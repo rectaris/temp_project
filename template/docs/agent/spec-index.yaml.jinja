@@ -1,5 +1,11 @@
 version: 1
 
+project:
+  name: "[[ project_name ]]"
+  slug: "[[ project_slug ]]"
+  primary_language: "[[ primary_language ]]"
+  planning_style: "[[ planning_style ]]"
+
 default_reads:
   - docs/agent/SPEC_VALIDATION.md
   - docs/agent/SPEC_GIT_WORKFLOW.md
@@ -62,4 +68,3 @@ rules:
   - Read conditional entries only when their when rule matches.
   - Treat usually_unneeded files as opt-in.
   - Do not sweep all docs/agent files for normal startup.
-

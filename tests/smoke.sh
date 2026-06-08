@@ -5,16 +5,42 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=${TMPDIR:-/tmp}/project-agent-workflow-smoke-$$
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-mkdir -p "$tmp/repo"
-"$root/scripts/init-project-workflow.sh" "$tmp/repo" >/dev/null
+python3 "$root/scripts/check-copier-template.py" >/dev/null
 
-test -f "$tmp/repo/AGENTS.md"
-test -f "$tmp/repo/docs/agent/spec-index.yaml"
-test -f "$tmp/repo/docs/plan/plan.md"
-test -f "$tmp/repo/.codex/agents/repo_explorer.toml"
-test -f "$tmp/repo/.codex/hooks/pre_tool_hardening_gate.py"
+if ! command -v copier >/dev/null 2>&1; then
+  echo "copier CLI not found; skipped generated-project smoke"
+  echo "smoke test passed"
+  exit 0
+fi
 
-"$root/scripts/init-project-workflow.sh" "$tmp/repo" >"$tmp/second-install.log"
-grep -q 'skip existing: AGENTS.md' "$tmp/second-install.log"
+render_fixture() {
+  fixture=$1
+  out=$2
+  set -- copy -f --data-file "$fixture"
+  set -- "$@" "$root" "$out"
+  copier "$@" >/dev/null
+}
+
+for fixture in "$root"/tests/fixtures/*.answers.yml; do
+  name=$(basename "$fixture" .answers.yml)
+  out="$tmp/$name"
+  render_fixture "$fixture" "$out"
+  test -f "$out/.copier-answers.yml"
+  test -f "$out/AGENTS.md"
+  test -f "$out/README.md"
+  test -f "$out/docs/agent/spec-index.yaml"
+  test -f "$out/docs/plan/plan.md"
+  test -f "$out/scripts/workflow-status.sh"
+  git -C "$out" init >/dev/null
+  git -C "$out" diff --check
+done
+
+test -f "$tmp/typescript/.codex/agents/repo_explorer.toml"
+test -f "$tmp/typescript/.codex/hooks/pre_tool_hardening_gate.py"
+test -f "$tmp/python/.codex/agents/repo_explorer.toml"
+test -f "$tmp/python/.codex/hooks/pre_tool_hardening_gate.py"
+test -f "$tmp/docs/.codex/agents/repo_explorer.toml"
+grep -q 'Codex hooks: `false`' "$tmp/python/AGENTS.md"
+grep -q 'Codex helper agents: `false`' "$tmp/docs/AGENTS.md"
 
 echo "smoke test passed"

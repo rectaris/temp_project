@@ -1,0 +1,9 @@
+project_name: python-tool
+project_slug: python-tool
+project_purpose: Build a Python tool.
+primary_language: python
+planning_style: active_backlog_checked
+use_codex_agents: true
+use_hooks: false
+max_agent_threads: 3
+

@@ -9,7 +9,8 @@ This repository packages reusable coding-agent project management, file routing,
 ## Rules
 
 - Keep `SKILL.md` concise; move detailed guidance into `references/`.
-- Keep installable repo files under `assets/templates/`.
+- Keep installable repo files under `template/`.
+- Keep `copier.yml` as the long-term generation/update interface.
 - Keep deterministic checks in `scripts/` or `tests/`.
 - Do not add project-specific `supportcard-status` facts to generic templates.
 - Validate with `scripts/lint-project-workflow.sh` and `tests/smoke.sh` before completion.
@@ -20,4 +21,3 @@ This repository packages reusable coding-agent project management, file routing,
 - State touched repository: `temp_project`.
 - State link changes.
 - Report validation and commit status.
-

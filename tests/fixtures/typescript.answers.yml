@@ -1,0 +1,9 @@
+project_name: typescript-app
+project_slug: typescript-app
+project_purpose: Build a TypeScript application.
+primary_language: typescript
+planning_style: active_backlog_checked
+use_codex_agents: true
+use_hooks: true
+max_agent_threads: 4
+

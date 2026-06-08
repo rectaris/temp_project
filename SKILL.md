@@ -1,6 +1,6 @@
 ---
 name: project-agent-workflow
-description: Use when a repository needs reusable AI-agent project management, task-scoped file routing, planning docs, handoff queues, validation selection, Git discipline, or deterministic file-management guardrails.
+description: Use when a repository needs reusable AI-agent project management through a Copier template, task-scoped file routing, planning docs, handoff queues, validation selection, Git discipline, or deterministic file-management guardrails.
 ---
 
 # Project Agent Workflow
@@ -20,13 +20,19 @@ Use this skill to set up or operate a repository that needs predictable coding-a
 
 ## Install Templates
 
-Run:
+Preferred:
 
 ```sh
-scripts/init-project-workflow.sh /path/to/repo
+copier copy /path/to/project-agent-workflow /path/to/repo
 ```
 
-Use `--force` only after reviewing the existing target files.
+For non-interactive defaults:
+
+```sh
+copier copy -f /path/to/project-agent-workflow /path/to/repo
+```
+
+The wrapper `scripts/init-project-workflow.sh` is available for local convenience, but Copier is the long-term interface. Commit the generated `.copier-answers.yml` so future `copier update` runs can reuse answers and apply template changes.
 
 ## Reference Selection
 
@@ -35,11 +41,11 @@ Use `--force` only after reviewing the existing target files.
 - For validation matrices and completion checks: read `references/validation.md`.
 - For safe file edits and cleanup policy: read `references/file-management.md`.
 - For helper agents and delegation boundaries: read `references/orchestration.md`.
+- For Copier template maintenance and release flow: read `references/template-development.md`.
 
 ## Non-Negotiables
 
 - Keep project-specific facts out of this skill; put them in the target repo's specs.
 - Prefer deterministic scripts for rules that can be checked.
-- Do not overwrite target repo workflow files without explicit `--force`.
+- Do not manually edit generated `.copier-answers.yml`; use `copier update`.
 - Keep `AGENTS.md` short; detailed policy belongs under `docs/agent/`.
-

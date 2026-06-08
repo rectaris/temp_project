@@ -1,0 +1,9 @@
+project_name: docs-workspace
+project_slug: docs-workspace
+project_purpose: Maintain a documentation workspace.
+primary_language: docs
+planning_style: lightweight
+use_codex_agents: false
+use_hooks: false
+max_agent_threads: 1
+

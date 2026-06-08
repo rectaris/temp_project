@@ -1,0 +1,66 @@
+_min_copier_version: "9.0.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_envops:
+  variable_start_string: "[["
+  variable_end_string: "]]"
+  block_start_string: "[%"
+  block_end_string: "%]"
+  comment_start_string: "[#"
+  comment_end_string: "#]"
+  lstrip_blocks: true
+  trim_blocks: true
+  keep_trailing_newline: true
+
+_exclude:
+  - "__pycache__"
+  - "*.pyc"
+
+project_name:
+  type: str
+  help: Human-facing project name.
+  default: "Example Project"
+
+project_slug:
+  type: str
+  help: Stable repository slug used in agent docs.
+  default: "example-project"
+
+project_purpose:
+  type: str
+  help: One sentence describing what the repository builds or maintains.
+  default: "Build and maintain the project."
+
+primary_language:
+  type: str
+  help: Main implementation surface for validation defaults.
+  choices:
+    - typescript
+    - python
+    - mixed
+    - docs
+  default: "mixed"
+
+planning_style:
+  type: str
+  help: Planning file structure to initialize.
+  choices:
+    - lightweight
+    - active_backlog_checked
+  default: "active_backlog_checked"
+
+use_codex_agents:
+  type: bool
+  help: Install reusable helper agent role definitions under .codex/agents.
+  default: true
+
+use_hooks:
+  type: bool
+  help: Install deterministic Codex hook templates under .codex/hooks.
+  default: true
+
+max_agent_threads:
+  type: int
+  help: Suggested maximum helper-agent concurrency.
+  default: 4

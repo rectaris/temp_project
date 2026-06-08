@@ -1,5 +1,7 @@
 # Validation
 
+Generated for primary language: `[[ primary_language ]]`.
+
 ## Baseline
 
 - Validate every non-trivial change.
@@ -13,6 +15,15 @@
 - Python scripts: `python3 -m py_compile <files>` and tests when available.
 - JavaScript/TypeScript: project build, unit tests, and lint when available.
 - Agent workflow docs or hooks: structure lint plus syntax checks.
+[% if primary_language == "typescript" %]
+- TypeScript default: run the package's build and unit-test commands when present, commonly `npm run build` and `npm run test`.
+[% elif primary_language == "python" %]
+- Python default: run Python tests when present, commonly `pytest` or `uv run pytest`.
+[% elif primary_language == "mixed" %]
+- Mixed default: run the smallest complete validation set for every language surface touched.
+[% elif primary_language == "docs" %]
+- Docs default: run Markdown, link, formatting, and whitespace checks available in the repository.
+[% endif %]
 
 ## Completion
 
@@ -22,4 +33,3 @@ Before final report:
 2. Inspect `git status --short`.
 3. Commit coherent changes unless the user requested otherwise.
 4. Report touched repositories, link changes, validation, and commit hash.
-

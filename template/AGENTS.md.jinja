@@ -1,6 +1,18 @@
 # AGENTS.md
 
-Agent entrypoint for this repository.
+Agent entrypoint for `[[ project_slug ]]`.
+
+## Purpose
+
+[[ project_purpose ]]
+
+## Generated Profile
+
+- Project name: `[[ project_name ]]`
+- Primary language: `[[ primary_language ]]`
+- Planning style: `[[ planning_style ]]`
+- Codex helper agents: `[[ use_codex_agents|lower ]]`
+- Codex hooks: `[[ use_hooks|lower ]]`
 
 ## Priority
 
@@ -14,6 +26,7 @@ Agent entrypoint for this repository.
 
 - Keep project-specific implementation rules in `docs/agent/SPEC_*.md`.
 - Track non-trivial implementation work in `docs/plan/plan.md`.
+- Keep Copier-managed workflow files updateable; put domain-specific details in separate specs.
 - Use Git for every coherent work unit.
 - Preserve user changes you did not make.
 - Prefer deterministic checks over prose-only rules.
@@ -24,4 +37,3 @@ Agent entrypoint for this repository.
 - State touched repositories.
 - State link or public-path changes.
 - Report validation run and commit status.
-
