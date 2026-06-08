@@ -1,49 +1,49 @@
 # Project Agent Workflow
 
-Reusable Codex workflow package for project management, agent file routing, and repository file hygiene.
+プロジェクト管理、エージェント向けファイルルーティング、リポジトリ内のファイル管理を再利用できるようにする Codex ワークフローパッケージです。
 
-This repository is intentionally small:
+このリポジトリは、役割ごとに小さく分けています。
 
-- `SKILL.md` teaches Codex when and how to use the workflow.
-- `references/` holds detailed guidance loaded only when needed.
-- `copier.yml` defines the long-term template interface.
-- `template/` contains files rendered into a target repository.
-- `scripts/init-project-workflow.sh` wraps Copier for simple installs.
-- `scripts/lint-project-workflow.sh` checks that this package remains installable.
+- `SKILL.md`: Codex がこのワークフローをいつ、どのように使うかを定義します。
+- `references/`: 必要なときだけ読む詳細な運用ガイドを置きます。
+- `copier.yml`: 長期運用するための Copier テンプレート設定です。
+- `template/`: 生成先リポジトリへ展開されるファイル群です。
+- `scripts/init-project-workflow.sh`: 簡単に導入するための Copier ラッパーです。
+- `scripts/lint-project-workflow.sh`: このパッケージが導入可能な状態かを検証します。
 
-## Install Into A Repository
+## リポジトリへ導入する
 
-Preferred:
+推奨:
 
 ```sh
 copier copy /path/to/project-agent-workflow /path/to/repo
 ```
 
-Wrapper:
+ラッパー:
 
 ```sh
 scripts/init-project-workflow.sh /path/to/repo
 ```
 
-Use force/default answers for non-interactive generation:
+対話なしでデフォルト回答を使って生成する場合:
 
 ```sh
 copier copy -f /path/to/project-agent-workflow /path/to/repo
 ```
 
-Commit the generated `.copier-answers.yml` file so `copier update` can work later.
+生成された `.copier-answers.yml` はコミットしてください。これにより、あとから `copier update` でテンプレート更新を追従できます。
 
-## Update A Generated Repository
+## 生成済みリポジトリを更新する
 
-From the generated repository:
+生成先リポジトリで次を実行します。
 
 ```sh
 copier update
 ```
 
-Review any `*.rej` files manually before committing. Stable template releases should be tagged so downstream updates can resolve versions predictably.
+`*.rej` ファイルが生成された場合は、コミット前に必ず手動で確認してください。安定版テンプレートには Git tag を付けると、生成先リポジトリが更新対象のバージョンを安定して解決できます。
 
-## Validate
+## 検証
 
 ```sh
 scripts/lint-project-workflow.sh
