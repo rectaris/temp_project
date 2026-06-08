@@ -1,0 +1,24 @@
+# Development Flow
+
+## Startup
+
+1. Read `AGENTS.md`.
+2. Read `docs/agent/spec-index.yaml`.
+3. Select the smallest matching route.
+4. Read `default_reads` and route `required` docs.
+5. Check `docs/plan/plan.md`.
+
+## Implementation
+
+- Keep changes scoped to the task.
+- Prefer existing project patterns.
+- Separate product logic, UI, data, and process changes when practical.
+- Move mechanically checkable rules into scripts, tests, type checks, or linters.
+- Escalate ambiguous high-impact changes before editing.
+
+## Review Classes
+
+- Class A: local or mechanical work.
+- Class B: semantic implementation work.
+- Class C: directional architecture, product, story, frame, or philosophy. Requires explicit approval.
+

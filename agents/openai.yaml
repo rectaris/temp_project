@@ -1,0 +1,7 @@
+interface:
+  display_name: "Project Agent Workflow"
+  short_description: "Reusable project workflow for coding agents"
+  default_prompt: "Use $project-agent-workflow to set up task routing, planning, validation, and Git hygiene in this repository."
+policy:
+  allow_implicit_invocation: true
+
