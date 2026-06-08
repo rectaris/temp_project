@@ -43,6 +43,16 @@ Repository-owned:
 1. Change `copier.yml`, `template/`, references, or tests.
 2. Run `scripts/lint-project-workflow.sh`.
 3. Run `tests/smoke.sh`.
-4. Generate at least one sample project with Copier when the CLI is available.
-5. Commit the change.
-6. Tag stable template versions for downstream `copier update`.
+4. Run `tests/test-hooks.py`.
+5. Run `tests/copier-update.sh`.
+6. Generate at least one sample project with Copier when the CLI is available.
+7. Commit the change.
+8. Tag stable template versions for downstream `copier update`.
+9. Push `main` and tags to GitHub.
+
+## CI Expectations
+
+- Install Copier before running generated-project checks.
+- Run smoke and update tests with `REQUIRE_COPIER=1`.
+- Treat generated `*.rej` files as release blockers.
+- Keep `git diff --check` as the final whitespace gate.

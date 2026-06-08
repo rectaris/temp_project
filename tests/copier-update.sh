@@ -1,0 +1,50 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tmp=${TMPDIR:-/tmp}/project-agent-workflow-update-$$
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+if ! command -v copier >/dev/null 2>&1; then
+  if [ "${REQUIRE_COPIER:-0}" = "1" ]; then
+    echo "copier CLI not found" >&2
+    exit 127
+  fi
+  echo "copier CLI not found; skipped copier update test"
+  echo "copier update test passed"
+  exit 0
+fi
+
+out="$tmp/generated"
+copier copy -f --data-file "$root/tests/fixtures/typescript.answers.yml" "$root" "$out" >/dev/null
+
+git -C "$out" init -b main >/dev/null
+git -C "$out" config user.email "ci@example.invalid"
+git -C "$out" config user.name "CI"
+git -C "$out" add -A
+git -C "$out" commit -m "Initial generated workflow" >/dev/null
+
+cat >"$out/docs/agent/SPEC_PRODUCT.md" <<'EOF'
+# Product Notes
+
+Local project-owned agent notes.
+EOF
+git -C "$out" add docs/agent/SPEC_PRODUCT.md
+git -C "$out" commit -m "Add local project notes" >/dev/null
+
+copier update -f --vcs-ref HEAD "$out" >/dev/null
+
+test -f "$out/.copier-answers.yml"
+test -f "$out/AGENTS.md"
+test -f "$out/docs/agent/spec-index.yaml"
+test -f "$out/docs/agent/SPEC_PRODUCT.md"
+test -f "$out/scripts/workflow-status.sh"
+grep -q 'Local project-owned agent notes.' "$out/docs/agent/SPEC_PRODUCT.md"
+
+if find "$out" -name '*.rej' -print -quit | grep -q .; then
+  echo "copier update produced rejection files" >&2
+  exit 1
+fi
+
+git -C "$out" diff --check
+echo "copier update test passed"

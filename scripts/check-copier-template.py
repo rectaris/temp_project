@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 REQUIRED = [
+    ".github/workflows/ci.yml",
     "copier.yml",
     "template/AGENTS.md.jinja",
     "template/README.md.jinja",
@@ -24,6 +25,9 @@ REQUIRED = [
     "tests/fixtures/typescript.answers.yml",
     "tests/fixtures/python.answers.yml",
     "tests/fixtures/docs.answers.yml",
+    "tests/copier-update.sh",
+    "tests/smoke.sh",
+    "tests/test-hooks.py",
 ]
 
 
@@ -93,4 +97,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -2,22 +2,27 @@
 
 [[ project_purpose ]]
 
-## Agent Workflow
+## エージェントワークフロー
 
-This repository was initialized from `project-agent-workflow`.
+このリポジトリは `project-agent-workflow` から初期化されています。
 
-- Start with `AGENTS.md`.
-- Use `docs/agent/spec-index.yaml` for task-scoped document routing.
-- Track non-trivial work in `docs/plan/plan.md`.
-- Keep project-specific rules in `docs/agent/SPEC_*.md`.
+- 最初に `AGENTS.md` を確認します。
+- タスクごとの参照先は `docs/agent/spec-index.yaml` で選びます。
+- 重要な作業は `docs/plan/plan.md` で追跡します。
+- プロジェクト固有のルールは `docs/agent/SPEC_*.md` に置きます。
 
-## Updating From The Template
+## テンプレート更新
 
-Keep `.copier-answers.yml` committed. To update from a tagged template version:
+`.copier-answers.yml` はコミットしてください。テンプレート更新を取り込むには、生成先リポジトリで次を実行します。
 
 ```sh
 copier update
 ```
 
-Review any `*.rej` files manually before committing.
+特定のタグへ更新する場合:
 
+```sh
+copier update --vcs-ref vX.Y.Z
+```
+
+`*.rej` ファイルが生成された場合は、コミット前に手動で確認してください。

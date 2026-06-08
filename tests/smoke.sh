@@ -8,6 +8,10 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 python3 "$root/scripts/check-copier-template.py" >/dev/null
 
 if ! command -v copier >/dev/null 2>&1; then
+  if [ "${REQUIRE_COPIER:-0}" = "1" ]; then
+    echo "copier CLI not found" >&2
+    exit 127
+  fi
   echo "copier CLI not found; skipped generated-project smoke"
   echo "smoke test passed"
   exit 0
@@ -16,7 +20,7 @@ fi
 render_fixture() {
   fixture=$1
   out=$2
-  set -- copy -f --data-file "$fixture"
+  set -- copy -f --vcs-ref HEAD --data-file "$fixture"
   set -- "$@" "$root" "$out"
   copier "$@" >/dev/null
 }
@@ -31,7 +35,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   test -f "$out/docs/agent/spec-index.yaml"
   test -f "$out/docs/plan/plan.md"
   test -f "$out/scripts/workflow-status.sh"
-  git -C "$out" init >/dev/null
+  git -C "$out" init -b main >/dev/null
   git -C "$out" diff --check
 done
 
@@ -40,6 +44,7 @@ test -f "$tmp/typescript/.codex/hooks/pre_tool_hardening_gate.py"
 test -f "$tmp/python/.codex/agents/repo_explorer.toml"
 test -f "$tmp/python/.codex/hooks/pre_tool_hardening_gate.py"
 test -f "$tmp/docs/.codex/agents/repo_explorer.toml"
+grep -q 'エージェントワークフロー' "$tmp/typescript/README.md"
 grep -q 'Codex hooks: `false`' "$tmp/python/AGENTS.md"
 grep -q 'Codex helper agents: `false`' "$tmp/docs/AGENTS.md"
 

@@ -13,6 +13,18 @@
 
 ## リポジトリへ導入する
 
+GitHub から直接導入する場合:
+
+```sh
+copier copy https://github.com/rectaris/temp_project.git /path/to/repo
+```
+
+安定版タグを指定する場合:
+
+```sh
+copier copy --vcs-ref v0.2.0 https://github.com/rectaris/temp_project.git /path/to/repo
+```
+
 推奨:
 
 ```sh
@@ -43,9 +55,26 @@ copier update
 
 `*.rej` ファイルが生成された場合は、コミット前に必ず手動で確認してください。安定版テンプレートには Git tag を付けると、生成先リポジトリが更新対象のバージョンを安定して解決できます。
 
+タグ付きバージョンへ明示的に更新する場合:
+
+```sh
+copier update --vcs-ref v0.2.0
+```
+
+リリース時は、テンプレート変更をコミットしたあとにタグを作成して push します。
+
+```sh
+git tag vX.Y.Z
+git push origin main --tags
+```
+
 ## 検証
 
 ```sh
 scripts/lint-project-workflow.sh
 tests/smoke.sh
+tests/test-hooks.py
+tests/copier-update.sh
 ```
+
+CI では Copier をインストールしたうえで、生成テストと更新テストを必須として実行します。ローカルで Copier が無い場合、`tests/smoke.sh` と `tests/copier-update.sh` は生成系の検証をスキップします。
