@@ -6,4 +6,10 @@ planning_style: active_backlog_checked
 use_codex_agents: true
 use_hooks: false
 max_agent_threads: 3
-
+use_plan_lifecycle: true
+use_change_validation: true
+use_security_static: true
+use_structure_scanner: true
+use_mcp_policy: true
+use_linear_sync: false
+use_graph_memory: false

@@ -24,3 +24,12 @@ Before reporting completion:
 
 Prefer checks that prove the rule directly. Do not use a green broad command as evidence unless it covers the changed behavior.
 
+## Generated Selectors
+
+Generated repositories may include:
+
+- `scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.
+- `scripts/security-static-check.py`: scans common high-signal static risks.
+- `scripts/structure-map.py --check`: verifies basic agent workflow structure.
+
+These scripts provide a baseline. Project-specific builds, unit tests, browser tests, package audits, and domain contract checks should be added locally.

@@ -11,6 +11,8 @@
 - `scripts/init-project-workflow.sh`: 簡単に導入するための Copier ラッパーです。
 - `scripts/lint-project-workflow.sh`: このパッケージが導入可能な状態かを検証します。
 
+生成先には、計画 lifecycle、変更差分に応じた検証選択、静的セキュリティ検査、構造スキャンの汎用ルールを導入できます。MCP、Linear、graph memory のような外部サービス依存ルールは Copier の回答で opt-in します。
+
 ## リポジトリへ導入する
 
 GitHub から直接導入する場合:

@@ -27,8 +27,13 @@ Copier-managed:
 - reusable `.codex/agents/` definitions
 - deterministic hook templates
 - workflow utility scripts
+- generic plan lifecycle scripts
+- change-aware validation, static security, and structure scanner scripts
+- optional external-service policy stubs
 
 Current `use_codex_agents` and `use_hooks` answers are recorded in generated docs/config. They do not remove files from the rendered tree because conditional file exclusion in `copier.yml` would make update behavior harder to reason about.
+
+The same update-safe approach applies to generic lifecycle and external-service modules: generated files remain present, while template answers record whether MCP, Linear, or graph-memory policy is enabled.
 
 Repository-owned:
 

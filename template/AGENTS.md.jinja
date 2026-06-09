@@ -13,6 +13,11 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Planning style: `[[ planning_style ]]`
 - Codex helper agents: `[[ use_codex_agents|lower ]]`
 - Codex hooks: `[[ use_hooks|lower ]]`
+- Plan lifecycle scripts: `[[ use_plan_lifecycle|lower ]]`
+- Change-aware validation: `[[ use_change_validation|lower ]]`
+- Static security checks: `[[ use_security_static|lower ]]`
+- Structure scanner: `[[ use_structure_scanner|lower ]]`
+- External service policies: MCP=`[[ use_mcp_policy|lower ]]`, Linear=`[[ use_linear_sync|lower ]]`, graph memory=`[[ use_graph_memory|lower ]]`
 
 ## Priority
 
@@ -31,6 +36,8 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Preserve user changes you did not make.
 - Prefer deterministic checks over prose-only rules.
 - Ask before high-impact or ambiguous changes.
+- Treat `docs/plan/checked.md` and checked archives as lookup-only history; search metadata first when possible.
+- Keep human-facing README files separate from agent-facing operational policy.
 
 ## Reports
 

@@ -21,3 +21,6 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 
 Use local execution for tightly coupled, urgent, or small work. Use helpers when context pressure, file size, semantic risk, or review value outweighs coordination cost.
 
+## Optional External Services
+
+MCP, Linear, graph memory, and external CLIs should be modeled as opt-in modules. For each workflow, document whether operations are dry-run, read-capable, or write-capable. External writes require explicit user intent or a documented lifecycle command.

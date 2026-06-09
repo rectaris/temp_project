@@ -37,8 +37,13 @@ copier update -f --vcs-ref HEAD "$out" >/dev/null
 test -f "$out/.copier-answers.yml"
 test -f "$out/AGENTS.md"
 test -f "$out/docs/agent/spec-index.yaml"
+test -f "$out/docs/agent/SPEC_FILE_MANAGEMENT.md"
+test -f "$out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test -f "$out/docs/agent/SPEC_PRODUCT.md"
 test -f "$out/scripts/workflow-status.sh"
+test -f "$out/scripts/create-plan.sh"
+test -f "$out/scripts/validate-changes.py"
+test -f "$out/scripts/security-static-check.py"
 grep -q 'Local project-owned agent notes.' "$out/docs/agent/SPEC_PRODUCT.md"
 
 if find "$out" -name '*.rej' -print -quit | grep -q .; then

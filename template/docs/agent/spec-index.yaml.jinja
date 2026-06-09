@@ -9,6 +9,7 @@ project:
 default_reads:
   - docs/agent/SPEC_VALIDATION.md
   - docs/agent/SPEC_GIT_WORKFLOW.md
+  - docs/agent/SPEC_FILE_MANAGEMENT.md
 
 task_types:
   planning_docs:
@@ -19,6 +20,8 @@ task_types:
     conditional:
       - path: docs/agent/SPEC_ORCHESTRATION.md
         when: helper agents, delegation, handoffs, hooks, or execution-process behavior changes.
+      - path: docs/agent/SPEC_EXTERNAL_SERVICES.md
+        when: MCP, Linear, graph memory, external issue sync, or external write policy changes.
 
   product_logic:
     summary: Runtime behavior, calculations, business logic, data contracts, or public APIs.
@@ -54,6 +57,15 @@ task_types:
       - docs/agent/SPEC_ORCHESTRATION.md
     conditional: []
 
+  external_services:
+    summary: MCP, Linear, graph memory, external issue sync, or external write policy.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_EXTERNAL_SERVICES.md
+    conditional:
+      - path: docs/agent/SPEC_PLAN_WORKFLOW.md
+        when: external service state is linked to plan lifecycle files.
+
 usually_unneeded:
   - path: docs/agent/SPEC_ORCHESTRATION.md
     unless: orchestration, handoff, hook, or delegation behavior is in scope.
@@ -61,6 +73,8 @@ usually_unneeded:
     unless: environment, generated files, static paths, CI, or deployment behavior is in scope.
   - path: docs/agent/SPEC_UI_DESIGN.md
     unless: visible UI, copy, accessibility, or interaction behavior is in scope.
+  - path: docs/agent/SPEC_EXTERNAL_SERVICES.md
+    unless: MCP, Linear, graph memory, external issue sync, or external write behavior is in scope.
 
 rules:
   - Start with default_reads plus the matching route's required list.
@@ -68,3 +82,4 @@ rules:
   - Read conditional entries only when their when rule matches.
   - Treat usually_unneeded files as opt-in.
   - Do not sweep all docs/agent files for normal startup.
+  - Keep README files human-facing; agent-facing operational policy belongs in docs/agent.

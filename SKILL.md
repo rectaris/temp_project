@@ -18,6 +18,8 @@ Use this skill to set up or operate a repository that needs predictable coding-a
 7. Validate with the smallest complete command set for the changed files.
 8. Commit each coherent work unit.
 
+When generated lifecycle scripts are present, prefer them for plan creation, promotion, completion, archive search, plan linting, and change-aware validation. Keep external-service workflows optional unless the target repository enables them in `SPEC_EXTERNAL_SERVICES.md`.
+
 ## Install Templates
 
 Preferred:
@@ -49,3 +51,4 @@ The wrapper `scripts/init-project-workflow.sh` is available for local convenienc
 - Prefer deterministic scripts for rules that can be checked.
 - Do not manually edit generated `.copier-answers.yml`; use `copier update`.
 - Keep `AGENTS.md` short; detailed policy belongs under `docs/agent/`.
+- Keep MCP, Linear, and graph-memory workflows opt-in and side-effect classified.

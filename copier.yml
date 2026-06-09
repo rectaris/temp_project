@@ -64,3 +64,38 @@ max_agent_threads:
   type: int
   help: Suggested maximum helper-agent concurrency.
   default: 4
+
+use_plan_lifecycle:
+  type: bool
+  help: Install generic plan creation, linting, archive, and completion scripts.
+  default: true
+
+use_change_validation:
+  type: bool
+  help: Install change-aware validation selector scripts and rules.
+  default: true
+
+use_security_static:
+  type: bool
+  help: Install a lightweight static security checker for scripts, workflows, and docs.
+  default: true
+
+use_structure_scanner:
+  type: bool
+  help: Install a generic repository structure and contract scanner.
+  default: true
+
+use_mcp_policy:
+  type: bool
+  help: Enable optional MCP read/write boundary policy in generated agent docs.
+  default: false
+
+use_linear_sync:
+  type: bool
+  help: Enable optional Linear planning-sync policy stubs in generated agent docs.
+  default: false
+
+use_graph_memory:
+  type: bool
+  help: Enable optional graph-memory policy stubs in generated agent docs.
+  default: false

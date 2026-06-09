@@ -1,0 +1,56 @@
+# External Services
+
+This policy is optional. Generated settings:
+
+- MCP policy: `[[ use_mcp_policy|lower ]]`
+- Linear sync policy: `[[ use_linear_sync|lower ]]`
+- Graph memory policy: `[[ use_graph_memory|lower ]]`
+
+## Baseline
+
+- External reads and writes are not required for normal repository work.
+- External writes require explicit user intent or a documented opt-in lifecycle command.
+- Keep credentials in environment variables or platform secret stores, never in repository files.
+- Dry-run or local payload validation must not perform external writes.
+
+[% if use_mcp_policy %]
+## MCP Policy
+
+- Before using an MCP server, read the local MCP policy or skill if the repository provides one.
+- Separate read-only operations from write-capable operations.
+- Record fallback only when MCP unavailability changes scope, confidence, or validation.
+- Do not send secrets, private config, or unrelated local context to external tools.
+[% else %]
+## MCP Policy
+
+MCP-specific workflow is disabled by this template answer. Add project-local rules before relying on MCP for required work.
+[% endif %]
+
+[% if use_linear_sync %]
+## Linear Sync Policy
+
+- Treat Linear as a human-facing planning surface, not the source of truth for code.
+- Local plan files remain the repository fallback.
+- Classify commands as dry-run, read-capable, or write-capable before execution.
+- Write-capable issue creation, description updates, status updates, comments, labels, and assignees require explicit user intent or documented lifecycle opt-in.
+- Managed issue regions must preserve human-authored text outside generated markers.
+- Duplicate prevention should use deterministic source markers and fail closed on ambiguity.
+[% else %]
+## Linear Sync Policy
+
+Linear sync is disabled by this template answer. Keep plan lifecycle local unless the project adds an explicit Linear module.
+[% endif %]
+
+[% if use_graph_memory %]
+## Graph Memory Policy
+
+- Graph memory is auxiliary to repository files, tests, validation output, and Git history.
+- Default to read-only graph queries when they can affect the task.
+- Do not write graph memory unless the user explicitly requests a graph-memory write.
+- Do not store secrets, credentials, private configuration, raw personal data, generated dependency artifacts, build artifacts, or temporary task logs in graph memory.
+- Keep canonical graph fields stable and reviewable.
+[% else %]
+## Graph Memory Policy
+
+Graph memory is disabled by this template answer. Do not assume project graph state exists.
+[% endif %]

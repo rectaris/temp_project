@@ -37,3 +37,18 @@ Review classes:
 - `B`: semantic implementation work.
 - `C`: architecture, product direction, story, frame, or philosophy. Requires explicit human approval.
 
+## Lifecycle Scripts
+
+Generated repositories may include local-only plan lifecycle helpers:
+
+- `scripts/create-plan.sh active <slug>`
+- `scripts/create-plan.sh backlog <slug>`
+- `scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`
+- `scripts/complete-plan.sh docs/plan/active/NNN-slug.md`
+- `scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`
+- `scripts/check-agent-completion.sh`
+- `scripts/lint-plan-docs.py`
+- `scripts/format-plan-docs.py`
+- `scripts/search-plan-archive.py --text <term>`
+
+These helpers must remain local-only. External issue or memory sync belongs in an optional module.
