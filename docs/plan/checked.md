@@ -5,3 +5,4 @@ id	path
 002	docs/plan/checked/002-copier-template.md
 003	docs/plan/checked/003-template-operations-hardening.md
 004	docs/plan/checked/004-generic-rule-modules.md
+005	docs/plan/checked/005-extended-generic-rules.md

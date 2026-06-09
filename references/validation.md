@@ -31,5 +31,8 @@ Generated repositories may include:
 - `scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.
 - `scripts/security-static-check.py`: scans common high-signal static risks.
 - `scripts/structure-map.py --check`: verifies basic agent workflow structure.
+- `scripts/format-plan-docs.py --check`: verifies plan Markdown whitespace.
+- Codex hook Python should compile with `python3 -m py_compile`.
+- `.codex/config.toml` and `.codex/agents/*.toml` should parse as TOML.
 
 These scripts provide a baseline. Project-specific builds, unit tests, browser tests, package audits, and domain contract checks should be added locally.

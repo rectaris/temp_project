@@ -13,7 +13,21 @@ ROOT = Path.cwd()
 PLAN = ROOT / "docs/plan/plan.md"
 CHECKED = ROOT / "docs/plan/checked.md"
 PLAN_DIRS = [ROOT / "docs/plan/active", ROOT / "docs/plan/backlog", ROOT / "docs/plan/checked"]
-REQUIRED_FIELDS = ("status:", "review_class:", "target_files:", "required_specs:", "validation:", "acceptance:")
+REQUIRED_FIELDS = (
+    "status:",
+    "task_type:",
+    "review_class:",
+    "human_design_required:",
+    "human_approval_status:",
+    "target_files:",
+    "required_specs:",
+    "validation:",
+    "acceptance:",
+    "expected_output:",
+    "checked_summary_ja:",
+)
+HUMAN_DESIGN_VALUES = {"yes", "no"}
+HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
 
 
 def fail(message: str) -> None:
@@ -88,6 +102,17 @@ def lint_manifest(path: Path) -> None:
     review = re.search(r"^review_class:\s*([ABC])\s*$", text, re.MULTILINE)
     if not review:
         fail(f"{path} review_class must be A, B, or C")
+    design = re.search(r"^human_design_required:\s*(\S+)\s*$", text, re.MULTILINE)
+    if not design or design.group(1) not in HUMAN_DESIGN_VALUES:
+        fail(f"{path} human_design_required must be yes or no")
+    approval = re.search(r"^human_approval_status:\s*(\S+)\s*$", text, re.MULTILINE)
+    if not approval or approval.group(1) not in HUMAN_APPROVAL_VALUES:
+        fail(f"{path} human_approval_status must be not_required, pending, or approved")
+    if review.group(1) == "C" and approval.group(1) != "approved":
+        fail(f"{path} class C work requires human_approval_status: approved before implementation")
+    summary = re.search(r"^checked_summary_ja:\s*(.+)\s*$", text, re.MULTILINE)
+    if not summary or not summary.group(1).strip():
+        fail(f"{path} checked_summary_ja must be non-empty")
 
 
 def lint_manifests() -> None:

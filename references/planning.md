@@ -10,6 +10,8 @@ Use lightweight planning files to make agent work resumable without turning ever
 - `docs/plan/checked.md`: machine-readable index of completed work.
 - `docs/plan/checked/*.md`: durable completion records.
 - `docs/plan/handoffs/`: temporary queue for real cross-agent or cross-session transfers.
+- `docs/plan/README.md`, `backlog/README.md`, and `handoffs/README.md`: human-facing Japanese overviews.
+- `docs/plan/sub-agents/`: optional helper prompt and custom-agent notes for repeated workflows.
 
 ## Rules
 
@@ -24,18 +26,27 @@ Use lightweight planning files to make agent work resumable without turning ever
 Recommended fields:
 
 - `status`
+- `task_type`
 - `review_class`
+- `human_design_required`
+- `human_approval_status`
 - `target_files`
+- `target_json`
 - `required_specs`
 - `validation`
 - `acceptance`
-- `notes`
+- `acceptance_focus`
+- `expected_output`
+- `checked_summary_ja`
+- `completion_deferred_reason`
 
 Review classes:
 
 - `A`: local/mechanical work.
 - `B`: semantic implementation work.
 - `C`: architecture, product direction, story, frame, or philosophy. Requires explicit human approval.
+
+Prefer English for manifest values and operational detail so agents can parse plans consistently. Japanese is expected for human-facing summaries, domain terms, and `checked_summary_ja`.
 
 ## Lifecycle Scripts
 
@@ -47,8 +58,12 @@ Generated repositories may include local-only plan lifecycle helpers:
 - `scripts/complete-plan.sh docs/plan/active/NNN-slug.md`
 - `scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`
 - `scripts/check-agent-completion.sh`
+- `scripts/select-task-context.sh docs/plan/active/NNN-slug.md`
+- `scripts/clean-handoffs.sh --dry-run`
 - `scripts/lint-plan-docs.py`
+- `scripts/lint-plan-docs.sh`
 - `scripts/format-plan-docs.py`
+- `scripts/format-plan-docs.sh --check`
 - `scripts/search-plan-archive.py --text <term>`
 
 These helpers must remain local-only. External issue or memory sync belongs in an optional module.

@@ -16,6 +16,8 @@ Generated for primary language: `[[ primary_language ]]`.
 - JavaScript/TypeScript: project build, unit tests, and lint when available.
 - Agent workflow docs or hooks: structure lint plus syntax checks.
 - Plan lifecycle, archive, handoff, or completion tooling: plan lint plus script syntax checks.
+- Codex hook Python: Python compile validation.
+- Codex config or custom agent TOML: TOML parse validation.
 - GitHub Actions or maintained scripts: static security checks when enabled.
 [% if primary_language == "typescript" %]
 - TypeScript default: run the package's build and unit-test commands when present, commonly `npm run build` and `npm run test`.
@@ -50,3 +52,4 @@ Before final report:
 - Static security: `python3 scripts/security-static-check.py`
 - Structure scanner: `python3 scripts/structure-map.py --check`
 - Plan lint: `python3 scripts/lint-plan-docs.py`
+- Plan format check: `python3 scripts/format-plan-docs.py --check`

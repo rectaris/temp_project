@@ -35,20 +35,31 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   test -f "$out/docs/agent/spec-index.yaml"
   test -f "$out/docs/agent/SPEC_FILE_MANAGEMENT.md"
   test -f "$out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+  test -f "$out/docs/plan/README.md"
+  test -f "$out/docs/plan/backlog/README.md"
+  test -f "$out/docs/plan/handoffs/README.md"
+  test -f "$out/docs/plan/sub-agents/helper-prompts.md"
   test -f "$out/docs/plan/plan.md"
   test -f "$out/scripts/workflow-status.sh"
   test -f "$out/scripts/create-plan.sh"
+  test -f "$out/scripts/select-task-context.sh"
+  test -f "$out/scripts/clean-handoffs.sh"
+  test -f "$out/scripts/lint-plan-docs.sh"
+  test -f "$out/scripts/format-plan-docs.sh"
   test -f "$out/scripts/validate-changes.py"
   test -f "$out/scripts/security-static-check.py"
   git -C "$out" init -b main >/dev/null
   git -C "$out" diff --check
   (cd "$out" && python3 scripts/lint-plan-docs.py)
+  (cd "$out" && python3 scripts/format-plan-docs.py --check)
   (cd "$out" && python3 scripts/structure-map.py --check >/dev/null)
 done
 
-(cd "$tmp/typescript" && scripts/create-plan.sh active sample --summary "Sample work." >/dev/null)
+(cd "$tmp/typescript" && scripts/create-plan.sh active sample --summary "Sample work." --summary-ja "サンプル作業を行う。" >/dev/null)
 (cd "$tmp/typescript" && test -f docs/plan/active/001-sample.md)
 (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
+(cd "$tmp/typescript" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPE=tooling$')
+(cd "$tmp/typescript" && scripts/clean-handoffs.sh --dry-run >/dev/null)
 (cd "$tmp/typescript" && scripts/complete-plan.sh docs/plan/active/001-sample.md >/dev/null)
 (cd "$tmp/typescript" && test -f docs/plan/checked/001-sample.md)
 (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)

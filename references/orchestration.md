@@ -16,6 +16,8 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 - Keep final judgment in the main session.
 - Treat helper output as advisory until accepted through validation.
 - Use durable handoff files only for cross-session transfer or staged work.
+- Keep repeated helper prompt templates under `docs/plan/sub-agents/` when a project needs them.
+- Use deterministic Stop hooks only as review prompts; they do not replace validation.
 
 ## Cost Gate
 

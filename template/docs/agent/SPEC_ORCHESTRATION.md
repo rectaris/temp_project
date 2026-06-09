@@ -8,6 +8,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 - `scoped_worker`: bounded implementation with explicit write scope.
 - `change_reviewer`: read-only correctness and regression review.
 - `docs_researcher`: read-only external or version-specific research.
+- Project-specific helper templates may live under `docs/plan/sub-agents/` when repeated workflows justify them.
 
 ## Rules
 
@@ -16,6 +17,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 - Treat helper output as advisory until accepted.
 - Prefer local work when coordination cost is higher than task complexity.
 - Keep final interpretation, integration, validation acceptance, planning updates, commits, and completion reports in the main session.
+- Use durable handoff directories only when direct helper output is not enough for continuity or review.
 
 ## Decision Matrix
 
@@ -34,6 +36,12 @@ Consider delegation or a separate review when:
 - a change touches data and runtime logic
 - a change affects validation rules, hooks, security checks, or orchestration
 - repeated low-level lookup would distract from final integration
+
+## Stop Review Gate
+
+- A deterministic Stop hook may request a final review pass for broad or high-risk diffs.
+- Treat the hook as a review prompt, not a validation runner.
+- If the requested helper path is unavailable, use the closest read-only review path and record any validation gap.
 
 ## Fallback
 

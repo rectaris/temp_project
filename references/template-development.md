@@ -24,6 +24,8 @@ Copier-managed:
 - generic `docs/agent/SPEC_*.md`
 - `docs/agent/spec-index.yaml`
 - `docs/plan/` skeleton
+- human-facing plan README files
+- optional helper prompt templates under `docs/plan/sub-agents/`
 - reusable `.codex/agents/` definitions
 - deterministic hook templates
 - workflow utility scripts

@@ -51,6 +51,10 @@ sh -n "$root/template/scripts/promote-plan.sh"
 sh -n "$root/template/scripts/complete-plan.sh"
 sh -n "$root/template/scripts/finalize-active-plan.sh"
 sh -n "$root/template/scripts/check-agent-completion.sh"
+sh -n "$root/template/scripts/lint-plan-docs.sh"
+sh -n "$root/template/scripts/format-plan-docs.sh"
+sh -n "$root/template/scripts/select-task-context.sh"
+sh -n "$root/template/scripts/clean-handoffs.sh"
 
 PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/project-agent-workflow-pycache-$$" \
   python3 -m py_compile \

@@ -13,7 +13,7 @@ default_reads:
 
 task_types:
   planning_docs:
-    summary: Plan indexes, active tasks, checked archives, handoff docs, or repo instructions.
+    summary: Plan indexes, active tasks, backlog, checked archives, handoff docs, plan README files, or repo instructions.
     required:
       - docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -50,7 +50,7 @@ task_types:
     conditional: []
 
   orchestration_meta:
-    summary: Agent workflow, helper roles, handoff policy, hooks, or process documentation.
+    summary: Agent workflow, helper roles, helper prompt templates, handoff policy, hooks, or process documentation.
     required:
       - docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -83,3 +83,4 @@ rules:
   - Treat usually_unneeded files as opt-in.
   - Do not sweep all docs/agent files for normal startup.
   - Keep README files human-facing; agent-facing operational policy belongs in docs/agent.
+  - Treat external-service modules as optional unless SPEC_EXTERNAL_SERVICES explicitly enables them.

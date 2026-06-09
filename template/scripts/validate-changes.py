@@ -9,6 +9,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - compatibility for Python < 3.11.
+    tomllib = None  # type: ignore[assignment]
+
 
 ROOT = Path.cwd()
 
@@ -45,11 +50,28 @@ def select_commands(paths: list[str]) -> list[list[str]]:
         commands.append(["python3", "-m", "py_compile", *py_files])
     if any(path.startswith("docs/plan/") or path.startswith("scripts/") for path in paths) and existing("scripts/lint-plan-docs.py"):
         commands.append(["python3", "scripts/lint-plan-docs.py"])
+    if any(path.startswith("docs/plan/") for path in paths) and existing("scripts/format-plan-docs.py"):
+        commands.append(["python3", "scripts/format-plan-docs.py", "--check"])
     if any(path.startswith(".github/") or path.startswith("scripts/") for path in paths) and existing("scripts/security-static-check.py"):
         commands.append(["python3", "scripts/security-static-check.py"])
     if any(path in {"AGENTS.md", "docs/agent/spec-index.yaml"} or path.startswith("docs/agent/") for path in paths) and existing("scripts/structure-map.py"):
         commands.append(["python3", "scripts/structure-map.py", "--check"])
     return commands
+
+
+def validate_toml(paths: list[str]) -> int:
+    toml_paths = [ROOT / path for path in paths if path.endswith(".toml") and existing(path)]
+    if toml_paths and tomllib is None:
+        print("TOML parse skipped: Python tomllib is unavailable", file=sys.stderr)
+        return 0
+    failed = 0
+    for path in toml_paths:
+        try:
+            tomllib.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"TOML parse failed: {path.relative_to(ROOT)}: {exc}", file=sys.stderr)
+            failed = 1
+    return failed
 
 
 def main() -> int:
@@ -67,6 +89,9 @@ def main() -> int:
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
             return result.returncode
+    toml_result = validate_toml(paths)
+    if toml_result != 0:
+        return toml_result
     return 0
 
 
