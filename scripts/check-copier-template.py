@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_REQUIRED = [
     ".github/workflows/ci.yml",
     "copier.yml",
+    "pyproject.toml",
+    "uv.lock",
     "SKILL.md",
     "agents/openai.yaml",
     "references/routing.md",

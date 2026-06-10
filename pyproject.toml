@@ -1,0 +1,11 @@
+[project]
+name = "project-agent-workflow"
+version = "0.0.0"
+description = "Reusable coding-agent project workflow template."
+requires-python = ">=3.11"
+dependencies = [
+    "copier>=9.0.0",
+]
+
+[tool.uv]
+package = false

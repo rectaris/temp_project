@@ -7,7 +7,19 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 python3 "$root/scripts/check-copier-template.py" >/dev/null
 
-if ! command -v copier >/dev/null 2>&1; then
+copier_available() {
+  command -v copier >/dev/null 2>&1 || { command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; }
+}
+
+run_copier() {
+  if command -v copier >/dev/null 2>&1; then
+    copier "$@"
+  else
+    (cd "$root" && UV_CACHE_DIR="$root/.uv-cache" uv run copier "$@")
+  fi
+}
+
+if ! copier_available; then
   if [ "${REQUIRE_COPIER:-0}" = "1" ]; then
     echo "copier CLI not found" >&2
     exit 127
@@ -22,7 +34,7 @@ render_fixture() {
   out=$2
   set -- copy -f --vcs-ref HEAD --data-file "$fixture"
   set -- "$@" "$root" "$out"
-  copier "$@" >/dev/null
+  run_copier "$@" >/dev/null
 }
 
 assert_generated_required_files() {

@@ -5,7 +5,19 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=${TMPDIR:-/tmp}/project-agent-workflow-update-$$
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-if ! command -v copier >/dev/null 2>&1; then
+copier_available() {
+  command -v copier >/dev/null 2>&1 || { command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; }
+}
+
+run_copier() {
+  if command -v copier >/dev/null 2>&1; then
+    copier "$@"
+  else
+    (cd "$root" && UV_CACHE_DIR="$root/.uv-cache" uv run copier "$@")
+  fi
+}
+
+if ! copier_available; then
   if [ "${REQUIRE_COPIER:-0}" = "1" ]; then
     echo "copier CLI not found" >&2
     exit 127
@@ -16,7 +28,7 @@ if ! command -v copier >/dev/null 2>&1; then
 fi
 
 out="$tmp/generated"
-copier copy -f --data-file "$root/tests/fixtures/typescript.answers.yml" "$root" "$out" >/dev/null
+run_copier copy -f --data-file "$root/tests/fixtures/typescript.answers.yml" "$root" "$out" >/dev/null
 
 git -C "$out" init -b main >/dev/null
 git -C "$out" config user.email "ci@example.invalid"
@@ -32,7 +44,7 @@ EOF
 git -C "$out" add docs/agent/SPEC_PRODUCT.md
 git -C "$out" commit -m "Add local project notes" >/dev/null
 
-copier update -f --vcs-ref HEAD "$out" >/dev/null
+run_copier update -f --vcs-ref HEAD "$out" >/dev/null
 
 test -f "$out/.copier-answers.yml"
 test -f "$out/AGENTS.md"

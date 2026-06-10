@@ -74,6 +74,13 @@ git push origin main --tags
 
 ## 検証
 
+初回は `uv` で依存関係を同期します。
+
+```sh
+UV_CACHE_DIR=.uv-cache uv sync
+UV_CACHE_DIR=.uv-cache uv run copier --version
+```
+
 ```sh
 scripts/lint-project-workflow.sh
 tests/smoke.sh
@@ -81,4 +88,4 @@ tests/test-hooks.py
 tests/copier-update.sh
 ```
 
-CI では Copier をインストールしたうえで、生成テストと更新テストを必須として実行します。ローカルで Copier が無い場合、`tests/smoke.sh` と `tests/copier-update.sh` は生成系の検証をスキップします。
+CI では `uv sync` したうえで、生成テストと更新テストを必須として実行します。PATH 上に `copier` が無い場合、`tests/smoke.sh` と `tests/copier-update.sh` は `uv run copier` を使います。`uv` も無い場合は生成系の検証をスキップします。
