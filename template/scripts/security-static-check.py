@@ -26,6 +26,8 @@ def iter_files() -> list[Path]:
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
+        if path.resolve() == Path(__file__).resolve():
+            continue
         if any(part in SKIP_DIRS for part in path.relative_to(ROOT).parts):
             continue
         if path.suffix in TEXT_SUFFIXES or path.name in {"Dockerfile", "Makefile"}:
