@@ -4,20 +4,9 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=${TMPDIR:-/tmp}/project-agent-workflow-smoke-$$
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+. "$root/tests/lib-copier.sh"
 
 python3 "$root/scripts/check-copier-template.py" >/dev/null
-
-copier_available() {
-  command -v copier >/dev/null 2>&1 || { command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; }
-}
-
-run_copier() {
-  if command -v copier >/dev/null 2>&1; then
-    copier "$@"
-  else
-    (cd "$root" && UV_CACHE_DIR="$root/.uv-cache" uv run copier "$@")
-  fi
-}
 
 if ! copier_available; then
   if [ "${REQUIRE_COPIER:-0}" = "1" ]; then

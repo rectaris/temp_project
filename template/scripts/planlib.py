@@ -9,7 +9,11 @@ from pathlib import Path
 ROOT = Path.cwd()
 PLAN = ROOT / "docs/plan/plan.md"
 CHECKED = ROOT / "docs/plan/checked.md"
-PLAN_DIRS = [ROOT / "docs/plan/active", ROOT / "docs/plan/backlog", ROOT / "docs/plan/checked"]
+ACTIVE_DIR = ROOT / "docs/plan/active"
+BACKLOG_DIR = ROOT / "docs/plan/backlog"
+CHECKED_DIR = ROOT / "docs/plan/checked"
+OPEN_PLAN_DIRS = [ACTIVE_DIR, BACKLOG_DIR]
+PLAN_DIRS = [*OPEN_PLAN_DIRS, CHECKED_DIR]
 
 REQUIRED_FIELDS = (
     "status",

@@ -7,14 +7,16 @@ import re
 import sys
 from pathlib import Path
 
+import security_rules
+
 
 ROOT = Path.cwd()
 SKIP_DIRS = {".git", "node_modules", "dist", "coverage", ".venv", ".uv-cache", ".uv-tools", ".uv-home"}
 TEXT_SUFFIXES = {".sh", ".py", ".js", ".mjs", ".ts", ".tsx", ".yml", ".yaml", ".toml", ".md", ".json"}
 RULES = [
-    (re.compile(r"-----BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----"), "private key material"),
-    (re.compile(r"\b(curl|wget)\b[^\n|]*\|\s*(sh|bash|zsh)\b"), "remote script piped to shell"),
-    (re.compile(r"^\s*sudo\b", re.MULTILINE), "sudo command in repository script"),
+    (security_rules.PRIVATE_KEY_MATERIAL, "private key material"),
+    (security_rules.REMOTE_SCRIPT_PIPE, "remote script piped to shell"),
+    (security_rules.SUDO_COMMAND, "sudo command in repository script"),
     (re.compile(r"\bpull_request_target\b"), "pull_request_target workflow requires careful review"),
 ]
 

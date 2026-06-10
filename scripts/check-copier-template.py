@@ -66,6 +66,7 @@ SOURCE_REQUIRED = [
     "template/scripts/format-plan-docs.py",
     "template/scripts/search-plan-archive.py",
     "template/scripts/validate-changes.py",
+    "template/scripts/security_rules.py",
     "template/scripts/security-static-check.py",
     "template/scripts/structure-map.py",
     "references/template-development.md",
@@ -73,8 +74,10 @@ SOURCE_REQUIRED = [
     "tests/fixtures/python.answers.yml",
     "tests/fixtures/docs.answers.yml",
     "tests/copier-update.sh",
+    "tests/lib-copier.sh",
     "tests/smoke.sh",
     "tests/test-hooks.py",
+    "scripts/init-project-workflow.sh",
 ]
 
 GENERATED_REQUIRED = [
@@ -121,10 +124,14 @@ GENERATED_REQUIRED = [
     "scripts/planlib.py",
     "scripts/promote-plan.sh",
     "scripts/search-plan-archive.py",
+    "scripts/security_rules.py",
     "scripts/structure-map.py",
     "scripts/validate-changes.py",
     "scripts/security-static-check.py",
 ]
+
+SOURCE_SHELL_LINT = [path for path in SOURCE_REQUIRED if path.endswith(".sh")]
+SOURCE_PYTHON_COMPILE = [path for path in SOURCE_REQUIRED if path.endswith(".py")]
 
 
 QUESTIONS = {
@@ -174,6 +181,12 @@ def main() -> int:
         return 0
     if len(sys.argv) == 2 and sys.argv[1] == "--print-generated-required":
         print("\n".join(GENERATED_REQUIRED))
+        return 0
+    if len(sys.argv) == 2 and sys.argv[1] == "--print-source-shell":
+        print("\n".join(SOURCE_SHELL_LINT))
+        return 0
+    if len(sys.argv) == 2 and sys.argv[1] == "--print-source-python":
+        print("\n".join(SOURCE_PYTHON_COMPILE))
         return 0
     if len(sys.argv) > 1:
         fail(f"unknown arguments: {' '.join(sys.argv[1:])}")

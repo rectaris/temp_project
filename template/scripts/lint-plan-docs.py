@@ -11,10 +11,9 @@ from pathlib import Path
 import planlib
 
 
-ROOT = Path.cwd()
-PLAN = ROOT / "docs/plan/plan.md"
-CHECKED = ROOT / "docs/plan/checked.md"
-PLAN_DIRS = [ROOT / "docs/plan/active", ROOT / "docs/plan/backlog", ROOT / "docs/plan/checked"]
+ROOT = planlib.ROOT
+PLAN = planlib.PLAN
+CHECKED = planlib.CHECKED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
 
@@ -89,7 +88,7 @@ def lint_manifest(path: Path) -> None:
 
 
 def lint_manifests() -> None:
-    for directory in (ROOT / "docs/plan/active", ROOT / "docs/plan/backlog"):
+    for directory in planlib.OPEN_PLAN_DIRS:
         if not directory.exists():
             continue
         for path in sorted(directory.glob("[0-9][0-9][0-9]-*.md")):
