@@ -26,7 +26,7 @@ copier copy https://github.com/rectaris/temp_project.git /path/to/repo
 安定版タグを指定する場合:
 
 ```sh
-copier copy --vcs-ref v0.2.0 https://github.com/rectaris/temp_project.git /path/to/repo
+copier copy --vcs-ref v0.3.0 https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
 推奨:
@@ -62,7 +62,7 @@ copier update
 タグ付きバージョンへ明示的に更新する場合:
 
 ```sh
-copier update --vcs-ref v0.2.0
+copier update --vcs-ref v0.3.0
 ```
 
 リリース時は、テンプレート変更をコミットしたあとにタグを作成して push します。
