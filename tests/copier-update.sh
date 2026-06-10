@@ -53,6 +53,8 @@ test -f "$out/scripts/format-plan-docs.sh"
 test -f "$out/scripts/validate-changes.py"
 test -f "$out/scripts/security-static-check.py"
 grep -q 'Local project-owned agent notes.' "$out/docs/agent/SPEC_PRODUCT.md"
+grep -q 'Integration Checklist' "$out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'To add Linear later' "$out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 
 if find "$out" -name '*.rej' -print -quit | grep -q .; then
   echo "copier update produced rejection files" >&2

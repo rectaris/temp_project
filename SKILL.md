@@ -18,7 +18,7 @@ Use this skill to set up or operate a repository that needs predictable coding-a
 7. Validate with the smallest complete command set for the changed files.
 8. Commit each coherent work unit.
 
-When generated lifecycle scripts are present, prefer them for plan creation, promotion, completion, archive search, plan linting, handoff cleanup, task-context selection, and change-aware validation. Keep external-service workflows optional unless the target repository enables them in `SPEC_EXTERNAL_SERVICES.md`.
+When generated lifecycle scripts are present, prefer them for plan creation, promotion, completion, archive search, plan linting, handoff cleanup, task-context selection, and change-aware validation. Keep external-service workflows optional unless the target repository enables them in `SPEC_EXTERNAL_SERVICES.md`; use that spec for setup steps, credentials, dry-run/read/write classification, and fallback behavior.
 
 ## Install Templates
 

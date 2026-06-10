@@ -13,6 +13,8 @@
 
 生成先には、計画 lifecycle、変更差分に応じた検証選択、静的セキュリティ検査、構造スキャン、handoff 管理、active plan の文脈抽出、Codex hook/config 検証の汎用ルールを導入できます。MCP、Linear、graph memory のような外部サービス依存ルールは Copier の回答で opt-in します。
 
+外部サービスを opt-in した生成先には、`docs/agent/SPEC_EXTERNAL_SERVICES.md` が生成されます。このドキュメントには、認証情報の置き場所、dry-run/read/write の分類、MCP server の記録項目、Linear の issue sync 境界、graph memory の project id と write review 境界を記載します。外部連携を無効にした場合も、同じファイルに「ローカル運用で十分であること」と後から有効化する際の追加項目を残します。
+
 ## リポジトリへ導入する
 
 GitHub から直接導入する場合:

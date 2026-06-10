@@ -6,3 +6,4 @@ id	path
 003	docs/plan/checked/003-template-operations-hardening.md
 004	docs/plan/checked/004-generic-rule-modules.md
 005	docs/plan/checked/005-extended-generic-rules.md
+006	docs/plan/checked/006-external-service-integration-docs.md
