@@ -28,7 +28,8 @@ if ! copier_available; then
 fi
 
 out="$tmp/generated"
-run_copier copy -f --data-file "$root/tests/fixtures/typescript.answers.yml" "$root" "$out" >/dev/null
+base_ref=${COPIER_UPDATE_BASE_REF:-v0.2.0}
+run_copier copy -f --vcs-ref "$base_ref" --data-file "$root/tests/fixtures/typescript.answers.yml" "$root" "$out" >/dev/null
 
 git -C "$out" init -b main >/dev/null
 git -C "$out" config user.email "ci@example.invalid"
