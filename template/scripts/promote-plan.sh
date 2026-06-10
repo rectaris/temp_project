@@ -19,15 +19,6 @@ mkdir -p docs/plan/active
 mv "$src" "$dst"
 
 id=${base%%-*}
-if grep -q "No active development items." docs/plan/plan.md; then
-  cat >docs/plan/plan.md <<EOF
-# Active Plan
-
-id	path	status
-$id	$dst	in_progress
-EOF
-else
-  printf "%s\t%s\t%s\n" "$id" "$dst" "in_progress" >>docs/plan/plan.md
-fi
+python3 scripts/lint-plan-docs.py --add-active "$id" "$dst"
 
 echo "$dst"

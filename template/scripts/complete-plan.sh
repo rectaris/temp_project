@@ -21,19 +21,7 @@ dst="docs/plan/checked/$base"
 mkdir -p docs/plan/checked
 mv "$src" "$dst"
 
-tmp=$(mktemp)
-awk -v id="$id" 'BEGIN { FS=OFS="\t" } $1 != id { print }' docs/plan/plan.md >"$tmp"
-mv "$tmp" docs/plan/plan.md
-if ! grep -q '^[0-9][0-9][0-9]	' docs/plan/plan.md; then
-  cat >docs/plan/plan.md <<'EOF'
-# Active Plan
-
-No active development items.
-EOF
-fi
-
-if ! grep -q "^$id	" docs/plan/checked.md; then
-  printf "%s\t%s\n" "$id" "$dst" >>docs/plan/checked.md
-fi
+python3 scripts/lint-plan-docs.py --remove-active "$id"
+python3 scripts/lint-plan-docs.py --append-checked "$id" "$dst"
 
 echo "$dst"

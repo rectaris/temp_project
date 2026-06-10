@@ -8,24 +8,13 @@ import re
 import sys
 from pathlib import Path
 
+import planlib
+
 
 ROOT = Path.cwd()
 PLAN = ROOT / "docs/plan/plan.md"
 CHECKED = ROOT / "docs/plan/checked.md"
 PLAN_DIRS = [ROOT / "docs/plan/active", ROOT / "docs/plan/backlog", ROOT / "docs/plan/checked"]
-REQUIRED_FIELDS = (
-    "status:",
-    "task_type:",
-    "review_class:",
-    "human_design_required:",
-    "human_approval_status:",
-    "target_files:",
-    "required_specs:",
-    "validation:",
-    "acceptance:",
-    "expected_output:",
-    "checked_summary_ja:",
-)
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
 
@@ -36,26 +25,11 @@ def fail(message: str) -> None:
 
 
 def plan_ids() -> set[int]:
-    ids: set[int] = set()
-    for directory in PLAN_DIRS:
-        if not directory.exists():
-            continue
-        for path in directory.glob("[0-9][0-9][0-9]-*.md"):
-            ids.add(int(path.name[:3]))
-    if CHECKED.exists():
-        for line in CHECKED.read_text(encoding="utf-8").splitlines():
-            match = re.match(r"^(\d{3})\s+", line)
-            if match:
-                ids.add(int(match.group(1)))
-    return ids
+    return planlib.plan_ids()
 
 
 def next_id() -> str:
-    ids = plan_ids()
-    value = 1
-    while value in ids:
-        value += 1
-    return f"{value:03d}"
+    return planlib.next_id()
 
 
 def lint_plan_index() -> None:
@@ -95,23 +69,22 @@ def lint_checked_index() -> None:
 
 
 def lint_manifest(path: Path) -> None:
-    text = path.read_text(encoding="utf-8")
-    for field in REQUIRED_FIELDS:
-        if field not in text:
-            fail(f"{path} missing field: {field}")
-    review = re.search(r"^review_class:\s*([ABC])\s*$", text, re.MULTILINE)
-    if not review:
+    try:
+        values = planlib.require_manifest_fields(path)
+    except planlib.PlanError as exc:
+        fail(str(exc))
+    review_value = planlib.manifest_scalar(values, "review_class")
+    if review_value not in {"A", "B", "C"}:
         fail(f"{path} review_class must be A, B, or C")
-    design = re.search(r"^human_design_required:\s*(\S+)\s*$", text, re.MULTILINE)
-    if not design or design.group(1) not in HUMAN_DESIGN_VALUES:
+    design_value = planlib.manifest_scalar(values, "human_design_required")
+    if design_value not in HUMAN_DESIGN_VALUES:
         fail(f"{path} human_design_required must be yes or no")
-    approval = re.search(r"^human_approval_status:\s*(\S+)\s*$", text, re.MULTILINE)
-    if not approval or approval.group(1) not in HUMAN_APPROVAL_VALUES:
+    approval_value = planlib.manifest_scalar(values, "human_approval_status")
+    if approval_value not in HUMAN_APPROVAL_VALUES:
         fail(f"{path} human_approval_status must be not_required, pending, or approved")
-    if review.group(1) == "C" and approval.group(1) != "approved":
+    if review_value == "C" and approval_value != "approved":
         fail(f"{path} class C work requires human_approval_status: approved before implementation")
-    summary = re.search(r"^checked_summary_ja:\s*(.+)\s*$", text, re.MULTILINE)
-    if not summary or not summary.group(1).strip():
+    if not planlib.manifest_scalar(values, "checked_summary_ja").strip():
         fail(f"{path} checked_summary_ja must be non-empty")
 
 
@@ -126,9 +99,29 @@ def lint_manifests() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--next-id", action="store_true", help="print the next available plan id")
+    parser.add_argument("--print-context", metavar="PLAN", help="print shell context for a plan manifest")
+    parser.add_argument("--add-active", nargs=2, metavar=("ID", "PATH"), help="add or replace an active index row")
+    parser.add_argument("--remove-active", metavar="ID", help="remove an active index row")
+    parser.add_argument("--append-checked", nargs=2, metavar=("ID", "PATH"), help="append a checked index row")
     args = parser.parse_args()
     if args.next_id:
         print(next_id())
+        return 0
+    if args.print_context:
+        try:
+            print("\n".join(planlib.context_lines(Path(args.print_context))))
+        except planlib.PlanError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return 0
+    if args.add_active:
+        planlib.add_active(args.add_active[0], args.add_active[1])
+        return 0
+    if args.remove_active:
+        planlib.remove_active(args.remove_active)
+        return 0
+    if args.append_checked:
+        planlib.append_checked(args.append_checked[0], args.append_checked[1])
         return 0
     lint_plan_index()
     lint_checked_index()

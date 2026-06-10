@@ -90,16 +90,7 @@ checked_summary_ja: $summary_ja
 EOF
 
 if [ "$kind" = "active" ]; then
-  if grep -q "No active development items." docs/plan/plan.md; then
-    cat >docs/plan/plan.md <<EOF
-# Active Plan
-
-id	path	status
-$id	$path	in_progress
-EOF
-  else
-    printf "%s\t%s\t%s\n" "$id" "$path" "in_progress" >>docs/plan/plan.md
-  fi
+  python3 scripts/lint-plan-docs.py --add-active "$id" "$path"
 fi
 
 echo "$path"

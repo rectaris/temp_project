@@ -2,6 +2,9 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+required_list=${TMPDIR:-/tmp}/project-agent-workflow-required-$$
+trap 'rm -f "$required_list"' EXIT HUP INT TERM
+python3 "$root/scripts/check-copier-template.py" --print-source-required >"$required_list"
 
 missing=0
 while IFS= read -r path; do
@@ -10,27 +13,7 @@ while IFS= read -r path; do
     echo "missing: $path" >&2
     missing=1
   fi
-done <<'EOF'
-copier.yml
-SKILL.md
-agents/openai.yaml
-references/routing.md
-references/planning.md
-references/validation.md
-references/file-management.md
-references/orchestration.md
-references/template-development.md
-template/AGENTS.md.jinja
-template/README.md.jinja
-template/.gitignore.jinja
-template/[[ _copier_conf.answers_file ]].jinja
-template/docs/agent/spec-index.yaml.jinja
-template/docs/agent/SPEC_VALIDATION.md.jinja
-template/docs/agent/SPEC_GIT_WORKFLOW.md
-scripts/init-project-workflow.sh
-scripts/lint-project-workflow.sh
-scripts/check-copier-template.py
-EOF
+done <"$required_list"
 
 if [ "$missing" -ne 0 ]; then
   exit 1
@@ -62,6 +45,7 @@ PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/project-agent-workflow-pycache-$$" \
   "$root/template/.codex/hooks/stop_review_gate.py" \
   "$root/scripts/check-copier-template.py" \
   "$root/template/scripts/lint-plan-docs.py" \
+  "$root/template/scripts/planlib.py" \
   "$root/template/scripts/format-plan-docs.py" \
   "$root/template/scripts/search-plan-archive.py" \
   "$root/template/scripts/validate-changes.py" \

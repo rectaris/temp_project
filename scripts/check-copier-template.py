@@ -11,19 +11,40 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-REQUIRED = [
+SOURCE_REQUIRED = [
     ".github/workflows/ci.yml",
     "copier.yml",
+    "SKILL.md",
+    "agents/openai.yaml",
+    "references/routing.md",
+    "references/planning.md",
+    "references/validation.md",
+    "references/file-management.md",
+    "references/orchestration.md",
     "template/AGENTS.md.jinja",
     "template/README.md.jinja",
     "template/.gitignore.jinja",
+    "template/.codex/config.toml.jinja",
+    "template/.codex/agents/change_reviewer.toml",
+    "template/.codex/agents/docs_researcher.toml",
+    "template/.codex/agents/repo_explorer.toml",
+    "template/.codex/agents/scoped_worker.toml",
+    "template/.codex/hooks/pre_tool_hardening_gate.py",
+    "template/.codex/hooks/stop_review_gate.py",
     "template/[[ _copier_conf.answers_file ]].jinja",
     "template/docs/agent/spec-index.yaml.jinja",
+    "template/docs/agent/SPEC_DEVELOPMENT_FLOW.md.jinja",
+    "template/docs/agent/SPEC_ENVIRONMENT.md",
+    "template/docs/agent/SPEC_ORCHESTRATION.md",
     "template/docs/agent/SPEC_VALIDATION.md.jinja",
     "template/docs/agent/SPEC_GIT_WORKFLOW.md",
     "template/docs/agent/SPEC_FILE_MANAGEMENT.md",
     "template/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+    "template/docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "template/docs/agent/SPEC_UI_DESIGN.md",
     "template/docs/plan/README.md",
+    "template/docs/plan/checked.md",
+    "template/docs/plan/plan.md",
     "template/docs/plan/backlog/README.md",
     "template/docs/plan/handoffs/README.md",
     "template/docs/plan/sub-agents/custom-agents.md",
@@ -39,6 +60,7 @@ REQUIRED = [
     "template/scripts/select-task-context.sh",
     "template/scripts/clean-handoffs.sh",
     "template/scripts/lint-plan-docs.py",
+    "template/scripts/planlib.py",
     "template/scripts/format-plan-docs.py",
     "template/scripts/search-plan-archive.py",
     "template/scripts/validate-changes.py",
@@ -51,6 +73,55 @@ REQUIRED = [
     "tests/copier-update.sh",
     "tests/smoke.sh",
     "tests/test-hooks.py",
+]
+
+GENERATED_REQUIRED = [
+    ".copier-answers.yml",
+    ".gitignore",
+    ".codex/config.toml",
+    ".codex/agents/change_reviewer.toml",
+    ".codex/agents/docs_researcher.toml",
+    ".codex/agents/repo_explorer.toml",
+    ".codex/agents/scoped_worker.toml",
+    ".codex/hooks/pre_tool_hardening_gate.py",
+    ".codex/hooks/stop_review_gate.py",
+    "AGENTS.md",
+    "README.md",
+    "docs/agent/spec-index.yaml",
+    "docs/agent/SPEC_DEVELOPMENT_FLOW.md",
+    "docs/agent/SPEC_ENVIRONMENT.md",
+    "docs/agent/SPEC_FILE_MANAGEMENT.md",
+    "docs/agent/SPEC_EXTERNAL_SERVICES.md",
+    "docs/agent/SPEC_GIT_WORKFLOW.md",
+    "docs/agent/SPEC_ORCHESTRATION.md",
+    "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "docs/agent/SPEC_UI_DESIGN.md",
+    "docs/agent/SPEC_VALIDATION.md",
+    "docs/plan/README.md",
+    "docs/plan/backlog/README.md",
+    "docs/plan/checked.md",
+    "docs/plan/handoffs/README.md",
+    "docs/plan/sub-agents/custom-agents.md",
+    "docs/plan/sub-agents/helper-prompts.md",
+    "docs/plan/plan.md",
+    "scripts/check-agent-completion.sh",
+    "scripts/complete-plan.sh",
+    "scripts/workflow-status.sh",
+    "scripts/create-plan.sh",
+    "scripts/finalize-active-plan.sh",
+    "scripts/format-plan-docs.py",
+    "scripts/select-task-context.sh",
+    "scripts/clean-handoffs.sh",
+    "scripts/lint-plan-docs.sh",
+    "scripts/format-plan-docs.sh",
+    "scripts/lint-plan-docs.py",
+    "scripts/next-plan-id.sh",
+    "scripts/planlib.py",
+    "scripts/promote-plan.sh",
+    "scripts/search-plan-archive.py",
+    "scripts/structure-map.py",
+    "scripts/validate-changes.py",
+    "scripts/security-static-check.py",
 ]
 
 
@@ -96,7 +167,16 @@ def parse_fixture(path: Path) -> dict[str, str]:
 
 
 def main() -> int:
-    for rel in REQUIRED:
+    if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
+        print("\n".join(SOURCE_REQUIRED))
+        return 0
+    if len(sys.argv) == 2 and sys.argv[1] == "--print-generated-required":
+        print("\n".join(GENERATED_REQUIRED))
+        return 0
+    if len(sys.argv) > 1:
+        fail(f"unknown arguments: {' '.join(sys.argv[1:])}")
+
+    for rel in SOURCE_REQUIRED:
         if not (ROOT / rel).is_file():
             fail(f"missing required file: {rel}")
 
