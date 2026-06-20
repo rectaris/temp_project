@@ -1,12 +1,13 @@
 # Japanese Technical Writing
 
-This generated specification adapts the Japanese technical-writing standards published by k16shikano and packaged for reuse by f4ah6o.
+This generated specification adapts the Japanese technical-writing standards published by k16shikano, packaged for reuse by f4ah6o, and supplemented with ReportSkills report-prose rules.
 Use it as repository-local agent policy, not as an installed skill.
 
 Sources:
 
 - `https://gist.github.com/k16shikano/fd287c3133457c4fd8f5601d34aa817d`
 - `https://github.com/f4ah6o/tech-write-ja`
+- `https://github.com/mizuamedesu/ReportSkills`
 
 ## Scope
 
@@ -27,6 +28,19 @@ It does not replace validation, Git, security, UI, or domain-specific specs.
 - Do not use em dashes, horizontal bars, or double dashes in Japanese body text or headings for apposition or explanation.
 - Do not use middle dots for ordinary Japanese parallel lists.
 - Use a full-width colon for term definitions: `**用語**：説明`.
+
+## Report-Style Naturalness
+
+Apply these additional rules when writing Japanese reports, assignments, explanatory notes, or other prose where a plain human-written tone matters.
+
+- Do not omit Japanese particles.
+- Avoid parenthetical glosses that only restate a preceding term, such as `commonization (abstraction)` or `virtual file system (VFS)`, unless the parenthetical form is needed later.
+- Do not use decorative bold emphasis in report prose.
+- Prefer ordinary Japanese sentences over symbol-heavy lists or punctuation that makes the text look generated.
+- Avoid hard-coded numbering in paragraphs and headings when the order may change during editing.
+- Use Markdown list markers when list structure is needed.
+- Do not use complex ASCII art for diagrams.
+- Use Mermaid or another diagram format when a diagram is needed and the repository supports it.
 
 ## Paragraphs And Argument Flow
 
