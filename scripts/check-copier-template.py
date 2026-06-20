@@ -69,6 +69,7 @@ SOURCE_REQUIRED = [
     "template/scripts/validate-changes.py",
     "template/scripts/security_rules.py",
     "template/scripts/security-static-check.py",
+    "template/scripts/skillspector-scan.sh",
     "template/scripts/structure-map.py",
     "references/template-development.md",
     "tests/fixtures/typescript.answers.yml",
@@ -130,6 +131,7 @@ GENERATED_REQUIRED = [
     "scripts/structure-map.py",
     "scripts/validate-changes.py",
     "scripts/security-static-check.py",
+    "scripts/skillspector-scan.sh",
 ]
 
 SOURCE_SHELL_LINT = [path for path in SOURCE_REQUIRED if path.endswith(".sh")]
@@ -148,6 +150,7 @@ QUESTIONS = {
     "use_plan_lifecycle",
     "use_change_validation",
     "use_security_static",
+    "use_skillspector",
     "use_structure_scanner",
     "use_mcp_policy",
     "use_linear_sync",

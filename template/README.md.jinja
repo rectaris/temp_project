@@ -11,6 +11,14 @@
 - 重要な作業は `docs/plan/plan.md` で追跡します。
 - プロジェクト固有のルールは `docs/agent/SPEC_*.md` に置きます。
 
+## セキュリティ検証
+
+このテンプレートには軽量な静的セキュリティ検査が含まれます。AI agent skill を追加または更新するリポジトリでは、任意で NVIDIA SkillSpector による追加スキャンも使えます。
+
+- 現在の SkillSpector 有効化状態は `docs/agent/SPEC_VALIDATION.md` を確認してください。
+- CLI を導入済みの場合は `scripts/skillspector-scan.sh <skill-path>` で静的スキャンを実行できます。
+- LLM 解析を使う場合だけ、`SKILLSPECTOR_USE_LLM=1` とプロバイダ認証情報を環境変数で設定します。
+
 ## 外部サービス連携
 
 MCP、Linear、graph memory は任意機能です。現在の有効化状態と設定手順は `docs/agent/SPEC_EXTERNAL_SERVICES.md` を確認してください。

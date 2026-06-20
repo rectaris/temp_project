@@ -30,6 +30,7 @@ Generated repositories may include:
 
 - `scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.
 - `scripts/security-static-check.py`: scans common high-signal static risks.
+- `scripts/skillspector-scan.sh`: optional NVIDIA SkillSpector wrapper for AI agent skill scans.
 - `scripts/structure-map.py --check`: verifies basic agent workflow structure.
 - `scripts/format-plan-docs.py --check`: verifies plan Markdown whitespace.
 - Codex hook Python should compile with `python3 -m py_compile`.

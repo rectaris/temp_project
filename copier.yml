@@ -80,6 +80,11 @@ use_security_static:
   help: Install a lightweight static security checker for scripts, workflows, and docs.
   default: true
 
+use_skillspector:
+  type: bool
+  help: Document optional NVIDIA SkillSpector scans for AI agent skills.
+  default: false
+
 use_structure_scanner:
   type: bool
   help: Install a generic repository structure and contract scanner.

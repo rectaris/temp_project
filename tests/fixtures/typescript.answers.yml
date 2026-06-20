@@ -9,6 +9,7 @@ max_agent_threads: 4
 use_plan_lifecycle: true
 use_change_validation: true
 use_security_static: true
+use_skillspector: true
 use_structure_scanner: true
 use_mcp_policy: true
 use_linear_sync: true

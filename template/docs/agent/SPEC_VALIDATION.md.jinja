@@ -2,6 +2,8 @@
 
 Generated for primary language: `[[ primary_language ]]`.
 
+Optional SkillSpector scan: `[[ use_skillspector|lower ]]`.
+
 ## Baseline
 
 - Validate every non-trivial change.
@@ -50,6 +52,20 @@ Before final report:
 ## Optional Checks
 
 - Static security: `python3 scripts/security-static-check.py`
+- SkillSpector agent-skill scan: `scripts/skillspector-scan.sh <skill-path>`
 - Structure scanner: `python3 scripts/structure-map.py --check`
 - Plan lint: `python3 scripts/lint-plan-docs.py`
 - Plan format check: `python3 scripts/format-plan-docs.py --check`
+
+## SkillSpector
+
+[% if use_skillspector %]
+Use NVIDIA SkillSpector before installing, updating, or vendoring AI agent skills from external sources.
+
+- Run `scripts/skillspector-scan.sh <skill-path>` for static-only analysis.
+- Set `SKILLSPECTOR_USE_LLM=1` only when semantic LLM analysis is intentionally required.
+- Keep provider credentials in environment variables or a secret store; do not commit them.
+- Treat HIGH or CRITICAL results as blocking until reviewed and remediated.
+[% else %]
+SkillSpector is not required by this template answer. To add it later, enable `use_skillspector`, install the `skillspector` CLI in an isolated environment, and run `scripts/skillspector-scan.sh <skill-path>` before installing or updating external AI agent skills.
+[% endif %]
