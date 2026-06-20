@@ -13,6 +13,8 @@ This repository packages reusable coding-agent project management, file routing,
 - Keep `copier.yml` as the long-term generation/update interface.
 - Keep deterministic checks in `scripts/` or `tests/`.
 - Do not add project-specific `supportcard-status` facts to generic templates.
+- When writing or editing Japanese prose in this repository, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
+- When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
 - Validate with `scripts/lint-project-workflow.sh` and `tests/smoke.sh` before completion.
 - Use Git for all changes.
 - Keep commits granular and scoped to one meaningful work unit.
