@@ -41,6 +41,17 @@ task_types:
     conditional:
       - path: docs/agent/SPEC_ENVIRONMENT.md
         when: assets, routes, static files, or hosted paths change.
+      - path: docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+        when: Japanese UI copy, labels, help text, documentation, prompts, plans, or prose are written or edited.
+
+  japanese_prose:
+    summary: Japanese README text, documentation, plans, specs, prompts, review comments, issue text, or other prose.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+    conditional:
+      - path: docs/agent/SPEC_UI_DESIGN.md
+        when: visible UI copy, accessibility text, interaction labels, or screenshots are affected.
 
   environment_data_flow:
     summary: Static assets, generated data, runtime paths, package scripts, CI, or deployment config.
@@ -75,6 +86,8 @@ usually_unneeded:
     unless: visible UI, copy, accessibility, or interaction behavior is in scope.
   - path: docs/agent/SPEC_EXTERNAL_SERVICES.md
     unless: MCP, Linear, graph memory, external issue sync, or external write behavior is in scope.
+  - path: docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+    unless: Japanese prose, UI copy, documentation, prompts, plans, issues, or review text is in scope.
 
 rules:
   - Start with default_reads plus the matching route's required list.
@@ -84,3 +97,4 @@ rules:
   - Do not sweep all docs/agent files for normal startup.
   - Keep README files human-facing; agent-facing operational policy belongs in docs/agent.
   - Treat external-service modules as optional unless SPEC_EXTERNAL_SERVICES explicitly enables them.
+  - Apply SPEC_JAPANESE_TECH_WRITING to Japanese prose without requiring an installed external skill.
