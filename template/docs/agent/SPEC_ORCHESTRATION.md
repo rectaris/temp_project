@@ -19,6 +19,16 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 - Keep final interpretation, integration, validation acceptance, planning updates, commits, and completion reports in the main session.
 - Use durable handoff directories only when direct helper output is not enough for continuity or review.
 
+## Command Sessions
+
+- Use normal command execution for short, deterministic commands.
+- Use tmux when available for long-running commands, shared processes, watch tasks, dev servers, and interactive CLIs.
+- Name tmux sessions descriptively enough that another agent or a human can identify the task.
+- Capture logs to a project-local file when command output may be needed after the session ends or by another agent.
+- Before starting a duplicate long-running process, check for an existing relevant tmux session.
+- When human intervention is needed, report the attach command instead of re-running or abandoning the process.
+- Stop tmux sessions that are no longer needed unless the user asked to keep them running.
+
 ## Decision Matrix
 
 - Use local execution for urgent critical-path work, direct user clarification, final specification judgment, validation acceptance, planning updates, commits, and completion reports.
