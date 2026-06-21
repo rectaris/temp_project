@@ -67,6 +67,14 @@ copier update --vcs-ref v0.3.0
 
 リリース時は、テンプレート変更をコミットしたあとにタグを作成して push します。
 
+タグの `X.Y.Z` は、直近の安定版タグからの変更内容で決めます。
+
+- `X`: 既存の生成先リポジトリで手動移行が必要になる破壊的変更を入れたときに上げます。
+- `Y`: `copier.yml` の質問追加、`template/` の機能追加、生成される運用ルールの追加など、後方互換の機能追加を入れたときに上げます。
+- `Z`: 誤記修正、検証の補強、後方互換のバグ修正など、既存機能の修正に限るときに上げます。
+
+判断に迷う場合は、`git diff <latest-tag>..HEAD -- copier.yml template scripts tests docs references README.md` で生成契約と運用手順への影響を確認します。
+
 ```sh
 git tag vX.Y.Z
 git push origin main --tags
