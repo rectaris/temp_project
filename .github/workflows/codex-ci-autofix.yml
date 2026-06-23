@@ -1,0 +1,398 @@
+name: Codex CI Autofix
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Same-repository pull request number to repair."
+        required: true
+        type: string
+      failed_run_id:
+        description: "Failed CI run id. Defaults to the latest failed CI run for the PR."
+        required: false
+        type: string
+      max_attempts:
+        description: "Maximum number of autofix commits allowed on the PR branch."
+        required: false
+        default: "3"
+        type: string
+      mode:
+        description: "direct-push commits to the PR branch; patch-only only uploads an artifact."
+        required: false
+        default: direct-push
+        type: choice
+        options:
+          - direct-push
+          - patch-only
+
+# Automatic workflow_run executions default to direct-push for same-repository PRs.
+# To make automatic runs upload artifacts without pushing, change the prepare job's
+# workflow_run mode assignment from "direct-push" to "patch-only".
+permissions: {}
+
+concurrency:
+  group: codex-ci-autofix-${{ github.event.workflow_run.pull_requests[0].number || inputs.pr_number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Prepare guarded context
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.context.outputs.should_run }}
+      reason: ${{ steps.context.outputs.reason }}
+      pr_number: ${{ steps.context.outputs.pr_number }}
+      base_branch: ${{ steps.context.outputs.base_branch }}
+      head_branch: ${{ steps.context.outputs.head_branch }}
+      head_sha: ${{ steps.context.outputs.head_sha }}
+      failed_run_id: ${{ steps.context.outputs.failed_run_id }}
+      max_attempts: ${{ steps.context.outputs.max_attempts }}
+      mode: ${{ steps.context.outputs.mode }}
+    steps:
+      - name: Resolve pull request and failed run
+        id: context
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const repository = `${owner}/${repo}`;
+            const set = (name, value) => core.setOutput(name, String(value ?? ""));
+            const stop = (reason) => {
+              set("should_run", "false");
+              set("reason", reason);
+              core.notice(reason);
+            };
+
+            let prNumber;
+            let failedRunId;
+            let maxAttempts = "3";
+            let mode = "direct-push";
+
+            if (context.eventName === "workflow_run") {
+              const run = context.payload.workflow_run;
+              maxAttempts = "3";
+              mode = "direct-push";
+
+              if (run.conclusion !== "failure") {
+                return stop(`CI conclusion is ${run.conclusion}; autofix only runs on failure.`);
+              }
+              if (run.event !== "pull_request") {
+                return stop(`CI event is ${run.event}; autofix only runs for pull_request CI.`);
+              }
+              if (!run.pull_requests || run.pull_requests.length === 0) {
+                return stop("Failed CI run is not associated with a pull request.");
+              }
+              if (!run.head_repository || run.head_repository.full_name !== repository) {
+                return stop("Pull request branch is from a fork or another repository; write-token autofix is disabled.");
+              }
+
+              prNumber = run.pull_requests[0].number;
+              failedRunId = run.id;
+            } else {
+              prNumber = Number(core.getInput("pr_number"));
+              failedRunId = core.getInput("failed_run_id");
+              maxAttempts = core.getInput("max_attempts") || "3";
+              mode = core.getInput("mode") || "direct-push";
+
+              if (!Number.isInteger(prNumber) || prNumber <= 0) {
+                return stop("workflow_dispatch requires a valid pr_number.");
+              }
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber,
+            });
+
+            if (pr.head.repo.full_name !== repository) {
+              return stop("Pull request branch is from a fork or another repository; write-token autofix is disabled.");
+            }
+
+            if (!failedRunId) {
+              const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner,
+                repo,
+                event: "pull_request",
+                branch: pr.head.ref,
+                status: "completed",
+                per_page: 30,
+              });
+              const failed = runs.workflow_runs.find((run) =>
+                run.name === "CI" &&
+                run.conclusion === "failure" &&
+                run.head_sha === pr.head.sha
+              );
+              if (!failed) {
+                return stop("No failed CI workflow_run was found for the current PR head.");
+              }
+              failedRunId = failed.id;
+            }
+
+            const parsedMaxAttempts = Number.parseInt(maxAttempts, 10);
+            if (!Number.isInteger(parsedMaxAttempts) || parsedMaxAttempts < 1) {
+              return stop("max_attempts must be a positive integer.");
+            }
+            if (!["direct-push", "patch-only"].includes(mode)) {
+              return stop("mode must be direct-push or patch-only.");
+            }
+
+            set("should_run", "true");
+            set("reason", "ready");
+            set("pr_number", pr.number);
+            set("base_branch", pr.base.ref);
+            set("head_branch", pr.head.ref);
+            set("head_sha", pr.head.sha);
+            set("failed_run_id", failedRunId);
+            set("max_attempts", parsedMaxAttempts);
+            set("mode", mode);
+
+  generate-fix:
+    name: Generate patch with Codex
+    needs: prepare
+    if: needs.prepare.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      has_patch: ${{ steps.diff.outputs.has_patch }}
+      skipped: ${{ steps.guard.outputs.skipped }}
+    steps:
+      - name: Check out pull request branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.head_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch base branch
+        run: git fetch --no-tags origin "${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+        env:
+          BASE_BRANCH: ${{ needs.prepare.outputs.base_branch }}
+
+      - name: Check autofix attempt limit
+        id: guard
+        run: |
+          set -eu
+          attempts=$(git log --format=%s "origin/${BASE_BRANCH}..HEAD" | awk '$0 == "fix: codex ci autofix" { count++ } END { print count + 0 }')
+          echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
+          if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "Autofix attempt limit reached: $attempts/$MAX_ATTEMPTS" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BASE_BRANCH: ${{ needs.prepare.outputs.base_branch }}
+          MAX_ATTEMPTS: ${{ needs.prepare.outputs.max_attempts }}
+
+      - name: Set up Python
+        if: steps.guard.outputs.skipped != 'true' && hashFiles('pyproject.toml', 'requirements.txt', 'uv.lock') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        if: steps.guard.outputs.skipped != 'true' && hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies when declared
+        if: steps.guard.outputs.skipped != 'true' && hashFiles('pyproject.toml', 'requirements.txt', 'uv.lock') != ''
+        run: |
+          set -eu
+          if [ -f uv.lock ]; then
+            python -m pip install --upgrade uv
+            UV_CACHE_DIR=.uv-cache uv sync
+          elif [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          elif [ -f pyproject.toml ]; then
+            python -m pip install -e ".[dev]" || python -m pip install -e .
+          fi
+
+      - name: Install Node dependencies when declared
+        if: steps.guard.outputs.skipped != 'true' && hashFiles('package.json') != ''
+        run: |
+          set -eu
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            pnpm install --frozen-lockfile
+          elif [ -f yarn.lock ]; then
+            corepack enable
+            yarn install --frozen-lockfile
+          fi
+
+      - name: Render Codex prompt
+        if: steps.guard.outputs.skipped != 'true'
+        run: |
+          set -eu
+          cp .github/codex/prompts/ci-autofix.md codex-ci-autofix-prompt.md
+          {
+            echo
+            echo "Runtime context:"
+            echo
+            echo "- Failed CI run id: ${FAILED_RUN_ID}"
+            echo "- Pull request number: ${PR_NUMBER}"
+            echo "- Base branch: ${BASE_BRANCH}"
+            echo "- Head branch: ${HEAD_BRANCH}"
+            echo "- Head SHA: ${HEAD_SHA}"
+            echo
+            echo "Use these environment variables when running commands:"
+            echo
+            echo "- FAILED_RUN_ID"
+            echo "- PR_NUMBER"
+            echo "- BASE_BRANCH"
+            echo "- HEAD_BRANCH"
+            echo "- HEAD_SHA"
+          } >> codex-ci-autofix-prompt.md
+        env:
+          FAILED_RUN_ID: ${{ needs.prepare.outputs.failed_run_id }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          BASE_BRANCH: ${{ needs.prepare.outputs.base_branch }}
+          HEAD_BRANCH: ${{ needs.prepare.outputs.head_branch }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+
+      - name: Run Codex
+        if: steps.guard.outputs.skipped != 'true'
+        id: run_codex
+        uses: openai/codex-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FAILED_RUN_ID: ${{ needs.prepare.outputs.failed_run_id }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          BASE_BRANCH: ${{ needs.prepare.outputs.base_branch }}
+          HEAD_BRANCH: ${{ needs.prepare.outputs.head_branch }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: codex-ci-autofix-prompt.md
+          output-file: codex-ci-autofix-output.md
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      - name: Create patch artifact
+        if: steps.guard.outputs.skipped != 'true'
+        id: diff
+        run: |
+          set -eu
+          git add -N .
+          git diff --binary HEAD > codex-ci-autofix.patch
+          if [ -s codex-ci-autofix.patch ]; then
+            echo "has_patch=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_patch=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload patch artifact
+        if: steps.diff.outputs.has_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-ci-autofix-patch-${{ needs.prepare.outputs.pr_number }}
+          path: codex-ci-autofix.patch
+          if-no-files-found: error
+
+      - name: Upload Codex summary
+        if: steps.guard.outputs.skipped != 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-ci-autofix-summary-${{ needs.prepare.outputs.pr_number }}
+          path: codex-ci-autofix-output.md
+          if-no-files-found: ignore
+
+  apply-patch:
+    name: Apply patch to PR branch
+    needs:
+      - prepare
+      - generate-fix
+    if: needs.prepare.outputs.mode == 'direct-push' && needs.generate-fix.outputs.has_patch == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out pull request branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.head_branch }}
+          fetch-depth: 0
+
+      - name: Download Codex patch
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-ci-autofix-patch-${{ needs.prepare.outputs.pr_number }}
+
+      - name: Apply patch and commit
+        run: |
+          set -eu
+          git apply --index codex-ci-autofix.patch
+          if git diff --cached --quiet; then
+            echo "Codex produced no staged changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: codex ci autofix"
+          git push origin "HEAD:${HEAD_BRANCH}"
+        env:
+          HEAD_BRANCH: ${{ needs.prepare.outputs.head_branch }}
+
+      - name: Comment on pull request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: [
+                "Codex pushed `fix: codex ci autofix` to this same-repository PR branch.",
+                "",
+                `Failed run inspected: ${process.env.FAILED_RUN_ID}`,
+                "Review the commit before merging. If the fix is wrong, revert the commit or disable `.github/workflows/codex-ci-autofix.yml`."
+              ].join("\n"),
+            });
+        env:
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          FAILED_RUN_ID: ${{ needs.prepare.outputs.failed_run_id }}
+
+  patch-only-notice:
+    name: Patch-only notice
+    needs:
+      - prepare
+      - generate-fix
+    if: needs.prepare.outputs.mode == 'patch-only' && needs.generate-fix.outputs.has_patch == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment with artifact notice
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: [
+                "Codex generated a CI autofix patch artifact but did not push it because `mode` is `patch-only`.",
+                "",
+                "Download the `codex-ci-autofix-patch-*` artifact from this workflow run, inspect it, and apply it manually if appropriate."
+              ].join("\n"),
+            });
+        env:
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}

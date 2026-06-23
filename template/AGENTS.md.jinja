@@ -42,6 +42,16 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Keep human-facing README files separate from agent-facing operational policy.
 - When writing or editing Japanese prose, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
 
+## CI Autofix Rules
+
+- Codex must make minimal changes when repairing CI failures.
+- Codex must not change unrelated behavior.
+- Codex must not weaken tests to make CI pass.
+- Codex must not delete failing tests unless the user explicitly requests it.
+- Codex must not modify secrets, deployment credentials, or production settings.
+- Codex must prefer fixing root causes over skipping checks.
+- Codex must stop and report when the failure is due to missing secrets, external service outages, or environment-only issues.
+
 ## Reports
 
 - State touched repositories.

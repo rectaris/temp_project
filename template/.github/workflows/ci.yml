@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        if: hashFiles('pyproject.toml', 'requirements.txt', 'uv.lock') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        if: hashFiles('pyproject.toml', 'requirements.txt', 'uv.lock') != ''
+        run: |
+          set -eu
+          if [ -f uv.lock ]; then
+            python -m pip install --upgrade uv
+            UV_CACHE_DIR=.uv-cache uv sync
+          elif [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          elif [ -f pyproject.toml ]; then
+            python -m pip install -e ".[dev]" || python -m pip install -e .
+          fi
+
+      - name: Install Node dependencies
+        if: hashFiles('package.json') != ''
+        run: |
+          set -eu
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            pnpm install --frozen-lockfile
+          elif [ -f yarn.lock ]; then
+            corepack enable
+            yarn install --frozen-lockfile
+          fi
+
+      - name: Run Python lint
+        if: hashFiles('ruff.toml', '.ruff.toml', 'pyproject.toml') != ''
+        run: |
+          set -eu
+          if [ -f ruff.toml ] || [ -f .ruff.toml ] || grep -q '^\[tool\.ruff' pyproject.toml 2>/dev/null; then
+            :
+          else
+            echo "ruff is not configured; skipping ruff check"
+            exit 0
+          fi
+          if python -m ruff --version >/dev/null 2>&1; then
+            python -m ruff check .
+          else
+            echo "ruff is not installed; skipping ruff check"
+          fi
+
+      - name: Run Python typecheck
+        if: hashFiles('mypy.ini', '.mypy.ini', 'pyproject.toml') != ''
+        run: |
+          set -eu
+          if [ -f mypy.ini ] || [ -f .mypy.ini ] || grep -q '^\[tool\.mypy\]' pyproject.toml 2>/dev/null; then
+            :
+          else
+            echo "mypy is not configured; skipping mypy check"
+            exit 0
+          fi
+          if python -m mypy --version >/dev/null 2>&1; then
+            python -m mypy .
+          else
+            echo "mypy is not installed; skipping mypy check"
+          fi
+
+      - name: Run Python tests
+        if: hashFiles('pytest.ini', 'tox.ini', 'tests/**/*.py') != ''
+        run: |
+          set -eu
+          if python -m pytest --version >/dev/null 2>&1; then
+            python -m pytest
+          else
+            echo "pytest is not installed; skipping pytest"
+          fi
+
+      - name: Run Node lint
+        if: hashFiles('package.json') != ''
+        run: |
+          set -eu
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.lint ? 0 : 1)"; then
+            npm run lint
+          else
+            echo "npm script lint is not defined; skipping"
+          fi
+
+      - name: Run Node typecheck
+        if: hashFiles('package.json') != ''
+        run: |
+          set -eu
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.typecheck ? 0 : 1)"; then
+            npm run typecheck
+          else
+            echo "npm script typecheck is not defined; skipping"
+          fi
+
+      - name: Run Node tests
+        if: hashFiles('package.json') != ''
+        run: |
+          set -eu
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+            npm run test
+          else
+            echo "npm script test is not defined; skipping"
+          fi
+
+      - name: Run Node build
+        if: hashFiles('package.json') != ''
+        run: |
+          set -eu
+          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+            npm run build
+          else
+            echo "npm script build is not defined; skipping"
+          fi
+
+      - name: Check whitespace
+        run: git diff --check

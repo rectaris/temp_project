@@ -24,6 +24,16 @@ This repository packages reusable coding-agent project management, file routing,
 - Commit after successful validation unless the user requested otherwise or a concrete dirty-worktree blocker prevents it.
 - Do not push unless the user explicitly requests it.
 
+## CI Autofix Rules
+
+- Codex must make minimal changes when repairing CI failures.
+- Codex must not change unrelated behavior.
+- Codex must not weaken tests to make CI pass.
+- Codex must not delete failing tests unless the user explicitly requests it.
+- Codex must not modify secrets, deployment credentials, or production settings.
+- Codex must prefer fixing root causes over skipping checks.
+- Codex must stop and report when the failure is due to missing secrets, external service outages, or environment-only issues.
+
 ## Reports
 
 - State touched repository: `temp_project`.

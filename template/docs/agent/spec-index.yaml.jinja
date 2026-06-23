@@ -58,7 +58,9 @@ task_types:
     required:
       - docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - docs/agent/SPEC_ENVIRONMENT.md
-    conditional: []
+    conditional:
+      - path: docs/agent/CODEX_CI_AUTOFIX.md
+        when: Codex CI autofix, failed-CI repair loops, GitHub Actions workflow_run automation, or CI autofix permissions change.
 
   orchestration_meta:
     summary: Agent workflow, helper roles, helper prompt templates, handoff policy, hooks, or process documentation.
@@ -88,6 +90,8 @@ usually_unneeded:
     unless: MCP, Linear, graph memory, external issue sync, or external write behavior is in scope.
   - path: docs/agent/SPEC_JAPANESE_TECH_WRITING.md
     unless: Japanese prose, UI copy, documentation, prompts, plans, issues, or review text is in scope.
+  - path: docs/agent/CODEX_CI_AUTOFIX.md
+    unless: CI autofix, GitHub Actions failure repair, Codex automation, or autofix permissions are in scope.
 
 rules:
   - Start with default_reads plus the matching route's required list.

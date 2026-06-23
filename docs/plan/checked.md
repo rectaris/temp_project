@@ -8,3 +8,4 @@ id	path
 005	docs/plan/checked/005-extended-generic-rules.md
 006	docs/plan/checked/006-external-service-integration-docs.md
 007	docs/plan/checked/007-security-static-self-skip.md
+008	docs/plan/checked/008-codex-ci-autofix.md
