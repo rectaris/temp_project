@@ -15,6 +15,13 @@ This repository packages reusable coding-agent project management, file routing,
 - Do not add project-specific `supportcard-status` facts to generic templates.
 - When writing or editing Japanese prose in this repository, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
 - When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
+- Use `docs/agent/spec-index.yaml` to route root-level agent policy when the task concerns planning, logging, compression, decision audit, or Japanese prose.
+- Keep raw agent logs and large agent artifacts local under `.agent-logs/` and `.agent-artifacts/`; do not commit them.
+- Use run manifests, search, excerpts, and optional context compression before loading large raw logs.
+- Read `AGENTS.md`, `docs/agent/`, validation policy, and security policy directly; do not route normative instructions through compression.
+- Run decision audit before creating or materially updating active plans when meaningful design, storage, validation, lifecycle, security, or artifact-boundary choices remain open; keep the full audit out of `docs/plan/active`.
+- Keep active plans as executable agent instructions. Record final accepted decisions only, not recommendation matrices or debate transcripts.
+- Do not depend on a repo-local `.codex/skills/decision-audit` installation in this repository root; `.codex/` is environment-provided and read-only here.
 - Validate with `scripts/lint-project-workflow.sh` and `tests/smoke.sh` before completion.
 - Use Git for all changes.
 - Keep commits granular and scoped to one meaningful work unit.

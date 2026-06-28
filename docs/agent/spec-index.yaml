@@ -1,0 +1,45 @@
+version: 1
+
+project:
+  name: project-agent-workflow
+  role: template-development-repository
+
+default_reads:
+  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+
+task_types:
+  planning_docs:
+    summary: Root or template plan files, plan indexes, checked archives, or plan workflow policy.
+    required:
+      - docs/agent/SPEC_PLAN_WORKFLOW.md
+    conditional:
+      - path: docs/agent/SPEC_DECISION_AUDIT.md
+        when: unstated decisions, approach comparisons, recommendations, or plan preflight choices are in scope.
+      - path: docs/agent/SPEC_AGENT_LOGGING.md
+        when: raw logs, run manifests, .agent-logs, .agent-artifacts, or plan-linked run evidence are in scope.
+      - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
+        when: context compression, Headroom, large logs, CI logs, or compressed run views are in scope.
+
+  template_workflow:
+    summary: Copier template files, generated agent docs, generated scripts, smoke tests, or template checks.
+    required:
+      - docs/agent/SPEC_PLAN_WORKFLOW.md
+    conditional:
+      - path: docs/agent/SPEC_DECISION_AUDIT.md
+        when: meaningful template design, storage, validation, lifecycle, security, or artifact-boundary choices remain open.
+      - path: docs/agent/SPEC_AGENT_LOGGING.md
+        when: raw local logs or large artifacts are kept as evidence for template work.
+      - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
+        when: large generated logs, CI logs, or local evidence need compressed views.
+
+  japanese_prose:
+    summary: Japanese README text, documentation, plans, prompts, issues, review comments, or prose.
+    required:
+      - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+
+rules:
+  - Start with AGENTS.md and the smallest matching route.
+  - Read normative instructions directly; do not compress AGENTS.md or docs/agent files.
+  - Use decision audit before non-trivial active-plan creation or material plan updates when meaningful choices remain open.
+  - Keep full decision-audit output out of docs/plan/active.
+  - Keep raw logs and large artifacts local under .agent-logs/ and .agent-artifacts/.
