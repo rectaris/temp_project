@@ -9,3 +9,4 @@ id	path
 006	docs/plan/checked/006-external-service-integration-docs.md
 007	docs/plan/checked/007-security-static-self-skip.md
 008	docs/plan/checked/008-codex-ci-autofix.md
+009	docs/plan/checked/009-agent-logging-context-compression.md

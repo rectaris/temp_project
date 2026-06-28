@@ -53,6 +53,8 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   assert_generated_required_files "$out"
   git -C "$out" init -b main >/dev/null
   git -C "$out" diff --check
+  git -C "$out" check-ignore .agent-logs/sample/manifest.json >/dev/null
+  git -C "$out" check-ignore .agent-artifacts/sample/output.txt >/dev/null
   (cd "$out" && python3 scripts/lint-plan-docs.py)
   (cd "$out" && python3 scripts/format-plan-docs.py --check)
   (cd "$out" && python3 scripts/structure-map.py --check >/dev/null)
@@ -86,5 +88,24 @@ grep -q 'Linear sync is disabled' "$tmp/python/docs/agent/SPEC_EXTERNAL_SERVICES
 grep -q 'To add Linear later' "$tmp/python/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'To add MCP later' "$tmp/docs/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'To add graph memory later' "$tmp/docs/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Agent Logging' "$tmp/typescript/docs/agent/SPEC_AGENT_LOGGING.md"
+grep -q 'Headroom is an optional backend' "$tmp/typescript/docs/agent/SPEC_CONTEXT_COMPRESSION.md"
+grep -q 'agent_logging:' "$tmp/typescript/docs/agent/spec-index.yaml"
+grep -q 'Context compression helper: optional' "$tmp/typescript/AGENTS.md"
+grep -q 'scripts/context-compress.sh' "$tmp/typescript/docs/agent/SPEC_CONTEXT_COMPRESSION.md"
+
+mkdir -p "$tmp/typescript/.agent-logs/sample/raw"
+printf 'line 1\nline 2\n' >"$tmp/typescript/.agent-logs/sample/raw/session.log"
+(cd "$tmp/typescript" && HEADROOM_DISABLED=1 scripts/context-compress.sh .agent-logs/sample/raw/session.log sample >/dev/null)
+test -f "$tmp/typescript/.agent-logs/sample/compressed/session.log.compressed.md"
+test -f "$tmp/typescript/.agent-logs/sample/manifest.json"
+if (cd "$tmp/typescript" && scripts/context-compress.sh AGENTS.md >/dev/null 2>&1); then
+  echo "context-compress.sh accepted AGENTS.md" >&2
+  exit 1
+fi
+if (cd "$tmp/typescript" && scripts/context-compress.sh docs/agent/SPEC_VALIDATION.md >/dev/null 2>&1); then
+  echo "context-compress.sh accepted validation policy" >&2
+  exit 1
+fi
 
 echo "smoke test passed"

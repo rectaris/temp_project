@@ -2,7 +2,7 @@
 
 ## Manifest
 
-- `status`: `active`
+- `status`: `checked`
 - `task_type`: `planning_docs`
 - `review_class`: `B`
 - `human_design_required`: `no`
@@ -113,16 +113,16 @@ The raw log remains the source evidence for audit and reproduction.
 
 ## Tasks
 
-- [ ] Inspect existing template outputs and smoke-test expectations.
-- [ ] Add generated `.gitignore` entries for `.agent-logs/` and `.agent-artifacts/`.
-- [ ] Add `SPEC_AGENT_LOGGING.md` covering raw logs, summaries, manifests, redaction, the default keep policy, explicit deletion, and Git boundaries.
-- [ ] Add `SPEC_CONTEXT_COMPRESSION.md` covering route-based use of optional compression backends, including Headroom.
-- [ ] Update `spec-index.yaml.jinja` with conditional routes for agent logging and context compression.
-- [ ] Update `AGENTS.md.jinja` and development-flow docs so raw logs are local evidence, not the primary planning record.
-- [ ] Add `context-compress.sh` as a thin fallback-safe wrapper around optional Headroom usage.
-- [ ] Add deterministic checks for ignored raw-log paths and wrapper refusal paths.
-- [ ] Update Copier generation tests and smoke tests.
-- [ ] Run `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- [x] Inspect existing template outputs and smoke-test expectations.
+- [x] Add generated `.gitignore` entries for `.agent-logs/` and `.agent-artifacts/`.
+- [x] Add `SPEC_AGENT_LOGGING.md` covering raw logs, summaries, manifests, redaction, the default keep policy, explicit deletion, and Git boundaries.
+- [x] Add `SPEC_CONTEXT_COMPRESSION.md` covering route-based use of optional compression backends, including Headroom.
+- [x] Update `spec-index.yaml.jinja` with conditional routes for agent logging and context compression.
+- [x] Update `AGENTS.md.jinja` and development-flow docs so raw logs are local evidence, not the primary planning record.
+- [x] Add `context-compress.sh` as a thin fallback-safe wrapper around optional Headroom usage.
+- [x] Add deterministic checks for ignored raw-log paths and wrapper refusal paths.
+- [x] Update Copier generation tests and smoke tests.
+- [x] Run `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
 
 ## Open Decisions
 
@@ -130,6 +130,10 @@ The raw log remains the source evidence for audit and reproduction.
 
 ## Validation Notes
 
-Confirm that generated projects receive no new required dependency.
+- `scripts/lint-project-workflow.sh`
+- `tests/smoke.sh`
+- `tests/copier-update.sh`
 
-Confirm that normal generated-project workflow, plan linting, and smoke tests pass when Headroom is not installed.
+Generated projects receive no new required dependency.
+
+Smoke coverage forces `HEADROOM_DISABLED=1` for wrapper output and verifies refusal paths without installing Headroom.

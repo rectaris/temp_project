@@ -12,6 +12,14 @@
 - `docs/plan/backlog/README.md`: human-facing backlog overview.
 - `docs/plan/handoffs/README.md`: human-facing handoff overview.
 
+## Agent Log Boundary
+
+- Keep `docs/plan` as the durable summary, decision, validation, and follow-up record.
+- Do not store raw agent logs, full command transcripts, large stdout/stderr captures, or compression transcripts inside plan files.
+- If log evidence matters, record the run id, manifest path, short summary, and relevant excerpt path.
+- Treat `.agent-logs/` runs referenced from `docs/plan` as pinned local evidence.
+- Use `SPEC_AGENT_LOGGING.md` and `SPEC_CONTEXT_COMPRESSION.md` when raw logs, run manifests, or large compressed views are in scope.
+
 ## README Boundary
 
 - Keep README files human-facing.
@@ -29,6 +37,7 @@
 - Search `docs/plan/checked.md` or use `scripts/search-plan-archive.py` before opening full checked archives.
 - Preserve durable decisions, validation outcomes, and fallback impact in active or checked records before deleting handoff files.
 - Keep README files human-facing; do not put required agent routing policy only in README files.
+- Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
 
 ## Manifest Contract
 

@@ -13,6 +13,7 @@
 - Avoid destructive operations.
 - Use Git to inspect changes before cleanup.
 - Keep generated, cache, build, dependency, and local tool folders out of commits.
+- Keep `.agent-logs/` and `.agent-artifacts/` local-only unless the repository owner explicitly approves a reviewed exception.
 
 ## Backup And Generated Files
 
@@ -25,3 +26,4 @@
 - Do not read or print likely secret-bearing files without explicit need.
 - Never commit credentials, tokens, private keys, `.env` contents, or local environment files.
 - Keep external service credentials in environment variables or platform secret stores.
+- Redact secret-like content from raw agent logs and local artifacts before summarizing or sharing them.

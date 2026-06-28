@@ -11,7 +11,9 @@
 - `scripts/init-project-workflow.sh`: 簡単に導入するための Copier ラッパーです。
 - `scripts/lint-project-workflow.sh`: このパッケージが導入可能な状態かを検証します。
 
-生成先には、計画 lifecycle、変更差分に応じた検証選択、静的セキュリティ検査、任意の NVIDIA SkillSpector スキャン手順、構造スキャン、handoff 管理、active plan の文脈抽出、Codex hook/config 検証の汎用ルールを導入できます。MCP、Linear、graph memory のような外部サービス依存ルールは Copier の回答で opt-in します。
+生成先には、計画 lifecycle、変更差分に応じた検証選択、静的セキュリティ検査、任意の NVIDIA SkillSpector スキャン手順、構造スキャン、handoff 管理、active plan の文脈抽出、ローカル agent ログ方針、任意の context 圧縮 helper、Codex hook/config 検証の汎用ルールを導入できます。MCP、Linear、graph memory のような外部サービス依存ルールは Copier の回答で opt-in します。
+
+ローカル agent ログは生成先の `.agent-logs/` と `.agent-artifacts/` に保存する方針を常に生成します。これらは Git 管理外の情報資産として扱い、`docs/plan` には raw log ではなく要約、判断、検証結果、必要な run id を残します。大きなログを読み返す場合は `docs/agent/spec-index.yaml` のルーティング、manifest、検索、抜粋、`scripts/context-compress.sh` を使います。Headroom は PATH 上にある場合だけ任意 backend として使い、テンプレートの必須依存にはしません。
 
 外部サービスを opt-in した生成先には、`docs/agent/SPEC_EXTERNAL_SERVICES.md` が生成されます。このドキュメントには、認証情報の置き場所、dry-run/read/write の分類、MCP server の記録項目、Linear の issue sync 境界、graph memory の project id と write review 境界を記載します。外部連携を無効にした場合も、同じファイルに「ローカル運用で十分であること」と後から有効化する際の追加項目を残します。
 

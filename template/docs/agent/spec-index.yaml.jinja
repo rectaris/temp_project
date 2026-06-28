@@ -18,6 +18,10 @@ task_types:
       - docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - docs/agent/SPEC_PLAN_WORKFLOW.md
     conditional:
+      - path: docs/agent/SPEC_AGENT_LOGGING.md
+        when: raw agent logs, run manifests, .agent-logs, .agent-artifacts, or plan-linked run evidence are in scope.
+      - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
+        when: context compression, Headroom, large logs, CI logs, or compressed run views are in scope.
       - path: docs/agent/SPEC_ORCHESTRATION.md
         when: helper agents, delegation, handoffs, hooks, or execution-process behavior changes.
       - path: docs/agent/SPEC_EXTERNAL_SERVICES.md
@@ -79,6 +83,25 @@ task_types:
       - path: docs/agent/SPEC_PLAN_WORKFLOW.md
         when: external service state is linked to plan lifecycle files.
 
+  agent_logging:
+    summary: Local raw agent logs, run manifests, redaction reports, compressed views, or large agent artifacts.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_AGENT_LOGGING.md
+    conditional:
+      - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
+        when: large logs, Headroom, compressed views, or context-size reduction are in scope.
+      - path: docs/agent/SPEC_PLAN_WORKFLOW.md
+        when: logs are linked from active or checked plans.
+
+  context_compression:
+    summary: Optional compression of large logs or artifacts, including Headroom-backed derived views.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_AGENT_LOGGING.md
+      - docs/agent/SPEC_CONTEXT_COMPRESSION.md
+    conditional: []
+
 usually_unneeded:
   - path: docs/agent/SPEC_ORCHESTRATION.md
     unless: orchestration, handoff, hook, or delegation behavior is in scope.
@@ -92,6 +115,10 @@ usually_unneeded:
     unless: Japanese prose, UI copy, documentation, prompts, plans, issues, or review text is in scope.
   - path: docs/agent/CODEX_CI_AUTOFIX.md
     unless: CI autofix, GitHub Actions failure repair, Codex automation, or autofix permissions are in scope.
+  - path: docs/agent/SPEC_AGENT_LOGGING.md
+    unless: raw agent logs, run manifests, redaction reports, .agent-logs, or .agent-artifacts are in scope.
+  - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
+    unless: large logs, context compression, Headroom, or compressed derived views are in scope.
 
 rules:
   - Start with default_reads plus the matching route's required list.
@@ -102,3 +129,5 @@ rules:
   - Keep README files human-facing; agent-facing operational policy belongs in docs/agent.
   - Treat external-service modules as optional unless SPEC_EXTERNAL_SERVICES explicitly enables them.
   - Apply SPEC_JAPANESE_TECH_WRITING to Japanese prose without requiring an installed external skill.
+  - Do not compress AGENTS.md, docs/agent files, validation policy, or security policy; read normative instructions directly.
+  - Use raw-log manifests, search, excerpts, and optional compression to decide whether large logs should enter context.
