@@ -26,6 +26,15 @@
 - Keep agent-facing operational policy in `docs/agent/SPEC_*.md`.
 - If a reusable operational rule appears only in a README, move or mirror it into `docs/agent/` before relying on it.
 
+## Decision Audit Preflight
+
+- Before creating or materially updating an active plan, run decision audit when meaningful design, storage, validation, lifecycle, security, or artifact-boundary choices remain open.
+- Use `SPEC_DECISION_AUDIT.md` for trigger rules, output format, and artifact boundaries.
+- Keep full decision-audit output in chat, raw logs, handoff research artifacts, dedicated decision artifacts, or `.agent-artifacts/decision-audits/`.
+- Do not copy approach matrices, debate transcripts, or long recommendation rationale into `docs/plan/active`.
+- After the direction is settled, record only final accepted decisions in the active plan.
+- Skip the preflight for small, mechanical, or already-determined changes.
+
 ## Rules
 
 - Create or update an active plan before non-trivial edits.
@@ -38,6 +47,7 @@
 - Preserve durable decisions, validation outcomes, and fallback impact in active or checked records before deleting handoff files.
 - Keep README files human-facing; do not put required agent routing policy only in README files.
 - Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
+- Keep active plans executable. Use `## Decisions` for final accepted decisions, not full decision-audit output.
 
 ## Manifest Contract
 

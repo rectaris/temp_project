@@ -2,7 +2,7 @@
 
 ## Manifest
 
-- `status`: `active`
+- `status`: `checked`
 - `task_type`: `orchestration_meta`
 - `review_class`: `B`
 - `human_design_required`: `no`
@@ -126,16 +126,16 @@ Do not add a Copier prompt that makes this optional unless implementation proves
 
 ## Tasks
 
-- [ ] Inspect current Codex support for repository-local generated skills under `.codex/skills`.
-- [ ] Add the generated `decision-audit` skill when repository-local skill discovery is supported.
-- [ ] Add `template/docs/agent/SPEC_DECISION_AUDIT.md`.
-- [ ] Update `template/docs/agent/spec-index.yaml.jinja` with a `decision_audit` route.
-- [ ] Update `template/docs/agent/SPEC_PLAN_WORKFLOW.md` with the decision-audit preflight rule and artifact boundary.
-- [ ] Update `template/AGENTS.md.jinja` with the automatic decision-audit operating rule.
-- [ ] Update template required-file checks.
-- [ ] Add or update smoke tests for generated files and route references.
-- [ ] Confirm active-plan guardrails still keep full audit matrices out of active plans.
-- [ ] Run `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- [x] Inspect current Codex support for repository-local generated skills under `.codex/skills`.
+- [x] Add the generated `decision-audit` skill when repository-local skill discovery is supported.
+- [x] Add `template/docs/agent/SPEC_DECISION_AUDIT.md`.
+- [x] Update `template/docs/agent/spec-index.yaml.jinja` with a `decision_audit` route.
+- [x] Update `template/docs/agent/SPEC_PLAN_WORKFLOW.md` with the decision-audit preflight rule and artifact boundary.
+- [x] Update `template/AGENTS.md.jinja` with the automatic decision-audit operating rule.
+- [x] Update template required-file checks.
+- [x] Add or update smoke tests for generated files and route references.
+- [x] Confirm active-plan guardrails still keep full audit matrices out of active plans.
+- [x] Run `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
 
 ## Open Decisions
 
@@ -143,8 +143,18 @@ Do not add a Copier prompt that makes this optional unless implementation proves
 
 ## Validation Notes
 
-Confirm that the generated project contains the decision-audit workflow files and that routing docs reference the workflow.
+Confirmed that generated projects contain the decision-audit skill files and `SPEC_DECISION_AUDIT.md`.
 
-Confirm that existing active plans remain valid and do not need to contain decision-audit matrices.
+Confirmed that `spec-index.yaml`, `SPEC_PLAN_WORKFLOW.md`, and `AGENTS.md` reference the workflow and plan-preflight rule.
 
-Confirm that the new workflow remains compatible with `010-plan-authoring-guardrails`.
+Confirmed that full audit matrices remain outside active plans; active plans record only final accepted decisions.
+
+Validated with:
+
+- `python3 /home/rectaris/.codex/skills/.system/skill-creator/scripts/quick_validate.py template/.codex/skills/decision-audit`
+- `python3 scripts/check-copier-template.py`
+- `scripts/lint-project-workflow.sh`
+- `tests/smoke.sh`
+- `git diff --check`
+
+`tests/smoke.sh` emitted Copier `DirtyLocalWarning` because it rendered the template with uncommitted local changes, then passed.

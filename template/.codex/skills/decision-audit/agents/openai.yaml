@@ -1,0 +1,4 @@
+interface:
+  display_name: "Decision Audit"
+  short_description: "Find unstated decisions before planning"
+  default_prompt: "Use $decision-audit to identify unstated decisions, compare approaches, and recommend a direction before updating the plan."

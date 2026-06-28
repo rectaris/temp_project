@@ -10,3 +10,4 @@ id	path
 007	docs/plan/checked/007-security-static-self-skip.md
 008	docs/plan/checked/008-codex-ci-autofix.md
 009	docs/plan/checked/009-agent-logging-context-compression.md
+011	docs/plan/checked/011-decision-audit-skill.md

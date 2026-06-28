@@ -26,6 +26,8 @@ task_types:
         when: helper agents, delegation, handoffs, hooks, or execution-process behavior changes.
       - path: docs/agent/SPEC_EXTERNAL_SERVICES.md
         when: MCP, Linear, graph memory, external issue sync, or external write policy changes.
+      - path: docs/agent/SPEC_DECISION_AUDIT.md
+        when: unstated important decisions, approach comparisons, recommendations, or material plan preflight choices are in scope.
 
   product_logic:
     summary: Runtime behavior, calculations, business logic, data contracts, or public APIs.
@@ -72,7 +74,22 @@ task_types:
       - docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - docs/agent/SPEC_PLAN_WORKFLOW.md
       - docs/agent/SPEC_ORCHESTRATION.md
-    conditional: []
+    conditional:
+      - path: docs/agent/SPEC_DECISION_AUDIT.md
+        when: decision-audit workflow, plan preflight decisions, or recommendation-analysis behavior changes.
+
+  decision_audit:
+    summary: Unstated important decisions, missing decision analysis, approach comparisons, or recommendations with reasons.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_DECISION_AUDIT.md
+    conditional:
+      - path: docs/agent/SPEC_PLAN_WORKFLOW.md
+        when: the audit affects active plans, backlog plans, checked records, handoffs, or plan lifecycle files.
+      - path: docs/agent/SPEC_AGENT_LOGGING.md
+        when: the full audit is stored or linked through raw logs, run manifests, or .agent-logs.
+      - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
+        when: large logs, Headroom, compressed views, or context-size reduction are part of the decision.
 
   external_services:
     summary: MCP, Linear, graph memory, external issue sync, or external write policy.
@@ -119,6 +136,8 @@ usually_unneeded:
     unless: raw agent logs, run manifests, redaction reports, .agent-logs, or .agent-artifacts are in scope.
   - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
     unless: large logs, context compression, Headroom, or compressed derived views are in scope.
+  - path: docs/agent/SPEC_DECISION_AUDIT.md
+    unless: unstated decisions, approach recommendations, or plan preflight choices are in scope.
 
 rules:
   - Start with default_reads plus the matching route's required list.
@@ -131,3 +150,4 @@ rules:
   - Apply SPEC_JAPANESE_TECH_WRITING to Japanese prose without requiring an installed external skill.
   - Do not compress AGENTS.md, docs/agent files, validation policy, or security policy; read normative instructions directly.
   - Use raw-log manifests, search, excerpts, and optional compression to decide whether large logs should enter context.
+  - Use decision audit before non-trivial active-plan creation or material plan updates when meaningful choices remain open.
