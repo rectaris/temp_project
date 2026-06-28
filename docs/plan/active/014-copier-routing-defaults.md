@@ -1,0 +1,140 @@
+# Copier Routing Defaults
+
+## Manifest
+
+- `status`: `active`
+- `task_type`: `template_workflow`
+- `review_class`: `B`
+- `human_design_required`: `no`
+- `human_approval_status`: `not_required`
+- `target_files`:
+  - `copier.yml`
+  - `template/AGENTS.md.jinja`
+  - `template/docs/agent/spec-index.yaml.jinja`
+  - `template/docs/agent/SPEC_DEVELOPMENT_FLOW.md.jinja`
+  - `template/docs/agent/SPEC_VALIDATION.md.jinja`
+  - `scripts/check-copier-template.py`
+  - `tests/fixtures/*.answers.yml`
+  - `tests/smoke.sh`
+  - `tests/copier-update.sh`
+- `required_specs`:
+  - `AGENTS.md`
+  - `docs/agent/SPEC_PLAN_WORKFLOW.md`
+  - `docs/agent/SPEC_DECISION_AUDIT.md`
+- `validation`:
+  - `scripts/lint-project-workflow.sh`
+  - `tests/smoke.sh`
+  - `git diff --check`
+- `acceptance`:
+  - Copier no longer prompts for local-only workflow modules that agents can activate through text routing.
+  - Generated projects still include the local workflow files needed for plan lifecycle, change validation, static security checks, structure scanning, helper agents, and concurrency guidance.
+  - Runtime policy tells agents to decide whether to read or execute those local modules through `docs/agent/spec-index.yaml` and routed specs.
+  - External-service and external-tool opt-ins remain explicit Copier answers.
+  - Static checks, fixtures, smoke tests, and update tests match the reduced Copier question set.
+- `acceptance_focus`:
+  - reduced Copier prompts
+  - route-based runtime activation
+  - explicit external opt-ins
+  - template update compatibility
+- `expected_output`: reduced Copier question set, updated generated policy text, updated checks and fixtures, validation output, and checked plan record.
+- `checked_summary_ja`: ローカル完結の workflow module を Copier 質問から外し、生成後の agent routing で使用判断する方針に整理した。
+- `completion_deferred_reason`: ``
+
+## Problem
+
+`copier.yml` currently asks for several local workflow settings that do not need generation-time user choice.
+
+The generated repository can include these local workflow modules by default and let agents decide whether to read or run them through text routing.
+
+Keeping these settings as Copier questions increases setup friction and creates fixture and update churn without giving the user a meaningful safety boundary.
+
+## Goal
+
+Reduce Copier prompts to project identity, primary language, and explicit opt-ins for external or higher-risk capabilities.
+
+Make local workflow modules default-on in generated repositories.
+
+Use generated agent routing policy to decide when those modules are relevant during task execution.
+
+## Decisions
+
+1. Remove generation-time questions for local-only workflow modules that can be safely installed by default.
+
+2. Keep explicit Copier answers for project metadata, `primary_language`, external-service policies, and SkillSpector.
+
+3. Treat hooks as an explicit Copier answer unless implementation proves the generated hook configuration is inert without user runtime registration.
+
+4. Preserve `.copier-answers.yml` update compatibility by making removed settings internal defaults or by providing a documented migration path for older answers.
+
+5. Do not remove generated local workflow files as part of this work.
+
+## Implementation Instructions
+
+Remove these Copier questions if no later inspection shows a hard generation-time boundary:
+
+- `planning_style`
+- `use_codex_agents`
+- `max_agent_threads`
+- `use_plan_lifecycle`
+- `use_change_validation`
+- `use_security_static`
+- `use_structure_scanner`
+
+Replace removed answers with internal template defaults where templates still need values.
+
+Use defaults equivalent to the current recommended path:
+
+- `planning_style`: `active_backlog_checked`
+- `use_codex_agents`: `true`
+- `max_agent_threads`: `4`
+- `use_plan_lifecycle`: `true`
+- `use_change_validation`: `true`
+- `use_security_static`: `true`
+- `use_structure_scanner`: `true`
+
+Keep these Copier questions:
+
+- `project_name`
+- `project_slug`
+- `project_purpose`
+- `primary_language`
+- `use_hooks`
+- `use_skillspector`
+- `use_mcp_policy`
+- `use_linear_sync`
+- `use_graph_memory`
+
+Update generated `AGENTS.md` and generated agent docs so they no longer present removed local workflow defaults as user-selected template answers.
+
+Add or update policy text stating that local workflow modules are available by default and should be used only when the task route requires them.
+
+Update `scripts/check-copier-template.py` so `QUESTIONS` matches the reduced prompt set and any required internal defaults are checked directly.
+
+Update all Copier answer fixtures to remove deleted answers.
+
+Update smoke and update tests for the reduced prompt set and confirm generated required files still exist.
+
+Inspect Copier update behavior from old answer files before finalizing.
+
+If removed answers from an older `.copier-answers.yml` cause update failures or rejection churn, add the smallest compatible handling supported by Copier and document it in the plan's validation notes.
+
+## Tasks
+
+- [ ] Inspect all template references to the removable Copier answers.
+- [ ] Convert removable answers to internal defaults or static generated text.
+- [ ] Update generated agent routing and development-flow policy for route-based local module use.
+- [ ] Reduce `scripts/check-copier-template.py` question checks.
+- [ ] Update answer fixtures and smoke/update expectations.
+- [ ] Run template static checks.
+- [ ] Run `scripts/lint-project-workflow.sh`.
+- [ ] Run `tests/smoke.sh`.
+- [ ] Run `tests/copier-update.sh` if Copier is available.
+- [ ] Archive this plan after validation.
+
+## Open Decisions
+
+- Confirm whether `use_hooks` should remain explicit or become default-on after inspecting generated runtime side effects.
+
+## Validation Notes
+
+Not yet run.
