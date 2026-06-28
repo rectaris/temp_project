@@ -62,6 +62,33 @@ done
 
 run_plan_lifecycle_smoke "$tmp/typescript"
 
+good_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
+(cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
+(cd "$tmp/typescript" && scripts/complete-plan.sh "$good_plan" >/dev/null)
+
+bad_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active recommendation-matrix --summary "Recommendation matrix." --summary-ja "推奨案を比較する。" )
+cat >>"$tmp/typescript/$bad_plan" <<'EOF_BAD_PLAN'
+## Decision Audit
+
+1. Storage location
+   Compare possible storage locations.
+
+   A: Store the full audit in the active plan.
+   B: Store the full audit in a separate artifact.
+
+   推奨: B
+   理由: Active plans should keep only final decisions.
+EOF_BAD_PLAN
+if (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py >/dev/null 2>&1); then
+  echo "lint-plan-docs.py accepted an active-plan recommendation matrix" >&2
+  exit 1
+fi
+bad_base=$(basename "$bad_plan")
+bad_id=${bad_base%%-*}
+(cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py --remove-active "$bad_id")
+rm "$tmp/typescript/$bad_plan"
+(cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
+
 test -f "$tmp/typescript/.codex/agents/repo_explorer.toml"
 test -f "$tmp/typescript/.codex/hooks/pre_tool_hardening_gate.py"
 test -f "$tmp/python/.codex/agents/repo_explorer.toml"

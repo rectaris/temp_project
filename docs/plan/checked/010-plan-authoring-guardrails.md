@@ -2,7 +2,7 @@
 
 ## Manifest
 
-- `status`: `active`
+- `status`: `checked`
 - `task_type`: `planning_docs`
 - `review_class`: `B`
 - `human_design_required`: `no`
@@ -94,13 +94,13 @@ Add tests for a bad active plan that contains a recommendation matrix and a good
 
 ## Tasks
 
-- [ ] Inspect current generated plan scaffolding and lint-plan behavior.
-- [ ] Update `template/docs/agent/SPEC_PLAN_WORKFLOW.md` with active-plan artifact boundaries.
-- [ ] Update generated plan scaffolding if needed.
-- [ ] Add active-plan lint rules for obvious deliberation-log patterns.
-- [ ] Add tests for rejected recommendation-matrix plans and accepted final-decision plans.
-- [ ] Confirm Japanese user-facing fields remain valid.
-- [ ] Run `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- [x] Inspect current generated plan scaffolding and lint-plan behavior.
+- [x] Update `template/docs/agent/SPEC_PLAN_WORKFLOW.md` with active-plan artifact boundaries.
+- [x] Update generated plan scaffolding if needed.
+- [x] Add active-plan lint rules for obvious deliberation-log patterns.
+- [x] Add tests for rejected recommendation-matrix plans and accepted final-decision plans.
+- [x] Confirm Japanese user-facing fields remain valid.
+- [x] Run `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
 
 ## Open Decisions
 
@@ -108,6 +108,16 @@ Add tests for a bad active plan that contains a recommendation matrix and a good
 
 ## Validation Notes
 
-Confirm that the new lint rules do not reject existing valid active and checked plans.
+Confirmed that generated plans with compact final decisions and Japanese `checked_summary_ja` still pass lint.
 
-Confirm that generated projects can still create and complete plans with normal lifecycle scripts.
+Confirmed that active plans containing a structured recommendation matrix are rejected by generated `lint-plan-docs.py`.
+
+Confirmed that generated projects can still create and complete plans with normal lifecycle scripts.
+
+Validated with:
+
+- `scripts/lint-project-workflow.sh`
+- `tests/smoke.sh`
+- `git diff --check`
+
+`tests/smoke.sh` emitted Copier `DirtyLocalWarning` because it rendered the template with uncommitted local changes, then passed.

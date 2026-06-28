@@ -35,6 +35,16 @@
 - After the direction is settled, record only final accepted decisions in the active plan.
 - Skip the preflight for small, mechanical, or already-determined changes.
 
+## Active Plan Authoring
+
+- Write active plans as executable instructions for the next agent.
+- Prefer English for operational sections, implementation instructions, task lists, file paths, validation notes, and manifest values.
+- Use Japanese only for user-facing summaries, `checked_summary_ja`, domain terms, quoted user requirements, or tasks whose scope is Japanese prose.
+- Record final accepted decisions in `## Decisions`.
+- Do not store alternatives, recommendation matrices, debate transcripts, or long rationale blocks in active plans.
+- Put detailed option analysis in chat, raw logs, handoff research artifacts, dedicated decision artifacts, or `.agent-artifacts/decision-audits/`.
+- Keep enough context for implementation and validation without preserving the full discussion that produced the plan.
+
 ## Rules
 
 - Create or update an active plan before non-trivial edits.
@@ -48,6 +58,7 @@
 - Keep README files human-facing; do not put required agent routing policy only in README files.
 - Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
 - Keep active plans executable. Use `## Decisions` for final accepted decisions, not full decision-audit output.
+- Keep active-plan operational prose in English by default.
 
 ## Manifest Contract
 

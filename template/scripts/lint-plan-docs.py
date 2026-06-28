@@ -16,6 +16,10 @@ PLAN = planlib.PLAN
 CHECKED = planlib.CHECKED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
+MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[:：]")
+APPROACH_MARKERS = {"A", "B", "C"}
+RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
+MATRIX_WINDOW_LINES = 20
 
 
 def fail(message: str) -> None:
@@ -87,12 +91,36 @@ def lint_manifest(path: Path) -> None:
         fail(f"{path} checked_summary_ja must be non-empty")
 
 
+def lint_active_plan_body(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    markers: list[tuple[int, str]] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        match = MATRIX_MARKER_RE.match(line)
+        if match:
+            markers.append((lineno, match.group(1)))
+
+    for index, (lineno, marker) in enumerate(markers):
+        if marker not in APPROACH_MARKERS:
+            continue
+        window = [
+            candidate
+            for candidate_lineno, candidate in markers[index:]
+            if candidate_lineno - lineno <= MATRIX_WINDOW_LINES
+        ]
+        approach_count = len({candidate for candidate in window if candidate in APPROACH_MARKERS})
+        has_rationale = any(candidate in RATIONALE_MARKERS for candidate in window)
+        if approach_count >= 2 and has_rationale:
+            fail(f"{path} contains an option-analysis matrix; keep full deliberation outside active plans")
+
+
 def lint_manifests() -> None:
     for directory in planlib.OPEN_PLAN_DIRS:
         if not directory.exists():
             continue
         for path in sorted(directory.glob("[0-9][0-9][0-9]-*.md")):
             lint_manifest(path)
+            if directory == planlib.ACTIVE_DIR:
+                lint_active_plan_body(path)
 
 
 def main() -> int:

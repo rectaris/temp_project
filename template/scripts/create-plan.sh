@@ -85,7 +85,27 @@ acceptance_focus:
 expected_output: full-implementation
 checked_summary_ja: $summary_ja
 
-## Notes
+## Problem
+
+TBD
+
+## Goal
+
+TBD
+
+## Implementation Instructions
+
+Describe the executable steps for the next agent in English by default.
+
+## Decisions
+
+- TBD
+
+## Tasks
+
+- [ ] TBD
+
+## Validation Notes
 
 EOF
 
