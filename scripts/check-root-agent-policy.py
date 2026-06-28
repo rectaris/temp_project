@@ -21,6 +21,7 @@ REQUIRED_ROOT_FILES = [
     "docs/agent/SPEC_CONTEXT_COMPRESSION.md",
     "docs/agent/SPEC_DECISION_AUDIT.md",
     "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "scripts/agent-log-event.py",
     "scripts/context-compress.sh",
 ]
 
@@ -28,6 +29,7 @@ REQUIRED_AGENT_RULES = [
     "docs/agent/spec-index.yaml",
     ".agent-logs/",
     ".agent-artifacts/",
+    "scripts/agent-log-event.py",
     "decision audit",
     "docs/plan/active",
 ]

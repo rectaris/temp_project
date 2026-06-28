@@ -1,0 +1,97 @@
+[% if use_hooks %]
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event SessionStart",
+            "timeout": 30,
+            "statusMessage": "Logging Codex session start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event UserPromptSubmit",
+            "timeout": 30,
+            "statusMessage": "Logging user prompt"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PreToolUse",
+            "timeout": 30,
+            "statusMessage": "Logging tool request"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PostToolUse",
+            "timeout": 30,
+            "statusMessage": "Logging tool result"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PreCompact",
+            "timeout": 30,
+            "statusMessage": "Logging pre-compact event"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PostCompact",
+            "timeout": 30,
+            "statusMessage": "Logging post-compact event"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event Stop",
+            "timeout": 30,
+            "statusMessage": "Logging turn stop"
+          }
+        ]
+      }
+    ]
+  }
+}
+[% else %]
+{
+  "hooks": {}
+}
+[% endif %]

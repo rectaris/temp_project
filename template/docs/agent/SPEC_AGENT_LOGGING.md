@@ -25,6 +25,22 @@ Raw logs should capture observable work evidence when available:
 
 Do not invent or reconstruct missing internal reasoning. Record what is observable.
 
+## Hook Logging
+
+Generated projects include `.codex/hooks/agent_log_event.py` and `.codex/hooks.json`.
+
+When Codex hooks are enabled, the hook records observable payloads for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop` events.
+
+Hook logs are written to:
+
+```text
+.agent-logs/<run-id>/raw/events.jsonl
+```
+
+The hook also creates or updates `manifest.json` and `redaction-report.md`.
+
+Hook logging is best-effort and must not block agent execution. If the hook payload does not contain assistant final text, internal reasoning, or a full transcript, the hook must not reconstruct it.
+
 ## Exclusions And Redaction
 
 Never store credentials, tokens, private keys, `.env` contents, or deployment secrets in raw logs.

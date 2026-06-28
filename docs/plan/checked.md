@@ -13,3 +13,4 @@ id	path
 010	docs/plan/checked/010-plan-authoring-guardrails.md
 011	docs/plan/checked/011-decision-audit-skill.md
 012	docs/plan/checked/012-root-self-apply-agent-workflow.md
+013	docs/plan/checked/013-agent-log-hook.md
