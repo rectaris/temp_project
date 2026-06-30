@@ -19,8 +19,8 @@
   - `tests/fixtures/*.answers.yml`
   - `tests/smoke.sh`
   - `tests/copier-update.sh`
-- `related_active_plans`:
-  - `docs/plan/active/014-copier-routing-defaults.md`
+- `related_checked_plans`:
+  - `docs/plan/checked/014-copier-routing-defaults.md`
 - `required_specs`:
   - `AGENTS.md`
   - `docs/agent/SPEC_PLAN_WORKFLOW.md`
@@ -91,7 +91,7 @@ Do not rework `planning_style`, `use_codex_agents`, `max_agent_threads`, `use_pl
 
 ## Implementation Instructions
 
-Coordinate with `docs/plan/active/014-copier-routing-defaults.md`.
+Coordinate with `docs/plan/checked/014-copier-routing-defaults.md`.
 
 Implement plan 014 first or in the same branch before final validation so local-only workflow booleans are removed once and are not redesigned here.
 

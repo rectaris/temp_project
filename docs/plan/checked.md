@@ -14,4 +14,5 @@ id	path
 011	docs/plan/checked/011-decision-audit-skill.md
 012	docs/plan/checked/012-root-self-apply-agent-workflow.md
 013	docs/plan/checked/013-agent-log-hook.md
+014	docs/plan/checked/014-copier-routing-defaults.md
 016	docs/plan/checked/016-root-codex-self-apply.md

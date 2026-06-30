@@ -2,15 +2,8 @@ project_name: docs-workspace
 project_slug: docs-workspace
 project_purpose: Maintain a documentation workspace.
 primary_language: docs
-planning_style: lightweight
-use_codex_agents: false
 use_hooks: false
-max_agent_threads: 1
-use_plan_lifecycle: true
-use_change_validation: true
-use_security_static: true
 use_skillspector: false
-use_structure_scanner: false
 use_mcp_policy: false
 use_linear_sync: false
 use_graph_memory: false

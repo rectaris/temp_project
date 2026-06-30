@@ -42,53 +42,15 @@ primary_language:
     - docs
   default: "mixed"
 
-planning_style:
-  type: str
-  help: Planning file structure to initialize.
-  choices:
-    - lightweight
-    - active_backlog_checked
-  default: "active_backlog_checked"
-
-use_codex_agents:
-  type: bool
-  help: Install reusable helper agent role definitions under .codex/agents.
-  default: true
-
 use_hooks:
   type: bool
   help: Install deterministic Codex hook templates under .codex/hooks.
-  default: true
-
-max_agent_threads:
-  type: int
-  help: Suggested maximum helper-agent concurrency.
-  default: 4
-
-use_plan_lifecycle:
-  type: bool
-  help: Install generic plan creation, linting, archive, and completion scripts.
-  default: true
-
-use_change_validation:
-  type: bool
-  help: Install change-aware validation selector scripts and rules.
-  default: true
-
-use_security_static:
-  type: bool
-  help: Install a lightweight static security checker for scripts, workflows, and docs.
   default: true
 
 use_skillspector:
   type: bool
   help: Document optional NVIDIA SkillSpector scans for AI agent skills.
   default: false
-
-use_structure_scanner:
-  type: bool
-  help: Install a generic repository structure and contract scanner.
-  default: true
 
 use_mcp_policy:
   type: bool

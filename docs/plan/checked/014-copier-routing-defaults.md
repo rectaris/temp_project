@@ -2,7 +2,7 @@
 
 ## Manifest
 
-- `status`: `active`
+- `status`: `checked`
 - `task_type`: `template_workflow`
 - `review_class`: `B`
 - `human_design_required`: `no`
@@ -70,6 +70,10 @@ Leave hook behavior, SkillSpector behavior, and external-service activation sema
 
 5. Do not remove generated local workflow files as part of this work.
 
+6. Keep `planning_style` as generated metadata with the fixed value `active_backlog_checked`.
+
+7. Keep Codex helper-agent concurrency as generated config with `max_threads = 4`.
+
 ## Implementation Instructions
 
 Remove these Copier questions if no later inspection shows a hard generation-time boundary:
@@ -93,6 +97,10 @@ Use defaults equivalent to the current recommended path:
 - `use_change_validation`: `true`
 - `use_security_static`: `true`
 - `use_structure_scanner`: `true`
+
+Do not preserve `false` values for removed answers from older `.copier-answers.yml` files.
+
+After this change, older generated repositories may still retain obsolete keys in `.copier-answers.yml`, but the template must not read them.
 
 Keep these Copier questions:
 
@@ -125,16 +133,16 @@ If removed answers from an older `.copier-answers.yml` cause update failures or 
 
 ## Tasks
 
-- [ ] Inspect all template references to the removable Copier answers.
-- [ ] Convert removable answers to internal defaults or static generated text.
-- [ ] Update generated agent routing and development-flow policy for route-based local module use.
-- [ ] Reduce `scripts/check-copier-template.py` question checks.
-- [ ] Update answer fixtures and smoke/update expectations for local-only question removal.
-- [ ] Run template static checks.
-- [ ] Run `scripts/lint-project-workflow.sh`.
-- [ ] Run `tests/smoke.sh`.
-- [ ] Run `tests/copier-update.sh` if Copier is available.
-- [ ] Archive this plan after validation.
+- [x] Inspect all template references to the removable Copier answers.
+- [x] Convert removable answers to internal defaults or static generated text.
+- [x] Update generated agent routing and development-flow policy for route-based local module use.
+- [x] Reduce `scripts/check-copier-template.py` question checks.
+- [x] Update answer fixtures and smoke/update expectations for local-only question removal.
+- [x] Run template static checks.
+- [x] Run `scripts/lint-project-workflow.sh`.
+- [x] Run `tests/smoke.sh`.
+- [x] Run `tests/copier-update.sh` if Copier is available.
+- [x] Archive this plan after validation.
 
 ## Out Of Scope
 
@@ -148,4 +156,14 @@ If removed answers from an older `.copier-answers.yml` cause update failures or 
 
 ## Validation Notes
 
-Not yet run.
+Validated with:
+
+- `python3 scripts/check-copier-template.py`
+- `git diff --check`
+- `scripts/lint-project-workflow.sh`
+- `tests/smoke.sh`
+- `tests/copier-update.sh`
+
+`tests/smoke.sh` and `tests/copier-update.sh` emitted Copier `DirtyLocalWarning` because they rendered the template with uncommitted local changes, then passed.
+
+Copier update from `v0.2.0` passed without rejection files after removing local-only workflow questions.

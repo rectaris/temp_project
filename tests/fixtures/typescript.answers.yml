@@ -2,15 +2,8 @@ project_name: typescript-app
 project_slug: typescript-app
 project_purpose: Build a TypeScript application.
 primary_language: typescript
-planning_style: active_backlog_checked
-use_codex_agents: true
 use_hooks: true
-max_agent_threads: 4
-use_plan_lifecycle: true
-use_change_validation: true
-use_security_static: true
 use_skillspector: true
-use_structure_scanner: true
 use_mcp_policy: true
 use_linear_sync: true
 use_graph_memory: true

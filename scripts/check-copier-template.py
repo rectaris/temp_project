@@ -177,18 +177,21 @@ QUESTIONS = {
     "project_slug",
     "project_purpose",
     "primary_language",
+    "use_hooks",
+    "use_skillspector",
+    "use_mcp_policy",
+    "use_linear_sync",
+    "use_graph_memory",
+}
+
+REMOVED_LOCAL_WORKFLOW_QUESTIONS = {
     "planning_style",
     "use_codex_agents",
-    "use_hooks",
     "max_agent_threads",
     "use_plan_lifecycle",
     "use_change_validation",
     "use_security_static",
-    "use_skillspector",
     "use_structure_scanner",
-    "use_mcp_policy",
-    "use_linear_sync",
-    "use_graph_memory",
 }
 
 
@@ -241,6 +244,9 @@ def main() -> int:
     for question in QUESTIONS:
         if not re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml missing question: {question}")
+    for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
+        if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
+            fail(f"copier.yml still prompts for local workflow question: {question}")
 
     if (ROOT / "assets/templates").exists():
         fail("assets/templates must not exist; template/ is the source of truth")
@@ -254,6 +260,9 @@ def main() -> int:
         missing = QUESTIONS - set(answers)
         if missing:
             fail(f"{fixture} missing answers: {sorted(missing)}")
+        obsolete = REMOVED_LOCAL_WORKFLOW_QUESTIONS & set(answers)
+        if obsolete:
+            fail(f"{fixture} still contains removed local workflow answers: {sorted(obsolete)}")
 
     print("copier template static check passed")
     return 0
