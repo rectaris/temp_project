@@ -27,7 +27,7 @@ Do not invent or reconstruct missing internal reasoning. Record what is observab
 
 Use `scripts/agent-log-event.py` as the root best-effort logger for Codex lifecycle hook payloads when wiring hooks outside this read-only root `.codex/` environment.
 
-Generated projects use `.codex/hooks/agent_log_event.py` through `.codex/hooks.json` when Codex hooks are enabled.
+Generated projects include `.codex/hooks/agent_log_event.py` and use it through `.codex/hooks.json` only when Codex hooks are enabled.
 
 The hook records observable payloads for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop` events.
 

@@ -33,9 +33,11 @@ Copier-managed:
 - change-aware validation, static security, and structure scanner scripts
 - optional external-service policy stubs
 
-Current `use_codex_agents` and `use_hooks` answers are recorded in generated docs/config. They do not remove files from the rendered tree because conditional file exclusion in `copier.yml` would make update behavior harder to reason about.
+Codex helper agents are installed by default and recorded in generated docs/config.
 
-The same update-safe approach applies to generic lifecycle and external-service modules: generated files remain present, while template answers record whether MCP, Linear, or graph-memory policy is enabled.
+`codex_hooks_mode` separates installed hook scripts from active `.codex/hooks.json` wiring.
+
+External-service modules use generated policy states in `docs/agent/external-services.yaml`; template answers do not authorize MCP, Linear, or graph-memory reads or writes by themselves.
 
 Repository-owned:
 

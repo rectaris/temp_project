@@ -1,0 +1,39 @@
+[% set mcp_state = "documented" if (use_mcp_policy is defined and use_mcp_policy) else "disabled" %]
+[% set linear_state = "documented" if (use_linear_sync is defined and use_linear_sync) else "disabled" %]
+[% set graph_state = "documented" if (use_graph_memory is defined and use_graph_memory) else "disabled" %]
+version: 1
+
+states:
+  disabled: Policy exists, but service reads and writes are not authorized.
+  documented: Setup guidance exists, but service reads and writes are not authorized.
+  configured_read_only: Required fields are complete and allowed_reads is non-empty.
+  configured_write_capable: Required fields are complete, allowed_writes is non-empty, and write_authorization_rule is explicit.
+
+external_services:
+  mcp:
+    state: [[ mcp_state ]]
+    connection: ""
+    credential_env: ""
+    allowed_reads: []
+    allowed_writes: []
+    write_authorization_rule: ""
+    dry_run_or_local_validation: ""
+    unavailable_fallback: "Use local repository files, plans, and validation only."
+  linear_sync:
+    state: [[ linear_state ]]
+    connection: ""
+    credential_env: ""
+    allowed_reads: []
+    allowed_writes: []
+    write_authorization_rule: ""
+    dry_run_or_local_validation: ""
+    unavailable_fallback: "Keep plan lifecycle local and record sync deferral only when it affects scope or completion."
+  graph_memory:
+    state: [[ graph_state ]]
+    connection: ""
+    credential_env: ""
+    allowed_reads: []
+    allowed_writes: []
+    write_authorization_rule: ""
+    dry_run_or_local_validation: ""
+    unavailable_fallback: "Use repository files, checked plans, validation output, and Git history as the source of truth."

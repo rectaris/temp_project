@@ -15,13 +15,18 @@
 
 このテンプレートには軽量な静的セキュリティ検査が含まれます。AI agent skill を追加または更新するリポジトリでは、任意で NVIDIA SkillSpector による追加スキャンも使えます。
 
-- 現在の SkillSpector 有効化状態は `docs/agent/SPEC_VALIDATION.md` を確認してください。
+[% if skillspector_mode == "document_optional" %]
+- 現在の SkillSpector mode は `docs/agent/SPEC_VALIDATION.md` を確認してください。
 - CLI を導入済みの場合は `scripts/skillspector-scan.sh <skill-path>` で静的スキャンを実行できます。
 - LLM 解析を使う場合だけ、`SKILLSPECTOR_USE_LLM=1` とプロバイダ認証情報を環境変数で設定します。
+[% else %]
+- 現在の SkillSpector mode は `docs/agent/SPEC_VALIDATION.md` を確認してください。
+- この生成設定では SkillSpector scan script は生成されません。
+[% endif %]
 
 ## 外部サービス連携
 
-MCP、Linear、graph memory は任意機能です。現在の有効化状態と設定手順は `docs/agent/SPEC_EXTERNAL_SERVICES.md` を確認してください。
+MCP、Linear、graph memory は任意機能です。現在の policy state と設定手順は `docs/agent/SPEC_EXTERNAL_SERVICES.md` と `docs/agent/external-services.yaml` を確認してください。
 
 - 連携しない場合も、ローカルの plan、validation、Git workflow はそのまま使えます。
 - 認証情報はリポジトリに置かず、環境変数または secret store で管理します。

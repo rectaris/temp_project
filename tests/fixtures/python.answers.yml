@@ -2,8 +2,5 @@ project_name: python-tool
 project_slug: python-tool
 project_purpose: Build a Python tool.
 primary_language: python
-use_hooks: false
-use_skillspector: false
-use_mcp_policy: true
-use_linear_sync: false
-use_graph_memory: false
+codex_hooks_mode: install_templates
+skillspector_mode: disabled

@@ -27,7 +27,9 @@ Do not invent or reconstruct missing internal reasoning. Record what is observab
 
 ## Hook Logging
 
-Generated projects include `.codex/hooks/agent_log_event.py` and `.codex/hooks.json`.
+Generated projects include `.codex/hooks/agent_log_event.py`.
+
+Generated projects include `.codex/hooks.json` only when `codex_hooks_mode` is `enable_local_logging`.
 
 When Codex hooks are enabled, the hook records observable payloads for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop` events.
 

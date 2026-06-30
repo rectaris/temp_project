@@ -2,7 +2,7 @@
 
 ## Manifest
 
-- `status`: `active`
+- `status`: `checked`
 - `task_type`: `template_workflow`
 - `review_class`: `B`
 - `human_design_required`: `no`
@@ -89,6 +89,18 @@ Do not rework `planning_style`, `use_codex_agents`, `max_agent_threads`, `use_pl
 
 7. Preserve update compatibility for old boolean answers during migration.
 
+8. Generate `.codex/hooks.json` only for `codex_hooks_mode: enable_local_logging`.
+
+9. Keep hook scripts under `.codex/hooks/` for `install_templates`; the inactive/active boundary is the generated `.codex/hooks.json` file.
+
+10. Map old `use_hooks: true` answers to `codex_hooks_mode: install_templates` and old `use_hooks: false` answers to `codex_hooks_mode: disabled`.
+
+11. Map old `use_skillspector: true` answers to `skillspector_mode: document_optional` and old `use_skillspector: false` answers to `skillspector_mode: disabled`.
+
+12. Map old external-service `true` answers to `documented` and old `false` answers to `disabled`.
+
+13. Store generated external-service states in a machine-readable project-local policy file and keep `documented` read/write-disabled.
+
 ## Implementation Instructions
 
 Coordinate with `docs/plan/checked/014-copier-routing-defaults.md`.
@@ -120,6 +132,8 @@ Define hook mode behavior as follows:
 - `install_templates`: generate hook scripts and documentation, but do not generate an active `.codex/hooks.json`.
 - `enable_local_logging`: generate `.codex/hooks.json` and local logging hook wiring.
 
+For old answers, map `use_hooks: true` to `install_templates` and `use_hooks: false` to `disabled`.
+
 Replace `use_skillspector` with a string mode:
 
 ```yaml
@@ -135,9 +149,13 @@ Do not run SkillSpector from generated validation automatically.
 
 Document the scan command only when `skillspector_mode` is `document_optional`.
 
+For old answers, map `use_skillspector: true` to `document_optional` and `use_skillspector: false` to `disabled`.
+
 Replace `use_mcp_policy`, `use_linear_sync`, and `use_graph_memory` as Copier booleans.
 
 Generated projects should contain external-service policy in a disabled state by default.
+
+For old answers, map old external-service `true` values to `documented` and old `false` values to `disabled`.
 
 Use project-local policy fields such as:
 
@@ -173,6 +191,8 @@ Recommended states:
 
 Ensure `documented` means policy text exists but service reads and writes are not authorized.
 
+Generate a machine-readable project-local policy file for these states and have prose specs point agents to it before external reads or writes.
+
 Update `template/AGENTS.md.jinja` so generated settings no longer display external-service booleans as enabled features.
 
 Update `template/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja` so agents must inspect the generated policy state and required fields before using MCP, Linear, or graph memory.
@@ -181,7 +201,7 @@ Update `template/docs/agent/SPEC_VALIDATION.md.jinja` so SkillSpector is optiona
 
 Update static checks and fixtures for renamed questions and removed booleans.
 
-Add update-test coverage from old answer files containing `use_hooks`, `use_skillspector`, `use_mcp_policy`, `use_linear_sync`, or `use_graph_memory`.
+Add update-test coverage from old answer files containing `use_hooks`, `use_skillspector`, `use_mcp_policy`, `use_linear_sync`, or `use_graph_memory`. The update test must verify that old booleans do not leave active hooks enabled, do not leave old boolean labels in generated docs, and do not configure external services beyond `documented`.
 
 Do not add duplicate coverage for local-only workflow booleans when plan 014 already covers them.
 
@@ -189,26 +209,24 @@ If Copier cannot map old boolean answers cleanly, document the manual migration 
 
 ## Tasks
 
-- [ ] Confirm plan 014's local-only question removal is already implemented or included in the same branch.
-- [ ] Replace `use_hooks` with `codex_hooks_mode`.
-- [ ] Replace `use_skillspector` with `skillspector_mode`.
-- [ ] Replace external-service booleans with generated disabled policy states.
-- [ ] Update generated `AGENTS.md` settings language.
-- [ ] Update generated validation and external-service specs.
-- [ ] Update `scripts/check-copier-template.py`.
-- [ ] Update answer fixtures.
-- [ ] Add or update migration/update coverage for old boolean answers.
-- [ ] Run `scripts/lint-project-workflow.sh`.
-- [ ] Run `tests/smoke.sh`.
-- [ ] Run `tests/copier-update.sh`.
-- [ ] Run `git diff --check`.
-- [ ] Archive this plan after validation.
+- [x] Confirm plan 014's local-only question removal is already implemented or included in the same branch.
+- [x] Replace `use_hooks` with `codex_hooks_mode`.
+- [x] Replace `use_skillspector` with `skillspector_mode`.
+- [x] Replace external-service booleans with generated disabled policy states.
+- [x] Update generated `AGENTS.md` settings language.
+- [x] Update generated validation and external-service specs.
+- [x] Update `scripts/check-copier-template.py`.
+- [x] Update answer fixtures.
+- [x] Add or update migration/update coverage for old boolean answers.
+- [x] Run `scripts/lint-project-workflow.sh`.
+- [x] Run `tests/smoke.sh`.
+- [x] Run `tests/copier-update.sh`.
+- [x] Run `git diff --check`.
+- [x] Archive this plan after validation.
 
 ## Open Decisions
 
-- Decide whether `install_templates` should generate hook scripts under `.codex/hooks/` or move them to a non-active template path until enabled.
-
-- Decide whether external-service state examples should live only in prose or in a generated machine-readable config file.
+- None.
 
 ## Out Of Scope
 
@@ -218,4 +236,14 @@ If Copier cannot map old boolean answers cleanly, document the manual migration 
 
 ## Validation Notes
 
-Not yet run.
+Validated with:
+
+- `python3 scripts/check-copier-template.py`
+- `scripts/lint-project-workflow.sh`
+- `tests/smoke.sh`
+- `tests/copier-update.sh`
+- `git diff --check`
+
+`tests/smoke.sh` and `tests/copier-update.sh` emitted Copier `DirtyLocalWarning` because they rendered the template with uncommitted local changes, then passed.
+
+`tests/copier-update.sh` covers legacy activation booleans from `v0.4.1`: old `use_hooks: true` migrates to `codex_hooks_mode: install_templates`, old `use_skillspector: true` migrates to `skillspector_mode: document_optional`, and old external-service `true` answers migrate to `documented` without configuring reads, writes, or active hooks.

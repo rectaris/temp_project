@@ -64,6 +64,7 @@ SOURCE_REQUIRED = [
     "template/docs/agent/SPEC_FILE_MANAGEMENT.md",
     "template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md",
     "template/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+    "template/docs/agent/external-services.yaml.jinja",
     "template/docs/agent/SPEC_PLAN_WORKFLOW.md",
     "template/docs/agent/SPEC_UI_DESIGN.md",
     "template/docs/plan/README.md",
@@ -108,7 +109,6 @@ GENERATED_REQUIRED = [
     ".copier-answers.yml",
     ".gitignore",
     ".codex/config.toml",
-    ".codex/hooks.json",
     ".codex/agents/change_reviewer.toml",
     ".codex/agents/docs_researcher.toml",
     ".codex/agents/repo_explorer.toml",
@@ -132,6 +132,7 @@ GENERATED_REQUIRED = [
     "docs/agent/SPEC_DECISION_AUDIT.md",
     "docs/agent/SPEC_FILE_MANAGEMENT.md",
     "docs/agent/SPEC_EXTERNAL_SERVICES.md",
+    "docs/agent/external-services.yaml",
     "docs/agent/SPEC_GIT_WORKFLOW.md",
     "docs/agent/SPEC_ORCHESTRATION.md",
     "docs/agent/SPEC_JAPANESE_TECH_WRITING.md",
@@ -165,7 +166,6 @@ GENERATED_REQUIRED = [
     "scripts/structure-map.py",
     "scripts/validate-changes.py",
     "scripts/security-static-check.py",
-    "scripts/skillspector-scan.sh",
 ]
 
 SOURCE_SHELL_LINT = [path for path in SOURCE_REQUIRED if path.endswith(".sh")]
@@ -177,6 +177,11 @@ QUESTIONS = {
     "project_slug",
     "project_purpose",
     "primary_language",
+    "codex_hooks_mode",
+    "skillspector_mode",
+}
+
+REMOVED_ACTIVATION_QUESTIONS = {
     "use_hooks",
     "use_skillspector",
     "use_mcp_policy",
@@ -247,6 +252,9 @@ def main() -> int:
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")
+    for question in REMOVED_ACTIVATION_QUESTIONS:
+        if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
+            fail(f"copier.yml still prompts for activation boolean: {question}")
 
     if (ROOT / "assets/templates").exists():
         fail("assets/templates must not exist; template/ is the source of truth")
@@ -263,6 +271,9 @@ def main() -> int:
         obsolete = REMOVED_LOCAL_WORKFLOW_QUESTIONS & set(answers)
         if obsolete:
             fail(f"{fixture} still contains removed local workflow answers: {sorted(obsolete)}")
+        obsolete_activation = REMOVED_ACTIVATION_QUESTIONS & set(answers)
+        if obsolete_activation:
+            fail(f"{fixture} still contains removed activation answers: {sorted(obsolete_activation)}")
 
     print("copier template static check passed")
     return 0

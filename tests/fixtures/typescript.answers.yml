@@ -2,8 +2,5 @@ project_name: typescript-app
 project_slug: typescript-app
 project_purpose: Build a TypeScript application.
 primary_language: typescript
-use_hooks: true
-use_skillspector: true
-use_mcp_policy: true
-use_linear_sync: true
-use_graph_memory: true
+codex_hooks_mode: enable_local_logging
+skillspector_mode: document_optional

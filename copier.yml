@@ -16,6 +16,8 @@ _envops:
 _exclude:
   - "__pycache__"
   - "*.pyc"
+  - "[% if codex_hooks_mode != 'enable_local_logging' %].codex/hooks.json[% else %]__never_exclude_hooks_json__[% endif %]"
+  - "[% if skillspector_mode != 'document_optional' %]scripts/skillspector-scan.sh[% else %]__never_exclude_skillspector__[% endif %]"
 
 project_name:
   type: str
@@ -42,27 +44,19 @@ primary_language:
     - docs
   default: "mixed"
 
-use_hooks:
-  type: bool
-  help: Install deterministic Codex hook templates under .codex/hooks.
-  default: true
+codex_hooks_mode:
+  type: str
+  help: Choose whether Codex hook templates are only installed or local logging hooks are active.
+  choices:
+    - disabled
+    - install_templates
+    - enable_local_logging
+  default: "[% if use_hooks is defined and not use_hooks %]disabled[% else %]install_templates[% endif %]"
 
-use_skillspector:
-  type: bool
-  help: Document optional NVIDIA SkillSpector scans for AI agent skills.
-  default: false
-
-use_mcp_policy:
-  type: bool
-  help: Enable optional MCP read/write boundary policy in generated agent docs.
-  default: false
-
-use_linear_sync:
-  type: bool
-  help: Enable optional Linear planning-sync policy stubs in generated agent docs.
-  default: false
-
-use_graph_memory:
-  type: bool
-  help: Enable optional graph-memory policy stubs in generated agent docs.
-  default: false
+skillspector_mode:
+  type: str
+  help: Choose whether optional NVIDIA SkillSpector scan documentation is generated.
+  choices:
+    - disabled
+    - document_optional
+  default: "[% if use_skillspector is defined and use_skillspector %]document_optional[% else %]disabled[% endif %]"

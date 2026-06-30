@@ -1,3 +1,6 @@
+[% set mcp_state = "documented" if (use_mcp_policy is defined and use_mcp_policy) else "disabled" %]
+[% set linear_state = "documented" if (use_linear_sync is defined and use_linear_sync) else "disabled" %]
+[% set graph_state = "documented" if (use_graph_memory is defined and use_graph_memory) else "disabled" %]
 # AGENTS.md
 
 Agent entrypoint for `[[ project_slug ]]`.
@@ -13,15 +16,15 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Planning style: `active_backlog_checked`
 - Local workflow modules: installed by default and activated by task routing
 - Codex helper agents: installed by default
-- Codex hooks: `[[ use_hooks|lower ]]`
+- Codex hooks mode: `[[ codex_hooks_mode ]]`
 - Plan lifecycle scripts: installed by default
 - Change-aware validation: installed by default
 - Static security checks: installed by default
-- SkillSpector scan: `[[ use_skillspector|lower ]]`
+- SkillSpector mode: `[[ skillspector_mode ]]`
 - Structure scanner: installed by default
 - Local agent logs: `true`
 - Context compression helper: optional, Headroom-aware when available
-- External service policies: MCP=`[[ use_mcp_policy|lower ]]`, Linear=`[[ use_linear_sync|lower ]]`, graph memory=`[[ use_graph_memory|lower ]]`
+- External service policy states: MCP=`[[ mcp_state ]]`, Linear=`[[ linear_state ]]`, graph memory=`[[ graph_state ]]`
 
 ## Priority
 
