@@ -47,6 +47,8 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Treat `docs/plan/checked.md` and checked archives as lookup-only history; search metadata first when possible.
 - Keep human-facing README files separate from agent-facing operational policy.
 - Keep raw agent logs and large agent artifacts local under `.agent-logs/` and `.agent-artifacts/`; do not commit them.
+- Treat external transcript logs as primary full-turn evidence when available, and repo-local hook event logs as best-effort corroborating evidence.
+- Record missing transcript or hook sources explicitly in run manifests.
 - Use run manifests, search, excerpts, and optional context compression before loading large raw logs.
 - Read `AGENTS.md`, `docs/agent/`, validation policy, and security policy directly; do not route normative instructions through compression.
 - When writing or editing Japanese prose, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.

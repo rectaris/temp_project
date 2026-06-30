@@ -17,3 +17,4 @@ id	path
 014	docs/plan/checked/014-copier-routing-defaults.md
 015	docs/plan/checked/015-copier-activation-modes.md
 016	docs/plan/checked/016-root-codex-self-apply.md
+017	docs/plan/checked/017-hybrid-agent-logging.md

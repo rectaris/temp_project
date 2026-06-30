@@ -28,6 +28,7 @@ REQUIRED_ROOT_FILES = [
     "docs/agent/SPEC_DECISION_AUDIT.md",
     "docs/agent/SPEC_PLAN_WORKFLOW.md",
     "scripts/agent-log-event.py",
+    "scripts/check-agent-log-manifest.py",
     "scripts/context-compress.sh",
 ]
 

@@ -2,7 +2,7 @@
 
 ## Manifest
 
-- `status`: `active`
+- `status`: `checked`
 - `task_type`: `template_workflow`
 - `review_class`: `B`
 - `human_design_required`: `no`
@@ -102,6 +102,20 @@ Keep raw logs local under `.agent-logs/` and keep durable plan records as summar
 
 10. Keep generated-project and root policy semantically aligned.
 
+11. Keep `raw_logs` as a backward-compatible aggregate list while adding named `transcript_log` and `hook_event_log` fields.
+
+12. Model `coverage` as source-specific structured metadata for `external_transcript`, `codex_hooks`, and optional `manual_evidence`.
+
+13. Treat missing sources as warnings by default; make them blocking only through `--require-transcript` or `--require-hooks`.
+
+14. Make the manifest checker validate transcript structure and redaction status, but leave full secret scanning to transcript ingestion or security-specific checks.
+
+15. Make hook manifest updates non-destructive so existing transcript metadata is preserved.
+
+16. Keep the generated checker standalone and make the root checker delegate to the template implementation.
+
+17. Allow transcript and hook event logs as compression inputs only after manifest and redaction review.
+
 ## Implementation Instructions
 
 Update root and generated `SPEC_AGENT_LOGGING.md` with a hybrid logging model.
@@ -163,22 +177,22 @@ Generated projects should always receive the policy and checker because missing-
 
 ## Tasks
 
-- [ ] Inspect current root and template hook logger behavior.
-- [ ] Define the hybrid manifest schema in root and generated logging policy.
-- [ ] Add root `scripts/check-agent-log-manifest.py`.
-- [ ] Add generated `template/scripts/check-agent-log-manifest.py`.
-- [ ] Update root and template hook loggers to write `hook_event_log`, `coverage`, and `missing_sources`.
-- [ ] Update context compression policy for transcript and hook event log inputs.
-- [ ] Update root policy checks and Copier template checks.
-- [ ] Update smoke tests for manifest coverage cases.
-- [ ] Update hook tests for manifest fields.
-- [ ] Run `python3 scripts/check-agent-log-manifest.py --self-test`.
-- [ ] Run `python3 scripts/check-copier-template.py`.
-- [ ] Run `scripts/lint-project-workflow.sh`.
-- [ ] Run `tests/smoke.sh`.
-- [ ] Run `tests/test-hooks.py`.
-- [ ] Run `git diff --check`.
-- [ ] Archive this plan after validation.
+- [x] Inspect current root and template hook logger behavior.
+- [x] Define the hybrid manifest schema in root and generated logging policy.
+- [x] Add root `scripts/check-agent-log-manifest.py`.
+- [x] Add generated `template/scripts/check-agent-log-manifest.py`.
+- [x] Update root and template hook loggers to write `hook_event_log`, `coverage`, and `missing_sources`.
+- [x] Update context compression policy for transcript and hook event log inputs.
+- [x] Update root policy checks and Copier template checks.
+- [x] Update smoke tests for manifest coverage cases.
+- [x] Update hook tests for manifest fields.
+- [x] Run `python3 scripts/check-agent-log-manifest.py --self-test`.
+- [x] Run `python3 scripts/check-copier-template.py`.
+- [x] Run `scripts/lint-project-workflow.sh`.
+- [x] Run `tests/smoke.sh`.
+- [x] Run `tests/test-hooks.py`.
+- [x] Run `git diff --check`.
+- [x] Archive this plan after validation.
 
 ## Open Decisions
 
@@ -196,4 +210,13 @@ Generated projects should always receive the policy and checker because missing-
 
 ## Validation Notes
 
-Not yet run.
+Validated with:
+
+- `python3 scripts/check-agent-log-manifest.py --self-test`
+- `python3 scripts/check-copier-template.py`
+- `scripts/lint-project-workflow.sh`
+- `tests/smoke.sh`
+- `tests/test-hooks.py`
+- `git diff --check`
+
+`tests/smoke.sh` emitted Copier `DirtyLocalWarning` because it rendered the template with uncommitted local changes, then passed.

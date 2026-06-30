@@ -108,11 +108,45 @@ def update_manifest(run_dir: Path, run: str, event_path: Path) -> None:
     manifest.setdefault("created_at", utc_now())
     manifest.setdefault("task", "codex hook event log")
     manifest.setdefault("plans", [])
-    manifest["raw_logs"] = sorted(set([*manifest.get("raw_logs", []), str(event_path.relative_to(run_dir))]))
+    hook_rel = str(event_path.relative_to(run_dir))
+    transcript_rel = manifest.get("transcript_log")
+    raw_logs = set(manifest.get("raw_logs", []))
+    raw_logs.add(hook_rel)
+    if isinstance(transcript_rel, str) and transcript_rel:
+        raw_logs.add(transcript_rel)
+    manifest["raw_logs"] = sorted(raw_logs)
     manifest.setdefault("artifacts", [])
     manifest.setdefault("compressed_outputs", [])
     manifest.setdefault("redaction_report", "redaction-report.md")
     manifest.setdefault("pinned", False)
+    manifest.setdefault("transcript_log", None)
+    manifest["hook_event_log"] = hook_rel
+    coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
+    transcript_path = manifest.get("transcript_log")
+    transcript_present = isinstance(transcript_path, str) and (run_dir / transcript_path).is_file()
+    existing_transcript = coverage.get("external_transcript") if isinstance(coverage.get("external_transcript"), dict) else {}
+    coverage["external_transcript"] = {
+        "present": transcript_present,
+        "path": transcript_path if isinstance(transcript_path, str) else None,
+        "status": "present" if transcript_present else ("path_missing" if transcript_path else "missing"),
+        "redaction_status": existing_transcript.get(
+            "redaction_status",
+            "pending_review" if transcript_present else "not_applicable",
+        ),
+    }
+    coverage["codex_hooks"] = {
+        "present": True,
+        "path": hook_rel,
+        "status": "present",
+        "redaction_status": "automatic_redaction",
+    }
+    manifest["coverage"] = coverage
+    missing_sources = []
+    if not coverage["external_transcript"]["present"]:
+        missing_sources.append("external_transcript")
+    if not coverage["codex_hooks"]["present"]:
+        missing_sources.append("codex_hooks")
+    manifest["missing_sources"] = missing_sources
     manifest["updated_at"] = utc_now()
     write_json(manifest_path, manifest)
 

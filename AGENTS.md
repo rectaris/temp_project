@@ -17,6 +17,8 @@ This repository packages reusable coding-agent project management, file routing,
 - When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
 - Use `docs/agent/spec-index.yaml` to route root-level agent policy when the task concerns planning, logging, compression, decision audit, or Japanese prose.
 - Keep raw agent logs and large agent artifacts local under `.agent-logs/` and `.agent-artifacts/`; do not commit them.
+- Treat external transcript logs as primary full-turn evidence when available, and repo-local hook event logs as best-effort corroborating evidence.
+- Record missing transcript or hook sources explicitly in run manifests.
 - Use `.codex/hooks/agent_log_event.py` as the root best-effort Codex lifecycle event logger when Codex hooks are active; keep raw outputs under `.agent-logs/`.
 - Use run manifests, search, excerpts, and optional context compression before loading large raw logs.
 - Read `AGENTS.md`, `docs/agent/`, validation policy, and security policy directly; do not route normative instructions through compression.

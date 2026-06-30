@@ -78,6 +78,86 @@ class AgentLogEventTest(unittest.TestCase):
             self.assertEqual(record["payload"]["api_key"], "[REDACTED]")
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertIn("raw/events.jsonl", manifest["raw_logs"])
+            self.assertIsNone(manifest["transcript_log"])
+            self.assertEqual(manifest["hook_event_log"], "raw/events.jsonl")
+            self.assertEqual(manifest["coverage"]["external_transcript"]["status"], "missing")
+            self.assertEqual(manifest["coverage"]["codex_hooks"]["status"], "present")
+            self.assertEqual(manifest["coverage"]["codex_hooks"]["redaction_status"], "automatic_redaction")
+            self.assertEqual(manifest["missing_sources"], ["external_transcript"])
+
+    def test_preserves_existing_transcript_manifest_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            run_dir = repo / ".agent-logs/hybrid-run"
+            raw_dir = run_dir / "raw"
+            raw_dir.mkdir(parents=True)
+            (raw_dir / "transcript.jsonl").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "record_type": "message",
+                        "created_at": "2026-06-30T00:00:00Z",
+                        "run_id": "hybrid-run",
+                        "turn_id": "turn-1",
+                        "role": "assistant",
+                        "content": "done",
+                        "metadata": {},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "redaction-report.md").write_text("# Redaction Report\n", encoding="utf-8")
+            (run_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "hybrid-run",
+                        "created_at": "2026-06-30T00:00:00Z",
+                        "task": "hybrid test",
+                        "plans": [],
+                        "raw_logs": ["raw/transcript.jsonl"],
+                        "transcript_log": "raw/transcript.jsonl",
+                        "hook_event_log": None,
+                        "coverage": {
+                            "external_transcript": {
+                                "present": True,
+                                "path": "raw/transcript.jsonl",
+                                "status": "present",
+                                "redaction_status": "redacted",
+                            },
+                            "codex_hooks": {
+                                "present": False,
+                                "path": None,
+                                "status": "missing",
+                                "redaction_status": "not_applicable",
+                            },
+                        },
+                        "missing_sources": ["codex_hooks"],
+                        "artifacts": [],
+                        "compressed_outputs": [],
+                        "redaction_report": "redaction-report.md",
+                        "pinned": False,
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            run_hook(
+                AGENT_LOG,
+                {"tool": "Bash", "output": "done"},
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "hybrid-run"},
+                args=["--event", "PostToolUse"],
+            )
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["transcript_log"], "raw/transcript.jsonl")
+            self.assertEqual(manifest["hook_event_log"], "raw/events.jsonl")
+            self.assertEqual(sorted(manifest["raw_logs"]), ["raw/events.jsonl", "raw/transcript.jsonl"])
+            self.assertEqual(manifest["coverage"]["external_transcript"]["redaction_status"], "redacted")
+            self.assertEqual(manifest["coverage"]["codex_hooks"]["status"], "present")
+            self.assertEqual(manifest["missing_sources"], [])
 
     def test_appends_multiple_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

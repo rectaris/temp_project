@@ -25,6 +25,41 @@ Raw logs should capture observable work evidence when available:
 
 Do not invent or reconstruct missing internal reasoning. Record what is observable.
 
+## Hybrid Log Sources
+
+Use a hybrid model when multiple log sources are available:
+
+- `external_transcript`: primary full-turn source provided by an outer runtime or API wrapper.
+- `codex_hooks`: best-effort repo-local lifecycle and tool-event source.
+- `manual_evidence`: optional manually added excerpts or artifacts, not a substitute for transcript coverage.
+
+External transcript logs are primary for reconstructing user and assistant turns when available.
+Codex hook logs corroborate lifecycle and tool activity but remain best-effort.
+
+Generated projects own the transcript ingestion contract and manifest validator.
+They do not own a specific external capture runtime.
+
+Transcript records are written to:
+
+```text
+.agent-logs/<run-id>/raw/transcript.jsonl
+```
+
+Each transcript JSONL record must include at least:
+
+- `schema_version`
+- `record_type`
+- `created_at`
+- `run_id`
+- `turn_id`
+- `role`
+- `content`
+- `metadata`
+
+Allowed transcript `role` values are `user`, `assistant`, `tool`, and `system_event`.
+
+Transcript ingestion must redact secrets before writing, or mark the transcript source with `redaction_status: "pending_review"` in `manifest.json`.
+
 ## Hook Logging
 
 Generated projects include `.codex/hooks/agent_log_event.py`.
@@ -62,6 +97,23 @@ Each run directory should include `manifest.json` when practical:
   "task": "short task label",
   "plans": ["docs/plan/active/009-example.md"],
   "raw_logs": ["raw/session.log"],
+  "transcript_log": null,
+  "hook_event_log": null,
+  "coverage": {
+    "external_transcript": {
+      "present": false,
+      "path": null,
+      "status": "missing",
+      "redaction_status": "not_applicable"
+    },
+    "codex_hooks": {
+      "present": false,
+      "path": null,
+      "status": "missing",
+      "redaction_status": "not_applicable"
+    }
+  },
+  "missing_sources": ["external_transcript", "codex_hooks"],
   "artifacts": [],
   "compressed_outputs": [],
   "redaction_report": "redaction-report.md",
@@ -69,7 +121,15 @@ Each run directory should include `manifest.json` when practical:
 }
 ```
 
-Use stable relative paths. If a run is referenced by `docs/plan`, treat it as pinned.
+Use stable relative paths.
+Keep `raw_logs` as the backward-compatible aggregate list of declared raw log files.
+Use `transcript_log` and `hook_event_log` for named hybrid source paths.
+Use `coverage` for source-specific status metadata.
+Use `missing_sources` to make absent transcript or hook sources explicit.
+If a run is referenced by `docs/plan`, treat it as pinned.
+
+Missing transcript or hook sources are warnings by default.
+Validation may require complete transcript or hook coverage by using `scripts/check-agent-log-manifest.py --require-transcript` or `scripts/check-agent-log-manifest.py --require-hooks`.
 
 ## Retention
 

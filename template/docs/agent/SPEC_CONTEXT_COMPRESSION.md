@@ -23,12 +23,16 @@ Read those files as source text through the routing rules in `docs/agent/spec-in
 Consider compression for:
 
 - large raw logs under `.agent-logs/`;
+- external transcript logs declared by `transcript_log`;
+- Codex hook event logs declared by `hook_event_log`;
 - long CI logs;
 - large stdout or stderr captures;
 - verbose JSON, trace, or telemetry dumps;
 - large generated text artifacts under `.agent-artifacts/`.
 
 Before compressing, check the run `manifest.json` and redaction report when they exist.
+For transcript and hook event logs, also check `coverage` and `missing_sources`.
+Do not use compressed transcript output as durable evidence when `redaction_status` is `pending_review`; cite only the run id and raw source path until review is resolved.
 
 ## Decision Flow
 
