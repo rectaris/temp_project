@@ -32,7 +32,7 @@
   - `git diff --check`
 - `acceptance`:
   - Copier keeps descriptive text inputs for project identity, purpose, and primary language.
-  - Boolean prompts that remain after plan 014 are replaced with explicit modes or generated disabled policy blocks.
+  - Boolean prompts that remain after plan 014 are limited to hook, SkillSpector, and external-service activation and are replaced with explicit modes or generated disabled policy blocks.
   - Generated repositories do not treat a reflexive yes/no answer as authorization for hooks, external writes, persistent memory writes, or external-tool execution.
   - External-service configuration requires generated project-local policy fields for connection names, credential names, read/write boundaries, and write authorization rules.
   - Backward compatibility for existing `.copier-answers.yml` boolean answers is tested or explicitly documented.
@@ -69,6 +69,10 @@ Replace remaining yes/no prompts with explicit modes or generated disabled polic
 
 Make local installation, runtime activation, external reads, external writes, and persistent-memory writes separate states.
 
+Assume plan 014 owns local-only workflow question removal.
+
+Do not rework `planning_style`, `use_codex_agents`, `max_agent_threads`, `use_plan_lifecycle`, `use_change_validation`, `use_security_static`, or `use_structure_scanner` except to account for their already-removed defaults.
+
 ## Decisions
 
 1. Keep `project_name`, `project_slug`, `project_purpose`, and `primary_language` as Copier prompts.
@@ -89,7 +93,7 @@ Make local installation, runtime activation, external reads, external writes, an
 
 Coordinate with `docs/plan/active/014-copier-routing-defaults.md`.
 
-Implement plan 014 first or in the same branch before final validation so local-only workflow booleans are not redesigned twice.
+Implement plan 014 first or in the same branch before final validation so local-only workflow booleans are removed once and are not redesigned here.
 
 Keep these descriptive Copier prompts as they are unless a separate user decision changes them:
 
@@ -179,11 +183,13 @@ Update static checks and fixtures for renamed questions and removed booleans.
 
 Add update-test coverage from old answer files containing `use_hooks`, `use_skillspector`, `use_mcp_policy`, `use_linear_sync`, or `use_graph_memory`.
 
+Do not add duplicate coverage for local-only workflow booleans when plan 014 already covers them.
+
 If Copier cannot map old boolean answers cleanly, document the manual migration in the generated README and in validation notes.
 
 ## Tasks
 
-- [ ] Implement or account for plan 014's local-only question removal.
+- [ ] Confirm plan 014's local-only question removal is already implemented or included in the same branch.
 - [ ] Replace `use_hooks` with `codex_hooks_mode`.
 - [ ] Replace `use_skillspector` with `skillspector_mode`.
 - [ ] Replace external-service booleans with generated disabled policy states.
@@ -203,6 +209,12 @@ If Copier cannot map old boolean answers cleanly, document the manual migration 
 - Decide whether `install_templates` should generate hook scripts under `.codex/hooks/` or move them to a non-active template path until enabled.
 
 - Decide whether external-service state examples should live only in prose or in a generated machine-readable config file.
+
+## Out Of Scope
+
+- Do not remove local-only workflow Copier questions here; plan 014 owns that work.
+
+- Do not change route-based local workflow activation rules except where references need to match plan 014's final defaults.
 
 ## Validation Notes
 

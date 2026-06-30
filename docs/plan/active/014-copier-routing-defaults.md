@@ -29,7 +29,7 @@
   - Copier no longer prompts for local-only workflow modules that agents can activate through text routing.
   - Generated projects still include the local workflow files needed for plan lifecycle, change validation, static security checks, structure scanning, helper agents, and concurrency guidance.
   - Runtime policy tells agents to decide whether to read or execute those local modules through `docs/agent/spec-index.yaml` and routed specs.
-  - External-service and external-tool opt-ins remain explicit Copier answers.
+  - Hook, SkillSpector, and external-service activation are left unchanged by this plan and are redesigned only by `docs/plan/active/015-copier-activation-modes.md`.
   - Static checks, fixtures, smoke tests, and update tests match the reduced Copier question set.
 - `acceptance_focus`:
   - reduced Copier prompts
@@ -50,19 +50,21 @@ Keeping these settings as Copier questions increases setup friction and creates 
 
 ## Goal
 
-Reduce Copier prompts to project identity, primary language, and explicit opt-ins for external or higher-risk capabilities.
+Reduce Copier prompts by removing only local-only workflow module questions.
 
 Make local workflow modules default-on in generated repositories.
 
 Use generated agent routing policy to decide when those modules are relevant during task execution.
 
+Leave hook behavior, SkillSpector behavior, and external-service activation semantics to `docs/plan/active/015-copier-activation-modes.md`.
+
 ## Decisions
 
 1. Remove generation-time questions for local-only workflow modules that can be safely installed by default.
 
-2. Keep explicit Copier answers for project metadata, `primary_language`, external-service policies, and SkillSpector.
+2. Keep `project_name`, `project_slug`, `project_purpose`, and `primary_language` as descriptive Copier prompts.
 
-3. Treat hooks as an explicit Copier answer unless implementation proves the generated hook configuration is inert without user runtime registration.
+3. Do not redesign hook, SkillSpector, MCP, Linear, or graph-memory answers in this plan.
 
 4. Preserve `.copier-answers.yml` update compatibility by making removed settings internal defaults or by providing a documented migration path for older answers.
 
@@ -98,6 +100,9 @@ Keep these Copier questions:
 - `project_slug`
 - `project_purpose`
 - `primary_language`
+
+Leave these current answers untouched for plan 015 to replace with modes or generated policy states:
+
 - `use_hooks`
 - `use_skillspector`
 - `use_mcp_policy`
@@ -108,11 +113,11 @@ Update generated `AGENTS.md` and generated agent docs so they no longer present 
 
 Add or update policy text stating that local workflow modules are available by default and should be used only when the task route requires them.
 
-Update `scripts/check-copier-template.py` so `QUESTIONS` matches the reduced prompt set and any required internal defaults are checked directly.
+Update `scripts/check-copier-template.py` so `QUESTIONS` removes only the local-only workflow questions listed above and any required internal defaults are checked directly.
 
-Update all Copier answer fixtures to remove deleted answers.
+Update all Copier answer fixtures to remove only the deleted local-only workflow answers.
 
-Update smoke and update tests for the reduced prompt set and confirm generated required files still exist.
+Update smoke and update tests for the reduced local-only prompt set and confirm generated required files still exist.
 
 Inspect Copier update behavior from old answer files before finalizing.
 
@@ -124,16 +129,22 @@ If removed answers from an older `.copier-answers.yml` cause update failures or 
 - [ ] Convert removable answers to internal defaults or static generated text.
 - [ ] Update generated agent routing and development-flow policy for route-based local module use.
 - [ ] Reduce `scripts/check-copier-template.py` question checks.
-- [ ] Update answer fixtures and smoke/update expectations.
+- [ ] Update answer fixtures and smoke/update expectations for local-only question removal.
 - [ ] Run template static checks.
 - [ ] Run `scripts/lint-project-workflow.sh`.
 - [ ] Run `tests/smoke.sh`.
 - [ ] Run `tests/copier-update.sh` if Copier is available.
 - [ ] Archive this plan after validation.
 
+## Out Of Scope
+
+- Do not replace `use_hooks`, `use_skillspector`, `use_mcp_policy`, `use_linear_sync`, or `use_graph_memory`; plan 015 owns those changes.
+
+- Do not change external-service policy semantics or hook activation modes; plan 015 owns those changes.
+
 ## Open Decisions
 
-- Confirm whether `use_hooks` should remain explicit or become default-on after inspecting generated runtime side effects.
+- None.
 
 ## Validation Notes
 
