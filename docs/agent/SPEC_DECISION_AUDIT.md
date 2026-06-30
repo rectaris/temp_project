@@ -4,7 +4,7 @@ Decision audit identifies important choices that are not explicit in the request
 
 It is analysis for deciding direction. It is not an implementation plan and must not be copied in full into `docs/plan/active`.
 
-This repository root uses decision audit as documented policy. The environment-provided `.codex/` directory is read-only here, so root operation must not depend on installing a repo-local `.codex/skills/decision-audit` skill.
+This repository root uses decision audit as documented policy and includes the generated repo-local `.codex/skills/decision-audit` skill for Codex skill discovery. `docs/agent/SPEC_DECISION_AUDIT.md` remains the normative root policy when the skill and this document differ.
 
 ## When To Run
 

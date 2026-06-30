@@ -16,6 +16,12 @@ RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
 MATRIX_WINDOW_LINES = 20
 
 REQUIRED_ROOT_FILES = [
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/agents/repo_explorer.toml",
+    ".codex/hooks/agent_log_event.py",
+    ".codex/skills/decision-audit/SKILL.md",
+    ".codex/skills/decision-audit/agents/openai.yaml",
     "docs/agent/spec-index.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
     "docs/agent/SPEC_CONTEXT_COMPRESSION.md",
@@ -29,7 +35,8 @@ REQUIRED_AGENT_RULES = [
     "docs/agent/spec-index.yaml",
     ".agent-logs/",
     ".agent-artifacts/",
-    "scripts/agent-log-event.py",
+    ".codex/hooks/agent_log_event.py",
+    ".codex/skills/decision-audit",
     "decision audit",
     "docs/plan/active",
 ]
