@@ -114,6 +114,9 @@ Rules:
 - Linear sync dry-run: `scripts/sync-plan-to-linear.sh docs/plan/active/NNN-slug.md --dry-run`
 - Completion gate: `scripts/check-agent-completion.sh`
 - Select minimal active-plan context: `scripts/select-task-context.sh docs/plan/active/NNN-slug.md`
+- Machine-readable validation selection: `python3 scripts/validate-changes.py --print-only --json`
+- Machine-readable archive search: `scripts/search-plan-archive.py --text <term> --json`
+- Machine-readable workflow status: `scripts/workflow-status.sh --json`
 - Preview handoff cleanup: `scripts/clean-handoffs.sh --dry-run`
 - Apply handoff cleanup after durable records are saved: `scripts/clean-handoffs.sh --apply`
 - Plan lint wrapper: `scripts/lint-plan-docs.sh`

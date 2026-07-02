@@ -171,9 +171,15 @@ test -f "$tmp/typescript/scripts/sync-plan-to-linear.sh"
 (cd "$tmp/typescript" && python3 scripts/plan_validation_commands.py --self-test)
 (cd "$tmp/typescript" && python3 scripts/check-codex-toml.py >/dev/null)
 (cd "$tmp/typescript" && python3 scripts/validate-changes.py --print-only >/dev/null)
+(cd "$tmp/typescript" && python3 scripts/validate-changes.py --print-only --json | python3 -m json.tool >/dev/null)
+(cd "$tmp/typescript" && scripts/search-plan-archive.py --text sample --json | python3 -m json.tool | grep -q '"count":')
+(cd "$tmp/typescript" && scripts/workflow-status.sh --json | python3 -m json.tool | grep -q '"git_status"')
+(cd "$tmp/typescript" && python3 scripts/plan_validation_commands.py check-commands "python3 scripts/validate-changes.py --print-only --json")
 (cd "$tmp/typescript" && scripts/sync-plan-to-linear.sh docs/plan/checked/001-sample.md --dry-run | grep -q 'Desired status: Done')
 grep -q 'Plan Validation Commands' "$tmp/typescript/docs/agent/SPEC_VALIDATION.md"
 grep -q 'Linear sync dry-run' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"
+grep -q 'Machine-readable workflow status' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"
+grep -q 'Next: complete and archive the plan' "$tmp/typescript/scripts/check-agent-completion.sh"
 grep -q 'generic template script still fails closed' "$tmp/typescript/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 
 mkdir -p "$tmp/typescript/.agent-logs/sample/raw"

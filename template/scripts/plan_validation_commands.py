@@ -30,7 +30,12 @@ EXACT_COMMANDS = {
     ("python3", "scripts/structure-map.py", "--check"),
     ("python3", "scripts/validate-changes.py"),
     ("python3", "scripts/validate-changes.py", "--all"),
+    ("python3", "scripts/validate-changes.py", "--all", "--json"),
     ("python3", "scripts/validate-changes.py", "--print-only"),
+    ("python3", "scripts/validate-changes.py", "--print-only", "--json"),
+    ("python3", "scripts/validate-changes.py", "--all", "--print-only", "--json"),
+    ("python3", "scripts/validate-changes.py", "--staged", "--print-only", "--json"),
+    ("python3", "scripts/validate-changes.py", "--json"),
     ("python3", "scripts/plan_validation_commands.py", "--self-test"),
     ("sh", "scripts/lint-plan-docs.sh"),
     ("sh", "scripts/format-plan-docs.sh", "--check"),
@@ -209,6 +214,11 @@ def main(argv: list[str]) -> int:
             return 2
     except ValidationCommandError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        print(
+            "Next: keep validation entries as single allowlisted commands, then rerun "
+            "`python3 scripts/plan_validation_commands.py check-plan <plan>`.",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

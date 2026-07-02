@@ -8,6 +8,7 @@ if [ -f docs/plan/plan.md ] && grep -q '^[0-9][0-9][0-9]	' docs/plan/plan.md; th
       continue
     fi
     echo "open active plan blocks completion: $plan" >&2
+    echo "Next: complete and archive the plan, or add completion_deferred_reason if work is intentionally deferred." >&2
     exit 1
   done
 fi
@@ -15,6 +16,7 @@ fi
 if [ -n "$(git status --short)" ]; then
   echo "dirty worktree blocks completion report" >&2
   git status --short >&2
+  echo "Next: inspect git status --short, then commit intended changes or remove unrelated generated files." >&2
   exit 1
 fi
 

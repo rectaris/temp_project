@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import plan_validation_commands
 
 
 ROOT = Path.cwd()
+OUTPUT_LIMIT = 4000
 
 
 def git(args: list[str]) -> list[str]:
@@ -85,11 +87,26 @@ def validate_selected_commands(commands: list[list[str]]) -> None:
     plan_validation_commands.parse_validation_commands(raw_commands)
 
 
+def command_records(commands: list[list[str]]) -> list[dict[str, object]]:
+    return [{"argv": command, "raw": shlex.join(command)} for command in commands]
+
+
+def output_tail(value: str) -> str:
+    if len(value) <= OUTPUT_LIMIT:
+        return value
+    return value[-OUTPUT_LIMIT:]
+
+
+def print_json(value: dict[str, object]) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--all", action="store_true", help="inspect staged, unstaged, and untracked files")
     parser.add_argument("--staged", action="store_true", help="inspect staged files only")
     parser.add_argument("--print-only", action="store_true", help="print selected commands without running them")
+    parser.add_argument("--json", action="store_true", help="print machine-readable validation selection and results")
     args = parser.parse_args(argv)
 
     if args.all and args.staged:
@@ -98,11 +115,61 @@ def main(argv: list[str]) -> int:
     mode = "staged" if args.staged else "all" if args.all else "auto"
     paths, diff_mode = changed_files(mode)
     if not paths:
+        if args.json:
+            print_json({"changed_files": [], "commands": [], "diff_mode": diff_mode, "status": "no_changes"})
+            return 0
         print("no changed files detected")
         return 0
 
     commands = select_commands(paths, diff_mode)
     validate_selected_commands(commands)
+    if args.json and args.print_only:
+        print_json(
+            {
+                "changed_files": paths,
+                "commands": command_records(commands),
+                "diff_mode": diff_mode,
+                "status": "selected",
+            }
+        )
+        return 0
+    if args.json:
+        results = []
+        status = "passed"
+        exit_code = 0
+        for command in commands:
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if result.returncode != 0 and status == "passed":
+                status = "failed"
+                exit_code = result.returncode
+            results.append(
+                {
+                    "argv": command,
+                    "raw": shlex.join(command),
+                    "returncode": result.returncode,
+                    "stdout_tail": output_tail(result.stdout),
+                    "stderr_tail": output_tail(result.stderr),
+                }
+            )
+            if result.returncode != 0:
+                break
+        print_json(
+            {
+                "changed_files": paths,
+                "commands": command_records(commands),
+                "diff_mode": diff_mode,
+                "results": results,
+                "status": status,
+            }
+        )
+        return exit_code
     for command in commands:
         print(shlex.join(command))
     if args.print_only:

@@ -20,3 +20,4 @@ id	path
 017	docs/plan/checked/017-hybrid-agent-logging.md
 018	docs/plan/checked/018-generic-codex-skills.md
 019	docs/plan/checked/019-advanced-validation-lifecycle.md
+020	docs/plan/checked/020-agent-cli-ux-improvements.md
