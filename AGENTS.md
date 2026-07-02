@@ -26,6 +26,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Keep active plans as executable agent instructions. Record final accepted decisions only, not recommendation matrices or debate transcripts.
 - Use the repo-local `.codex/skills/decision-audit` skill when available; keep `docs/agent/SPEC_DECISION_AUDIT.md` as the normative root policy.
 - Use repo-local generic Codex skills such as `.codex/skills/implementation-guidelines`, `.codex/skills/mcp-ops`, `.codex/skills/linear-ops`, `.codex/skills/graph-memory`, and `.codex/skills/plan-archive` only as auxiliary workflow guidance; keep project-specific values in `docs/agent/` policy files.
+- When creating or updating Codex skills, follow `docs/agent/SPEC_SKILL_AUTHORING.md`.
 - Validate with `scripts/lint-project-workflow.sh` and `tests/smoke.sh` before completion.
 - Use Git for all changes.
 - Keep commits granular and scoped to one meaningful work unit.

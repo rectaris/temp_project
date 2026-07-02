@@ -153,6 +153,8 @@ grep -q 'name: graph-memory' "$tmp/typescript/.codex/skills/graph-memory/SKILL.m
 grep -q 'name: plan-archive' "$tmp/typescript/.codex/skills/plan-archive/SKILL.md"
 grep -q 'name: implementation-guidelines' "$tmp/typescript/.codex/skills/implementation-guidelines/SKILL.md"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/AGENTS.md"
+grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/AGENTS.md"
+grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/README.md"
 grep -q 'docs/agent/external-services.yaml' "$tmp/typescript/.codex/skills/mcp-ops/SKILL.md"
 grep -q 'external_services.linear_sync' "$tmp/typescript/.codex/skills/linear-ops/SKILL.md"
 grep -q 'external_services.graph_memory' "$tmp/typescript/.codex/skills/graph-memory/SKILL.md"
@@ -161,7 +163,11 @@ if grep -R 'supportcard-status' "$tmp/typescript/.codex/skills" >/dev/null; then
   exit 1
 fi
 grep -q 'decision_audit:' "$tmp/typescript/docs/agent/spec-index.yaml"
+grep -q 'skill_authoring:' "$tmp/typescript/docs/agent/spec-index.yaml"
 grep -q 'SPEC_DECISION_AUDIT.md' "$tmp/typescript/docs/agent/spec-index.yaml"
+grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/docs/agent/spec-index.yaml"
+grep -q 'Skill Authoring' "$tmp/typescript/docs/agent/SPEC_SKILL_AUTHORING.md"
+grep -q 'Keep `SKILL.md` concise' "$tmp/typescript/docs/agent/SPEC_SKILL_AUTHORING.md"
 grep -q 'Decision Audit Preflight' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"
 grep -q 'Run decision audit before creating or materially updating active plans' "$tmp/typescript/AGENTS.md"
 grep -q 'Full decision-audit output does not belong in `docs/plan/active`' "$tmp/typescript/docs/agent/SPEC_DECISION_AUDIT.md"

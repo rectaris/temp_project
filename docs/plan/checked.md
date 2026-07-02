@@ -21,3 +21,4 @@ id	path
 018	docs/plan/checked/018-generic-codex-skills.md
 019	docs/plan/checked/019-advanced-validation-lifecycle.md
 020	docs/plan/checked/020-agent-cli-ux-improvements.md
+021	docs/plan/checked/021-skill-authoring-policy.md

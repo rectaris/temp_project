@@ -32,6 +32,14 @@ task_types:
       - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
         when: large generated logs, CI logs, or local evidence need compressed views.
 
+  skill_authoring:
+    summary: Root or template Codex skills, SKILL.md files, skill references, skill scripts, or skill UI metadata.
+    required:
+      - docs/agent/SPEC_SKILL_AUTHORING.md
+    conditional:
+      - path: docs/agent/SPEC_DECISION_AUDIT.md
+        when: meaningful skill trigger, storage, validation, external-service, or generated-template boundary choices remain open.
+
   japanese_prose:
     summary: Japanese README text, documentation, plans, prompts, issues, review comments, or prose.
     required:
