@@ -18,3 +18,4 @@ id	path
 015	docs/plan/checked/015-copier-activation-modes.md
 016	docs/plan/checked/016-root-codex-self-apply.md
 017	docs/plan/checked/017-hybrid-agent-logging.md
+018	docs/plan/checked/018-generic-codex-skills.md

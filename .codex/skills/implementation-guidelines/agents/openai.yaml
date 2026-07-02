@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation Guidelines"
+  short_description: "Keep coding work scoped and verifiable"
+  default_prompt: "Use $implementation-guidelines while implementing this change."

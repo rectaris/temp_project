@@ -1,0 +1,4 @@
+interface:
+  display_name: "MCP Operations"
+  short_description: "Gate MCP reads and writes by local policy"
+  default_prompt: "Use $mcp-ops to check local external-service policy before using an MCP server."

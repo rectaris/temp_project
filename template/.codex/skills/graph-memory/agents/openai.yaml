@@ -1,0 +1,4 @@
+interface:
+  display_name: "Graph Memory"
+  short_description: "Use durable memory through local policy"
+  default_prompt: "Use $graph-memory to check graph-memory policy before reading or writing durable memory."

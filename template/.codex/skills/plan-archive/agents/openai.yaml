@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Archive"
+  short_description: "Archive active plans with lifecycle scripts"
+  default_prompt: "Use $plan-archive to complete and archive the active plan."

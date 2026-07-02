@@ -1,0 +1,4 @@
+interface:
+  display_name: "Linear Operations"
+  short_description: "Use Linear only through project policy"
+  default_prompt: "Use $linear-ops to verify Linear policy before syncing a local plan."
