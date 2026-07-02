@@ -19,3 +19,4 @@ id	path
 016	docs/plan/checked/016-root-codex-self-apply.md
 017	docs/plan/checked/017-hybrid-agent-logging.md
 018	docs/plan/checked/018-generic-codex-skills.md
+019	docs/plan/checked/019-advanced-validation-lifecycle.md

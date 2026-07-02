@@ -46,12 +46,22 @@ Before final report:
 
 - Use `scripts/validate-changes.py` to select the smallest complete validation set from changed files.
 - It inspects staged files first, then unstaged files, unless `--all` is supplied.
+- Use `--staged` to force staged-only selection.
 - Use `--print-only` to review selected commands without running them.
+- Selected commands are checked by `scripts/plan_validation_commands.py` before execution.
 - Treat selected commands as a floor, not a ceiling; add focused tests when risk requires it.
+
+## Plan Validation Commands
+
+- Use `python3 scripts/plan_validation_commands.py check-plan <plan>` to validate a plan manifest's `validation:` command list.
+- Use `python3 scripts/plan_validation_commands.py run-plan <plan>` only when the active plan's validation list is trusted and ready to execute.
+- Validation commands are parsed without a shell. Shell metacharacters, environment assignments, absolute paths, parent-directory traversal, and unsupported quoting are rejected.
+- Add project-specific commands by editing `scripts/plan_validation_commands.py` in the generated project and documenting the rule here.
 
 ## Optional Checks
 
 - Static security: `python3 scripts/security-static-check.py`
+- Codex TOML parse check: `python3 scripts/check-codex-toml.py`
 [% if skillspector_mode == "document_optional" %]
 - SkillSpector agent-skill scan: `scripts/skillspector-scan.sh <skill-path>`
 [% endif %]

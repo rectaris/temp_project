@@ -88,6 +88,8 @@ Rules:
 - `target_files` should list planned edit or context paths.
 - `target_json` is optional structured context. JSON edit targets must also appear in `target_files`.
 - `validation` should list commands needed for completion.
+- Validate plan command lists with `python3 scripts/plan_validation_commands.py check-plan <plan>` when plan validation entries are edited manually.
+- Keep validation entries as single commands, not shell pipelines or compound commands.
 - `acceptance_focus` is optional and should stay to one to three short points.
 - `checked_summary_ja` is the human-facing Japanese one-line completion summary.
 - Keep active-plan bodies parseable by agents. English is preferred for manifest values and operational detail; Japanese is fine for user-facing summaries, domain terms, and `checked_summary_ja`.
@@ -109,6 +111,7 @@ Rules:
 - Promote backlog: `scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`
 - Complete plan: `scripts/complete-plan.sh docs/plan/active/NNN-slug.md`
 - Finalize before final report: `scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`
+- Linear sync dry-run: `scripts/sync-plan-to-linear.sh docs/plan/active/NNN-slug.md --dry-run`
 - Completion gate: `scripts/check-agent-completion.sh`
 - Select minimal active-plan context: `scripts/select-task-context.sh docs/plan/active/NNN-slug.md`
 - Preview handoff cleanup: `scripts/clean-handoffs.sh --dry-run`
@@ -117,3 +120,5 @@ Rules:
 - Plan format wrapper: `scripts/format-plan-docs.sh --check`
 
 These scripts are local-only. External service sync belongs to `SPEC_EXTERNAL_SERVICES.md`.
+
+`scripts/sync-plan-to-linear.sh` is a generic policy gate. It can render a local dry-run draft without external reads or writes, but read-capable and write-capable modes require `docs/agent/external-services.yaml` plus a project-specific adapter before side effects are possible.

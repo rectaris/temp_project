@@ -165,6 +165,16 @@ grep -q 'SPEC_DECISION_AUDIT.md' "$tmp/typescript/docs/agent/spec-index.yaml"
 grep -q 'Decision Audit Preflight' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"
 grep -q 'Run decision audit before creating or materially updating active plans' "$tmp/typescript/AGENTS.md"
 grep -q 'Full decision-audit output does not belong in `docs/plan/active`' "$tmp/typescript/docs/agent/SPEC_DECISION_AUDIT.md"
+test -f "$tmp/typescript/scripts/plan_validation_commands.py"
+test -f "$tmp/typescript/scripts/check-codex-toml.py"
+test -f "$tmp/typescript/scripts/sync-plan-to-linear.sh"
+(cd "$tmp/typescript" && python3 scripts/plan_validation_commands.py --self-test)
+(cd "$tmp/typescript" && python3 scripts/check-codex-toml.py >/dev/null)
+(cd "$tmp/typescript" && python3 scripts/validate-changes.py --print-only >/dev/null)
+(cd "$tmp/typescript" && scripts/sync-plan-to-linear.sh docs/plan/checked/001-sample.md --dry-run | grep -q 'Desired status: Done')
+grep -q 'Plan Validation Commands' "$tmp/typescript/docs/agent/SPEC_VALIDATION.md"
+grep -q 'Linear sync dry-run' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"
+grep -q 'generic template script still fails closed' "$tmp/typescript/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 
 mkdir -p "$tmp/typescript/.agent-logs/sample/raw"
 printf 'line 1\nline 2\n' >"$tmp/typescript/.agent-logs/sample/raw/session.log"

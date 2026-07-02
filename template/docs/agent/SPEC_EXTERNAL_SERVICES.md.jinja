@@ -63,7 +63,10 @@ Before any external read or write, the matching service entry in `docs/agent/ext
 - Use Linear only when the `linear_sync` state is `configured_read_only` or `configured_write_capable`.
 - Treat Linear as a human-facing planning surface, not the source of truth for code.
 - Local plan files remain the repository fallback.
+- `scripts/sync-plan-to-linear.sh <plan> --dry-run` may render a local draft without Linear reads or writes.
+- Read-capable Linear preview modes require `configured_read_only` or `configured_write_capable` and a project-specific adapter.
 - Write-capable issue creation, description updates, status updates, comments, labels, and assignees require explicit user intent or documented lifecycle opt-in.
+- Write-capable Linear modes require `configured_write_capable`; the generic template script still fails closed until a project-specific adapter is installed.
 - Managed issue regions must preserve human-authored text outside generated markers.
 - Duplicate prevention should use deterministic source markers and fail closed on ambiguity.
 - If Linear credentials are unavailable, keep local planning active and record whether completion or sync is deferred.

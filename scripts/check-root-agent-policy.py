@@ -39,7 +39,11 @@ REQUIRED_ROOT_FILES = [
     "docs/agent/SPEC_PLAN_WORKFLOW.md",
     "scripts/agent-log-event.py",
     "scripts/check-agent-log-manifest.py",
+    "scripts/check-codex-toml.py",
     "scripts/context-compress.sh",
+    "scripts/plan_validation_commands.py",
+    "scripts/sync-plan-to-linear.sh",
+    "scripts/validate-changes.py",
 ]
 
 REQUIRED_AGENT_RULES = [
@@ -49,6 +53,7 @@ REQUIRED_AGENT_RULES = [
     ".codex/hooks/agent_log_event.py",
     ".codex/skills/decision-audit",
     ".codex/skills/implementation-guidelines",
+    "*.backup",
     "decision audit",
     "docs/plan/active",
 ]

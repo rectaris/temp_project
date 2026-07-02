@@ -32,6 +32,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Do not stage unrelated files.
 - Do not rewrite history unless explicitly requested.
 - Preserve user changes you did not make.
+- Before deleting generated backup files such as `*.backup`, `*.orig`, or `*.pre-*`, inspect and preserve or report useful prior state.
 - Commit after successful validation unless the user requested otherwise or a concrete dirty-worktree blocker prevents it.
 - Do not push unless the user explicitly requests it.
 
