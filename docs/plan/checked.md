@@ -23,3 +23,4 @@ id	path
 020	docs/plan/checked/020-agent-cli-ux-improvements.md
 021	docs/plan/checked/021-skill-authoring-policy.md
 022	docs/plan/checked/022-project-specific-copier-adoption.md
+023	docs/plan/checked/023-copier-answers-trailing-blank.md

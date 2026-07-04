@@ -111,6 +111,15 @@ grep -q 'SkillSpector is not enabled' "$tmp/python/docs/agent/SPEC_VALIDATION.md
 test -f "$tmp/typescript/scripts/skillspector-scan.sh"
 test ! -f "$tmp/python/scripts/skillspector-scan.sh"
 grep -q 'External service policy states: MCP=`disabled`, Linear=`disabled`, graph memory=`disabled`' "$tmp/python/AGENTS.md"
+python3 - "$tmp/typescript/.copier-answers.yml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+if text.endswith("\n\n"):
+    raise SystemExit(f"{path} has extra blank line at EOF")
+PY
 grep -q 'External service policy states: MCP=`documented`, Linear=`documented`, graph memory=`documented`' "$tmp/typescript/AGENTS.md"
 grep -q 'SPEC_COPIER_ADOPTION.md' "$tmp/typescript/AGENTS.md"
 grep -q 'copier_adoption:' "$tmp/typescript/docs/agent/spec-index.yaml"
