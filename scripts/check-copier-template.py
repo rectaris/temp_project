@@ -72,6 +72,7 @@ SOURCE_REQUIRED = [
     "template/docs/agent/SPEC_DEVELOPMENT_FLOW.md.jinja",
     "template/docs/agent/SPEC_ENVIRONMENT.md",
     "template/docs/agent/SPEC_AGENT_LOGGING.md",
+    "template/docs/agent/SPEC_COPIER_ADOPTION.md",
     "template/docs/agent/SPEC_CONTEXT_COMPRESSION.md",
     "template/docs/agent/SPEC_DECISION_AUDIT.md",
     "template/docs/agent/SPEC_ORCHESTRATION.md",
@@ -159,6 +160,7 @@ GENERATED_REQUIRED = [
     "docs/agent/SPEC_DEVELOPMENT_FLOW.md",
     "docs/agent/SPEC_ENVIRONMENT.md",
     "docs/agent/SPEC_AGENT_LOGGING.md",
+    "docs/agent/SPEC_COPIER_ADOPTION.md",
     "docs/agent/SPEC_CONTEXT_COMPRESSION.md",
     "docs/agent/SPEC_DECISION_AUDIT.md",
     "docs/agent/SPEC_FILE_MANAGEMENT.md",
@@ -215,6 +217,9 @@ QUESTIONS = {
     "primary_language",
     "codex_hooks_mode",
     "skillspector_mode",
+    "mcp_policy_mode",
+    "linear_sync_mode",
+    "graph_memory_mode",
 }
 
 REMOVED_ACTIVATION_QUESTIONS = {

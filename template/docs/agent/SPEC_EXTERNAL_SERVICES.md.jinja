@@ -1,6 +1,6 @@
-[% set mcp_state = "documented" if (use_mcp_policy is defined and use_mcp_policy) else "disabled" %]
-[% set linear_state = "documented" if (use_linear_sync is defined and use_linear_sync) else "disabled" %]
-[% set graph_state = "documented" if (use_graph_memory is defined and use_graph_memory) else "disabled" %]
+[% set mcp_state = "documented" if ((mcp_policy_mode is defined and mcp_policy_mode == "document_optional") or (use_mcp_policy is defined and use_mcp_policy)) else "disabled" %]
+[% set linear_state = "documented" if ((linear_sync_mode is defined and linear_sync_mode == "document_optional") or (use_linear_sync is defined and use_linear_sync)) else "disabled" %]
+[% set graph_state = "documented" if ((graph_memory_mode is defined and graph_memory_mode == "document_optional") or (use_graph_memory is defined and use_graph_memory)) else "disabled" %]
 # External Services
 
 External services are optional. Generated policy state lives in:
@@ -93,3 +93,5 @@ Before any external read or write, the matching service entry in `docs/agent/ext
 To enable a service, edit `docs/agent/external-services.yaml` in the generated project and add a project-specific spec if the workflow needs more detail.
 
 Do not move a service past `documented` until the required fields are complete and local validation or dry-run behavior is defined.
+
+When adopting this template into an existing repository, keep stronger project-specific external-service policy in a separate spec and reference it from this file or `SPEC_COPIER_ADOPTION.md`. Do not replace a concrete local adapter or service identifier with the generic disabled/documented stub.

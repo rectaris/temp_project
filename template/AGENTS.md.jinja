@@ -1,6 +1,6 @@
-[% set mcp_state = "documented" if (use_mcp_policy is defined and use_mcp_policy) else "disabled" %]
-[% set linear_state = "documented" if (use_linear_sync is defined and use_linear_sync) else "disabled" %]
-[% set graph_state = "documented" if (use_graph_memory is defined and use_graph_memory) else "disabled" %]
+[% set mcp_state = "documented" if ((mcp_policy_mode is defined and mcp_policy_mode == "document_optional") or (use_mcp_policy is defined and use_mcp_policy)) else "disabled" %]
+[% set linear_state = "documented" if ((linear_sync_mode is defined and linear_sync_mode == "document_optional") or (use_linear_sync is defined and use_linear_sync)) else "disabled" %]
+[% set graph_state = "documented" if ((graph_memory_mode is defined and graph_memory_mode == "document_optional") or (use_graph_memory is defined and use_graph_memory)) else "disabled" %]
 # AGENTS.md
 
 Agent entrypoint for `[[ project_slug ]]`.
@@ -40,6 +40,7 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Keep project-specific implementation rules in `docs/agent/SPEC_*.md`.
 - Track non-trivial implementation work in `docs/plan/plan.md`.
 - Keep Copier-managed workflow files updateable; put domain-specific details in separate specs.
+- For mature repositories, follow `docs/agent/SPEC_COPIER_ADOPTION.md` before copying or updating template-managed files.
 - Use Git for every coherent work unit.
 - Preserve user changes you did not make.
 - Prefer deterministic checks over prose-only rules.

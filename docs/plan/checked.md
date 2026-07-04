@@ -22,3 +22,4 @@ id	path
 019	docs/plan/checked/019-advanced-validation-lifecycle.md
 020	docs/plan/checked/020-agent-cli-ux-improvements.md
 021	docs/plan/checked/021-skill-authoring-policy.md
+022	docs/plan/checked/022-project-specific-copier-adoption.md

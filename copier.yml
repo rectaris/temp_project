@@ -60,3 +60,27 @@ skillspector_mode:
     - disabled
     - document_optional
   default: "[% if use_skillspector is defined and use_skillspector %]document_optional[% else %]disabled[% endif %]"
+
+mcp_policy_mode:
+  type: str
+  help: Document optional MCP integration policy without authorizing external reads or writes.
+  choices:
+    - disabled
+    - document_optional
+  default: "[% if use_mcp_policy is defined and use_mcp_policy %]document_optional[% else %]disabled[% endif %]"
+
+linear_sync_mode:
+  type: str
+  help: Document optional Linear planning sync without authorizing external reads or writes.
+  choices:
+    - disabled
+    - document_optional
+  default: "[% if use_linear_sync is defined and use_linear_sync %]document_optional[% else %]disabled[% endif %]"
+
+graph_memory_mode:
+  type: str
+  help: Document optional graph-memory integration without authorizing external reads or writes.
+  choices:
+    - disabled
+    - document_optional
+  default: "[% if use_graph_memory is defined and use_graph_memory %]document_optional[% else %]disabled[% endif %]"

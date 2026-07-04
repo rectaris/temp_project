@@ -4,3 +4,6 @@ project_purpose: Build a TypeScript application.
 primary_language: typescript
 codex_hooks_mode: enable_local_logging
 skillspector_mode: document_optional
+mcp_policy_mode: document_optional
+linear_sync_mode: document_optional
+graph_memory_mode: document_optional

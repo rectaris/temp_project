@@ -4,3 +4,6 @@ project_purpose: Build a Python tool.
 primary_language: python
 codex_hooks_mode: install_templates
 skillspector_mode: disabled
+mcp_policy_mode: disabled
+linear_sync_mode: disabled
+graph_memory_mode: disabled

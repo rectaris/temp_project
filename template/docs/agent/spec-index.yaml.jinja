@@ -114,6 +114,17 @@ task_types:
       - path: docs/agent/SPEC_PLAN_WORKFLOW.md
         when: external service state is linked to plan lifecycle files.
 
+  copier_adoption:
+    summary: Copier copy/update adoption, template-managed files, project-specific override policy, or mature-repository migration.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_COPIER_ADOPTION.md
+    conditional:
+      - path: docs/agent/SPEC_EXTERNAL_SERVICES.md
+        when: external service options, Linear, MCP, or graph memory policy are part of the adoption.
+      - path: docs/agent/SPEC_PLAN_WORKFLOW.md
+        when: plan lifecycle files, checked archives, or active plans are copied or merged.
+
   agent_logging:
     summary: Local raw agent logs, run manifests, redaction reports, compressed views, or large agent artifacts.
     required:
@@ -154,6 +165,8 @@ usually_unneeded:
     unless: unstated decisions, approach recommendations, or plan preflight choices are in scope.
   - path: docs/agent/SPEC_SKILL_AUTHORING.md
     unless: Codex skills, SKILL.md, skill references, skill scripts, skill assets, or skill metadata are in scope.
+  - path: docs/agent/SPEC_COPIER_ADOPTION.md
+    unless: Copier copy/update adoption, template-managed files, or mature-repository migration is in scope.
 
 rules:
   - Start with default_reads plus the matching route's required list.
@@ -165,6 +178,7 @@ rules:
   - Treat external-service modules as optional unless SPEC_EXTERNAL_SERVICES explicitly enables them.
   - Apply SPEC_JAPANESE_TECH_WRITING to Japanese prose without requiring an installed external skill.
   - Apply SPEC_SKILL_AUTHORING when creating, updating, vendoring, or reviewing Codex skills.
+  - Apply SPEC_COPIER_ADOPTION before copying template-managed files into a repository that already has local agent policy.
   - Do not compress AGENTS.md, docs/agent files, validation policy, or security policy; read normative instructions directly.
   - Use raw-log manifests, search, excerpts, and optional compression to decide whether large logs should enter context.
   - Use decision audit before non-trivial active-plan creation or material plan updates when meaningful choices remain open.
