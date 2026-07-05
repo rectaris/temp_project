@@ -21,66 +21,66 @@ _exclude:
 
 project_name:
   type: str
-  help: Human-facing project name.
+  help: 人間向けのプロジェクト名を入力してください。
   default: "Example Project"
 
 project_slug:
   type: str
-  help: Stable repository slug used in agent docs.
+  help: エージェント文書で使う安定したリポジトリ識別子を入力してください。
   default: "example-project"
 
 project_purpose:
   type: str
-  help: One sentence describing what the repository builds or maintains.
+  help: このリポジトリが構築または保守する内容を1文で入力してください。
   default: "Build and maintain the project."
 
 primary_language:
   type: str
-  help: Main implementation surface for validation defaults.
+  help: 検証の既定値に使う主な実装対象を選んでください。
   choices:
-    - typescript
-    - python
-    - mixed
-    - docs
+    TypeScript 中心: typescript
+    Python 中心: python
+    複数言語: mixed
+    ドキュメント中心: docs
   default: "mixed"
 
 codex_hooks_mode:
   type: str
-  help: Choose whether Codex hook templates are only installed or local logging hooks are active.
+  help: Codex hooks の導入方法を選んでください。
   choices:
-    - disabled
-    - install_templates
-    - enable_local_logging
+    無効にする: disabled
+    テンプレートだけ導入する: install_templates
+    ローカルログ記録を有効にする: enable_local_logging
   default: "[% if use_hooks is defined and not use_hooks %]disabled[% else %]install_templates[% endif %]"
 
 skillspector_mode:
   type: str
-  help: Choose whether optional NVIDIA SkillSpector scan documentation is generated.
+  help: 任意の NVIDIA SkillSpector スキャン手順を生成するか選んでください。
   choices:
-    - disabled
-    - document_optional
+    生成しない: disabled
+    任意手順として生成する: document_optional
   default: "[% if use_skillspector is defined and use_skillspector %]document_optional[% else %]disabled[% endif %]"
 
 mcp_policy_mode:
   type: str
-  help: Document optional MCP integration policy without authorizing external reads or writes.
+  help: 外部読み書きを許可せず、任意の MCP 連携方針だけを文書化するか選んでください。
   choices:
-    - disabled
-    - document_optional
+    文書化しない: disabled
+    任意方針として文書化する: document_optional
   default: "[% if use_mcp_policy is defined and use_mcp_policy %]document_optional[% else %]disabled[% endif %]"
 
 linear_sync_mode:
   type: str
-  help: Document optional Linear planning sync without authorizing external reads or writes.
+  help: 外部読み書きを許可せず、任意の Linear 計画同期方針だけを文書化するか選んでください。
   choices:
-    - disabled
-    - document_optional
+    文書化しない: disabled
+    任意方針として文書化する: document_optional
   default: "[% if use_linear_sync is defined and use_linear_sync %]document_optional[% else %]disabled[% endif %]"
 
 graph_memory_mode:
   type: str
-  help: Document optional graph-memory integration without authorizing external reads or writes.
+  help: 外部読み書きを許可せず、任意の graph memory 連携方針だけを文書化するか選んでください。
   choices:
-    - disabled
-    - document_optional
+    文書化しない: disabled
+    任意方針として文書化する: document_optional
   default: "[% if use_graph_memory is defined and use_graph_memory %]document_optional[% else %]disabled[% endif %]"

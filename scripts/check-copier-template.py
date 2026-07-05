@@ -225,6 +225,17 @@ QUESTIONS = {
     "graph_memory_mode",
 }
 
+EXPECTED_CHOICE_VALUES = {
+    "primary_language": {"typescript", "python", "mixed", "docs"},
+    "codex_hooks_mode": {"disabled", "install_templates", "enable_local_logging"},
+    "skillspector_mode": {"disabled", "document_optional"},
+    "mcp_policy_mode": {"disabled", "document_optional"},
+    "linear_sync_mode": {"disabled", "document_optional"},
+    "graph_memory_mode": {"disabled", "document_optional"},
+}
+
+JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+
 REMOVED_ACTIVATION_QUESTIONS = {
     "use_hooks",
     "use_skillspector",
@@ -266,6 +277,51 @@ def parse_fixture(path: Path) -> dict[str, str]:
     return data
 
 
+def copier_question_blocks(text: str) -> dict[str, list[str]]:
+    blocks: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        if line and not line.startswith(" ") and ":" in line:
+            current = line.split(":", 1)[0]
+            blocks[current] = []
+            continue
+        if current:
+            blocks[current].append(line)
+    return blocks
+
+
+def require_japanese_prompts(copier_yml: str) -> None:
+    blocks = copier_question_blocks(copier_yml)
+    for question in QUESTIONS:
+        body = blocks.get(question)
+        if body is None:
+            fail(f"copier.yml missing question: {question}")
+        help_lines = [line for line in body if line.startswith("  help:")]
+        if not help_lines:
+            fail(f"copier.yml question missing help text: {question}")
+        if not JAPANESE_RE.search(help_lines[0]):
+            fail(f"copier.yml question help must be Japanese: {question}")
+
+    for question, expected_values in EXPECTED_CHOICE_VALUES.items():
+        body = blocks[question]
+        values: set[str] = set()
+        in_choices = False
+        for line in body:
+            if line == "  choices:":
+                in_choices = True
+                continue
+            if in_choices and line.startswith("    ") and ":" in line:
+                label, value = line.strip().split(":", 1)
+                if not JAPANESE_RE.search(label):
+                    fail(f"copier.yml choice label must be Japanese: {question}: {label}")
+                values.add(value.strip().strip("\"'"))
+                continue
+            if in_choices and line and not line.startswith("    "):
+                break
+        if values != expected_values:
+            fail(f"copier.yml choice values changed for {question}: {sorted(values)}")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -293,6 +349,7 @@ def main() -> int:
     for question in QUESTIONS:
         if not re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml missing question: {question}")
+    require_japanese_prompts(copier_yml)
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")
