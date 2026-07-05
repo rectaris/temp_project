@@ -15,7 +15,7 @@
 - 作業ごとに `docs/plan/handoffs/<plan-id>-<slug>/` のようなディレクトリを作ります。
 - 依頼内容は `request.md` に書きます。
 - 実装メタデータは `result.json`、調査やレビュー結果は `findings.md` に残します。
-- 引き継ぎディレクトリは一時的なキューです。永続的な完了記録は `docs/plan/checked/*.md` に残します。
+- 引き継ぎディレクトリは一時的なキューです。永続的な完了記録は `docs/plan/checked/YYYY/MM/01-15/*.md` または `docs/plan/checked/YYYY/MM/16-31/*.md` に残します。
 - 完了内容を保存した後、不要になった引き継ぎディレクトリは削除します。
 
 ## AI エージェント向け情報

@@ -4,12 +4,13 @@ set -eu
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/sync-plan-to-linear.sh <docs/plan/<active|backlog|checked>/NNN-slug.md> --dry-run
+  scripts/sync-plan-to-linear.sh <docs/plan/<active|backlog>/NNN-slug.md> --dry-run
+  scripts/sync-plan-to-linear.sh <docs/plan/checked/.../NNN-slug.md> --dry-run
   scripts/sync-plan-to-linear.sh <docs/plan/<active|backlog>/NNN-slug.md> --update-issue --dry-run
   scripts/sync-plan-to-linear.sh <docs/plan/<active|backlog>/NNN-slug.md> --ensure-issue
   scripts/sync-plan-to-linear.sh <docs/plan/<active|backlog>/NNN-slug.md> --update-issue --apply
   scripts/sync-plan-to-linear.sh <docs/plan/active/NNN-slug.md> --preflight-completion-status
-  scripts/sync-plan-to-linear.sh <docs/plan/checked/NNN-slug.md> --update-status --apply
+  scripts/sync-plan-to-linear.sh <docs/plan/checked/.../NNN-slug.md> --update-status --apply
   scripts/sync-plan-to-linear.sh <docs/plan/<active|backlog>/NNN-slug.md> --apply --from-payload <payload.json>
 
 Generic Linear lifecycle gate.

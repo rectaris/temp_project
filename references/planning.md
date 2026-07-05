@@ -8,7 +8,8 @@ Use lightweight planning files to make agent work resumable without turning ever
 - `docs/plan/active/*.md`: current executable work with scope, target files, validation, and acceptance.
 - `docs/plan/backlog/*.md`: future or condition-waiting work.
 - `docs/plan/checked.md`: machine-readable index of completed work.
-- `docs/plan/checked/*.md`: durable completion records.
+- `docs/plan/checked/YYYY/MM/01-15/*.md`: durable completion records completed in the first half of a month.
+- `docs/plan/checked/YYYY/MM/16-31/*.md`: durable completion records completed in the second half of a month.
 - `docs/plan/handoffs/`: temporary queue for real cross-agent or cross-session transfers.
 - `docs/plan/README.md`, `backlog/README.md`, and `handoffs/README.md`: human-facing Japanese overviews.
 - `docs/plan/sub-agents/`: optional helper prompt and custom-agent notes for repeated workflows.
@@ -17,7 +18,7 @@ Use lightweight planning files to make agent work resumable without turning ever
 
 - Create or update an active plan before non-trivial edits.
 - Keep `plan.md` short; move details into active task files.
-- Move completed active work to `checked/` and update `checked.md`.
+- Move completed active work to the completion-date bucket under `checked/` and update `checked.md`.
 - Use handoff records only when direct prompt results are not enough.
 - Keep README files human-facing; keep operational rules in `docs/agent/`.
 

@@ -132,7 +132,12 @@ def plan_ids() -> set[int]:
     for directory in PLAN_DIRS:
         if not directory.exists():
             continue
-        for path in directory.glob("[0-9][0-9][0-9]-*.md"):
+        pattern = (
+            "**/[0-9][0-9][0-9]-*.md"
+            if directory == CHECKED_DIR
+            else "[0-9][0-9][0-9]-*.md"
+        )
+        for path in directory.glob(pattern):
             ids.add(int(path.name[:3]))
     if CHECKED.exists():
         for line in CHECKED.read_text(encoding="utf-8").splitlines():

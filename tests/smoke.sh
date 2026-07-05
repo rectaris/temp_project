@@ -41,8 +41,14 @@ run_plan_lifecycle_smoke() {
   (cd "$out" && python3 scripts/lint-plan-docs.py)
   (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPE=tooling$')
   (cd "$out" && scripts/clean-handoffs.sh --dry-run >/dev/null)
-  (cd "$out" && scripts/complete-plan.sh docs/plan/active/001-sample.md >/dev/null)
-  (cd "$out" && test -f docs/plan/checked/001-sample.md)
+  archive_path=$(cd "$out" && scripts/complete-plan.sh docs/plan/active/001-sample.md)
+  case "$archive_path" in
+    docs/plan/checked/[0-9][0-9][0-9][0-9]/[0-9][0-9]/01-15/001-sample.md) ;;
+    docs/plan/checked/[0-9][0-9][0-9][0-9]/[0-9][0-9]/16-31/001-sample.md) ;;
+    *) echo "unexpected checked archive path: $archive_path" >&2; exit 1 ;;
+  esac
+  test -f "$out/$archive_path"
+  printf '%s\n' "$archive_path" >"$out/.sample-archive-path"
   (cd "$out" && python3 scripts/lint-plan-docs.py)
 }
 
@@ -196,7 +202,8 @@ test -f "$tmp/typescript/scripts/sync-plan-to-linear.sh"
 (cd "$tmp/typescript" && scripts/search-plan-archive.py --text sample --json | python3 -m json.tool | grep -q '"count":')
 (cd "$tmp/typescript" && scripts/workflow-status.sh --json | python3 -m json.tool | grep -q '"git_status"')
 (cd "$tmp/typescript" && python3 scripts/plan_validation_commands.py check-commands "python3 scripts/validate-changes.py --print-only --json")
-(cd "$tmp/typescript" && scripts/sync-plan-to-linear.sh docs/plan/checked/001-sample.md --dry-run | grep -q 'Desired status: Done')
+sample_archive_path=$(cat "$tmp/typescript/.sample-archive-path")
+(cd "$tmp/typescript" && scripts/sync-plan-to-linear.sh "$sample_archive_path" --dry-run | grep -q 'Desired status: Done')
 grep -q 'Plan Validation Commands' "$tmp/typescript/docs/agent/SPEC_VALIDATION.md"
 grep -q 'Linear sync dry-run' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"
 grep -q 'Machine-readable workflow status' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"

@@ -6,7 +6,8 @@
 - `docs/plan/active/*.md`: active executable tasks.
 - `docs/plan/backlog/*.md`: future or condition-waiting work.
 - `docs/plan/checked.md`: completed-work index.
-- `docs/plan/checked/*.md`: durable completion records.
+- `docs/plan/checked/YYYY/MM/01-15/*.md`: durable completion records completed in the first half of a month.
+- `docs/plan/checked/YYYY/MM/16-31/*.md`: durable completion records completed in the second half of a month.
 - `docs/plan/handoffs/`: temporary transfer queue.
 - `docs/plan/README.md`: human-facing plan overview.
 - `docs/plan/backlog/README.md`: human-facing backlog overview.
@@ -49,7 +50,8 @@
 
 - Create or update an active plan before non-trivial edits.
 - Keep `plan.md` short.
-- Archive completed work to `checked/`.
+- Archive completed work under `checked/YYYY/MM/01-15/` or `checked/YYYY/MM/16-31/` based on completion date.
+- Keep `checked.md` as the machine-readable index for all checked archives, including nested paths.
 - Use handoff files only for real staged transfer.
 - Use a single numeric namespace across active, backlog, and checked files.
 - Treat checked archives as historical completion records, not current implementation guidance.

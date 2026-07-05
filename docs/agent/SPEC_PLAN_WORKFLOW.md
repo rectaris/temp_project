@@ -7,7 +7,8 @@ This repository root is a template development repository. It is not a Copier-ge
 - `docs/plan/plan.md`: short active-work index.
 - `docs/plan/active/*.md`: active executable tasks.
 - `docs/plan/checked.md`: completed-work index.
-- `docs/plan/checked/*.md`: durable completion records.
+- `docs/plan/checked/YYYY/MM/01-15/*.md`: durable completion records completed in the first half of a month.
+- `docs/plan/checked/YYYY/MM/16-31/*.md`: durable completion records completed in the second half of a month.
 
 ## Agent Log Boundary
 
@@ -40,7 +41,8 @@ This repository root is a template development repository. It is not a Copier-ge
 
 - Create or update an active plan before non-trivial edits.
 - Keep `plan.md` short.
-- Archive completed work to `checked/`.
+- Archive completed work under `checked/YYYY/MM/01-15/` or `checked/YYYY/MM/16-31/` based on completion date.
+- Keep `checked.md` as the machine-readable index for all checked archives, including nested paths.
 - Treat checked archives as historical completion records, not current implementation guidance.
 - Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
 - Keep active plans executable. Use `## Decisions` for final accepted decisions, not full decision-audit output.

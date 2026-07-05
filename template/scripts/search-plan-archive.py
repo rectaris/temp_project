@@ -25,7 +25,7 @@ def main() -> int:
             if needle in line.lower():
                 hits.append({"kind": "checked_index", "path": "docs/plan/checked.md", "line": line})
     if ARCHIVE.exists():
-        for path in sorted(ARCHIVE.glob("*.md")):
+        for path in sorted(ARCHIVE.rglob("*.md")):
             text = path.read_text(encoding="utf-8")
             if needle in text.lower():
                 hits.append({"kind": "checked_archive", "path": str(path.relative_to(ROOT))})
