@@ -152,6 +152,8 @@ grep -q 'external transcript logs as primary full-turn evidence' "$tmp/typescrip
 grep -q 'scripts/context-compress.sh' "$tmp/typescript/docs/agent/SPEC_CONTEXT_COMPRESSION.md"
 test -f "$tmp/typescript/scripts/check-agent-log-manifest.py"
 (cd "$tmp/typescript" && python3 scripts/check-agent-log-manifest.py --self-test >/dev/null)
+test -f "$tmp/typescript/scripts/import-codex-transcript.py"
+(cd "$tmp/typescript" && python3 scripts/import-codex-transcript.py --self-test >/dev/null)
 test -f "$tmp/typescript/.codex/skills/decision-audit/SKILL.md"
 test -f "$tmp/typescript/.codex/skills/decision-audit/agents/openai.yaml"
 grep -q 'name: decision-audit' "$tmp/typescript/.codex/skills/decision-audit/SKILL.md"

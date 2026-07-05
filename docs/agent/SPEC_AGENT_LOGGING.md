@@ -58,6 +58,15 @@ Allowed transcript `role` values are `user`, `assistant`, `tool`, and `system_ev
 
 Transcript ingestion must redact secrets before writing, or mark the transcript source with `redaction_status: "pending_review"` in `manifest.json`.
 
+Use `scripts/import-codex-transcript.py` to normalize an external Codex session JSONL transcript into:
+
+```text
+.agent-logs/<run-id>/raw/transcript.jsonl
+```
+
+The importer updates `manifest.json`, `coverage.external_transcript`, and `redaction-report.md`.
+It writes redacted normalized transcript records and excludes reasoning content items.
+
 ## Hook Logging
 
 Use `scripts/agent-log-event.py` as the root best-effort logger for Codex lifecycle hook payloads when wiring hooks outside this read-only root `.codex/` environment.
@@ -73,6 +82,10 @@ Hook logs are written to:
 ```
 
 The hook also creates or updates `manifest.json` and `redaction-report.md`.
+
+On `Stop`, if Codex provides `transcript_path`, the hook attempts a best-effort call to `scripts/import-codex-transcript.py`.
+This promotes the external transcript to the primary local source while keeping hook event logs as corroborating evidence.
+If the path is unavailable or import fails, the hook must still succeed and the manifest must keep `external_transcript` in `missing_sources`.
 
 Hook logging is best-effort and must not block agent execution. If the hook payload does not contain assistant final text, internal reasoning, or a full transcript, the hook must not reconstruct it.
 

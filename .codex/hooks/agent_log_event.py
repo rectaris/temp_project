@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -189,6 +190,32 @@ def append_event(event: str, payload: dict[str, Any]) -> None:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
     update_manifest(run_dir, run, event_path)
     ensure_redaction_report(run_dir)
+    if event == "Stop":
+        import_external_transcript(root, run, payload)
+
+
+def import_external_transcript(root: Path, run: str, payload: dict[str, Any]) -> None:
+    transcript_path = payload.get("transcript_path")
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return
+    source = Path(transcript_path).expanduser()
+    if not source.is_file():
+        return
+    importer = root / "scripts/import-codex-transcript.py"
+    if not importer.is_file():
+        return
+    try:
+        subprocess.run(
+            [sys.executable, str(importer), str(source), "--run-id", run, "--overwrite"],
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        )
+    except Exception:
+        pass
 
 
 def main() -> int:
