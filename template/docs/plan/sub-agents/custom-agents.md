@@ -21,3 +21,12 @@ output_contract:
 validation:
 fallback:
 ```
+
+## sequential_plan_worker
+
+purpose: implement exactly one assigned numbered active plan with bounded writes.
+inputs: assigned plan, required specs, explicit write scope, and required validation commands.
+write_scope: only the files explicitly assigned by the parent; never the plan lifecycle state.
+output_contract: changed paths, implementation summary, validation results, blockers, cross-plan impacts, and remaining risks.
+validation: run every validation command listed by the assigned plan.
+fallback: stop and report when the write scope, required input, validation, or worker contract is unavailable.

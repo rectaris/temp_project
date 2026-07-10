@@ -1,6 +1,6 @@
 # Sequential Plan Worker Agent
 
-status: active
+status: checked
 task_type: template_workflow
 review_class: B
 human_design_required: no
@@ -43,11 +43,14 @@ The worker must implement only the active plan assigned by the parent agent, ret
 - Its default reasoning effort is `medium` because the worker is optimized for bounded implementation and fast iteration; the parent may override this only through an explicit task-level setting.
 - The worker uses `workspace-write` because implementation plans may require repository edits.
 - The worker must not spawn child agents; the project remains at one delegation level for this workflow.
-- The parent agent remains responsible for acceptance, integration decisions, validation, and all final responses.
+- The worker writes only the files listed in the delegated task's explicit write scope and does not edit the assigned plan's status or lifecycle state.
+- The worker returns implementation and validation evidence without committing; the parent agent remains responsible for status transitions, acceptance, integration decisions, commits, and all final responses.
+- The worker configuration is validated in the template and generated output; model availability is outside repository validation scope.
+- Plan 026 is accepted and archived, so this plan's deferred dependency is cleared.
 
 ## Implementation Instructions
 
-1. Read Plan 026 and preserve its worker name, task contract, and sequencing semantics.
+1. Read the checked Plan 026 record and preserve its worker name, task contract, and sequencing semantics.
 2. Define `sequential_plan_worker` with required `name`, `description`, `model`, `model_reasoning_effort`, `sandbox_mode`, and concise developer instructions.
 3. Set:
 
@@ -60,14 +63,14 @@ The worker must implement only the active plan assigned by the parent agent, ret
 4. Require the worker to:
    - read the assigned plan and its required specs;
    - stay inside the explicit write scope;
-   - update the assigned plan's status and validation notes only when the plan lifecycle permits it;
+   - return validation notes without changing the assigned plan's status, `ready_to_archive` state, or archive location;
    - preserve unrelated user changes;
    - run the plan's required validation;
    - report changed paths, validation results, blockers, cross-plan impacts, and remaining risks.
-5. Explicitly prohibit the worker from processing the next active plan, spawning descendants, committing unrelated changes, or weakening tests.
-6. Keep `[agents].max_depth = 1` and verify that the worker configuration does not introduce recursive delegation.
+5. Explicitly prohibit the worker from processing the next active plan, spawning descendants, committing changes, changing lifecycle state, or weakening tests.
+6. Keep the existing `[agents].max_depth = 1` unchanged and verify that the worker configuration does not introduce recursive delegation.
 7. Add deterministic template and smoke assertions for the agent file and its model string.
-8. Validate generated output through the repository's existing Copier and TOML checks.
+8. Validate generated output through the repository's existing Copier and TOML checks, including exact model and delegation guardrail assertions; do not attempt to probe external model availability.
 
 ## Expected Output
 
@@ -75,6 +78,23 @@ The worker must implement only the active plan assigned by the parent agent, ret
 - Template and smoke coverage proving the model and orchestration guardrails are present.
 - A final report confirming the sequential workflow is ready for use.
 
-## completion_deferred_reason
+## Summary
 
-Plan 026 now defines the final skill contract and worker invocation name; proceed after Plan 026 acceptance.
+Added the generated `sequential_plan_worker` agent and connected its bounded worker contract to template checks and smoke coverage.
+
+## Completed Work
+
+- Added the `gpt-5.3-codex-spark` worker definition with medium reasoning and workspace-write access.
+- Restricted the worker to one assigned plan, explicit write scope, required validation, and structured evidence without lifecycle changes, descendant delegation, or commits.
+- Added custom-agent documentation, Copier static checks, and generated-project smoke assertions.
+- Corrected the existing sequential orchestrator metadata assertion to match its established `one bounded worker at a time` wording.
+
+## Validation Notes
+
+- `git diff --check` passed.
+- `python3 scripts/check-codex-toml.py` passed.
+- `python3 scripts/check-copier-template.py` passed.
+- `python3 scripts/validate-changes.py --all` passed.
+- `scripts/lint-project-workflow.sh` passed.
+- `tests/smoke.sh` passed. Copier emitted `DirtyLocalWarning` because the smoke test intentionally rendered the in-progress dirty template.
+- Model availability was not probed because it is outside deterministic repository validation scope.

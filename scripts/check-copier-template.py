@@ -52,6 +52,7 @@ SOURCE_REQUIRED = [
     "template/.codex/agents/docs_researcher.toml",
     "template/.codex/agents/repo_explorer.toml",
     "template/.codex/agents/scoped_worker.toml",
+    "template/.codex/agents/sequential_plan_worker.toml",
     "template/.codex/hooks/agent_log_event.py",
     "template/.codex/hooks/pre_tool_hardening_gate.py",
     "template/.codex/hooks/stop_review_gate.py",
@@ -139,6 +140,7 @@ GENERATED_REQUIRED = [
     ".codex/agents/docs_researcher.toml",
     ".codex/agents/repo_explorer.toml",
     ".codex/agents/scoped_worker.toml",
+    ".codex/agents/sequential_plan_worker.toml",
     ".codex/hooks/agent_log_event.py",
     ".codex/hooks/pre_tool_hardening_gate.py",
     ".codex/hooks/stop_review_gate.py",
@@ -268,6 +270,24 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def require_sequential_worker() -> None:
+    path = ROOT / "template/.codex/agents/sequential_plan_worker.toml"
+    text = path.read_text(encoding="utf-8")
+    required = (
+        'name = "sequential_plan_worker"',
+        'model = "gpt-5.3-codex-spark"',
+        'model_reasoning_effort = "medium"',
+        'sandbox_mode = "workspace-write"',
+        "Do not process the next active plan",
+        "Do not spawn descendant agents",
+        "Do not edit the assigned plan's status",
+        "Do not commit changes",
+    )
+    for marker in required:
+        if marker not in text:
+            fail(f"sequential worker missing required contract: {marker}")
+
+
 def parse_fixture(path: Path) -> dict[str, str]:
     data: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -367,6 +387,8 @@ def main() -> int:
     answers_template = read("template/[[ _copier_conf.answers_file ]].jinja")
     if "_copier_answers|to_nice_yaml" not in answers_template:
         fail("answers template must persist _copier_answers for future updates")
+
+    require_sequential_worker()
 
     for fixture in sorted((ROOT / "tests/fixtures").glob("*.answers.yml")):
         answers = parse_fixture(fixture)
