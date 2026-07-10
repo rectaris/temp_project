@@ -42,12 +42,17 @@ The parent agent must not implement the plan's product or code changes directly.
 
 - The skill is named `sequential-plan-orchestrator`.
 - The skill is generated under `template/.codex/skills/sequential-plan-orchestrator/`.
-- The workflow processes `docs/plan/active/*.md` in numeric filename order.
+- The workflow processes files matching `docs/plan/active/<number>-<name>.md` in integer filename order and stops on malformed names, duplicate numbers, ambiguous plans, blocked plans, or missing required inputs.
 - Each plan is delegated to one subagent, and the next plan starts only after the current plan's implementation and acceptance checks finish.
 - Before delegation, the parent agent reads the active plan, its required specs, and the current active-plan index.
-- The parent agent updates affected later plans when a completed plan changes their assumptions or target boundaries.
-- The parent agent performs review and validation after each delegated plan and does not make implementation changes outside orchestration metadata, plan updates, and validation artifacts.
-- Skill instructions must refer to the configurable worker agent name rather than hard-coding an unavailable runtime mechanism.
+- The default worker agent name is `sequential_plan_worker`; the skill may accept a configured replacement and stops if the resolved agent is unavailable.
+- The worker owns implementation within the assigned plan's explicit write scope and returns structured evidence; the parent owns status transitions, acceptance, archive decisions, later-plan updates, and final responses.
+- The parent may change only orchestration metadata, affected active-plan instructions, concise validation notes, and local evidence references; it must not implement product or code changes directly.
+- After each accepted plan, the parent inspects later plans and updates only affected decisions, targets, dependencies, or validation conditions before delegating the next plan.
+- A worker failure, blocker, missing input, or failed required validation rejects the plan and stops the sequence; there is no automatic retry or fallback delegation.
+- Worker results contain changed paths, implementation summary, validation results, blockers, cross-plan impacts, and remaining risks. Detailed logs remain under `.agent-logs/` or `.agent-artifacts/`, not in active plans.
+- The parent reruns acceptance validation after each worker and runs the consolidated repository validation before completion.
+- External-service writes and descendant delegation are outside this skill's scope.
 
 ## Implementation Instructions
 
@@ -55,16 +60,17 @@ The parent agent must not implement the plan's product or code changes directly.
 2. Use the system `skill-creator` workflow and keep `SKILL.md` concise.
 3. Put the trigger in the frontmatter description for requests to execute numbered active plans sequentially with one subagent per plan.
 4. Define the workflow in direct operational steps:
-   - enumerate and numerically sort active plan files;
+   - enumerate strictly named and numerically sort active plan files;
    - stop and report if an active plan is ambiguous, blocked, or missing required inputs;
-   - delegate exactly one bounded plan at a time;
+   - resolve the configured worker agent name, defaulting to `sequential_plan_worker`, and stop if it is unavailable;
+   - delegate exactly one bounded plan at a time with the explicit read and write scopes;
    - wait for that plan's subagent result;
    - inspect changed paths, validation evidence, and cross-plan impact;
    - update later active plans when required;
    - accept or reject the result before advancing;
    - finish with a consolidated validation and remaining-risk report.
 5. Define the subagent request contract, including plan path, explicit read scope, explicit write scope, required validation, expected return fields, and prohibition on unrelated changes.
-6. State that subagent output is advisory until the parent agent accepts it through repository validation.
+6. State that subagent output is advisory until the parent agent accepts it through repository validation, and that failure or rejection stops the sequence without automatic retry.
 7. Do not include project-specific supportcard facts, credentials, external-service writes, or a second orchestration loop in the skill.
 8. Generate `agents/openai.yaml` with metadata matching the skill name and trigger.
 9. Register the new skill in repository template checks and smoke coverage if those checks enumerate expected skill directories.
@@ -78,3 +84,12 @@ The parent agent must not implement the plan's product or code changes directly.
 ## completion_deferred_reason
 
 Plan 027 depends on the worker-agent name and output contract defined here.
+
+## Validation Notes
+
+- `python3 /home/rectaris/.codex/skills/.system/skill-creator/scripts/quick_validate.py template/.codex/skills/sequential-plan-orchestrator`
+- `python3 scripts/check-copier-template.py`
+- `python3 scripts/validate-changes.py --all`
+- `scripts/lint-project-workflow.sh`
+- `tests/smoke.sh`
+- Plan 027 now has the worker name and structured handoff contract required to proceed after Plan 026 acceptance.

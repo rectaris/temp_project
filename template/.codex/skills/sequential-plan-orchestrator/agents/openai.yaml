@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sequential Plan Orchestrator"
+  short_description: "Run numbered active plans through one bounded worker at a time"
+  default_prompt: "Use $sequential-plan-orchestrator to execute numbered active plans sequentially with parent acceptance."

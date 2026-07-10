@@ -77,4 +77,4 @@ The worker must implement only the active plan assigned by the parent agent, ret
 
 ## completion_deferred_reason
 
-This plan must wait until Plan 026 defines the final skill contract and worker invocation name.
+Plan 026 now defines the final skill contract and worker invocation name; proceed after Plan 026 acceptance.
