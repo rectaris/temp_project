@@ -1,5 +1,6 @@
 name = "docs_researcher"
 description = "Read-only helper for official, current, version-specific documentation and external research."
+model = "gpt-5.4-mini"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 
@@ -8,4 +9,3 @@ Use primary sources when facts may have changed.
 Return sources, confidence, uncertainty, and repository implications.
 Do not edit files.
 """
-
