@@ -1,6 +1,6 @@
 # Sequential Active-Plan Skill
 
-status: active
+status: checked
 task_type: skill_authoring
 review_class: B
 human_design_required: no
@@ -81,10 +81,6 @@ The parent agent must not implement the plan's product or code changes directly.
 - Updated template checks and smoke assertions when necessary.
 - Validation results and a list of any remaining assumptions for Plan 027.
 
-## completion_deferred_reason
-
-Plan 027 depends on the worker-agent name and output contract defined here.
-
 ## Validation Notes
 
 - `python3 /home/rectaris/.codex/skills/.system/skill-creator/scripts/quick_validate.py template/.codex/skills/sequential-plan-orchestrator`
@@ -93,3 +89,14 @@ Plan 027 depends on the worker-agent name and output contract defined here.
 - `scripts/lint-project-workflow.sh`
 - `tests/smoke.sh`
 - Plan 027 now has the worker name and structured handoff contract required to proceed after Plan 026 acceptance.
+
+## Summary
+
+Added the reusable `sequential-plan-orchestrator` skill and connected it to generated-template checks and smoke coverage.
+
+## Completed Work
+
+- Added the generated skill definition and UI metadata.
+- Defined numeric active-plan ordering, one-worker delegation, parent acceptance, stop conditions, write boundaries, and structured handoff requirements.
+- Updated Plan 027 with the finalized worker contract dependency.
+- Registered the skill in Copier static checks and generated-project smoke coverage.

@@ -26,3 +26,4 @@ id	path
 023	docs/plan/checked/023-copier-answers-trailing-blank.md
 024	docs/plan/checked/2026/07/01-15/024-half-month-checked-archive.md
 025	docs/plan/checked/2026/07/01-15/025-japanese-copier-prompts.md
+026	docs/plan/checked/2026/07/01-15/026-sequential-plan-skill.md
