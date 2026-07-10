@@ -32,6 +32,8 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/mcp-ops/agents/openai.yaml",
     ".codex/skills/plan-archive/SKILL.md",
     ".codex/skills/plan-archive/agents/openai.yaml",
+    ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+    ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
     "docs/agent/SPEC_CONTEXT_COMPRESSION.md",
