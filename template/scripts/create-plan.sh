@@ -64,7 +64,7 @@ fi
 cat >"$path" <<EOF
 # $summary
 
-status: $kind
+status: $( [ "$kind" = "active" ] && echo in_progress || echo backlog )
 task_type: tooling
 review_class: B
 human_design_required: no

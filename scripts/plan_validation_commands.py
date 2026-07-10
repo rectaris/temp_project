@@ -137,7 +137,7 @@ def is_python_compile(argv: tuple[str, ...]) -> bool:
         path = Path(raw_path)
         if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
             return False
-        if path.parts[0] not in {"scripts", "tests", ".codex"} and path.parts[:2] != ("template", "scripts"):
+        if path.parts[0] not in {"scripts", "tests", ".codex", "template"}:
             return False
     return True
 

@@ -54,6 +54,20 @@ def main() -> int:
         return 0
 
     repo = repo_root()
+    completion_script = repo / "scripts/check-agent-completion.sh"
+    if completion_script.is_file():
+        completion = subprocess.run(
+            ["sh", str(completion_script), "--plans-only"],
+            cwd=repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if completion.returncode != 0:
+            json.dump({"decision": "block", "reason": completion.stderr.strip()}, sys.stdout)
+            sys.stdout.write("\n")
+            return 0
     paths = sorted(set(git(["diff", "--name-only"], repo) + git(["diff", "--cached", "--name-only"], repo) + git(["ls-files", "--others", "--exclude-standard"], repo)))
     risky = [path for path in paths if is_high_risk(path)]
     if risky or len(paths) >= 3:
@@ -72,4 +86,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

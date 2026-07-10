@@ -97,6 +97,14 @@ Rules:
 - Keep active-plan bodies parseable by agents. English is preferred for manifest values and operational detail; Japanese is fine for user-facing summaries, domain terms, and `checked_summary_ja`.
 - `completion_deferred_reason` is only for intentionally incomplete work or concrete external blockers.
 
+Lifecycle states:
+
+- Use `status: in_progress` for ongoing work and `status: deferred` for intentionally postponed work.
+- Use `status: ready_to_archive` only after acceptance and validation evidence are recorded.
+- `ready_to_archive` is the only active-plan state that blocks the completion gate.
+- Set `ready_to_archive` with `scripts/complete-plan.sh`, then use `scripts/finalize-active-plan.sh` as the only archive transition.
+- Finalization requires a non-empty `checked_summary_ja`, a non-empty `Validation Notes` section, a matching active index row, and a non-colliding date-based archive path.
+
 ## Handoff Queue
 
 - Use direct prompts for short-lived helper tasks whose result can be consumed immediately.

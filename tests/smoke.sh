@@ -41,7 +41,9 @@ run_plan_lifecycle_smoke() {
   (cd "$out" && python3 scripts/lint-plan-docs.py)
   (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPE=tooling$')
   (cd "$out" && scripts/clean-handoffs.sh --dry-run >/dev/null)
-  archive_path=$(cd "$out" && scripts/complete-plan.sh docs/plan/active/001-sample.md)
+  (cd "$out" && scripts/complete-plan.sh docs/plan/active/001-sample.md >/dev/null)
+  printf 'smoke validation passed\n' >>"$out/docs/plan/active/001-sample.md"
+  archive_path=$(cd "$out" && scripts/finalize-active-plan.sh docs/plan/active/001-sample.md)
   case "$archive_path" in
     docs/plan/checked/[0-9][0-9][0-9][0-9]/[0-9][0-9]/01-15/001-sample.md) ;;
     docs/plan/checked/[0-9][0-9][0-9][0-9]/[0-9][0-9]/16-31/001-sample.md) ;;
@@ -71,6 +73,8 @@ run_plan_lifecycle_smoke "$tmp/typescript"
 good_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
 (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
 (cd "$tmp/typescript" && scripts/complete-plan.sh "$good_plan" >/dev/null)
+printf 'smoke validation passed\n' >>"$tmp/typescript/$good_plan"
+(cd "$tmp/typescript" && scripts/finalize-active-plan.sh "$good_plan" >/dev/null)
 
 bad_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active recommendation-matrix --summary "Recommendation matrix." --summary-ja "推奨案を比較する。" )
 cat >>"$tmp/typescript/$bad_plan" <<'EOF_BAD_PLAN'
@@ -218,7 +222,7 @@ sample_archive_path=$(cat "$tmp/typescript/.sample-archive-path")
 grep -q 'Plan Validation Commands' "$tmp/typescript/docs/agent/SPEC_VALIDATION.md"
 grep -q 'Linear sync dry-run' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"
 grep -q 'Machine-readable workflow status' "$tmp/typescript/docs/agent/SPEC_PLAN_WORKFLOW.md"
-grep -q 'Next: complete and archive the plan' "$tmp/typescript/scripts/check-agent-completion.sh"
+grep -q 'Next: scripts/finalize-active-plan.sh' "$tmp/typescript/scripts/check-agent-completion.sh"
 grep -q 'generic template script still fails closed' "$tmp/typescript/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 
 mkdir -p "$tmp/typescript/.agent-logs/sample/raw"

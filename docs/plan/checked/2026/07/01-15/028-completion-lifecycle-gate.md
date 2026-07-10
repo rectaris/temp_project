@@ -1,6 +1,6 @@
 # Enforce active-plan completion lifecycle
 
-status: active
+status: ready_to_archive
 task_type: template_workflow
 review_class: B
 human_design_required: no
@@ -56,6 +56,11 @@ Make plan completion deterministic by requiring an explicit machine-readable rea
 - Run the completion gate from the Stop-hook path and expose it as a direct command so both interactive and scripted workflows use the same checks.
 - Keep root and generated-project lifecycle behavior semantically aligned while preserving their existing root-versus-template file boundaries.
 - Keep detailed logs outside plan files and report only concise validation evidence and local artifact references in completion records.
+- Represent the lifecycle state in the existing `status` field, using `ready_to_archive` as the only completion-blocking state.
+- Treat `in_progress` and `deferred` as non-blocking during ordinary Stop-hook checks.
+- Require a non-empty `Validation Notes` section and fail closed on missing active-index entries or archive-path collisions.
+- Keep finalization non-committing; the caller commits lifecycle changes and reruns the direct completion gate.
+- Make Stop-hook completion checks plan-only so dirty worktrees do not block ordinary development turns.
 
 ## Implementation Instructions
 
@@ -69,11 +74,15 @@ Make plan completion deterministic by requiring an explicit machine-readable rea
 
 ## Tasks
 
-- [ ] Define and validate the machine-readable ready-to-archive lifecycle state.
-- [ ] Add root completion and finalization commands.
-- [ ] Align generated lifecycle scripts and Stop-hook integration.
-- [ ] Add deterministic static and smoke coverage.
-- [ ] Run all required validation and archive this plan after acceptance.
+- [x] Define and validate the machine-readable ready-to-archive lifecycle state.
+- [x] Add root completion and finalization commands.
+- [x] Align generated lifecycle scripts and Stop-hook integration.
+- [x] Add deterministic static and smoke coverage.
+- [x] Run all required validation and archive this plan after acceptance.
 
 ## Validation Notes
 
+- `python3 scripts/validate-changes.py --all` passed.
+- `scripts/lint-project-workflow.sh` passed, including Copier static checks and hook tests.
+- `tests/smoke.sh` passed for generated lifecycle scenarios.
+- `git diff --check` passed.

@@ -16,6 +16,7 @@ PLAN = planlib.PLAN
 CHECKED = planlib.CHECKED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
+OPEN_STATUS_VALUES = {"in_progress", "deferred", "ready_to_archive", "backlog"}
 MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[:：]")
 APPROACH_MARKERS = {"A", "B", "C"}
 RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
@@ -87,6 +88,9 @@ def lint_manifest(path: Path) -> None:
         fail(f"{path} human_approval_status must be not_required, pending, or approved")
     if review_value == "C" and approval_value != "approved":
         fail(f"{path} class C work requires human_approval_status: approved before implementation")
+    status_value = planlib.manifest_scalar(values, "status")
+    if status_value not in OPEN_STATUS_VALUES:
+        fail(f"{path} status must be in_progress, deferred, ready_to_archive, or backlog")
     if not planlib.manifest_scalar(values, "checked_summary_ja").strip():
         fail(f"{path} checked_summary_ja must be non-empty")
 

@@ -28,3 +28,4 @@ id	path
 025	docs/plan/checked/2026/07/01-15/025-japanese-copier-prompts.md
 026	docs/plan/checked/2026/07/01-15/026-sequential-plan-skill.md
 027	docs/plan/checked/2026/07/01-15/027-sequential-plan-agent.md
+028	docs/plan/checked/2026/07/01-15/028-completion-lifecycle-gate.md

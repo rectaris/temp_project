@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import plan_validation_commands
@@ -175,7 +177,11 @@ def main(argv: list[str]) -> int:
     if args.print_only:
         return 0
     for command in commands:
-        result = subprocess.run(command, cwd=ROOT, check=False)
+        env = None
+        if command[:3] == ["python3", "-m", "py_compile"]:
+            env = os.environ.copy()
+            env["PYTHONPYCACHEPREFIX"] = tempfile.gettempdir() + "/project-agent-workflow-pycache"
+        result = subprocess.run(command, cwd=ROOT, env=env, check=False)
         if result.returncode != 0:
             return result.returncode
     return 0
