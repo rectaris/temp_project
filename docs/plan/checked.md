@@ -30,3 +30,4 @@ id	path
 027	docs/plan/checked/2026/07/01-15/027-sequential-plan-agent.md
 028	docs/plan/checked/2026/07/01-15/028-completion-lifecycle-gate.md
 029	docs/plan/checked/2026/07/16-31/029-referent-first-semantic-guard.md
+030	docs/plan/checked/2026/07/16-31/030-chat-visible-referent-staging.md

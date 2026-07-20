@@ -254,6 +254,16 @@ class ReferentContractTest(unittest.TestCase):
             self.assertTrue(any(requirement["critical"] for requirement in scenario["requirements"]))
         skill_text = (ROOT / ".codex/skills/define-referents-first/SKILL.md").read_text(encoding="utf-8")
         self.assertNotIn("holdout-retry-point", skill_text)
+        self.assertIn("without candidate labels or controlled terms", skill_text)
+        self.assertIn("keep the settled referent separate", skill_text)
+        self.assertIn("Classify a referent by its role in the source", skill_text)
+        self.assertIn("For a threshold", skill_text)
+        self.assertIn("Preserve source specificity", skill_text)
+        self.assertIn("Run a source-fidelity pass", skill_text)
+        self.assertIn("For a sequence summary", skill_text)
+        self.assertIn("changes the sealed semantic kind", skill_text)
+        self.assertIn("Do not add an artifact-order disclaimer", skill_text)
+        self.assertNotIn("state that artifact-order validation is unavailable", skill_text)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,30 @@ Use a task-specific view over these shared fields:
 
 Use task-specific relations rather than forcing every task into one universal table.
 
+Classify semantic kind from the referent's role in the source, not from whether its wording contains a change verb.
+
+A condition is a truth-valued predicate used for eligibility, gating, or triggering.
+
+An event is an occurrence, emission, or recorded transition boundary.
+
+Treat the transition into a condition as a separate event only when the source establishes that occurrence rather than merely stating the predicate.
+
+For threshold semantics, classify the predicate comparing a measurement with a configured limit as a condition.
+
+Classify detection of a crossing, emission of a notification, or a recorded transition as an event only when the source establishes that occurrence.
+
+Preserve the source's level of specificity when describing the referent.
+
+Do not infer comparison operators, boundary inclusivity, units, causality, timing, or derivation rules that the source does not establish.
+
+Record those details as unknown when they affect design or naming.
+
+Run a source-fidelity pass before sealing referents and again before submitting the target.
+
+Every operator, boundary, causal, and timing claim must point to source evidence.
+
+When the source provides only a neutral natural-language boundary relation, preserve that relation in the referent and definition while leaving the exact operator and inclusivity unknown.
+
 Investigation work should preserve unknown, hypothesis, test, observed record, inference, and next-decision relations.
 
 State design should preserve condition, event, prior state, next state, and invariant relations.
@@ -42,6 +66,12 @@ API and data design should preserve actor, operation, input, output, failure, en
 Naming work should preserve referent, kind, scope, lifetime, label, and definition relations.
 
 Causal summaries should preserve premise, evidence, inference, decision, and execution order.
+
+An executable sequence summary must contain only actions and branches established by the source.
+
+Do not add retry loops, validation, rollback, documentation, or other workflow steps merely because they are generally useful.
+
+When the source does not state what happens after an inconclusive result, preserve that outcome as unresolved instead of choosing the next action.
 
 ## Uncertainty
 
@@ -55,11 +85,23 @@ Record what evidence would resolve an unknown and which naming or design decisio
 
 Do not convert uncertainty into certainty to complete a table or continue prose.
 
+Attach uncertainty to the narrowest concrete referent that is actually unresolved.
+
+When a value, event, condition, or other referent is settled but a property, derivation, or selection rule concerning it is not, represent the settled referent and the unresolved property or rule separately.
+
+Do not merge them into a row such as `value or rule`, and do not lower the settled referent's certainty merely because its derivation is unresolved.
+
 ## Controlled Terms
 
 A controlled term is a label newly introduced or redefined by the current work.
 
 Each controlled term must identify exactly one referent in the contract.
+
+A referent stage does not precede naming when its rows or bullets begin with candidate labels or controlled terms.
+
+The assigned label and its first-use definition must preserve the sealed referent's semantic kind when read without the surrounding explanation.
+
+Reject a naming decision that turns an event into a time or boundary, a condition into a value, a record into an observation action, or any other referent into a different kind.
 
 Different semantic kinds require different controlled terms even when they participate in one workflow.
 
@@ -96,11 +138,13 @@ Do not patch explanatory prose around a wrong referent while preserving the wron
 
 ## Chat-Only Work
 
-When no writable filesystem is available, submit the referent and uncertainty stage visibly before the target prose.
+Before any candidate label or controlled term appears, submit a visible stage that identifies each concrete referent, semantic kind, boundary or relation, and certainty without naming it.
 
-State that artifact-order validation is unavailable in that environment.
+Assign controlled terms only in a later stage, then write the target prose from those decisions.
 
-Do not claim that a table placed at the top of one final answer proves the generation order.
+This visible order is an output requirement.
+
+It does not prove the model's hidden reasoning order, and ordinary user-facing answers should not add an artifact-order disclaimer unless the user requests audit evidence.
 
 ## Review
 
