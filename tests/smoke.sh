@@ -54,6 +54,23 @@ run_plan_lifecycle_smoke() {
   (cd "$out" && python3 scripts/lint-plan-docs.py)
 }
 
+run_referent_contract_smoke() {
+  out=$1
+  contract=.agent-artifacts/referent-contracts/smoke/contract.json
+  target=docs/referent-smoke.md
+  (cd "$out" && python3 scripts/referent-contract.py init "$contract" --slug smoke --task-kind naming --source docs/source.md --target "$target" --mode advisory >/dev/null)
+  (cd "$out" && python3 scripts/referent-contract.py review-unknowns "$contract" --none)
+  (cd "$out" && python3 scripts/referent-contract.py add-referent "$contract" --id R1 --purpose 'exercise generated lifecycle' --concrete-target 'generated smoke target' --kind artifact --reasoning-role result --relation 'source precedes target' --evidence 'smoke fixture' --certainty confirmed)
+  (cd "$out" && python3 scripts/referent-contract.py seal-referents "$contract" >/dev/null)
+  (cd "$out" && python3 scripts/referent-contract.py assign-label "$contract" --id R1 --label 'Smoke term' --definition 'Smoke term means generated smoke target.')
+  (cd "$out" && python3 scripts/referent-contract.py finalize-labels "$contract")
+  printf 'Smoke term means generated smoke target.\n' >"$out/$target"
+  (cd "$out" && python3 scripts/referent-contract.py record-draft "$contract" >/dev/null)
+  (cd "$out" && python3 scripts/referent-contract.py close-advisory "$contract" --reason 'generated smoke completed')
+  (cd "$out" && python3 scripts/referent-contract.py check "$contract" >/dev/null)
+  (cd "$out" && python3 scripts/referent-contract.py semantic-diff "$contract" | grep -q 'Smoke term')
+}
+
 for fixture in "$root"/tests/fixtures/*.answers.yml; do
   name=$(basename "$fixture" .answers.yml)
   out="$tmp/$name"
@@ -69,6 +86,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
 done
 
 run_plan_lifecycle_smoke "$tmp/typescript"
+run_referent_contract_smoke "$tmp/typescript"
 
 good_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
 (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
@@ -108,6 +126,7 @@ grep -q "Do not edit the assigned plan's status" "$tmp/typescript/.codex/agents/
 grep -q 'Do not commit changes' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 test -f "$tmp/typescript/.codex/hooks/pre_tool_hardening_gate.py"
 test -f "$tmp/typescript/.codex/hooks/agent_log_event.py"
+test -f "$tmp/typescript/.codex/hooks/semantic_guard_advisory.py"
 test -f "$tmp/typescript/.codex/hooks.json"
 test -f "$tmp/python/.codex/agents/repo_explorer.toml"
 test -f "$tmp/python/.codex/hooks/pre_tool_hardening_gate.py"
@@ -115,6 +134,7 @@ test ! -f "$tmp/python/.codex/hooks.json"
 test -f "$tmp/docs/.codex/agents/repo_explorer.toml"
 test ! -f "$tmp/docs/.codex/hooks.json"
 grep -q 'agent_log_event.py' "$tmp/typescript/.codex/hooks.json"
+grep -q 'semantic_guard_advisory.py' "$tmp/typescript/.codex/hooks.json"
 grep -q 'エージェントワークフロー' "$tmp/typescript/README.md"
 grep -q '外部サービス連携' "$tmp/typescript/README.md"
 grep -q 'Codex hooks mode: `enable_local_logging`' "$tmp/typescript/AGENTS.md"
@@ -172,6 +192,10 @@ test -f "$tmp/typescript/scripts/import-codex-transcript.py"
 (cd "$tmp/typescript" && python3 scripts/import-codex-transcript.py --self-test >/dev/null)
 test -f "$tmp/typescript/.codex/skills/decision-audit/SKILL.md"
 test -f "$tmp/typescript/.codex/skills/decision-audit/agents/openai.yaml"
+test -f "$tmp/typescript/.codex/skills/define-referents-first/SKILL.md"
+test -f "$tmp/typescript/.codex/skills/define-referents-first/agents/openai.yaml"
+test -f "$tmp/typescript/.codex/skills/define-referents-first/references/workflow.md"
+grep -q 'name: define-referents-first' "$tmp/typescript/.codex/skills/define-referents-first/SKILL.md"
 grep -q 'name: decision-audit' "$tmp/typescript/.codex/skills/decision-audit/SKILL.md"
 test -f "$tmp/typescript/.codex/skills/mcp-ops/SKILL.md"
 test -f "$tmp/typescript/.codex/skills/linear-ops/SKILL.md"
@@ -200,6 +224,9 @@ if grep -R 'supportcard-status' "$tmp/typescript/.codex/skills" >/dev/null; then
 fi
 grep -q 'decision_audit:' "$tmp/typescript/docs/agent/spec-index.yaml"
 grep -q 'skill_authoring:' "$tmp/typescript/docs/agent/spec-index.yaml"
+grep -q 'referent_first:' "$tmp/typescript/docs/agent/spec-index.yaml"
+grep -q 'Referent-First Semantic Guard' "$tmp/typescript/docs/agent/SPEC_REFERENT_FIRST.md"
+grep -q 'referent-contract.py' "$tmp/typescript/docs/agent/SPEC_REFERENT_FIRST.md"
 grep -q 'SPEC_DECISION_AUDIT.md' "$tmp/typescript/docs/agent/spec-index.yaml"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/docs/agent/spec-index.yaml"
 grep -q 'Skill Authoring' "$tmp/typescript/docs/agent/SPEC_SKILL_AUTHORING.md"

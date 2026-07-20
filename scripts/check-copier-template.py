@@ -30,6 +30,7 @@ SOURCE_REQUIRED = [
     "docs/agent/SPEC_CONTEXT_COMPRESSION.md",
     "docs/agent/SPEC_DECISION_AUDIT.md",
     "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "docs/agent/SPEC_REFERENT_FIRST.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
     "scripts/agent-log-event.py",
     "scripts/check-agent-log-manifest.py",
@@ -38,6 +39,7 @@ SOURCE_REQUIRED = [
     "scripts/context-compress.sh",
     "scripts/import-codex-transcript.py",
     "scripts/plan_validation_commands.py",
+    "scripts/referent-contract.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
     "template/AGENTS.md.jinja",
@@ -55,7 +57,11 @@ SOURCE_REQUIRED = [
     "template/.codex/agents/sequential_plan_worker.toml",
     "template/.codex/hooks/agent_log_event.py",
     "template/.codex/hooks/pre_tool_hardening_gate.py",
+    "template/.codex/hooks/semantic_guard_advisory.py",
     "template/.codex/hooks/stop_review_gate.py",
+    "template/.codex/skills/define-referents-first/SKILL.md",
+    "template/.codex/skills/define-referents-first/agents/openai.yaml",
+    "template/.codex/skills/define-referents-first/references/workflow.md",
     "template/.codex/skills/decision-audit/SKILL.md",
     "template/.codex/skills/decision-audit/agents/openai.yaml",
     "template/.codex/skills/graph-memory/SKILL.md",
@@ -87,6 +93,7 @@ SOURCE_REQUIRED = [
     "template/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
     "template/docs/agent/external-services.yaml.jinja",
     "template/docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "template/docs/agent/SPEC_REFERENT_FIRST.md",
     "template/docs/agent/SPEC_SKILL_AUTHORING.md",
     "template/docs/agent/SPEC_UI_DESIGN.md",
     "template/docs/plan/README.md",
@@ -113,6 +120,7 @@ SOURCE_REQUIRED = [
     "template/scripts/lint-plan-docs.py",
     "template/scripts/planlib.py",
     "template/scripts/plan_validation_commands.py",
+    "template/scripts/referent-contract.py",
     "template/scripts/format-plan-docs.py",
     "template/scripts/search-plan-archive.py",
     "template/scripts/validate-changes.py",
@@ -129,6 +137,9 @@ SOURCE_REQUIRED = [
     "tests/lib-copier.sh",
     "tests/smoke.sh",
     "tests/test-hooks.py",
+    "tests/test-referent-contract.py",
+    "tests/fixtures/referent-contract/scenarios.json",
+    "tests/fixtures/referent-contract/evaluation-protocol.md",
     "scripts/init-project-workflow.sh",
 ]
 
@@ -143,7 +154,11 @@ GENERATED_REQUIRED = [
     ".codex/agents/sequential_plan_worker.toml",
     ".codex/hooks/agent_log_event.py",
     ".codex/hooks/pre_tool_hardening_gate.py",
+    ".codex/hooks/semantic_guard_advisory.py",
     ".codex/hooks/stop_review_gate.py",
+    ".codex/skills/define-referents-first/SKILL.md",
+    ".codex/skills/define-referents-first/agents/openai.yaml",
+    ".codex/skills/define-referents-first/references/workflow.md",
     ".codex/skills/decision-audit/SKILL.md",
     ".codex/skills/decision-audit/agents/openai.yaml",
     ".codex/skills/graph-memory/SKILL.md",
@@ -178,6 +193,7 @@ GENERATED_REQUIRED = [
     "docs/agent/SPEC_ORCHESTRATION.md",
     "docs/agent/SPEC_JAPANESE_TECH_WRITING.md",
     "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "docs/agent/SPEC_REFERENT_FIRST.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
     "docs/agent/SPEC_UI_DESIGN.md",
     "docs/agent/SPEC_VALIDATION.md",
@@ -206,6 +222,7 @@ GENERATED_REQUIRED = [
     "scripts/next-plan-id.sh",
     "scripts/planlib.py",
     "scripts/plan_validation_commands.py",
+    "scripts/referent-contract.py",
     "scripts/promote-plan.sh",
     "scripts/search-plan-archive.py",
     "scripts/security_rules.py",
@@ -286,6 +303,26 @@ def require_sequential_worker() -> None:
     for marker in required:
         if marker not in text:
             fail(f"sequential worker missing required contract: {marker}")
+
+
+def require_referent_first_alignment() -> None:
+    pairs = (
+        ("docs/agent/SPEC_REFERENT_FIRST.md", "template/docs/agent/SPEC_REFERENT_FIRST.md"),
+        (".codex/skills/define-referents-first/SKILL.md", "template/.codex/skills/define-referents-first/SKILL.md"),
+        (
+            ".codex/skills/define-referents-first/agents/openai.yaml",
+            "template/.codex/skills/define-referents-first/agents/openai.yaml",
+        ),
+        (
+            ".codex/skills/define-referents-first/references/workflow.md",
+            "template/.codex/skills/define-referents-first/references/workflow.md",
+        ),
+        ("scripts/referent-contract.py", "template/scripts/referent-contract.py"),
+        (".codex/hooks/semantic_guard_advisory.py", "template/.codex/hooks/semantic_guard_advisory.py"),
+    )
+    for root_path, template_path in pairs:
+        if read(root_path) != read(template_path):
+            fail(f"referent-first root/template files differ: {root_path} != {template_path}")
 
 
 def parse_fixture(path: Path) -> dict[str, str]:
@@ -389,6 +426,7 @@ def main() -> int:
         fail("answers template must persist _copier_answers for future updates")
 
     require_sequential_worker()
+    require_referent_first_alignment()
 
     for fixture in sorted((ROOT / "tests/fixtures").glob("*.answers.yml")):
         answers = parse_fixture(fixture)

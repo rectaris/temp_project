@@ -92,6 +92,16 @@ task_types:
       - path: docs/agent/SPEC_DECISION_AUDIT.md
         when: meaningful skill trigger, storage, validation, lifecycle, security, or generated-artifact boundary choices remain open.
 
+  referent_first:
+    summary: New domain terms, workflow labels, state or event naming, investigation reports, causal summaries, or remediation proposals where one label could hide multiple concrete referents.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_REFERENT_FIRST.md
+      - docs/agent/SPEC_VALIDATION.md
+    conditional:
+      - path: docs/agent/SPEC_DECISION_AUDIT.md
+        when: unresolved referents change design, storage, validation, lifecycle, security, or artifact boundaries.
+
   decision_audit:
     summary: Unstated important decisions, missing decision analysis, approach comparisons, or recommendations with reasons.
     required:
@@ -178,6 +188,7 @@ rules:
   - Treat external-service modules as optional unless SPEC_EXTERNAL_SERVICES explicitly enables them.
   - Apply SPEC_JAPANESE_TECH_WRITING to Japanese prose without requiring an installed external skill.
   - Apply SPEC_SKILL_AUTHORING when creating, updating, vendoring, or reviewing Codex skills.
+  - Apply SPEC_REFERENT_FIRST before assigning new labels to unresolved or potentially overloaded referents.
   - Apply SPEC_COPIER_ADOPTION before copying template-managed files into a repository that already has local agent policy.
   - Do not compress AGENTS.md, docs/agent files, validation policy, or security policy; read normative instructions directly.
   - Use raw-log manifests, search, excerpts, and optional compression to decide whether large logs should enter context.

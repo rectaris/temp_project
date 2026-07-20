@@ -40,6 +40,14 @@ task_types:
       - path: docs/agent/SPEC_DECISION_AUDIT.md
         when: meaningful skill trigger, storage, validation, external-service, or generated-template boundary choices remain open.
 
+  referent_first:
+    summary: New domain terms, workflow labels, state or event naming, investigation reports, causal summaries, or remediation proposals where one label could hide multiple concrete referents.
+    required:
+      - docs/agent/SPEC_REFERENT_FIRST.md
+    conditional:
+      - path: docs/agent/SPEC_DECISION_AUDIT.md
+        when: unresolved referents change design, storage, validation, lifecycle, security, or artifact boundaries.
+
   japanese_prose:
     summary: Japanese README text, documentation, plans, prompts, issues, review comments, or prose.
     required:

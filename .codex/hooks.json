@@ -9,6 +9,12 @@
             "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event SessionStart",
             "timeout": 30,
             "statusMessage": "Logging Codex session start"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/semantic_guard_advisory.py\"",
+            "timeout": 30,
+            "statusMessage": "Restoring active referent contracts"
           }
         ]
       }
@@ -71,6 +77,12 @@
             "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PostCompact",
             "timeout": 30,
             "statusMessage": "Logging post-compact event"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/semantic_guard_advisory.py\"",
+            "timeout": 30,
+            "statusMessage": "Restoring active referent contracts"
           }
         ]
       }
@@ -83,6 +95,12 @@
             "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event Stop",
             "timeout": 30,
             "statusMessage": "Logging turn stop"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/semantic_guard_advisory.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking active referent contracts"
           },
           {
             "type": "command",

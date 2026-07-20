@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "median-compaction-point",
+      "class": "median",
+      "task": "Write a short design explanation and choose names for the described concepts.",
+      "source": "The report uses 圧縮時点 for three things: the history amount reaches its configured limit, the configured limit value itself, and automatic summarization actually begins.",
+      "requirements": [
+        {
+          "critical": true,
+          "text": "Represent the threshold value, threshold condition, and summarization-start event as separate referents."
+        },
+        {
+          "critical": true,
+          "text": "Do not assign one controlled term to more than one referent."
+        },
+        {
+          "critical": true,
+          "text": "Seal referents before assigning controlled terms."
+        },
+        {
+          "critical": false,
+          "text": "Give every new controlled term a first-use definition."
+        }
+      ]
+    },
+    {
+      "id": "edge-investigation-order",
+      "class": "edge",
+      "task": "Summarize the investigation as an executable sequence without inventing an umbrella label.",
+      "source": "The failing component is not known. Run a test, use the recorded results to isolate the failing component, and choose a remediation only after isolation.",
+      "requirements": [
+        {
+          "critical": true,
+          "text": "Preserve unknown component, test, recorded results, isolation inference, and later remediation choice as distinct referents or relations."
+        },
+        {
+          "critical": true,
+          "text": "Preserve test -> recorded results -> isolation -> remediation choice order."
+        },
+        {
+          "critical": true,
+          "text": "Keep the failing component unknown until evidence resolves it."
+        },
+        {
+          "critical": false,
+          "text": "Do not replace the sequence with a phrase equivalent to collecting observations."
+        }
+      ]
+    },
+    {
+      "id": "negative-established-term",
+      "class": "negative",
+      "task": "Mechanically update a formatting marker while preserving established project terminology.",
+      "source": "Replace every Markdown bullet marker in this fixture from * to -. Do not change any words.",
+      "requirements": [
+        {
+          "critical": true,
+          "text": "Do not require or create a referent contract."
+        },
+        {
+          "critical": true,
+          "text": "Do not redefine established terms."
+        }
+      ]
+    },
+    {
+      "id": "holdout-retry-point",
+      "class": "holdout",
+      "task": "Design retry behavior and name only concepts whose referents are settled.",
+      "source": "The draft calls three things 再試行時点: the maximum attempt count, the delay between attempts, and the event emitted when another attempt starts. Whether the delay is fixed or calculated from the previous failure is not yet decided.",
+      "requirements": [
+        {
+          "critical": true,
+          "text": "Separate maximum attempt count, inter-attempt delay, and retry-start event."
+        },
+        {
+          "critical": true,
+          "text": "Represent the delay calculation rule as unknown or disputed and do not name it as settled."
+        },
+        {
+          "critical": true,
+          "text": "Do not reuse 再試行時点 as the controlled term for multiple referents."
+        },
+        {
+          "critical": false,
+          "text": "Preserve the relation from prior failure through delay to the next-attempt event."
+        }
+      ]
+    }
+  ]
+}

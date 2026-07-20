@@ -1,0 +1,4 @@
+interface:
+  display_name: "Define Referents First"
+  short_description: "Fix referents and unknowns before naming"
+  default_prompt: "Use $define-referents-first to fix concrete referents and unknowns before naming or drafting."
