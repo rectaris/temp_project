@@ -37,6 +37,8 @@ Treat these paths as generic by default:
 
 Treat these paths as project-specific unless the project says otherwise:
 
+- `docs/agent/PROJECT_ENVIRONMENT.md`
+- `docs/agent/PROJECT_UI_DESIGN.md`
 - product, domain, data-contract, deployment, or runtime specs
 - external-service connection identifiers and write policy
 - project-specific Codex skills

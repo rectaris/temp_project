@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOG = ROOT / "template/.codex/hooks/agent_log_event.py"
 IMPORTER = ROOT / "template/scripts/import-codex-transcript.py"
+MANIFEST_HELPER = ROOT / "template/scripts/agent_log_manifest.py"
 PRE_TOOL = ROOT / "template/.codex/hooks/pre_tool_hardening_gate.py"
 STOP_REVIEW = ROOT / "template/.codex/hooks/stop_review_gate.py"
 SEMANTIC_GUARD = ROOT / "template/.codex/hooks/semantic_guard_advisory.py"
@@ -125,14 +126,14 @@ class AgentLogEventTest(unittest.TestCase):
             record = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
             self.assertEqual(record["event"], "UserPromptSubmit")
             self.assertEqual(record["payload"]["prompt"], "hello")
-            self.assertEqual(record["payload"]["api_key"], "[REDACTED]")
+            self.assertNotIn("api_key", record["payload"])
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertIn("raw/events.jsonl", manifest["raw_logs"])
             self.assertIsNone(manifest["transcript_log"])
             self.assertEqual(manifest["hook_event_log"], "raw/events.jsonl")
             self.assertEqual(manifest["coverage"]["external_transcript"]["status"], "missing")
             self.assertEqual(manifest["coverage"]["codex_hooks"]["status"], "present")
-            self.assertEqual(manifest["coverage"]["codex_hooks"]["redaction_status"], "automatic_redaction")
+            self.assertEqual(manifest["coverage"]["codex_hooks"]["redaction_status"], "pending_review")
             self.assertEqual(manifest["missing_sources"], ["external_transcript"])
 
     def test_preserves_existing_transcript_manifest_fields(self) -> None:
@@ -228,6 +229,7 @@ class AgentLogEventTest(unittest.TestCase):
             scripts_dir = repo / "scripts"
             scripts_dir.mkdir()
             shutil.copyfile(IMPORTER, scripts_dir / "import-codex-transcript.py")
+            shutil.copyfile(MANIFEST_HELPER, scripts_dir / "agent_log_manifest.py")
             source = Path(tmp) / "session.jsonl"
             write_sample_codex_transcript(source)
             run_hook(
@@ -278,7 +280,7 @@ class CodexTranscriptImportTest(unittest.TestCase):
             self.assertEqual(transcript[1]["content"], "done")
             self.assertIn("[REDACTED]", transcript[2]["content"])
             manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["coverage"]["external_transcript"]["redaction_status"], "redacted")
+            self.assertEqual(manifest["coverage"]["external_transcript"]["redaction_status"], "pending_review")
             self.assertEqual(manifest["missing_sources"], ["codex_hooks"])
 
 
@@ -299,6 +301,18 @@ class StopReviewGateTest(unittest.TestCase):
             output = run_hook(STOP_REVIEW, {}, cwd=repo)
         self.assertEqual(output["decision"], "block")
         self.assertIn("src/app.py", output["reason"])
+
+    def test_completion_preflight_ignores_dirty_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            scripts = repo / "scripts"
+            scripts.mkdir()
+            shutil.copyfile(ROOT / "template/scripts/check-agent-completion.sh", scripts / "check-agent-completion.sh")
+            (repo / "notes.txt").write_text("dirty\n", encoding="utf-8")
+            output = run_hook(STOP_REVIEW, {}, cwd=repo)
+        self.assertEqual(output["decision"], "block")
+        self.assertNotIn("dirty worktree", output["reason"])
 
     def test_allows_when_stop_hook_already_active(self) -> None:
         output = run_hook(STOP_REVIEW, {"stop_hook_active": True})

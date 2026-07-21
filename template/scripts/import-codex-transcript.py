@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import agent_log_manifest
+
 
 SECRET_KEY_RE = re.compile(r"(token|secret|password|passwd|api[_-]?key|authorization|credential|private[_-]?key)", re.I)
 SECRET_VALUE_RE = re.compile(r"(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,})")
@@ -202,67 +204,6 @@ def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
     tmp.replace(path)
 
 
-def source_coverage(path: str | None, present: bool, status: str, redaction_status: str) -> dict[str, Any]:
-    return {
-        "present": present,
-        "path": path,
-        "status": status,
-        "redaction_status": redaction_status,
-    }
-
-
-def update_manifest(run_dir: Path, run_id: str, redaction_status: str) -> None:
-    manifest_path = run_dir / "manifest.json"
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            manifest = {}
-    else:
-        manifest = {}
-    manifest.setdefault("run_id", run_id)
-    manifest.setdefault("created_at", utc_now())
-    manifest.setdefault("task", "codex transcript import")
-    manifest.setdefault("plans", [])
-    manifest.setdefault("artifacts", [])
-    manifest.setdefault("compressed_outputs", [])
-    manifest.setdefault("redaction_report", "redaction-report.md")
-    manifest.setdefault("pinned", False)
-    manifest["transcript_log"] = TRANSCRIPT_REL
-
-    hook_rel = manifest.get("hook_event_log")
-    hook_present = isinstance(hook_rel, str) and (run_dir / hook_rel).is_file()
-    if not hook_present:
-        hook_rel = None
-        manifest["hook_event_log"] = None
-
-    raw_logs = set()
-    for rel in manifest.get("raw_logs", []):
-        if not isinstance(rel, str):
-            continue
-        if rel == TRANSCRIPT_REL or (run_dir / rel).is_file():
-            raw_logs.add(rel)
-    raw_logs.add(TRANSCRIPT_REL)
-    if isinstance(hook_rel, str):
-        raw_logs.add(hook_rel)
-    manifest["raw_logs"] = sorted(raw_logs)
-    manifest["coverage"] = {
-        "external_transcript": source_coverage(TRANSCRIPT_REL, True, "present", redaction_status),
-        "codex_hooks": source_coverage(
-            hook_rel if isinstance(hook_rel, str) else None,
-            hook_present,
-            "present" if hook_present else "missing",
-            "automatic_redaction" if hook_present else "not_applicable",
-        ),
-    }
-    missing_sources = []
-    if not hook_present:
-        missing_sources.append("codex_hooks")
-    manifest["missing_sources"] = missing_sources
-    manifest["updated_at"] = utc_now()
-    write_json(manifest_path, manifest)
-
-
 def update_redaction_report(run_dir: Path, redaction_status: str) -> None:
     report = run_dir / "redaction-report.md"
     section = "\n".join(
@@ -291,12 +232,12 @@ def import_transcript(source: Path, run_dir: Path, run_id: str, redaction_status
     raw_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / TRANSCRIPT_REL
     if target.exists() and not overwrite:
-        update_manifest(run_dir, run_id, redaction_status)
+        agent_log_manifest.record_transcript(run_dir, run_id, redaction_status)
         update_redaction_report(run_dir, redaction_status)
         return target
     records = load_source_records(source, run_id)
     write_jsonl(target, records)
-    update_manifest(run_dir, run_id, redaction_status)
+    agent_log_manifest.record_transcript(run_dir, run_id, redaction_status)
     update_redaction_report(run_dir, redaction_status)
     return target
 
@@ -352,7 +293,7 @@ def main() -> int:
     parser.add_argument("source", nargs="?")
     parser.add_argument("--run-id")
     parser.add_argument("--run-dir")
-    parser.add_argument("--redaction-status", choices=("redacted", "pending_review"), default="redacted")
+    parser.add_argument("--redaction-status", choices=("redacted", "pending_review"), default="pending_review")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()

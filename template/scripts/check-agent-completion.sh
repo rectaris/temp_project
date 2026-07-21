@@ -1,6 +1,16 @@
 #!/bin/sh
 set -eu
 
+plans_only=0
+if [ "${1:-}" = "--plans-only" ]; then
+  plans_only=1
+  shift
+fi
+if [ "$#" -ne 0 ]; then
+  echo "Usage: $0 [--plans-only]" >&2
+  exit 2
+fi
+
 blocked=0
 if [ -f docs/plan/plan.md ]; then
   while IFS="	" read -r id plan status; do
@@ -26,7 +36,7 @@ if [ "$blocked" -ne 0 ]; then
   exit 1
 fi
 
-if [ -n "$(git status --short)" ]; then
+if [ "$plans_only" -eq 0 ] && [ -n "$(git status --short)" ]; then
   echo "dirty worktree blocks completion report" >&2
   git status --short >&2
   echo "Next: inspect git status --short, then commit intended changes or remove unrelated generated files." >&2

@@ -10,10 +10,6 @@ fail() {
   exit 1
 }
 
-json_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
 refuse_if_normative() {
   path=$1
   rel=${path#./}
@@ -73,6 +69,10 @@ fi
 input=$1
 run_id=${2:-${CONTEXT_COMPRESS_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}}
 
+case "$run_id" in
+  *[!A-Za-z0-9_-]*|"") fail "run-id must use only letters, numbers, underscores, or hyphens" ;;
+esac
+
 [ -f "$input" ] || fail "missing input file: $input"
 refuse_if_normative "$input"
 
@@ -109,24 +109,11 @@ if [ ! -f "$run_dir/redaction-report.md" ]; then
   } >"$run_dir/redaction-report.md"
 fi
 
-if [ ! -f "$run_dir/manifest.json" ]; then
-  escaped_run_id=$(json_escape "$run_id")
-  escaped_input=$(json_escape "$input")
-  escaped_output=$(json_escape "$output")
-  cat >"$run_dir/manifest.json" <<EOF
-{
-  "run_id": "$escaped_run_id",
-  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "task": "context compression",
-  "plans": [],
-  "raw_logs": ["$escaped_input"],
-  "artifacts": [],
-  "compressed_outputs": ["$escaped_output"],
-  "redaction_report": "redaction-report.md",
-  "pinned": false
-}
-EOF
-fi
+python3 template/scripts/agent_log_manifest.py record-compression \
+  --run-dir "$run_dir" \
+  --run-id "$run_id" \
+  --source "$input" \
+  --output "$output"
 
 echo "$output"
 echo "backend=$backend" >&2

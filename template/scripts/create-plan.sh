@@ -65,7 +65,7 @@ cat >"$path" <<EOF
 # $summary
 
 status: $( [ "$kind" = "active" ] && echo in_progress || echo backlog )
-task_type: tooling
+task_type: environment_data_flow
 review_class: B
 human_design_required: no
 human_approval_status: not_required
@@ -76,6 +76,9 @@ target_json:
 required_specs:
   - docs/agent/SPEC_VALIDATION.md
   - docs/agent/SPEC_GIT_WORKFLOW.md
+  - docs/agent/SPEC_FILE_MANAGEMENT.md
+  - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+  - docs/agent/SPEC_ENVIRONMENT.md
 validation:
   - git diff --check
 acceptance:

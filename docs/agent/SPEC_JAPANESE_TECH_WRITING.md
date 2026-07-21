@@ -19,6 +19,9 @@ It does not require installing ReportSkills as an external skill.
 The template file governs generated projects.
 When a change affects the general Japanese-writing policy, update both this file and `template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` unless the difference is intentional.
 
+The generated policy intentionally contains additional argument-flow, reader-load, heading, and reader-honesty rules for downstream projects.
+The root policy keeps the smaller subset needed to maintain this template repository.
+
 ## Priority
 
 - Follow explicit user instructions first.

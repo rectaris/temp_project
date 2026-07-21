@@ -64,7 +64,7 @@
 
 ## Manifest Contract
 
-Recommended active/backlog fields:
+Required active/backlog fields:
 
 - `status`
 - `task_type`
@@ -72,13 +72,16 @@ Recommended active/backlog fields:
 - `human_design_required`
 - `human_approval_status`
 - `target_files`
-- `target_json`
 - `required_specs`
 - `validation`
 - `acceptance`
-- `acceptance_focus`
 - `expected_output`
 - `checked_summary_ja`
+
+Optional active/backlog fields:
+
+- `target_json`
+- `acceptance_focus`
 - `completion_deferred_reason`
 
 Rules:
@@ -86,7 +89,9 @@ Rules:
 - `review_class` is `A`, `B`, or `C`.
 - Class C work requires explicit human approval before implementation.
 - `human_design_required` is `yes` only when material architecture, product frame, story, or visual philosophy is in scope.
-- `human_approval_status` is `not_required`, `pending`, or `approved`; Class C work must use `approved` before implementation.
+- `human_approval_status` is `not_required`, `pending`, or `approved`.
+- Class C backlog or deferred plans may use `pending`, but promotion to active implementation requires `approved`.
+- `task_type` must match one route key in `docs/agent/spec-index.yaml`.
 - `target_files` should list planned edit or context paths.
 - `target_json` is optional structured context. JSON edit targets must also appear in `target_files`.
 - `validation` should list commands needed for completion.

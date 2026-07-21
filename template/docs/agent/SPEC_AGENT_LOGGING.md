@@ -66,8 +66,9 @@ Use `scripts/import-codex-transcript.py` to normalize an external Codex session 
 .agent-logs/<run-id>/raw/transcript.jsonl
 ```
 
-The importer updates `manifest.json`, `coverage.external_transcript`, and `redaction-report.md`.
-It writes redacted normalized transcript records and excludes reasoning content items.
+The importer updates `manifest.json`, `coverage.external_transcript`, and `redaction-report.md` through `scripts/agent_log_manifest.py`.
+It writes normalized transcript records, excludes reasoning content items, and defaults automatic redaction to `pending_review`.
+Use `redacted` only after review or a deterministic project-specific check establishes that the stored data class is safe.
 
 ## Hook Logging
 
@@ -83,13 +84,15 @@ Hook logs are written to:
 .agent-logs/<run-id>/raw/events.jsonl
 ```
 
-The hook also creates or updates `manifest.json` and `redaction-report.md`.
+The hook also creates or updates `manifest.json` through `scripts/agent_log_manifest.py` and maintains `redaction-report.md`.
 
 On `Stop`, if Codex provides `transcript_path`, the hook attempts a best-effort call to `scripts/import-codex-transcript.py`.
 This promotes the external transcript to the primary local source while keeping hook event logs as corroborating evidence.
 If the path is unavailable or import fails, the hook must still succeed and the manifest must keep `external_transcript` in `missing_sources`.
 
-Hook logging is best-effort and must not block agent execution. If the hook payload does not contain assistant final text, internal reasoning, or a full transcript, the hook must not reconstruct it.
+Hook logging is best-effort and must not block agent execution.
+Persist only allowlisted hook payload fields and mark automatic redaction as `pending_review`.
+If the hook payload does not contain assistant final text, internal reasoning, or a full transcript, the hook must not reconstruct it.
 
 ## Exclusions And Redaction
 

@@ -13,10 +13,18 @@ case "$src" in
 esac
 
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
+review_class=$(awk -F': ' '$1 == "review_class" { print $2; exit }' "$src")
+approval=$(awk -F': ' '$1 == "human_approval_status" { print $2; exit }' "$src")
+if [ "$review_class" = "C" ] && [ "$approval" != "approved" ]; then
+  echo "class C plan requires human_approval_status: approved before promotion" >&2
+  exit 1
+fi
 base=$(basename "$src")
 dst="docs/plan/active/$base"
 mkdir -p docs/plan/active
-mv "$src" "$dst"
+sed 's/^status: .*/status: in_progress/' "$src" >"$dst.tmp"
+mv "$dst.tmp" "$dst"
+rm "$src"
 
 id=${base%%-*}
 python3 scripts/lint-plan-docs.py --add-active "$id" "$dst"

@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path.cwd()
+SPEC_INDEX = ROOT / "docs/agent/spec-index.yaml"
 PLAN = ROOT / "docs/plan/plan.md"
 CHECKED = ROOT / "docs/plan/checked.md"
 ACTIVE_DIR = ROOT / "docs/plan/active"
@@ -62,10 +63,26 @@ CONTEXT_KEYS = {
     "EXPECTED_OUTPUT": "expected_output",
 }
 CONTEXT_REQUIRED = ("task_type", "target_files", "required_specs", "validation", "expected_output")
-
-
 class PlanError(ValueError):
     """Raised for invalid plan docs or indexes."""
+
+
+def task_type_values() -> set[str]:
+    if not SPEC_INDEX.is_file():
+        return set()
+    values: set[str] = set()
+    in_task_types = False
+    for line in SPEC_INDEX.read_text(encoding="utf-8").splitlines():
+        if line == "task_types:":
+            in_task_types = True
+            continue
+        if in_task_types and line and not line.startswith(" "):
+            break
+        if in_task_types:
+            match = re.fullmatch(r"  ([a-z][a-z0-9_]*):", line)
+            if match:
+                values.add(match.group(1))
+    return values
 
 
 def parse_manifest(path: Path) -> dict[str, str | list[str]]:

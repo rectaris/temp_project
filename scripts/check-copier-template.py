@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,7 +46,7 @@ SOURCE_REQUIRED = [
     "template/AGENTS.md.jinja",
     "template/README.md.jinja",
     "template/.github/workflows/ci.yml",
-    "template/.github/workflows/codex-ci-autofix.yml",
+    "template/.github/workflows/codex-ci-autofix.yml.jinja",
     "template/.github/codex/prompts/ci-autofix.md",
     "template/.gitignore.jinja",
     "template/.codex/config.toml.jinja",
@@ -94,8 +95,11 @@ SOURCE_REQUIRED = [
     "template/docs/agent/external-services.yaml.jinja",
     "template/docs/agent/SPEC_PLAN_WORKFLOW.md",
     "template/docs/agent/SPEC_REFERENT_FIRST.md",
+    "template/docs/agent/SPEC_SECURITY.md",
     "template/docs/agent/SPEC_SKILL_AUTHORING.md",
     "template/docs/agent/SPEC_UI_DESIGN.md",
+    "template/docs/agent/PROJECT_ENVIRONMENT.md",
+    "template/docs/agent/PROJECT_UI_DESIGN.md",
     "template/docs/plan/README.md",
     "template/docs/plan/checked.md",
     "template/docs/plan/plan.md",
@@ -103,6 +107,10 @@ SOURCE_REQUIRED = [
     "template/docs/plan/handoffs/README.md",
     "template/docs/plan/sub-agents/custom-agents.md",
     "template/docs/plan/sub-agents/helper-prompts.md",
+    "template/docs/plan/active/.gitkeep",
+    "template/docs/plan/backlog/.gitkeep",
+    "template/docs/plan/checked/.gitkeep",
+    "template/docs/plan/handoffs/.gitkeep",
     "template/scripts/create-plan.sh",
     "template/scripts/next-plan-id.sh",
     "template/scripts/promote-plan.sh",
@@ -110,6 +118,7 @@ SOURCE_REQUIRED = [
     "template/scripts/check-agent-completion.sh",
     "template/scripts/finalize-active-plan.sh",
     "template/scripts/check-agent-log-manifest.py",
+    "template/scripts/agent_log_manifest.py",
     "template/scripts/check-codex-toml.py",
     "template/scripts/context-compress.sh",
     "template/scripts/import-codex-transcript.py",
@@ -129,6 +138,7 @@ SOURCE_REQUIRED = [
     "template/scripts/skillspector-scan.sh",
     "template/scripts/structure-map.py",
     "template/scripts/sync-plan-to-linear.sh",
+    "template/scripts/workflow-status.sh",
     "references/template-development.md",
     "tests/fixtures/typescript.answers.yml",
     "tests/fixtures/python.answers.yml",
@@ -194,8 +204,11 @@ GENERATED_REQUIRED = [
     "docs/agent/SPEC_JAPANESE_TECH_WRITING.md",
     "docs/agent/SPEC_PLAN_WORKFLOW.md",
     "docs/agent/SPEC_REFERENT_FIRST.md",
+    "docs/agent/SPEC_SECURITY.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
     "docs/agent/SPEC_UI_DESIGN.md",
+    "docs/agent/PROJECT_ENVIRONMENT.md",
+    "docs/agent/PROJECT_UI_DESIGN.md",
     "docs/agent/SPEC_VALIDATION.md",
     "docs/plan/README.md",
     "docs/plan/backlog/README.md",
@@ -204,9 +217,14 @@ GENERATED_REQUIRED = [
     "docs/plan/sub-agents/custom-agents.md",
     "docs/plan/sub-agents/helper-prompts.md",
     "docs/plan/plan.md",
+    "docs/plan/active/.gitkeep",
+    "docs/plan/backlog/.gitkeep",
+    "docs/plan/checked/.gitkeep",
+    "docs/plan/handoffs/.gitkeep",
     "scripts/check-agent-completion.sh",
     "scripts/finalize-active-plan.sh",
     "scripts/check-agent-log-manifest.py",
+    "scripts/agent_log_manifest.py",
     "scripts/check-codex-toml.py",
     "scripts/context-compress.sh",
     "scripts/import-codex-transcript.py",
@@ -246,6 +264,7 @@ QUESTIONS = {
     "mcp_policy_mode",
     "linear_sync_mode",
     "graph_memory_mode",
+    "ci_autofix_mode",
 }
 
 EXPECTED_CHOICE_VALUES = {
@@ -255,6 +274,7 @@ EXPECTED_CHOICE_VALUES = {
     "mcp_policy_mode": {"disabled", "document_optional"},
     "linear_sync_mode": {"disabled", "document_optional"},
     "graph_memory_mode": {"disabled", "document_optional"},
+    "ci_autofix_mode": {"patch_only", "direct_push"},
 }
 
 JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
@@ -292,8 +312,6 @@ def require_sequential_worker() -> None:
     text = path.read_text(encoding="utf-8")
     required = (
         'name = "sequential_plan_worker"',
-        'model = "gpt-5.3-codex-spark"',
-        'model_reasoning_effort = "medium"',
         'sandbox_mode = "workspace-write"',
         "Do not process the next active plan",
         "Do not spawn descendant agents",
@@ -303,6 +321,24 @@ def require_sequential_worker() -> None:
     for marker in required:
         if marker not in text:
             fail(f"sequential worker missing required contract: {marker}")
+    if "gpt-5.3-codex-spark" in text:
+        fail("sequential worker must not require an entitlement-specific preview model")
+
+
+def require_template_manifest_complete() -> None:
+    result = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "template"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        check=True,
+    )
+    tracked = {line for line in result.stdout.splitlines() if line}
+    listed = {path for path in SOURCE_REQUIRED if path.startswith("template/")}
+    missing = sorted(tracked - listed)
+    stale = sorted(listed - tracked)
+    if missing or stale:
+        fail(f"template source manifest mismatch: missing={missing}, stale={stale}")
 
 
 def require_referent_first_alignment() -> None:
@@ -427,6 +463,7 @@ def main() -> int:
 
     require_sequential_worker()
     require_referent_first_alignment()
+    require_template_manifest_complete()
 
     for fixture in sorted((ROOT / "tests/fixtures").glob("*.answers.yml")):
         answers = parse_fixture(fixture)

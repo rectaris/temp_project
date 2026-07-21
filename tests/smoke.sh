@@ -39,7 +39,7 @@ run_plan_lifecycle_smoke() {
   (cd "$out" && scripts/create-plan.sh active sample --summary "Sample work." --summary-ja "サンプル作業を行う。" >/dev/null)
   (cd "$out" && test -f docs/plan/active/001-sample.md)
   (cd "$out" && python3 scripts/lint-plan-docs.py)
-  (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPE=tooling$')
+  (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPE=environment_data_flow$')
   (cd "$out" && scripts/clean-handoffs.sh --dry-run >/dev/null)
   (cd "$out" && scripts/complete-plan.sh docs/plan/active/001-sample.md >/dev/null)
   printf 'smoke validation passed\n' >>"$out/docs/plan/active/001-sample.md"
@@ -85,8 +85,27 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   (cd "$out" && python3 scripts/structure-map.py --check >/dev/null)
 done
 
+if run_copier copy -f --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data project_slug='invalid slug' "$root" "$tmp/invalid-slug" >/dev/null 2>&1; then
+  echo "copier accepted an invalid project slug" >&2
+  exit 1
+fi
+
 run_plan_lifecycle_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
+
+class_c=$(cd "$tmp/typescript" && scripts/create-plan.sh backlog class-c-approval --summary "Class C approval." --summary-ja "承認待ち計画を確認する。")
+sed -i 's/^review_class: .*/review_class: C/; s/^human_approval_status: .*/human_approval_status: pending/' "$tmp/typescript/$class_c"
+(cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
+if (cd "$tmp/typescript" && scripts/promote-plan.sh "$class_c" >/dev/null 2>&1); then
+  echo "promote-plan accepted an unapproved class C plan" >&2
+  exit 1
+fi
+sed -i 's/^human_approval_status: .*/human_approval_status: approved/' "$tmp/typescript/$class_c"
+class_c_active=$(cd "$tmp/typescript" && scripts/promote-plan.sh "$class_c")
+grep -q '^status: in_progress$' "$tmp/typescript/$class_c_active"
+(cd "$tmp/typescript" && scripts/complete-plan.sh "$class_c_active" >/dev/null)
+printf 'class C lifecycle validation passed\n' >>"$tmp/typescript/$class_c_active"
+(cd "$tmp/typescript" && scripts/finalize-active-plan.sh "$class_c_active" >/dev/null)
 
 good_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
 (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
@@ -119,7 +138,10 @@ rm "$tmp/typescript/$bad_plan"
 
 test -f "$tmp/typescript/.codex/agents/repo_explorer.toml"
 test -f "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
-grep -q 'model = "gpt-5.3-codex-spark"' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
+if grep -q 'gpt-5.3-codex-spark' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"; then
+  echo "sequential worker pinned an entitlement-specific preview model" >&2
+  exit 1
+fi
 grep -q 'Do not process the next active plan' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q 'Do not spawn descendant agents' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q "Do not edit the assigned plan's status" "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
@@ -134,6 +156,7 @@ test ! -f "$tmp/python/.codex/hooks.json"
 test -f "$tmp/docs/.codex/agents/repo_explorer.toml"
 test ! -f "$tmp/docs/.codex/hooks.json"
 grep -q 'agent_log_event.py' "$tmp/typescript/.codex/hooks.json"
+grep -q 'pre_tool_hardening_gate.py' "$tmp/typescript/.codex/hooks.json"
 grep -q 'semantic_guard_advisory.py' "$tmp/typescript/.codex/hooks.json"
 grep -q 'エージェントワークフロー' "$tmp/typescript/README.md"
 grep -q '外部サービス連携' "$tmp/typescript/README.md"
@@ -167,6 +190,15 @@ grep -q 'Codex helper agents: installed by default' "$tmp/docs/AGENTS.md"
 grep -q 'Local workflow modules: installed by default and activated by task routing' "$tmp/docs/AGENTS.md"
 grep -q 'planning_style: "active_backlog_checked"' "$tmp/docs/docs/agent/spec-index.yaml"
 grep -q 'max_threads = 4' "$tmp/docs/.codex/config.toml"
+if grep -q '^model = ' "$tmp/docs/.codex/config.toml"; then
+  echo "generated project config pinned a project-wide model" >&2
+  exit 1
+fi
+grep -q 'CI autofix mode: `direct_push`' "$tmp/typescript/AGENTS.md"
+grep -q 'CI autofix mode: `patch_only`' "$tmp/python/AGENTS.md"
+grep -q 'mode = "direct-push";' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
+grep -q 'mode = "patch-only";' "$tmp/python/.github/workflows/codex-ci-autofix.yml"
+grep -Fq 'ref: ${{ needs.prepare.outputs.head_sha }}' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 grep -q 'Use tmux for long-running, shared, or interactive commands' "$tmp/typescript/AGENTS.md"
 grep -q 'Command Sessions' "$tmp/typescript/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Name tmux sessions descriptively' "$tmp/typescript/docs/agent/SPEC_ORCHESTRATION.md"
@@ -259,6 +291,7 @@ printf 'line 1\nline 2\n' >"$tmp/typescript/.agent-logs/sample/raw/session.log"
 (cd "$tmp/typescript" && HEADROOM_DISABLED=1 scripts/context-compress.sh .agent-logs/sample/raw/session.log sample >/dev/null)
 test -f "$tmp/typescript/.agent-logs/sample/compressed/session.log.compressed.md"
 test -f "$tmp/typescript/.agent-logs/sample/manifest.json"
+(cd "$tmp/typescript" && python3 scripts/check-agent-log-manifest.py .agent-logs/sample/manifest.json >/dev/null)
 if (cd "$tmp/typescript" && scripts/context-compress.sh AGENTS.md >/dev/null 2>&1); then
   echo "context-compress.sh accepted AGENTS.md" >&2
   exit 1

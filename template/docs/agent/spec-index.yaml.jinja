@@ -1,8 +1,8 @@
 version: 1
 
 project:
-  name: "[[ project_name ]]"
-  slug: "[[ project_slug ]]"
+  name: [[ project_name | tojson ]]
+  slug: [[ project_slug | tojson ]]
   primary_language: "[[ primary_language ]]"
   planning_style: "active_backlog_checked"
 
@@ -36,6 +36,8 @@ task_types:
     conditional:
       - path: docs/agent/SPEC_ENVIRONMENT.md
         when: build, runtime, hosting, generated files, or data flow changes.
+      - path: docs/agent/PROJECT_ENVIRONMENT.md
+        when: build, runtime, hosting, generated files, or data flow changes.
       - path: docs/agent/SPEC_UI_DESIGN.md
         when: visible UI, copy, accessibility, or interaction changes.
 
@@ -44,8 +46,11 @@ task_types:
     required:
       - docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - docs/agent/SPEC_UI_DESIGN.md
+      - docs/agent/PROJECT_UI_DESIGN.md
     conditional:
       - path: docs/agent/SPEC_ENVIRONMENT.md
+        when: assets, routes, static files, or hosted paths change.
+      - path: docs/agent/PROJECT_ENVIRONMENT.md
         when: assets, routes, static files, or hosted paths change.
       - path: docs/agent/SPEC_JAPANESE_TECH_WRITING.md
         when: Japanese UI copy, labels, help text, documentation, prompts, plans, or prose are written or edited.
@@ -58,15 +63,31 @@ task_types:
     conditional:
       - path: docs/agent/SPEC_UI_DESIGN.md
         when: visible UI copy, accessibility text, interaction labels, or screenshots are affected.
+      - path: docs/agent/PROJECT_UI_DESIGN.md
+        when: visible UI copy, accessibility text, interaction labels, or screenshots are affected.
 
   environment_data_flow:
     summary: Static assets, generated data, runtime paths, package scripts, CI, or deployment config.
     required:
       - docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - docs/agent/SPEC_ENVIRONMENT.md
+      - docs/agent/PROJECT_ENVIRONMENT.md
     conditional:
       - path: docs/agent/CODEX_CI_AUTOFIX.md
         when: Codex CI autofix, failed-CI repair loops, GitHub Actions workflow_run automation, or CI autofix permissions change.
+
+  security:
+    summary: Secrets, credentials, permissions, hooks, logs, external access, dependency execution, or CI write behavior.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_SECURITY.md
+    conditional:
+      - path: docs/agent/SPEC_AGENT_LOGGING.md
+        when: agent logs, transcripts, redaction, manifests, or local evidence are in scope.
+      - path: docs/agent/SPEC_EXTERNAL_SERVICES.md
+        when: MCP, Linear, graph memory, credentials, network access, or external writes are in scope.
+      - path: docs/agent/CODEX_CI_AUTOFIX.md
+        when: Codex CI autofix, GitHub Actions tokens, patch application, or branch writes are in scope.
 
   orchestration_meta:
     summary: Agent workflow, helper roles, helper prompt templates, handoff policy, hooks, or process documentation.
@@ -177,6 +198,8 @@ usually_unneeded:
     unless: Codex skills, SKILL.md, skill references, skill scripts, skill assets, or skill metadata are in scope.
   - path: docs/agent/SPEC_COPIER_ADOPTION.md
     unless: Copier copy/update adoption, template-managed files, or mature-repository migration is in scope.
+  - path: docs/agent/SPEC_SECURITY.md
+    unless: secrets, credentials, permissions, hooks, logs, dependency execution, or external writes are in scope.
 
 rules:
   - Start with default_reads plus the matching route's required list.

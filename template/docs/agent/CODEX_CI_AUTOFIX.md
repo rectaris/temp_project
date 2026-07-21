@@ -30,9 +30,15 @@ Codex は `.github/codex/prompts/ci-autofix.md` の指示を受け取り、`gh r
 
 Codex はファイルを編集できますが、commit、push、merge はしません。
 
-workflow の後段 job が差分を patch artifact にし、既定の `direct-push` mode では `fix: codex ci autofix` として PR ブランチへ push します。
+workflow の後段 job が差分を patch artifact にします。
 
-`patch-only` mode に切り替えると、workflow は patch artifact だけを残します。
+`patch-only` mode では、workflow は patch artifact だけを残します。
+
+`direct-push` mode では、後段 job が `fix: codex ci autofix` として PR ブランチへ push します。
+
+Copier の既定値は `patch_only` です。
+
+`direct_push` は生成時に明示的に選択した場合だけ既定動作になります。
 
 ## Required Secrets
 
@@ -50,9 +56,9 @@ workflow の write 権限は patch を適用して PR ブランチへ commit す
 
 無効化するには GitHub Actions の workflow 一覧で `Codex CI Autofix` を disable にするか、この YAML ファイルを削除します。
 
-一時的に自動 push を止める場合は、`workflow_dispatch` の `mode` で `patch-only` を選んで手動実行してください。
+手動実行ごとに動作を変える場合は、`workflow_dispatch` の `mode` を選択してください。
 
-自動実行も patch-only にしたい場合は、YAML 内の `mode = "direct-push"` を `mode = "patch-only"` に変更します。
+自動実行の既定値を変更する場合は、Copier の `ci_autofix_mode` 回答を更新します。
 
 ## Fork PR Restriction
 

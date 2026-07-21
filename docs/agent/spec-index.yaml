@@ -32,6 +32,16 @@ task_types:
       - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
         when: large generated logs, CI logs, or local evidence need compressed views.
 
+  security:
+    summary: Secrets, credentials, permissions, hooks, logs, external access, dependency execution, or CI write behavior.
+    required:
+      - docs/agent/SPEC_SECURITY.md
+    conditional:
+      - path: docs/agent/SPEC_AGENT_LOGGING.md
+        when: agent logs, transcripts, redaction, manifests, or local evidence are in scope.
+      - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
+        when: compressed logs or derived evidence are in scope.
+
   skill_authoring:
     summary: Root or template Codex skills, SKILL.md files, skill references, skill scripts, or skill UI metadata.
     required:

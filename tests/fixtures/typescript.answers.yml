@@ -7,3 +7,4 @@ skillspector_mode: document_optional
 mcp_policy_mode: document_optional
 linear_sync_mode: document_optional
 graph_memory_mode: document_optional
+ci_autofix_mode: direct_push

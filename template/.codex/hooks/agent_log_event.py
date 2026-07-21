@@ -14,12 +14,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import agent_log_manifest
+
 
 SECRET_KEY_RE = re.compile(r"(token|secret|password|passwd|api[_-]?key|authorization|credential|private[_-]?key)", re.I)
 SECRET_VALUE_RE = re.compile(r"(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,})")
 MAX_STRING = 12000
 MAX_LIST = 200
 MAX_DICT = 200
+ALLOWED_PAYLOAD_KEYS = {
+    "arguments",
+    "cwd",
+    "hook_event_name",
+    "prompt",
+    "result",
+    "session_id",
+    "stop_hook_active",
+    "tool",
+    "tool_input",
+    "tool_name",
+    "tool_response",
+    "transcript_path",
+}
 
 
 def utc_now() -> str:
@@ -39,8 +56,8 @@ def run_id() -> str:
     if existing:
         return safe_name(existing)
     session = os.environ.get("CODEX_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
-    date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
-    seed = f"{repo_root()}:{session or date_prefix}"
+    date_prefix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    seed = f"{repo_root()}:{session or f'{date_prefix}:{os.getpid()}'}"
     digest = hashlib.sha256(seed.encode("utf-8", errors="replace")).hexdigest()[:10]
     return f"{date_prefix}-codex-{digest}"
 
@@ -85,71 +102,11 @@ def load_payload() -> dict[str, Any]:
         if not raw.strip():
             return {}
         value = json.loads(raw)
-        return value if isinstance(value, dict) else {"payload": value}
+        if not isinstance(value, dict):
+            return {}
+        return {key: item for key, item in value.items() if key in ALLOWED_PAYLOAD_KEYS}
     except Exception as exc:
         return {"_parse_error": str(exc)}
-
-
-def write_json(path: Path, value: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
-
-
-def update_manifest(run_dir: Path, run: str, event_path: Path) -> None:
-    manifest_path = run_dir / "manifest.json"
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            manifest = {}
-    else:
-        manifest = {}
-    manifest.setdefault("run_id", run)
-    manifest.setdefault("created_at", utc_now())
-    manifest.setdefault("task", "codex hook event log")
-    manifest.setdefault("plans", [])
-    hook_rel = str(event_path.relative_to(run_dir))
-    transcript_rel = manifest.get("transcript_log")
-    raw_logs = set(manifest.get("raw_logs", []))
-    raw_logs.add(hook_rel)
-    if isinstance(transcript_rel, str) and transcript_rel:
-        raw_logs.add(transcript_rel)
-    manifest["raw_logs"] = sorted(raw_logs)
-    manifest.setdefault("artifacts", [])
-    manifest.setdefault("compressed_outputs", [])
-    manifest.setdefault("redaction_report", "redaction-report.md")
-    manifest.setdefault("pinned", False)
-    manifest.setdefault("transcript_log", None)
-    manifest["hook_event_log"] = hook_rel
-    coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
-    transcript_path = manifest.get("transcript_log")
-    transcript_present = isinstance(transcript_path, str) and (run_dir / transcript_path).is_file()
-    existing_transcript = coverage.get("external_transcript") if isinstance(coverage.get("external_transcript"), dict) else {}
-    coverage["external_transcript"] = {
-        "present": transcript_present,
-        "path": transcript_path if isinstance(transcript_path, str) else None,
-        "status": "present" if transcript_present else ("path_missing" if transcript_path else "missing"),
-        "redaction_status": existing_transcript.get(
-            "redaction_status",
-            "pending_review" if transcript_present else "not_applicable",
-        ),
-    }
-    coverage["codex_hooks"] = {
-        "present": True,
-        "path": hook_rel,
-        "status": "present",
-        "redaction_status": "automatic_redaction",
-    }
-    manifest["coverage"] = coverage
-    missing_sources = []
-    if not coverage["external_transcript"]["present"]:
-        missing_sources.append("external_transcript")
-    if not coverage["codex_hooks"]["present"]:
-        missing_sources.append("codex_hooks")
-    manifest["missing_sources"] = missing_sources
-    manifest["updated_at"] = utc_now()
-    write_json(manifest_path, manifest)
 
 
 def ensure_redaction_report(run_dir: Path) -> None:
@@ -188,7 +145,7 @@ def append_event(event: str, payload: dict[str, Any]) -> None:
     }
     with event_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-    update_manifest(run_dir, run, event_path)
+    agent_log_manifest.record_hook(run_dir, run, event_path)
     ensure_redaction_report(run_dir)
     if event == "Stop":
         import_external_transcript(root, run, payload)

@@ -44,7 +44,13 @@ cat >"$out/docs/agent/SPEC_PRODUCT.md" <<'EOF'
 
 Local project-owned agent notes.
 EOF
+cat >"$out/docs/agent/PROJECT_ENVIRONMENT.md" <<'EOF'
+# Project Environment
+
+Preserve this project-owned environment policy.
+EOF
 git -C "$out" add docs/agent/SPEC_PRODUCT.md
+git -C "$out" add docs/agent/PROJECT_ENVIRONMENT.md
 git -C "$out" commit -m "Add local project notes" >/dev/null
 
 run_copier update -f --vcs-ref HEAD "$out" >/dev/null
@@ -60,6 +66,8 @@ test -f "$out/docs/plan/backlog/README.md"
 test -f "$out/docs/plan/handoffs/README.md"
 test -f "$out/docs/plan/sub-agents/custom-agents.md"
 test -f "$out/docs/agent/SPEC_PRODUCT.md"
+test -f "$out/docs/agent/SPEC_SECURITY.md"
+test -f "$out/docs/agent/PROJECT_ENVIRONMENT.md"
 test -f "$out/scripts/workflow-status.sh"
 test -f "$out/scripts/create-plan.sh"
 test -f "$out/scripts/select-task-context.sh"
@@ -69,6 +77,7 @@ test -f "$out/scripts/format-plan-docs.sh"
 test -f "$out/scripts/validate-changes.py"
 test -f "$out/scripts/security-static-check.py"
 grep -q 'Local project-owned agent notes.' "$out/docs/agent/SPEC_PRODUCT.md"
+grep -q 'Preserve this project-owned environment policy.' "$out/docs/agent/PROJECT_ENVIRONMENT.md"
 grep -q 'Integration Checklist' "$out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'Codex hooks mode: `install_templates`' "$out/AGENTS.md"
 grep -q 'SkillSpector mode: `document_optional`' "$out/AGENTS.md"
@@ -83,6 +92,8 @@ test -f "$out/.codex/hooks/agent_log_event.py"
 test -f "$out/scripts/skillspector-scan.sh"
 grep -q 'codex_hooks_mode: install_templates' "$out/.copier-answers.yml"
 grep -q 'skillspector_mode: document_optional' "$out/.copier-answers.yml"
+grep -q 'ci_autofix_mode: patch_only' "$out/.copier-answers.yml"
+grep -q 'mode = "patch-only";' "$out/.github/workflows/codex-ci-autofix.yml"
 if grep -q 'use_hooks\|use_skillspector\|use_mcp_policy\|use_linear_sync\|use_graph_memory' "$out/.copier-answers.yml" "$out/AGENTS.md" "$out/docs/agent/SPEC_EXTERNAL_SERVICES.md"; then
   echo "old activation booleans leaked into generated policy" >&2
   exit 1
@@ -98,4 +109,13 @@ if find "$out" -name '*.rej' -print -quit | grep -q .; then
 fi
 
 git -C "$out" diff --check
+(cd "$out" && python3 scripts/lint-plan-docs.py)
+(cd "$out" && python3 scripts/format-plan-docs.py --check)
+(cd "$out" && python3 scripts/check-codex-toml.py >/dev/null)
+(cd "$out" && python3 scripts/structure-map.py --check >/dev/null)
+(cd "$out" && python3 scripts/security-static-check.py >/dev/null)
+python3 "$root/scripts/check-copier-template.py" --print-generated-required | while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  test -f "$out/$path"
+done
 echo "copier update test passed"

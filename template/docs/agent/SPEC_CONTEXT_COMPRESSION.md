@@ -69,6 +69,10 @@ Set `HEADROOM_DISABLED=1` to force the deterministic fallback path during tests 
 
 The wrapper refuses normative instruction files and policy paths that should be read directly.
 
+The wrapper updates the run manifest through `scripts/agent_log_manifest.py` and records paths relative to the run directory when the source is inside that directory.
+
+Run ids must contain only letters, numbers, underscores, and hyphens.
+
 ## Output Use
 
 Compressed files may be cited in handoffs or plan notes as local derived views, but the raw log remains the source evidence.

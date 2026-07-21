@@ -19,20 +19,27 @@ _exclude:
   - "[% if codex_hooks_mode != 'enable_local_logging' %].codex/hooks.json[% else %]__never_exclude_hooks_json__[% endif %]"
   - "[% if skillspector_mode != 'document_optional' %]scripts/skillspector-scan.sh[% else %]__never_exclude_skillspector__[% endif %]"
 
+_skip_if_exists:
+  - "docs/agent/PROJECT_ENVIRONMENT.md"
+  - "docs/agent/PROJECT_UI_DESIGN.md"
+
 project_name:
   type: str
   help: 人間向けのプロジェクト名を入力してください。
   default: "Example Project"
+  validator: "[% if '\\n' in project_name or '\\r' in project_name %]プロジェクト名は1行で入力してください。[% endif %]"
 
 project_slug:
   type: str
   help: エージェント文書で使う安定したリポジトリ識別子を入力してください。
   default: "example-project"
+  validator: "[% if not (project_slug | regex_search('^[a-z0-9][a-z0-9-]*$')) %]slug は小文字英数字で始め、小文字英数字とハイフンだけを使ってください。[% endif %]"
 
 project_purpose:
   type: str
   help: このリポジトリが構築または保守する内容を1文で入力してください。
   default: "Build and maintain the project."
+  validator: "[% if '\\n' in project_purpose or '\\r' in project_purpose %]目的は1行で入力してください。[% endif %]"
 
 primary_language:
   type: str
@@ -84,3 +91,11 @@ graph_memory_mode:
     文書化しない: disabled
     任意方針として文書化する: document_optional
   default: "[% if use_graph_memory is defined and use_graph_memory %]document_optional[% else %]disabled[% endif %]"
+
+ci_autofix_mode:
+  type: str
+  help: Codex CI autofix が生成した patch の扱いを選んでください。
+  choices:
+    patch artifact だけを生成する: patch_only
+    同一リポジトリの PR branch へ直接 push する: direct_push
+  default: "patch_only"

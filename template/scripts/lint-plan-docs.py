@@ -83,14 +83,21 @@ def lint_manifest(path: Path) -> None:
     design_value = planlib.manifest_scalar(values, "human_design_required")
     if design_value not in HUMAN_DESIGN_VALUES:
         fail(f"{path} human_design_required must be yes or no")
+    task_type = planlib.manifest_scalar(values, "task_type")
+    if task_type not in planlib.task_type_values():
+        fail(f"{path} task_type must match a route key from docs/agent/spec-index.yaml")
     approval_value = planlib.manifest_scalar(values, "human_approval_status")
     if approval_value not in HUMAN_APPROVAL_VALUES:
         fail(f"{path} human_approval_status must be not_required, pending, or approved")
-    if review_value == "C" and approval_value != "approved":
-        fail(f"{path} class C work requires human_approval_status: approved before implementation")
     status_value = planlib.manifest_scalar(values, "status")
     if status_value not in OPEN_STATUS_VALUES:
         fail(f"{path} status must be in_progress, deferred, ready_to_archive, or backlog")
+    if path.parent == planlib.ACTIVE_DIR and status_value not in {"in_progress", "deferred", "ready_to_archive"}:
+        fail(f"{path} active plan status must be in_progress, deferred, or ready_to_archive")
+    if path.parent == planlib.BACKLOG_DIR and status_value not in {"backlog", "deferred"}:
+        fail(f"{path} backlog plan status must be backlog or deferred")
+    if review_value == "C" and status_value in {"in_progress", "ready_to_archive"} and approval_value != "approved":
+        fail(f"{path} class C implementation requires human_approval_status: approved")
     if not planlib.manifest_scalar(values, "checked_summary_ja").strip():
         fail(f"{path} checked_summary_ja must be non-empty")
 
