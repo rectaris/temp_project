@@ -40,7 +40,7 @@ def repo_root() -> Path:
 
 
 def safe_name(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", value.strip())
     return cleaned.strip("-")[:120] or "codex-run"
 
 
@@ -193,15 +193,25 @@ def load_source_records(source: Path, run_id: str) -> list[dict[str, Any]]:
 
 
 def write_json(path: Path, value: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    write_text_atomic(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text("".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in records), encoding="utf-8")
-    tmp.replace(path)
+    write_text_atomic(
+        path,
+        "".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in records),
+    )
+
+
+def write_text_atomic(path: Path, content: str) -> None:
+    descriptor, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def update_redaction_report(run_dir: Path, redaction_status: str) -> None:

@@ -47,3 +47,5 @@ This repository root is a template development repository. It is not a Copier-ge
 - Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
 - Keep active plans executable. Use `## Decisions` for final accepted decisions, not full decision-audit output.
 - Keep active-plan operational prose in English by default.
+- Record completed task checkboxes and non-pending validation evidence, then run `scripts/complete-plan.sh` before `scripts/finalize-active-plan.sh`.
+- Treat `status: checked` as the terminal state written by finalization.

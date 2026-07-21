@@ -36,9 +36,11 @@ workflow の後段 job が差分を patch artifact にします。
 
 `direct-push` mode では、後段 job が `fix: codex ci autofix` として PR ブランチへ push します。
 
-Copier の既定値は `patch_only` です。
+Copier の既定値は `disabled` です。
 
-`direct_push` は生成時に明示的に選択した場合だけ既定動作になります。
+`patch_only` または `direct_push` を生成時に明示的に選択した場合だけ、`.github/workflows/codex-ci-autofix.yml` を生成します。
+
+`patch_only` は、workflow を有効にする場合の安全側の選択肢です。
 
 ## Required Secrets
 
@@ -52,9 +54,9 @@ workflow の write 権限は patch を適用して PR ブランチへ commit す
 
 ## Enable Or Disable
 
-有効化するには `.github/workflows/codex-ci-autofix.yml` を repository の default branch に置きます。
+有効化するには `ci_autofix_mode` を `patch_only` または `direct_push` に変更し、Copier update で `.github/workflows/codex-ci-autofix.yml` を生成します。
 
-無効化するには GitHub Actions の workflow 一覧で `Codex CI Autofix` を disable にするか、この YAML ファイルを削除します。
+無効化するには `ci_autofix_mode` を `disabled` に変更して Copier update を実行します。
 
 手動実行ごとに動作を変える場合は、`workflow_dispatch` の `mode` を選択してください。
 

@@ -212,7 +212,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "copier", specifier = ">=9.0.0" }]
+requires-dist = [{ name = "copier", specifier = ">=9.6.0" }]
 
 [[package]]
 name = "prompt-toolkit"

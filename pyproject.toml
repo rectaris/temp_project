@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "Reusable coding-agent project workflow template."
 requires-python = ">=3.11"
 dependencies = [
-    "copier>=9.0.0",
+    "copier>=9.6.0",
 ]
 
 [tool.uv]

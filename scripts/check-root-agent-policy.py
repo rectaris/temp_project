@@ -37,6 +37,7 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/plan-archive/SKILL.md",
     ".codex/skills/plan-archive/agents/openai.yaml",
     ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+    ".codex/skills/sequential-plan-orchestrator/agents/openai.yaml",
     ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
@@ -48,12 +49,25 @@ REQUIRED_ROOT_FILES = [
     "scripts/agent-log-event.py",
     "scripts/check-agent-log-manifest.py",
     "scripts/check-codex-toml.py",
+    "scripts/complete-plan.sh",
     "scripts/context-compress.sh",
     "scripts/plan_validation_commands.py",
     "scripts/referent-contract.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
+    "tests/root-plan-lifecycle.sh",
 ]
+
+REUSABLE_SKILLS = (
+    "decision-audit",
+    "define-referents-first",
+    "graph-memory",
+    "implementation-guidelines",
+    "linear-ops",
+    "mcp-ops",
+    "plan-archive",
+    "sequential-plan-orchestrator",
+)
 
 REQUIRED_AGENT_RULES = [
     "docs/agent/spec-index.yaml",
@@ -126,6 +140,17 @@ def check_agents_rules() -> None:
             fail(f"AGENTS.md missing root policy reference: {required}")
 
 
+def check_reusable_skill_parity() -> None:
+    for skill in REUSABLE_SKILLS:
+        for relative in ("SKILL.md", "agents/openai.yaml"):
+            root_path = ROOT / ".codex" / "skills" / skill / relative
+            template_path = ROOT / "template" / ".codex" / "skills" / skill / relative
+            if not root_path.is_file() or not template_path.is_file():
+                fail(f"missing reusable skill file for parity: {skill}/{relative}")
+            if root_path.read_text(encoding="utf-8") != template_path.read_text(encoding="utf-8"):
+                fail(f"root/template reusable skill drift: {skill}/{relative}")
+
+
 def check_active_plans() -> None:
     active_dir = ROOT / "docs/plan/active"
     if not active_dir.exists():
@@ -162,6 +187,7 @@ def main() -> int:
     check_required_files()
     check_gitignore()
     check_agents_rules()
+    check_reusable_skill_parity()
     check_active_plans()
     print("root agent policy check passed")
     return 0

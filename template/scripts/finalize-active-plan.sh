@@ -29,23 +29,16 @@ awk '/^## Validation Notes$/{in_notes=1; next} /^## /{in_notes=0} in_notes && NF
 
 base=$(basename "$src")
 id=${base%%-*}
-index_row=$(awk -F"	" -v id="$id" '$1 == id {print; found=1} END{if (!found) exit 1}' docs/plan/plan.md) || {
-  echo "cannot finalize $src: missing active-plan index entry" >&2
-  exit 1
-}
-index_path=$(printf '%s\n' "$index_row" | awk -F"	" '{print $2}')
-[ "$index_path" = "$src" ] || {
-  echo "cannot finalize $src: active index points to $index_path" >&2
-  exit 1
-}
+python3 scripts/lint-plan-docs.py --check-active-mapping "$id" "$src" ready_to_archive
 
 year=$(date +%Y); month=$(date +%m); day=$(date +%d)
 case "$day" in 0[1-9]|1[0-5]) half=01-15 ;; *) half=16-31 ;; esac
 dst_dir="docs/plan/checked/$year/$month/$half"
 dst="$dst_dir/$base"
-[ ! -e "$dst" ] || { echo "archive already exists: $dst" >&2; exit 1; }
+python3 scripts/lint-plan-docs.py --check-archive-target "$id" "$dst"
 mkdir -p "$dst_dir"
-mv "$src" "$dst"
+python3 scripts/lint-plan-docs.py --copy-status-exclusive "$src" "$dst" checked
+rm "$src"
 python3 scripts/lint-plan-docs.py --remove-active "$id"
 python3 scripts/lint-plan-docs.py --append-checked "$id" "$dst"
 echo "$dst"

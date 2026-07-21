@@ -59,11 +59,16 @@ Use:
 scripts/context-compress.sh <input-file> [run-id]
 ```
 
-The wrapper writes compressed output under:
+The input must resolve to a regular file inside the repository.
+The wrapper checks the canonical path so symlink aliases cannot bypass normative-path refusals.
+
+The wrapper writes compressed output under a source-specific path:
 
 ```text
-.agent-logs/<run-id>/compressed/
+.agent-logs/<run-id>/compressed/<source-basename>.<source-path-hash>.compressed.md
 ```
+
+The source-path hash prevents different inputs with the same basename from overwriting each other within one run.
 
 Set `HEADROOM_DISABLED=1` to force the deterministic fallback path during tests or debugging.
 

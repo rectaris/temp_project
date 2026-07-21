@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from itertools import combinations, product
 from pathlib import Path
 
 
@@ -143,7 +144,10 @@ SOURCE_REQUIRED = [
     "tests/fixtures/typescript.answers.yml",
     "tests/fixtures/python.answers.yml",
     "tests/fixtures/docs.answers.yml",
+    "tests/fixtures/copier-pairwise.tsv",
+    "tests/copier-minimum.sh",
     "tests/copier-update.sh",
+    "tests/root-plan-lifecycle.sh",
     "tests/lib-copier.sh",
     "tests/smoke.sh",
     "tests/test-hooks.py",
@@ -186,7 +190,6 @@ GENERATED_REQUIRED = [
     "AGENTS.md",
     "README.md",
     ".github/workflows/ci.yml",
-    ".github/workflows/codex-ci-autofix.yml",
     ".github/codex/prompts/ci-autofix.md",
     "docs/agent/spec-index.yaml",
     "docs/agent/CODEX_CI_AUTOFIX.md",
@@ -274,8 +277,20 @@ EXPECTED_CHOICE_VALUES = {
     "mcp_policy_mode": {"disabled", "document_optional"},
     "linear_sync_mode": {"disabled", "document_optional"},
     "graph_memory_mode": {"disabled", "document_optional"},
-    "ci_autofix_mode": {"patch_only", "direct_push"},
+    "ci_autofix_mode": {"disabled", "patch_only", "direct_push"},
 }
+
+EXPECTED_DEFAULT_VALUES = {
+    "ci_autofix_mode": "disabled",
+}
+
+CONDITIONAL_GENERATED = {
+    ".codex/hooks.json": ("codex_hooks_mode", {"enable_local_logging"}),
+    "scripts/skillspector-scan.sh": ("skillspector_mode", {"document_optional"}),
+    ".github/workflows/codex-ci-autofix.yml": ("ci_autofix_mode", {"patch_only", "direct_push"}),
+}
+
+PAIRWISE_FIXTURE = ROOT / "tests/fixtures/copier-pairwise.tsv"
 
 JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 
@@ -325,7 +340,7 @@ def require_sequential_worker() -> None:
         fail("sequential worker must not require an entitlement-specific preview model")
 
 
-def require_template_manifest_complete() -> None:
+def template_source_files() -> set[str]:
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "template"],
         cwd=ROOT,
@@ -333,7 +348,11 @@ def require_template_manifest_complete() -> None:
         stdout=subprocess.PIPE,
         check=True,
     )
-    tracked = {line for line in result.stdout.splitlines() if line}
+    return {line for line in result.stdout.splitlines() if line}
+
+
+def require_template_manifest_complete() -> None:
+    tracked = template_source_files()
     listed = {path for path in SOURCE_REQUIRED if path.startswith("template/")}
     missing = sorted(tracked - listed)
     stale = sorted(listed - tracked)
@@ -370,8 +389,78 @@ def parse_fixture(path: Path) -> dict[str, str]:
         if ":" not in line:
             fail(f"fixture line is not key/value: {path}: {raw_line}")
         key, value = line.split(":", 1)
-        data[key.strip()] = value.strip()
+        key = key.strip()
+        if key in data:
+            fail(f"fixture contains duplicate answer: {path}: {key}")
+        data[key] = value.strip().strip("\"'")
     return data
+
+
+def parse_pairwise_fixture(path: Path) -> list[dict[str, str]]:
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")]
+    if not lines:
+        fail(f"pairwise fixture is empty: {path}")
+    header = lines[0].split("\t")
+    expected_header = ["case", *EXPECTED_CHOICE_VALUES]
+    if header != expected_header:
+        fail(f"pairwise fixture header mismatch: expected={expected_header}, actual={header}")
+    rows: list[dict[str, str]] = []
+    seen_cases: set[str] = set()
+    for raw_line in lines[1:]:
+        values = raw_line.split("\t")
+        if len(values) != len(header):
+            fail(f"pairwise fixture column mismatch: {path}: {raw_line}")
+        row = dict(zip(header, values, strict=True))
+        case = row.pop("case")
+        if not case or case in seen_cases:
+            fail(f"pairwise fixture case must be non-empty and unique: {case!r}")
+        seen_cases.add(case)
+        rows.append(row)
+    return rows
+
+
+def require_valid_answers(answers: dict[str, str], source: str, *, complete: bool) -> None:
+    if complete:
+        missing = QUESTIONS - set(answers)
+        unknown = set(answers) - QUESTIONS
+        if missing or unknown:
+            fail(f"{source} answer keys mismatch: missing={sorted(missing)}, unknown={sorted(unknown)}")
+    for question, expected_values in EXPECTED_CHOICE_VALUES.items():
+        value = answers.get(question)
+        if value is not None and value not in expected_values:
+            fail(f"{source} has invalid answer: {question}={value!r}")
+
+
+def require_pairwise_coverage(answer_sets: list[dict[str, str]]) -> None:
+    questions = list(EXPECTED_CHOICE_VALUES)
+    missing: list[str] = []
+    for first, second in combinations(questions, 2):
+        observed = {(answers[first], answers[second]) for answers in answer_sets}
+        expected = set(product(EXPECTED_CHOICE_VALUES[first], EXPECTED_CHOICE_VALUES[second]))
+        for first_value, second_value in sorted(expected - observed):
+            missing.append(f"{first}={first_value}, {second}={second_value}")
+    if missing:
+        fail(f"Copier fixture matrix is not pairwise complete: {missing}")
+
+
+def expected_generated_paths(answers: dict[str, str]) -> list[str]:
+    require_valid_answers(answers, "generated inventory input", complete=True)
+    generated: set[str] = set()
+    for source in template_source_files():
+        relative = source.removeprefix("template/")
+        if relative == "[[ _copier_conf.answers_file ]].jinja":
+            output = ".copier-answers.yml"
+        elif relative.endswith(".jinja"):
+            output = relative.removesuffix(".jinja")
+        else:
+            output = relative
+        condition = CONDITIONAL_GENERATED.get(output)
+        if condition is not None:
+            question, included_values = condition
+            if answers[question] not in included_values:
+                continue
+        generated.add(output)
+    return sorted(generated)
 
 
 def copier_question_blocks(text: str) -> dict[str, list[str]]:
@@ -418,6 +507,10 @@ def require_japanese_prompts(copier_yml: str) -> None:
         if values != expected_values:
             fail(f"copier.yml choice values changed for {question}: {sorted(values)}")
 
+    for question, expected_default in EXPECTED_DEFAULT_VALUES.items():
+        if f'  default: "{expected_default}"' not in blocks[question]:
+            fail(f"copier.yml default changed for {question}: expected {expected_default}")
+
 
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
@@ -431,6 +524,9 @@ def main() -> int:
         return 0
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-python":
         print("\n".join(SOURCE_PYTHON_COMPILE))
+        return 0
+    if len(sys.argv) == 3 and sys.argv[1] == "--print-expected-generated":
+        print("\n".join(expected_generated_paths(parse_fixture(Path(sys.argv[2])))))
         return 0
     if len(sys.argv) > 1:
         fail(f"unknown arguments: {' '.join(sys.argv[1:])}")
@@ -465,17 +561,22 @@ def main() -> int:
     require_referent_first_alignment()
     require_template_manifest_complete()
 
+    fixture_answers: list[dict[str, str]] = []
     for fixture in sorted((ROOT / "tests/fixtures").glob("*.answers.yml")):
         answers = parse_fixture(fixture)
-        missing = QUESTIONS - set(answers)
-        if missing:
-            fail(f"{fixture} missing answers: {sorted(missing)}")
+        require_valid_answers(answers, str(fixture), complete=True)
+        fixture_answers.append(answers)
         obsolete = REMOVED_LOCAL_WORKFLOW_QUESTIONS & set(answers)
         if obsolete:
             fail(f"{fixture} still contains removed local workflow answers: {sorted(obsolete)}")
         obsolete_activation = REMOVED_ACTIVATION_QUESTIONS & set(answers)
         if obsolete_activation:
             fail(f"{fixture} still contains removed activation answers: {sorted(obsolete_activation)}")
+
+    pairwise_answers = parse_pairwise_fixture(PAIRWISE_FIXTURE)
+    for index, answers in enumerate(pairwise_answers, start=1):
+        require_valid_answers(answers, f"{PAIRWISE_FIXTURE} row {index}", complete=False)
+    require_pairwise_coverage([*fixture_answers, *pairwise_answers])
 
     print("copier template static check passed")
     return 0

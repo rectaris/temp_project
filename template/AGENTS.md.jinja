@@ -33,8 +33,8 @@ Agent entrypoint for `[[ project_slug ]]`.
 1. Follow this file first for repository-local behavior.
 2. Use parent workspace rules only for cross-repository coordination, security, or Git policy.
 3. Open `docs/agent/spec-index.yaml`.
-4. Read only `default_reads` plus the matched route's `required` docs before editing.
-5. Add `conditional` docs only when the task or touched files match.
+4. Union the `required` docs from every matching route.
+5. Before editing, read `default_reads`, the required-doc union, and each `conditional` doc whose condition matches the task or touched files.
 
 ## Operating Rules
 

@@ -17,6 +17,9 @@ CHECKED = planlib.CHECKED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
 OPEN_STATUS_VALUES = {"in_progress", "deferred", "ready_to_archive", "backlog"}
+# Copier updates must continue to read archives produced before checked became
+# the terminal manifest value. New finalization is tested to emit checked.
+CLOSED_STATUS_VALUES = {"checked", "completed", "ready_to_archive"}
 MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[:：]")
 APPROACH_MARKERS = {"A", "B", "C"}
 RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
@@ -46,13 +49,32 @@ def lint_plan_index() -> None:
         return
     if "id\tpath\tstatus" not in text:
         fail("active plan index must contain TSV header: id path status")
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
     for line in text.splitlines():
         if re.match(r"^\d{3}\t", line):
             parts = line.split("\t")
             if len(parts) != 3:
                 fail(f"bad active index row: {line}")
-            if not (ROOT / parts[1]).is_file():
+            if parts[0] in seen_ids:
+                fail(f"duplicate active index id: {parts[0]}")
+            if parts[1] in seen_paths:
+                fail(f"duplicate active index path: {parts[1]}")
+            seen_ids.add(parts[0])
+            seen_paths.add(parts[1])
+            if not Path(parts[1]).name.startswith(parts[0] + "-"):
+                fail(f"active index id does not match filename: {line}")
+            indexed_path = ROOT / parts[1]
+            if indexed_path.parent != planlib.ACTIVE_DIR:
+                fail(f"active index path is outside active plan directory: {parts[1]}")
+            if not indexed_path.is_file():
                 fail(f"active index points to missing file: {parts[1]}")
+            try:
+                values = planlib.parse_manifest(indexed_path)
+            except planlib.PlanError as exc:
+                fail(str(exc))
+            if planlib.manifest_scalar(values, "status") != parts[2]:
+                fail(f"active index status does not match manifest: {parts[1]}")
 
 
 def lint_checked_index() -> None:
@@ -63,13 +85,25 @@ def lint_checked_index() -> None:
         fail("docs/plan/checked.md must start with '# Checked Plan Index'")
     if "id\tpath" not in text:
         fail("checked index must contain TSV header: id path")
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
     for line in text.splitlines():
         if re.match(r"^\d{3}\t", line):
             parts = line.split("\t")
             if len(parts) != 2:
                 fail(f"bad checked index row: {line}")
+            if parts[0] in seen_ids:
+                fail(f"duplicate checked index id: {parts[0]}")
+            if parts[1] in seen_paths:
+                fail(f"duplicate checked index path: {parts[1]}")
+            seen_ids.add(parts[0])
+            seen_paths.add(parts[1])
+            if not Path(parts[1]).name.startswith(parts[0] + "-"):
+                fail(f"checked index id does not match filename: {line}")
             if not (ROOT / parts[1]).is_file():
                 fail(f"checked index points to missing file: {parts[1]}")
+            if planlib.CHECKED_DIR not in (ROOT / parts[1]).parents:
+                fail(f"checked index path is outside checked archive: {parts[1]}")
 
 
 def lint_manifest(path: Path) -> None:
@@ -90,8 +124,11 @@ def lint_manifest(path: Path) -> None:
     if approval_value not in HUMAN_APPROVAL_VALUES:
         fail(f"{path} human_approval_status must be not_required, pending, or approved")
     status_value = planlib.manifest_scalar(values, "status")
-    if status_value not in OPEN_STATUS_VALUES:
-        fail(f"{path} status must be in_progress, deferred, ready_to_archive, or backlog")
+    is_checked = planlib.CHECKED_DIR in path.parents
+    allowed_statuses = CLOSED_STATUS_VALUES if is_checked else OPEN_STATUS_VALUES
+    if status_value not in allowed_statuses:
+        allowed = ", ".join(sorted(allowed_statuses))
+        fail(f"{path} status must be one of: {allowed}")
     if path.parent == planlib.ACTIVE_DIR and status_value not in {"in_progress", "deferred", "ready_to_archive"}:
         fail(f"{path} active plan status must be in_progress, deferred, or ready_to_archive")
     if path.parent == planlib.BACKLOG_DIR and status_value not in {"backlog", "deferred"}:
@@ -132,6 +169,9 @@ def lint_manifests() -> None:
             lint_manifest(path)
             if directory == planlib.ACTIVE_DIR:
                 lint_active_plan_body(path)
+    if planlib.CHECKED_DIR.exists():
+        for path in sorted(planlib.CHECKED_DIR.glob("**/[0-9][0-9][0-9]-*.md")):
+            lint_manifest(path)
 
 
 def main() -> int:
@@ -141,6 +181,13 @@ def main() -> int:
     parser.add_argument("--add-active", nargs=2, metavar=("ID", "PATH"), help="add or replace an active index row")
     parser.add_argument("--remove-active", metavar="ID", help="remove an active index row")
     parser.add_argument("--append-checked", nargs=2, metavar=("ID", "PATH"), help="append a checked index row")
+    parser.add_argument("--check-active-mapping", nargs=3, metavar=("ID", "PATH", "STATUS"))
+    parser.add_argument("--set-active-status", nargs=4, metavar=("ID", "PATH", "OLD", "NEW"))
+    parser.add_argument("--check-promotion", nargs=3, metavar=("ID", "SOURCE", "DESTINATION"))
+    parser.add_argument("--check-archive-target", nargs=2, metavar=("ID", "DESTINATION"))
+    parser.add_argument("--rewrite-status", nargs=2, metavar=("PATH", "STATUS"))
+    parser.add_argument("--copy-status-exclusive", nargs=3, metavar=("SOURCE", "DESTINATION", "STATUS"))
+    parser.add_argument("--complete-transition", nargs=3, metavar=("ID", "PATH", "OLD_STATUS"))
     args = parser.parse_args()
     if args.next_id:
         print(next_id())
@@ -159,7 +206,52 @@ def main() -> int:
         planlib.remove_active(args.remove_active)
         return 0
     if args.append_checked:
-        planlib.append_checked(args.append_checked[0], args.append_checked[1])
+        try:
+            planlib.append_checked(args.append_checked[0], args.append_checked[1])
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.check_active_mapping:
+        try:
+            planlib.check_active_mapping(*args.check_active_mapping)
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.set_active_status:
+        try:
+            planlib.set_active_status(*args.set_active_status)
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.check_promotion:
+        try:
+            planlib.check_promotion(*args.check_promotion)
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.check_archive_target:
+        try:
+            planlib.check_archive_target(*args.check_archive_target)
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.rewrite_status:
+        try:
+            planlib.rewrite_status(*args.rewrite_status)
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.copy_status_exclusive:
+        try:
+            planlib.copy_with_status_exclusive(*args.copy_status_exclusive)
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.complete_transition:
+        try:
+            planlib.complete_transition(*args.complete_transition)
+        except planlib.PlanError as exc:
+            fail(str(exc))
         return 0
     lint_plan_index()
     lint_checked_index()

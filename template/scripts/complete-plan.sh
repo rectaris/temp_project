@@ -14,17 +14,33 @@ esac
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
 
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
+id=$(basename "$src"); id=${id%%-*}
 case "$status" in
   in_progress|deferred)
-    sed "s/^status: .*/status: ready_to_archive/" "$src" >"$src.tmp"
-    mv "$src.tmp" "$src"
-    id=$(basename "$src"); id=${id%%-*}
-    python3 scripts/lint-plan-docs.py --add-active "$id" "$src"
-    awk -F"	" -v id="$id" 'BEGIN{OFS="	"} $1 == id {$3="ready_to_archive"} {print}' docs/plan/plan.md >docs/plan/plan.md.tmp
-    mv docs/plan/plan.md.tmp docs/plan/plan.md
+    python3 scripts/lint-plan-docs.py --check-active-mapping "$id" "$src" "$status"
+    if grep -Eq '^[[:space:]]*[-*+][[:space:]]+\[ \]' "$src"; then
+      echo "cannot mark plan ready: unchecked tasks remain in $src" >&2
+      exit 1
+    fi
+    awk '
+      /^## Validation Notes$/ { in_notes=1; next }
+      /^## / { in_notes=0 }
+      in_notes {
+        line=$0
+        sub(/^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/, "", line)
+        sub(/^[[:space:]]+/, "", line)
+        if (line != "" && tolower(line) !~ /^pending([ .:]|$)/) found=1
+      }
+      END { exit(found ? 0 : 1) }
+    ' "$src" || {
+      echo "cannot mark plan ready: Validation Notes are empty or pending in $src" >&2
+      exit 1
+    }
+    python3 scripts/lint-plan-docs.py --complete-transition "$id" "$src" "$status"
     echo "$src"
     ;;
   ready_to_archive)
+    python3 scripts/lint-plan-docs.py --check-active-mapping "$id" "$src" ready_to_archive
     echo "plan is already ready_to_archive: $src" >&2
     exit 0
     ;;

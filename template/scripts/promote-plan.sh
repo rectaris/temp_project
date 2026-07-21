@@ -21,12 +21,12 @@ if [ "$review_class" = "C" ] && [ "$approval" != "approved" ]; then
 fi
 base=$(basename "$src")
 dst="docs/plan/active/$base"
+id=${base%%-*}
+python3 scripts/lint-plan-docs.py --check-promotion "$id" "$src" "$dst"
 mkdir -p docs/plan/active
-sed 's/^status: .*/status: in_progress/' "$src" >"$dst.tmp"
-mv "$dst.tmp" "$dst"
+python3 scripts/lint-plan-docs.py --copy-status-exclusive "$src" "$dst" in_progress
 rm "$src"
 
-id=${base%%-*}
 python3 scripts/lint-plan-docs.py --add-active "$id" "$dst"
 
 echo "$dst"

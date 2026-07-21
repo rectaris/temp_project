@@ -12,10 +12,11 @@ Use this skill when active work tracked in `docs/plan/active/*.md` is complete.
 1. Confirm the active plan exists under `docs/plan/active/`.
 2. Confirm the plan has a non-empty `checked_summary_ja`.
 3. Record validation results, unresolved risks, and deferred work in the plan before archiving.
-4. Prefer `scripts/finalize-active-plan.sh <active-plan>` when available.
-5. Otherwise use `scripts/complete-plan.sh <active-plan>` when available.
-6. Review the move to `docs/plan/checked/`, the `docs/plan/plan.md` update, and the `docs/plan/checked.md` index entry.
-7. Run the repository's normal completion validation or report the concrete blocker.
+4. Run `scripts/complete-plan.sh <active-plan>` to mark the validated plan `ready_to_archive`.
+5. Run `scripts/finalize-active-plan.sh <active-plan>` to move the plan into `docs/plan/checked/` with `status: checked`.
+6. Stop and follow `docs/agent/SPEC_PLAN_WORKFLOW.md` if either lifecycle script is unavailable; do not substitute a manual move.
+7. Review the checked file, the `docs/plan/plan.md` update, and the `docs/plan/checked.md` index entry.
+8. Run the repository's normal completion validation or report the concrete blocker.
 
 ## Rules
 

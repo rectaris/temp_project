@@ -7,4 +7,4 @@ skillspector_mode: disabled
 mcp_policy_mode: disabled
 linear_sync_mode: disabled
 graph_memory_mode: disabled
-ci_autofix_mode: patch_only
+ci_autofix_mode: disabled

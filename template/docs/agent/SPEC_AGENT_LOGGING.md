@@ -76,7 +76,9 @@ Generated projects include `.codex/hooks/agent_log_event.py`.
 
 Generated projects include `.codex/hooks.json` only when `codex_hooks_mode` is `enable_local_logging`.
 
-When Codex hooks are enabled, the hook records observable payloads for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop` events.
+When Codex hooks are enabled, the hook records allowlisted metadata for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop` events.
+
+Events with the same runtime session identifier use one stable run id unless `CODEX_AGENT_LOG_RUN_ID` or `AGENT_LOG_RUN_ID` explicitly overrides it.
 
 Hook logs are written to:
 
@@ -91,7 +93,8 @@ This promotes the external transcript to the primary local source while keeping 
 If the path is unavailable or import fails, the hook must still succeed and the manifest must keep `external_transcript` in `missing_sources`.
 
 Hook logging is best-effort and must not block agent execution.
-Persist only allowlisted hook payload fields and mark automatic redaction as `pending_review`.
+Persist only allowlisted scalar metadata such as session, event, and tool names; do not persist prompt, command, result, response, or transcript content from hook payloads.
+Mark retained automatically filtered metadata as `pending_review`.
 If the hook payload does not contain assistant final text, internal reasoning, or a full transcript, the hook must not reconstruct it.
 
 ## Exclusions And Redaction

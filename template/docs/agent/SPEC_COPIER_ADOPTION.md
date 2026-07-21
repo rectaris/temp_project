@@ -25,6 +25,22 @@ For a repository that already has agent policy files:
 
 Do not run a direct overwrite copy into a mature repository unless the same-path files have already been made intentionally replaceable.
 
+## Conflict Handling
+
+Copier may report a conflict by placing conflict markers inside a managed file or by creating a `*.rej` file.
+Treat both forms as unresolved changes.
+
+Before committing an adoption or update:
+
+1. Search changed files for `<<<<<<<`, `=======`, and `>>>>>>>` markers.
+2. Inspect every `*.rej` file and compare it with the destination file.
+3. Preserve stronger project-owned rules and protected files while merging generic template changes.
+4. Remove a reject file only after its useful content has been merged or explicitly declined.
+5. Run `git diff --check` and the repository validation matrix.
+
+For direct adoption into a mature repository, render into a temporary directory, review a recursive diff against the repository, and copy or merge only accepted paths.
+Do not use a force-copy command as a substitute for this review.
+
 ## Merge Boundaries
 
 Treat these paths as generic by default:

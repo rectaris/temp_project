@@ -8,6 +8,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 - `scoped_worker`: bounded implementation with explicit write scope.
 - `change_reviewer`: read-only correctness and regression review.
 - `docs_researcher`: read-only external or version-specific research.
+- `sequential_plan_worker`: bounded implementation of exactly one assigned active plan under parent-controlled sequential orchestration.
 - Project-specific helper templates may live under `docs/plan/sub-agents/` when repeated workflows justify them.
 
 ## Rules

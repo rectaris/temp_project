@@ -64,7 +64,8 @@ task_types:
       - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
 
 rules:
-  - Start with AGENTS.md and the smallest matching route.
+  - Start with AGENTS.md and the smallest set of routes that covers the task.
+  - Union required entries from every matching route and add conditional entries only when their condition matches.
   - Read normative instructions directly; do not compress AGENTS.md or docs/agent files.
   - Use decision audit before non-trivial active-plan creation or material plan updates when meaningful choices remain open.
   - Keep full decision-audit output out of docs/plan/active.

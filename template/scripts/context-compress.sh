@@ -16,7 +16,7 @@ refuse_if_normative() {
   base=$(basename -- "$rel")
 
   case "$rel" in
-    AGENTS.md|*/AGENTS.md|docs/agent|docs/agent/*|*/docs/agent|*/docs/agent/*)
+    AGENTS.md|*/AGENTS.md|docs/agent|docs/agent/*|docs/plan/active|docs/plan/active/*)
       fail "refusing normative agent instruction input: $path"
       ;;
   esac
@@ -38,7 +38,7 @@ fallback_compress() {
   {
     echo "# Context Compression Fallback"
     echo
-    echo "- source: $input"
+    echo "- source: $source_rel"
     echo "- backend: fallback"
     echo "- source_lines: $line_count"
     echo
@@ -74,45 +74,61 @@ case "$run_id" in
 esac
 
 [ -f "$input" ] || fail "missing input file: $input"
-refuse_if_normative "$input"
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || fail "must run inside a Git repository"
+repo_root=$(python3 - "$repo_root" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve())
+PY
+)
+input_abs=$(python3 - "$input" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve(strict=True))
+PY
+) || fail "missing input file: $input"
 
-safe_name=$(printf '%s' "$(basename -- "$input")" | tr -c 'A-Za-z0-9._-' '_')
+case "$input_abs" in
+  "$repo_root"/*) source_rel=${input_abs#"$repo_root"/} ;;
+  *) fail "input must resolve inside the repository: $input" ;;
+esac
+
+refuse_if_normative "$source_rel"
+cd "$repo_root"
+
+safe_name=$(printf '%s' "$(basename -- "$source_rel")" | tr -c 'A-Za-z0-9._-' '_')
+source_hash=$(python3 - "$source_rel" <<'PY'
+import hashlib
+import sys
+print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest()[:12])
+PY
+)
 run_dir=".agent-logs/$run_id"
 out_dir="$run_dir/compressed"
-output="$out_dir/${safe_name}.compressed.md"
-tmp="$output.tmp"
-err="$output.headroom.err"
+output="$out_dir/${safe_name}.${source_hash}.compressed.md"
+tmp="$output.$$.tmp"
+err="$output.$$.headroom.err"
 backend=fallback
 
 mkdir -p "$out_dir"
 
 if [ "${HEADROOM_DISABLED:-0}" != "1" ] && command -v headroom >/dev/null 2>&1; then
-  if headroom "$input" >"$tmp" 2>"$err" && [ -s "$tmp" ]; then
+  if headroom "$input_abs" >"$tmp" 2>"$err" && [ -s "$tmp" ]; then
     mv "$tmp" "$output"
     rm -f "$err"
     backend=headroom
   else
     rm -f "$tmp" "$err"
-    fallback_compress "$input" "$output"
+    fallback_compress "$input_abs" "$output"
   fi
 else
-  fallback_compress "$input" "$output"
-fi
-
-if [ ! -f "$run_dir/redaction-report.md" ]; then
-  {
-    echo "# Redaction Report"
-    echo
-    echo "- created_by: scripts/context-compress.sh"
-    echo "- source: $input"
-    echo "- note: This wrapper does not redact source content. Review raw logs before sharing or committing summaries."
-  } >"$run_dir/redaction-report.md"
+  fallback_compress "$input_abs" "$output"
 fi
 
 python3 scripts/agent_log_manifest.py record-compression \
   --run-dir "$run_dir" \
   --run-id "$run_id" \
-  --source "$input" \
+  --source "$source_rel" \
   --output "$output"
 
 echo "$output"

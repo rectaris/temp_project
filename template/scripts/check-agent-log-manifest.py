@@ -79,7 +79,31 @@ def resolve_declared_path(run_dir: Path, value: Any, field: str) -> Path | None:
         raise ValidationError(f"{field} must be a relative path string or null")
     if not is_safe_relative_path(value):
         raise ValidationError(f"{field} must be a safe relative path: {value}")
-    return run_dir / value
+    path = run_dir / value
+    try:
+        path.resolve().relative_to(run_dir.resolve())
+    except ValueError as exc:
+        raise ValidationError(f"{field} resolves outside the run directory: {value}") from exc
+    return path
+
+
+def repository_root(run_dir: Path) -> Path:
+    for candidate in (run_dir, *run_dir.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    raise ValidationError(f"could not locate repository root for {run_dir}")
+
+
+def resolve_repository_path(run_dir: Path, value: Any, field: str) -> Path:
+    if not isinstance(value, str) or not is_safe_relative_path(value):
+        raise ValidationError(f"{field} must be a safe repository-relative path string")
+    root = repository_root(run_dir)
+    path = root / value
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValidationError(f"{field} resolves outside the repository: {value}") from exc
+    return path
 
 
 def expected_source_status(run_dir: Path, manifest: dict[str, Any], source: str) -> dict[str, Any]:
@@ -144,8 +168,23 @@ def validate_declared_paths(run_dir: Path, manifest: dict[str, Any]) -> None:
         path = resolve_declared_path(run_dir, manifest.get(field), field)
         if path is not None and not path.is_file():
             raise ValidationError(f"{field} is declared but missing: {manifest[field]}")
+    compressed_outputs = manifest.get("compressed_outputs")
+    if not isinstance(compressed_outputs, list):
+        raise ValidationError("compressed_outputs must be a list")
+    for index, rel in enumerate(compressed_outputs):
+        path = resolve_declared_path(run_dir, rel, f"compressed_outputs[{index}]")
+        if path is None or not path.is_file():
+            raise ValidationError(f"compressed output path is declared but missing: {rel}")
+    for field in ("plans", "artifacts"):
+        values = manifest.get(field)
+        if not isinstance(values, list):
+            raise ValidationError(f"{field} must be a list")
+        for index, rel in enumerate(values):
+            path = resolve_repository_path(run_dir, rel, f"{field}[{index}]")
+            if not path.exists():
+                raise ValidationError(f"{field}[{index}] is declared but missing: {rel}")
     redaction_report = resolve_declared_path(run_dir, manifest.get("redaction_report"), "redaction_report")
-    if redaction_report is not None and not redaction_report.is_file():
+    if redaction_report is None or not redaction_report.is_file():
         raise ValidationError(f"redaction_report is declared but missing: {manifest['redaction_report']}")
 
 
@@ -167,6 +206,8 @@ def validate_transcript(run_dir: Path, manifest: dict[str, Any]) -> None:
             raise ValidationError(f"transcript_log line {lineno} missing fields: {missing}")
         if record["role"] not in ALLOWED_ROLES:
             raise ValidationError(f"transcript_log line {lineno} has unsupported role: {record['role']}")
+        if record["run_id"] != manifest.get("run_id"):
+            raise ValidationError(f"transcript_log line {lineno} run_id does not match manifest")
 
 
 def validate_manifest(path: Path, require_transcript: bool = False, require_hooks: bool = False) -> list[str]:
@@ -176,6 +217,12 @@ def validate_manifest(path: Path, require_transcript: bool = False, require_hook
     missing = sorted(REQUIRED_KEYS - set(manifest))
     if missing:
         raise ValidationError(f"{path}: missing required keys: {missing}")
+    if not isinstance(manifest.get("run_id"), str) or not manifest["run_id"]:
+        raise ValidationError("run_id must be a non-empty string")
+    if path.parent.name != manifest["run_id"]:
+        raise ValidationError("run_id must match the run directory name")
+    if not isinstance(manifest.get("pinned"), bool):
+        raise ValidationError("pinned must be a boolean")
     run_dir = path.parent
     validate_declared_paths(run_dir, manifest)
     coverage = manifest.get("coverage")

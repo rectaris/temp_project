@@ -6,8 +6,8 @@ This workflow is generated for `[[ project_name ]]`.
 
 1. Read `AGENTS.md`.
 2. Read `docs/agent/spec-index.yaml`.
-3. Select the smallest matching route.
-4. Read `default_reads` and route `required` docs.
+3. Select every route needed to cover the task without unrelated reads.
+4. Union their `required` docs, add matching `conditional` docs, and read that set with `default_reads` before editing.
 5. Check `docs/plan/plan.md`.
 6. Treat checked archives as history; search an index before opening full archive files when possible.
 7. Do not load raw agent logs by default. Use run manifests, search, targeted excerpts, or context compression only when the route or task requires log evidence.

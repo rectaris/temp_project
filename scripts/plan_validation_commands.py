@@ -10,6 +10,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 
 
 class ValidationCommandError(ValueError):
@@ -40,6 +41,11 @@ EXACT_COMMANDS = {
     ("sh", "scripts/lint-plan-docs.sh"),
     ("sh", "scripts/format-plan-docs.sh", "--check"),
     ("sh", "scripts/check-agent-completion.sh"),
+    ("scripts/lint-project-workflow.sh",),
+    ("tests/copier-minimum.sh",),
+    ("tests/copier-update.sh",),
+    ("tests/root-plan-lifecycle.sh",),
+    ("tests/smoke.sh",),
     ("npm", "run", "build"),
     ("npm", "run", "test"),
     ("npm", "run", "test:unit"),
@@ -61,7 +67,7 @@ def extract_validation_commands(plan_path: Path) -> list[str]:
     commands: list[str] = []
     in_validation = False
     for line in lines:
-        if line.startswith("# "):
+        if line.startswith("## "):
             break
         if line == "validation:":
             in_validation = True
@@ -182,6 +188,14 @@ def self_test() -> None:
         except ValidationCommandError:
             continue
         raise ValidationCommandError(f"self-test accepted unsafe command: {bad}")
+    with tempfile.TemporaryDirectory() as tmp:
+        plan = Path(tmp) / "plan.md"
+        plan.write_text(
+            "# Plan title\n\nvalidation:\n  - git diff --check\n\n## Tasks\n\n- [ ] example\n",
+            encoding="utf-8",
+        )
+        if [item.raw for item in check_plan(plan)] != ["git diff --check"]:
+            raise ValidationCommandError("self-test did not parse validation after the plan title")
 
 
 def main(argv: list[str]) -> int:

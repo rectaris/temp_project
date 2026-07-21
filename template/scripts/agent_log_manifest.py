@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,9 +23,26 @@ def utc_now() -> str:
 
 
 def write_json(path: Path, value: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@contextmanager
+def manifest_lock(run_dir: Path):
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with (run_dir / ".manifest.lock").open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def relative_to_run(run_dir: Path, path: Path) -> str | None:
@@ -38,6 +59,25 @@ def source_coverage(path: str | None, present: bool, redaction_status: str) -> d
         "status": "present" if present else ("path_missing" if path else "missing"),
         "redaction_status": redaction_status if present else "not_applicable",
     }
+
+
+def ensure_compression_redaction_report(run_dir: Path, source: Path) -> None:
+    report = run_dir / "redaction-report.md"
+    if report.exists():
+        return
+    report.write_text(
+        "\n".join(
+            [
+                "# Redaction Report",
+                "",
+                "- created_by: scripts/context-compress.sh",
+                f"- source: {source}",
+                "- note: This wrapper does not redact source content. Review raw logs before sharing or committing summaries.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def load_manifest(run_dir: Path, run_id: str, task: str) -> dict[str, Any]:
@@ -107,50 +147,54 @@ def finalize_manifest(run_dir: Path, manifest: dict[str, Any]) -> None:
 
 
 def record_hook(run_dir: Path, run_id: str, event_path: Path) -> None:
-    manifest = load_manifest(run_dir, run_id, "codex hook event log")
-    hook_rel = relative_to_run(run_dir, event_path)
-    if hook_rel is None:
-        raise ValueError("hook event log must be inside the run directory")
-    manifest["hook_event_log"] = hook_rel
-    raw_logs = {value for value in manifest.get("raw_logs", []) if isinstance(value, str)}
-    raw_logs.add(hook_rel)
-    manifest["raw_logs"] = sorted(raw_logs)
-    coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
-    coverage["codex_hooks"] = source_coverage(hook_rel, True, "pending_review")
-    manifest["coverage"] = coverage
-    finalize_manifest(run_dir, manifest)
+    with manifest_lock(run_dir):
+        manifest = load_manifest(run_dir, run_id, "codex hook event log")
+        hook_rel = relative_to_run(run_dir, event_path)
+        if hook_rel is None:
+            raise ValueError("hook event log must be inside the run directory")
+        manifest["hook_event_log"] = hook_rel
+        raw_logs = {value for value in manifest.get("raw_logs", []) if isinstance(value, str)}
+        raw_logs.add(hook_rel)
+        manifest["raw_logs"] = sorted(raw_logs)
+        coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
+        coverage["codex_hooks"] = source_coverage(hook_rel, True, "pending_review")
+        manifest["coverage"] = coverage
+        finalize_manifest(run_dir, manifest)
 
 
 def record_transcript(run_dir: Path, run_id: str, redaction_status: str) -> None:
-    manifest = load_manifest(run_dir, run_id, "codex transcript import")
-    manifest["transcript_log"] = TRANSCRIPT_REL
-    raw_logs = {value for value in manifest.get("raw_logs", []) if isinstance(value, str)}
-    raw_logs.add(TRANSCRIPT_REL)
-    manifest["raw_logs"] = sorted(raw_logs)
-    coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
-    coverage["external_transcript"] = source_coverage(TRANSCRIPT_REL, True, redaction_status)
-    manifest["coverage"] = coverage
-    finalize_manifest(run_dir, manifest)
+    with manifest_lock(run_dir):
+        manifest = load_manifest(run_dir, run_id, "codex transcript import")
+        manifest["transcript_log"] = TRANSCRIPT_REL
+        raw_logs = {value for value in manifest.get("raw_logs", []) if isinstance(value, str)}
+        raw_logs.add(TRANSCRIPT_REL)
+        manifest["raw_logs"] = sorted(raw_logs)
+        coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
+        coverage["external_transcript"] = source_coverage(TRANSCRIPT_REL, True, redaction_status)
+        manifest["coverage"] = coverage
+        finalize_manifest(run_dir, manifest)
 
 
 def record_compression(run_dir: Path, run_id: str, source: Path, output: Path) -> None:
-    manifest = load_manifest(run_dir, run_id, "context compression")
-    output_rel = relative_to_run(run_dir, output)
-    if output_rel is None:
-        raise ValueError("compressed output must be inside the run directory")
-    compressed = {value for value in manifest.get("compressed_outputs", []) if isinstance(value, str)}
-    compressed.add(output_rel)
-    manifest["compressed_outputs"] = sorted(compressed)
-    source_rel = relative_to_run(run_dir, source)
-    if source_rel is not None:
-        raw_logs = {value for value in manifest.get("raw_logs", []) if isinstance(value, str)}
-        raw_logs.add(source_rel)
-        manifest["raw_logs"] = sorted(raw_logs)
-    else:
-        artifacts = {value for value in manifest.get("artifacts", []) if isinstance(value, str)}
-        artifacts.add(str(source))
-        manifest["artifacts"] = sorted(artifacts)
-    finalize_manifest(run_dir, manifest)
+    with manifest_lock(run_dir):
+        manifest = load_manifest(run_dir, run_id, "context compression")
+        ensure_compression_redaction_report(run_dir, source)
+        output_rel = relative_to_run(run_dir, output)
+        if output_rel is None:
+            raise ValueError("compressed output must be inside the run directory")
+        compressed = {value for value in manifest.get("compressed_outputs", []) if isinstance(value, str)}
+        compressed.add(output_rel)
+        manifest["compressed_outputs"] = sorted(compressed)
+        source_rel = relative_to_run(run_dir, source)
+        if source_rel is not None:
+            raw_logs = {value for value in manifest.get("raw_logs", []) if isinstance(value, str)}
+            raw_logs.add(source_rel)
+            manifest["raw_logs"] = sorted(raw_logs)
+        else:
+            artifacts = {value for value in manifest.get("artifacts", []) if isinstance(value, str)}
+            artifacts.add(str(source))
+            manifest["artifacts"] = sorted(artifacts)
+        finalize_manifest(run_dir, manifest)
 
 
 def main() -> int:

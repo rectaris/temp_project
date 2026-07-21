@@ -108,6 +108,9 @@ Lifecycle states:
 - Use `status: ready_to_archive` only after acceptance and validation evidence are recorded.
 - `ready_to_archive` is the only active-plan state that blocks the completion gate.
 - Set `ready_to_archive` with `scripts/complete-plan.sh`, then use `scripts/finalize-active-plan.sh` as the only archive transition.
+- `complete-plan.sh` fails while task checkboxes remain unchecked or `Validation Notes` are empty or pending.
+- `finalize-active-plan.sh` writes `status: checked` into the archived record.
+- Archive lint accepts legacy `completed` and `ready_to_archive` values created before terminal-status enforcement; new archives must use `checked`.
 - Finalization requires a non-empty `checked_summary_ja`, a non-empty `Validation Notes` section, a matching active index row, and a non-colliding date-based archive path.
 
 ## Handoff Queue
@@ -124,7 +127,7 @@ Lifecycle states:
 - Next plan id wrapper: `scripts/next-plan-id.sh`
 - Create plan: `scripts/create-plan.sh active <slug>`
 - Promote backlog: `scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`
-- Complete plan: `scripts/complete-plan.sh docs/plan/active/NNN-slug.md`
+- Mark plan ready to archive: `scripts/complete-plan.sh docs/plan/active/NNN-slug.md`
 - Finalize before final report: `scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`
 - Linear sync dry-run: `scripts/sync-plan-to-linear.sh docs/plan/active/NNN-slug.md --dry-run`
 - Completion gate: `scripts/check-agent-completion.sh`

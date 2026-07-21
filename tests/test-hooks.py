@@ -16,15 +16,27 @@ ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOG = ROOT / "template/.codex/hooks/agent_log_event.py"
 IMPORTER = ROOT / "template/scripts/import-codex-transcript.py"
 MANIFEST_HELPER = ROOT / "template/scripts/agent_log_manifest.py"
+MANIFEST_CHECKER = ROOT / "template/scripts/check-agent-log-manifest.py"
+CONTEXT_COMPRESS = ROOT / "template/scripts/context-compress.sh"
 PRE_TOOL = ROOT / "template/.codex/hooks/pre_tool_hardening_gate.py"
 STOP_REVIEW = ROOT / "template/.codex/hooks/stop_review_gate.py"
 SEMANTIC_GUARD = ROOT / "template/.codex/hooks/semantic_guard_advisory.py"
 
 
-def run_hook(script: Path, payload: dict, cwd: Path | None = None, env: dict[str, str] | None = None, args: list[str] | None = None) -> dict:
+def run_hook(
+    script: Path,
+    payload: dict,
+    cwd: Path | None = None,
+    env: dict[str, str | None] | None = None,
+    args: list[str] | None = None,
+) -> dict:
     child_env = os.environ.copy()
     if env:
-        child_env.update(env)
+        for key, value in env.items():
+            if value is None:
+                child_env.pop(key, None)
+            else:
+                child_env[key] = value
     result = subprocess.run(
         ["python3", str(script), *(args or [])],
         input=json.dumps(payload),
@@ -99,19 +111,35 @@ class PreToolHardeningGateTest(unittest.TestCase):
         self.assertEqual(output["decision"], "block")
         self.assertIn("remote script", output["reason"])
 
+    def test_blocks_actual_tool_input_payload(self) -> None:
+        output = run_hook(
+            PRE_TOOL,
+            {
+                "tool_name": "exec_command",
+                "tool_input": {"cmd": "git reset --hard HEAD~1"},
+            },
+        )
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("hard reset", output["reason"])
+
     def test_allows_routine_read_only_command(self) -> None:
         output = run_hook(PRE_TOOL, {"cmd": "git status --short"})
         self.assertEqual(output, {})
 
 
 class AgentLogEventTest(unittest.TestCase):
-    def test_logs_user_prompt_with_redaction(self) -> None:
+    def test_logs_allowlisted_metadata_without_prompt_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
             output = run_hook(
                 AGENT_LOG,
-                {"prompt": "hello", "api_key": "sk-abcdefghijklmnopqrstuvwxyz"},
+                {
+                    "prompt": "AWS_SECRET_ACCESS_KEY=must-not-persist",
+                    "api_key": "sk-abcdefghijklmnopqrstuvwxyz",
+                    "session_id": "session-metadata",
+                    "hook_event_name": "UserPromptSubmit",
+                },
                 cwd=repo,
                 env={"CODEX_AGENT_LOG_RUN_ID": "test-run"},
                 args=["--event", "UserPromptSubmit"],
@@ -125,8 +153,11 @@ class AgentLogEventTest(unittest.TestCase):
             self.assertTrue(redaction_path.is_file())
             record = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
             self.assertEqual(record["event"], "UserPromptSubmit")
-            self.assertEqual(record["payload"]["prompt"], "hello")
+            self.assertEqual(record["payload"]["session_id"], "session-metadata")
+            self.assertEqual(record["payload"]["hook_event_name"], "UserPromptSubmit")
+            self.assertNotIn("prompt", record["payload"])
             self.assertNotIn("api_key", record["payload"])
+            self.assertNotIn("must-not-persist", event_path.read_text(encoding="utf-8"))
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertIn("raw/events.jsonl", manifest["raw_logs"])
             self.assertIsNone(manifest["transcript_log"])
@@ -135,6 +166,41 @@ class AgentLogEventTest(unittest.TestCase):
             self.assertEqual(manifest["coverage"]["codex_hooks"]["status"], "present")
             self.assertEqual(manifest["coverage"]["codex_hooks"]["redaction_status"], "pending_review")
             self.assertEqual(manifest["missing_sources"], ["external_transcript"])
+
+    def test_default_run_id_is_stable_for_runtime_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            env = {
+                "CODEX_AGENT_LOG_RUN_ID": None,
+                "AGENT_LOG_RUN_ID": None,
+                "CODEX_SESSION_ID": "stable-session",
+                "CODEX_THREAD_ID": None,
+            }
+            run_hook(AGENT_LOG, {"session_id": "stable-session"}, cwd=repo, env=env, args=["--event", "SessionStart"])
+            run_hook(AGENT_LOG, {"session_id": "stable-session"}, cwd=repo, env=env, args=["--event", "Stop"])
+            run_dirs = sorted(path for path in (repo / ".agent-logs").iterdir() if path.is_dir())
+            self.assertEqual(len(run_dirs), 1)
+            self.assertTrue(run_dirs[0].name.startswith("codex-session-"))
+            records = [
+                json.loads(line)
+                for line in (run_dirs[0] / "raw/events.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([record["event"] for record in records], ["SessionStart", "Stop"])
+
+    def test_explicit_run_id_cannot_escape_log_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            run_hook(
+                AGENT_LOG,
+                {"session_id": "session"},
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "../escape"},
+                args=["--event", "SessionStart"],
+            )
+            self.assertTrue((repo / ".agent-logs/escape/manifest.json").is_file())
+            self.assertFalse((repo / "escape/manifest.json").exists())
 
     def test_preserves_existing_transcript_manifest_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -282,6 +348,132 @@ class CodexTranscriptImportTest(unittest.TestCase):
             manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["coverage"]["external_transcript"]["redaction_status"], "pending_review")
             self.assertEqual(manifest["missing_sources"], ["codex_hooks"])
+
+
+class ContextCompressionBoundaryTest(unittest.TestCase):
+    def prepare_repo(self, root: Path) -> None:
+        subprocess.run(["git", "init", "-b", "main"], cwd=root, stdout=subprocess.DEVNULL, check=True)
+        scripts = root / "scripts"
+        scripts.mkdir()
+        shutil.copyfile(CONTEXT_COMPRESS, scripts / "context-compress.sh")
+        shutil.copyfile(MANIFEST_HELPER, scripts / "agent_log_manifest.py")
+        shutil.copyfile(MANIFEST_CHECKER, scripts / "check-agent-log-manifest.py")
+
+    def compress(self, repo: Path, source: str, run_id: str) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["HEADROOM_DISABLED"] = "1"
+        return subprocess.run(
+            ["sh", "scripts/context-compress.sh", source, run_id],
+            cwd=repo,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_rejects_symlink_alias_for_normative_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self.prepare_repo(repo)
+            policy = repo / "docs/agent/POLICY.md"
+            policy.parent.mkdir(parents=True)
+            policy.write_text("normative\n", encoding="utf-8")
+            (repo / "innocent.txt").symlink_to(policy)
+            result = self.compress(repo, "innocent.txt", "symlink-run")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("refusing normative agent instruction", result.stderr)
+
+    def test_same_basename_sources_have_distinct_validated_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self.prepare_repo(repo)
+            for directory, content in (("a", "first\n"), ("b", "second\n")):
+                source = repo / "logs" / directory / "same.log"
+                source.parent.mkdir(parents=True)
+                source.write_text(content, encoding="utf-8")
+                result = self.compress(repo, str(source.relative_to(repo)), "same-run")
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+            run_dir = repo / ".agent-logs/same-run"
+            outputs = sorted((run_dir / "compressed").glob("same.log.*.compressed.md"))
+            self.assertEqual(len(outputs), 2)
+            self.assertIn("first", outputs[0].read_text(encoding="utf-8") + outputs[1].read_text(encoding="utf-8"))
+            self.assertIn("second", outputs[0].read_text(encoding="utf-8") + outputs[1].read_text(encoding="utf-8"))
+            check = subprocess.run(
+                ["python3", "scripts/check-agent-log-manifest.py", ".agent-logs/same-run/manifest.json"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_manifest_rejects_escaping_declared_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self.prepare_repo(repo)
+            source = repo / "sample.log"
+            source.write_text("sample\n", encoding="utf-8")
+            result = self.compress(repo, "sample.log", "escape-run")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest_path = repo / ".agent-logs/escape-run/manifest.json"
+            base_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            cases = {
+                "raw_logs": ["../outside.log"],
+                "transcript_log": "../outside.jsonl",
+                "hook_event_log": "../outside.jsonl",
+                "plans": ["../outside.md"],
+                "artifacts": ["../outside.bin"],
+                "compressed_outputs": ["../outside.md"],
+                "redaction_report": "../outside.md",
+            }
+            for field, value in cases.items():
+                with self.subTest(field=field):
+                    manifest = dict(base_manifest)
+                    manifest[field] = value
+                    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+                    check = subprocess.run(
+                        ["python3", "scripts/check-agent-log-manifest.py", str(manifest_path)],
+                        cwd=repo,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=False,
+                    )
+                    self.assertNotEqual(check.returncode, 0)
+                    self.assertIn("safe", check.stderr)
+
+    def test_concurrent_manifest_updates_preserve_both_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self.prepare_repo(repo)
+            sources = []
+            for name in ("first.log", "second.log"):
+                source = repo / "logs" / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(name + "\n", encoding="utf-8")
+                sources.append(str(source.relative_to(repo)))
+            env = os.environ.copy()
+            env["HEADROOM_DISABLED"] = "1"
+            processes = [
+                subprocess.Popen(
+                    ["sh", "scripts/context-compress.sh", source, "parallel-run"],
+                    cwd=repo,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                for source in sources
+            ]
+            for process in processes:
+                _, stderr = process.communicate()
+                self.assertEqual(process.returncode, 0, stderr)
+            manifest = json.loads((repo / ".agent-logs/parallel-run/manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(manifest["artifacts"]), 2)
+            self.assertEqual(len(manifest["compressed_outputs"]), 2)
 
 
 class StopReviewGateTest(unittest.TestCase):

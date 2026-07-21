@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-tmp=${TMPDIR:-/tmp}/project-agent-workflow-smoke-$$
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/project-agent-workflow-smoke.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 . "$root/tests/lib-copier.sh"
 
@@ -21,17 +21,19 @@ fi
 render_fixture() {
   fixture=$1
   out=$2
-  set -- copy -f --vcs-ref HEAD --data-file "$fixture"
+  set -- copy -q -f --vcs-ref HEAD --data-file "$fixture"
   set -- "$@" "$root" "$out"
   run_copier "$@" >/dev/null
 }
 
-assert_generated_required_files() {
+assert_generated_inventory() {
   out=$1
-  python3 "$root/scripts/check-copier-template.py" --print-generated-required | while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    test -f "$out/$path"
-  done
+  fixture=$2
+  expected="$tmp/expected-inventory-$$"
+  actual="$tmp/actual-inventory-$$"
+  python3 "$root/scripts/check-copier-template.py" --print-expected-generated "$fixture" >"$expected"
+  find "$out" -type f -printf '%P\n' | LC_ALL=C sort >"$actual"
+  diff -u "$expected" "$actual"
 }
 
 run_plan_lifecycle_smoke() {
@@ -41,8 +43,9 @@ run_plan_lifecycle_smoke() {
   (cd "$out" && python3 scripts/lint-plan-docs.py)
   (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPE=environment_data_flow$')
   (cd "$out" && scripts/clean-handoffs.sh --dry-run >/dev/null)
-  (cd "$out" && scripts/complete-plan.sh docs/plan/active/001-sample.md >/dev/null)
+  sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$out/docs/plan/active/001-sample.md"
   printf 'smoke validation passed\n' >>"$out/docs/plan/active/001-sample.md"
+  (cd "$out" && scripts/complete-plan.sh docs/plan/active/001-sample.md >/dev/null)
   archive_path=$(cd "$out" && scripts/finalize-active-plan.sh docs/plan/active/001-sample.md)
   case "$archive_path" in
     docs/plan/checked/[0-9][0-9][0-9][0-9]/[0-9][0-9]/01-15/001-sample.md) ;;
@@ -50,8 +53,127 @@ run_plan_lifecycle_smoke() {
     *) echo "unexpected checked archive path: $archive_path" >&2; exit 1 ;;
   esac
   test -f "$out/$archive_path"
+  grep -q '^status: checked$' "$out/$archive_path"
   printf '%s\n' "$archive_path" >"$out/.sample-archive-path"
   (cd "$out" && python3 scripts/lint-plan-docs.py)
+}
+
+run_plan_fail_closed_smoke() {
+  out=$1
+
+  evidence_plan=$(cd "$out" && scripts/create-plan.sh active evidence-gate --summary "Evidence gate." --summary-ja "完了根拠を確認する。")
+  sed -i 's/^- \[ \] TBD$/-  [ ] TBD/' "$out/$evidence_plan"
+  evidence_base=$(basename "$evidence_plan")
+  evidence_id=${evidence_base%%-*}
+  if (cd "$out" && scripts/complete-plan.sh "$evidence_plan" >/dev/null 2>&1); then
+    echo "complete-plan accepted unchecked tasks" >&2
+    exit 1
+  fi
+  grep -q '^status: in_progress$' "$out/$evidence_plan"
+  grep -q "^$evidence_id[[:space:]]$evidence_plan[[:space:]]in_progress$" "$out/docs/plan/plan.md"
+  sed -i 's/^-  \[ \] TBD$/- [x] TBD/' "$out/$evidence_plan"
+  printf '%s\n' '1. Pending validation.' >>"$out/$evidence_plan"
+  if (cd "$out" && scripts/complete-plan.sh "$evidence_plan" >/dev/null 2>&1); then
+    echo "complete-plan accepted pending Validation Notes" >&2
+    exit 1
+  fi
+  grep -q '^status: in_progress$' "$out/$evidence_plan"
+  grep -q "^$evidence_id[[:space:]]$evidence_plan[[:space:]]in_progress$" "$out/docs/plan/plan.md"
+  sed -i 's/^1\. Pending validation\.$/- focused validation passed/' "$out/$evidence_plan"
+  (cd "$out" && scripts/complete-plan.sh "$evidence_plan" >/dev/null)
+  evidence_archive=$(cd "$out" && scripts/finalize-active-plan.sh "$evidence_plan")
+  grep -q '^status: checked$' "$out/$evidence_archive"
+  sed -i 's/^status: checked$/status: ready_to_archive/' "$out/$evidence_archive"
+  (cd "$out" && python3 scripts/lint-plan-docs.py)
+  sed -i 's/^status: ready_to_archive$/status: checked/' "$out/$evidence_archive"
+
+  archive_plan=$(cd "$out" && scripts/create-plan.sh active archive-preflight --summary "Archive preflight." --summary-ja "アーカイブ前提条件を確認する。")
+  archive_base=$(basename "$archive_plan")
+  archive_id=${archive_base%%-*}
+  sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$out/$archive_plan"
+  printf 'archive preflight validation passed\n' >>"$out/$archive_plan"
+  (cd "$out" && scripts/complete-plan.sh "$archive_plan" >/dev/null)
+  sed -i "s/^$archive_id\t\(.*\)\tready_to_archive$/$archive_id\t\1\tin_progress/" "$out/docs/plan/plan.md"
+  if (cd "$out" && scripts/finalize-active-plan.sh "$archive_plan" >/dev/null 2>&1); then
+    echo "finalize-active-plan accepted a mismatched active index" >&2
+    exit 1
+  fi
+  test -f "$out/$archive_plan"
+  sed -i "s/^$archive_id\t\(.*\)\tin_progress$/$archive_id\t\1\tready_to_archive/" "$out/docs/plan/plan.md"
+  archive_year=$(date +%Y)
+  archive_month=$(date +%m)
+  archive_day=$(date +%d)
+  case "$archive_day" in 0[1-9]|1[0-5]) archive_half=01-15 ;; *) archive_half=16-31 ;; esac
+  collision_dst="docs/plan/checked/$archive_year/$archive_month/$archive_half/$archive_base"
+  mkdir -p "$out/docs/plan/checked/$archive_year/$archive_month/$archive_half"
+  printf 'existing archive\n' >"$out/$collision_dst"
+  if (cd "$out" && scripts/finalize-active-plan.sh "$archive_plan" >/dev/null 2>&1); then
+    echo "finalize-active-plan overwrote an existing archive" >&2
+    exit 1
+  fi
+  test -f "$out/$archive_plan"
+  rm "$out/$collision_dst"
+  archive_result=$(cd "$out" && scripts/finalize-active-plan.sh "$archive_plan")
+  grep -q '^status: checked$' "$out/$archive_result"
+
+  destination_plan=$(cd "$out" && scripts/create-plan.sh backlog promotion-destination --summary "Promotion destination." --summary-ja "昇格先の競合を確認する。")
+  destination_base=$(basename "$destination_plan")
+  cp "$out/$destination_plan" "$out/docs/plan/active/$destination_base"
+  if (cd "$out" && scripts/promote-plan.sh "$destination_plan" >/dev/null 2>&1); then
+    echo "promote-plan overwrote an existing destination" >&2
+    exit 1
+  fi
+  test -f "$out/$destination_plan"
+  rm "$out/docs/plan/active/$destination_base"
+
+  id_plan=$(cd "$out" && scripts/create-plan.sh backlog promotion-id --summary "Promotion id." --summary-ja "計画 ID の競合を確認する。")
+  id_base=$(basename "$id_plan")
+  id_value=${id_base%%-*}
+  mkdir -p "$out/docs/plan/checked/2000/01/01-15"
+  legacy_path="docs/plan/checked/2000/01/01-15/$id_value-legacy.md"
+  sed 's/^status: .*/status: checked/' "$out/$id_plan" >"$out/$legacy_path"
+  if (cd "$out" && scripts/promote-plan.sh "$id_plan" >/dev/null 2>&1); then
+    echo "promote-plan accepted a duplicate plan id" >&2
+    exit 1
+  fi
+  test -f "$out/$id_plan"
+  rm "$out/$legacy_path"
+
+  index_plan=$(cd "$out" && scripts/create-plan.sh backlog promotion-index --summary "Promotion index." --summary-ja "索引の競合を確認する。")
+  index_base=$(basename "$index_plan")
+  index_id=${index_base%%-*}
+  (cd "$out" && python3 scripts/lint-plan-docs.py --add-active "$index_id" "docs/plan/active/$index_base")
+  if (cd "$out" && scripts/promote-plan.sh "$index_plan" >/dev/null 2>&1); then
+    echo "promote-plan accepted a conflicting active index mapping" >&2
+    exit 1
+  fi
+  test -f "$out/$index_plan"
+  (cd "$out" && python3 scripts/lint-plan-docs.py --remove-active "$index_id")
+
+  mapping_plan=$(cd "$out" && scripts/create-plan.sh active index-id-mapping --summary "Index ID mapping." --summary-ja "索引 ID を確認する。")
+  mapping_base=$(basename "$mapping_plan")
+  mapping_id=${mapping_base%%-*}
+  sed -i "s/^$mapping_id\t/999\t/" "$out/docs/plan/plan.md"
+  if (cd "$out" && python3 scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted an index ID that differs from the filename" >&2
+    exit 1
+  fi
+  sed -i "s/^999\t/$mapping_id\t/" "$out/docs/plan/plan.md"
+
+  concurrent_dst=docs/plan/active/998-concurrent-destination.md
+  (cd "$out" && python3 scripts/lint-plan-docs.py --copy-status-exclusive "$mapping_plan" "$concurrent_dst" in_progress >/dev/null 2>&1) &
+  copy_pid_one=$!
+  (cd "$out" && python3 scripts/lint-plan-docs.py --copy-status-exclusive "$mapping_plan" "$concurrent_dst" in_progress >/dev/null 2>&1) &
+  copy_pid_two=$!
+  copy_successes=0
+  if wait "$copy_pid_one"; then copy_successes=$((copy_successes + 1)); fi
+  if wait "$copy_pid_two"; then copy_successes=$((copy_successes + 1)); fi
+  [ "$copy_successes" -eq 1 ] || { echo "exclusive plan copy expected one successful writer" >&2; exit 1; }
+  test -f "$out/$concurrent_dst"
+  rm "$out/$concurrent_dst"
+
+  (cd "$out" && python3 scripts/lint-plan-docs.py --remove-active "$mapping_id")
+  rm "$out/$mapping_plan"
 }
 
 run_referent_contract_smoke() {
@@ -75,7 +197,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   name=$(basename "$fixture" .answers.yml)
   out="$tmp/$name"
   render_fixture "$fixture" "$out"
-  assert_generated_required_files "$out"
+  assert_generated_inventory "$out" "$fixture"
   git -C "$out" init -b main >/dev/null
   git -C "$out" diff --check
   git -C "$out" check-ignore .agent-logs/sample/manifest.json >/dev/null
@@ -85,12 +207,54 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   (cd "$out" && python3 scripts/structure-map.py --check >/dev/null)
 done
 
+tab=$(printf '\t')
+while IFS="$tab" read -r case_name primary_language codex_hooks_mode skillspector_mode mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
+  [ "$case_name" != "case" ] || continue
+  [ -n "$case_name" ] || continue
+  fixture="$tmp/$case_name.answers.yml"
+  out="$tmp/pairwise-$case_name"
+  {
+    printf 'project_name: %s\n' "$case_name"
+    printf 'project_slug: %s\n' "$case_name"
+    printf 'project_purpose: Exercise Copier pairwise generation.\n'
+    printf 'primary_language: %s\n' "$primary_language"
+    printf 'codex_hooks_mode: %s\n' "$codex_hooks_mode"
+    printf 'skillspector_mode: %s\n' "$skillspector_mode"
+    printf 'mcp_policy_mode: %s\n' "$mcp_policy_mode"
+    printf 'linear_sync_mode: %s\n' "$linear_sync_mode"
+    printf 'graph_memory_mode: %s\n' "$graph_memory_mode"
+    printf 'ci_autofix_mode: %s\n' "$ci_autofix_mode"
+  } >"$fixture"
+  render_fixture "$fixture" "$out"
+  assert_generated_inventory "$out" "$fixture"
+done <"$root/tests/fixtures/copier-pairwise.tsv"
+
+assert_rejected_input() {
+  label=$1
+  question=$2
+  value=$3
+  if run_copier copy -f --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data "$question=$value" "$root" "$tmp/invalid-$label" >/dev/null 2>&1; then
+    echo "copier accepted invalid input: $label" >&2
+    exit 1
+  fi
+}
+
 if run_copier copy -f --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data project_slug='invalid slug' "$root" "$tmp/invalid-slug" >/dev/null 2>&1; then
   echo "copier accepted an invalid project slug" >&2
   exit 1
 fi
+assert_rejected_input empty-name project_name ''
+assert_rejected_input whitespace-name project_name '   '
+assert_rejected_input empty-purpose project_purpose ''
+multiline_name='First line
+Second line'
+assert_rejected_input multiline-name project_name "$multiline_name"
+multiline_purpose='First line
+Second line'
+assert_rejected_input multiline-purpose project_purpose "$multiline_purpose"
 
 run_plan_lifecycle_smoke "$tmp/typescript"
+run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
 
 class_c=$(cd "$tmp/typescript" && scripts/create-plan.sh backlog class-c-approval --summary "Class C approval." --summary-ja "承認待ち計画を確認する。")
@@ -103,14 +267,16 @@ fi
 sed -i 's/^human_approval_status: .*/human_approval_status: approved/' "$tmp/typescript/$class_c"
 class_c_active=$(cd "$tmp/typescript" && scripts/promote-plan.sh "$class_c")
 grep -q '^status: in_progress$' "$tmp/typescript/$class_c_active"
-(cd "$tmp/typescript" && scripts/complete-plan.sh "$class_c_active" >/dev/null)
+sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$tmp/typescript/$class_c_active"
 printf 'class C lifecycle validation passed\n' >>"$tmp/typescript/$class_c_active"
+(cd "$tmp/typescript" && scripts/complete-plan.sh "$class_c_active" >/dev/null)
 (cd "$tmp/typescript" && scripts/finalize-active-plan.sh "$class_c_active" >/dev/null)
 
 good_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
 (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
-(cd "$tmp/typescript" && scripts/complete-plan.sh "$good_plan" >/dev/null)
+sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$tmp/typescript/$good_plan"
 printf 'smoke validation passed\n' >>"$tmp/typescript/$good_plan"
+(cd "$tmp/typescript" && scripts/complete-plan.sh "$good_plan" >/dev/null)
 (cd "$tmp/typescript" && scripts/finalize-active-plan.sh "$good_plan" >/dev/null)
 
 bad_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active recommendation-matrix --summary "Recommendation matrix." --summary-ja "推奨案を比較する。" )
@@ -183,6 +349,8 @@ grep -q 'External service policy states: MCP=`documented`, Linear=`documented`, 
 grep -q 'SPEC_COPIER_ADOPTION.md' "$tmp/typescript/AGENTS.md"
 grep -q 'copier_adoption:' "$tmp/typescript/docs/agent/spec-index.yaml"
 grep -q 'Copier Adoption' "$tmp/typescript/docs/agent/SPEC_COPIER_ADOPTION.md"
+grep -q 'Conflict Handling' "$tmp/typescript/docs/agent/SPEC_COPIER_ADOPTION.md"
+grep -q 'conflict markers inside a managed file' "$tmp/typescript/docs/agent/SPEC_COPIER_ADOPTION.md"
 test -f "$tmp/typescript/docs/agent/external-services.yaml"
 grep -q 'external_services:' "$tmp/typescript/docs/agent/external-services.yaml"
 grep -q 'state: documented' "$tmp/typescript/docs/agent/external-services.yaml"
@@ -196,11 +364,17 @@ if grep -q '^model = ' "$tmp/docs/.codex/config.toml"; then
 fi
 grep -q 'CI autofix mode: `direct_push`' "$tmp/typescript/AGENTS.md"
 grep -q 'CI autofix mode: `patch_only`' "$tmp/python/AGENTS.md"
+grep -q 'CI autofix mode: `disabled`' "$tmp/docs/AGENTS.md"
+test -f "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
+test -f "$tmp/python/.github/workflows/codex-ci-autofix.yml"
+test ! -f "$tmp/docs/.github/workflows/codex-ci-autofix.yml"
 grep -q 'mode = "direct-push";' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 grep -q 'mode = "patch-only";' "$tmp/python/.github/workflows/codex-ci-autofix.yml"
 grep -Fq 'ref: ${{ needs.prepare.outputs.head_sha }}' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 grep -q 'Use tmux for long-running, shared, or interactive commands' "$tmp/typescript/AGENTS.md"
 grep -q 'Command Sessions' "$tmp/typescript/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'sequential_plan_worker.*exactly one assigned active plan' "$tmp/typescript/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'Do not redefine it here as a custom candidate' "$tmp/typescript/docs/plan/sub-agents/custom-agents.md"
 grep -q 'Name tmux sessions descriptively' "$tmp/typescript/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'docs/agent/external-services.yaml' "$tmp/typescript/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'MCP: `documented`' "$tmp/typescript/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -242,12 +416,19 @@ grep -q 'name: mcp-ops' "$tmp/typescript/.codex/skills/mcp-ops/SKILL.md"
 grep -q 'name: linear-ops' "$tmp/typescript/.codex/skills/linear-ops/SKILL.md"
 grep -q 'name: graph-memory' "$tmp/typescript/.codex/skills/graph-memory/SKILL.md"
 grep -q 'name: plan-archive' "$tmp/typescript/.codex/skills/plan-archive/SKILL.md"
+awk '
+  /Run `scripts\/complete-plan.sh/ { complete=NR }
+  /Run `scripts\/finalize-active-plan.sh/ { finalize=NR }
+  END { exit(complete && finalize && complete < finalize ? 0 : 1) }
+' "$tmp/typescript/.codex/skills/plan-archive/SKILL.md"
 grep -q 'name: implementation-guidelines' "$tmp/typescript/.codex/skills/implementation-guidelines/SKILL.md"
 grep -q 'name: sequential-plan-orchestrator' "$tmp/typescript/.codex/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'sequential_plan_worker' "$tmp/typescript/.codex/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'one bounded worker at a time' "$tmp/typescript/.codex/skills/sequential-plan-orchestrator/agents/openai.yaml"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/AGENTS.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/AGENTS.md"
+grep -q 'Union the `required` docs from every matching route' "$tmp/typescript/AGENTS.md"
+grep -q 'Union their `required` docs, add matching `conditional` docs' "$tmp/typescript/docs/agent/SPEC_DEVELOPMENT_FLOW.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/README.md"
 grep -q 'docs/agent/external-services.yaml' "$tmp/typescript/.codex/skills/mcp-ops/SKILL.md"
 grep -q 'external_services.linear_sync' "$tmp/typescript/.codex/skills/linear-ops/SKILL.md"
@@ -289,7 +470,7 @@ grep -q 'generic template script still fails closed' "$tmp/typescript/docs/agent
 mkdir -p "$tmp/typescript/.agent-logs/sample/raw"
 printf 'line 1\nline 2\n' >"$tmp/typescript/.agent-logs/sample/raw/session.log"
 (cd "$tmp/typescript" && HEADROOM_DISABLED=1 scripts/context-compress.sh .agent-logs/sample/raw/session.log sample >/dev/null)
-test -f "$tmp/typescript/.agent-logs/sample/compressed/session.log.compressed.md"
+find "$tmp/typescript/.agent-logs/sample/compressed" -maxdepth 1 -type f -name 'session.log.*.compressed.md' -print -quit | grep -q .
 test -f "$tmp/typescript/.agent-logs/sample/manifest.json"
 (cd "$tmp/typescript" && python3 scripts/check-agent-log-manifest.py .agent-logs/sample/manifest.json >/dev/null)
 if (cd "$tmp/typescript" && scripts/context-compress.sh AGENTS.md >/dev/null 2>&1); then
