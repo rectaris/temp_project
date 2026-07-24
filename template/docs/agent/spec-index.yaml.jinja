@@ -10,6 +10,7 @@ default_reads:
   - docs/agent/SPEC_VALIDATION.md
   - docs/agent/SPEC_GIT_WORKFLOW.md
   - docs/agent/SPEC_FILE_MANAGEMENT.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
 
 task_types:
   planning_docs:
@@ -113,6 +114,17 @@ task_types:
       - path: docs/agent/SPEC_DECISION_AUDIT.md
         when: meaningful skill trigger, storage, validation, lifecycle, security, or generated-artifact boundary choices remain open.
 
+  user_communication:
+    summary: User-facing progress updates, proposals, explanations, blocking reports, review summaries, or completion messages.
+    required:
+      - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - docs/agent/SPEC_USER_COMMUNICATION.md
+    conditional:
+      - path: docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+        when: the user-facing message is written in Japanese.
+      - path: docs/agent/SPEC_REFERENT_FIRST.md
+        when: the message introduces a new or compressed label that could hide multiple concrete referents.
+
   referent_first:
     summary: New domain terms, workflow labels, state or event naming, investigation reports, causal summaries, or remediation proposals where one label could hide multiple concrete referents.
     required:
@@ -210,6 +222,7 @@ rules:
   - Keep README files human-facing; agent-facing operational policy belongs in docs/agent.
   - Treat external-service modules as optional unless SPEC_EXTERNAL_SERVICES explicitly enables them.
   - Apply SPEC_JAPANESE_TECH_WRITING to Japanese prose without requiring an installed external skill.
+  - Apply SPEC_USER_COMMUNICATION before submitting a substantive user-facing message.
   - Apply SPEC_SKILL_AUTHORING when creating, updating, vendoring, or reviewing Codex skills.
   - Apply SPEC_REFERENT_FIRST before assigning new labels to unresolved or potentially overloaded referents.
   - Apply SPEC_COPIER_ADOPTION before copying template-managed files into a repository that already has local agent policy.

@@ -33,3 +33,4 @@ id	path
 030	docs/plan/checked/2026/07/16-31/030-chat-visible-referent-staging.md
 031	docs/plan/checked/2026/07/16-31/031-template-review-remediation.md
 032	docs/plan/checked/2026/07/16-31/032-template-review-followup.md
+033	docs/plan/checked/2026/07/16-31/033-reader-ready-communication.md

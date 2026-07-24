@@ -15,7 +15,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Do not add project-specific `supportcard-status` facts to generic templates.
 - When writing or editing Japanese prose in this repository, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
 - When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
-- Use `docs/agent/spec-index.yaml` to route root-level agent policy when the task concerns planning, logging, compression, decision audit, or Japanese prose.
+- Use `docs/agent/spec-index.yaml` to route root-level agent policy when the task concerns planning, logging, compression, decision audit, user-facing communication, or Japanese prose.
 - Keep raw agent logs and large agent artifacts local under `.agent-logs/` and `.agent-artifacts/`; do not commit them.
 - Treat external transcript logs as primary full-turn evidence when available, and repo-local hook event logs as best-effort corroborating evidence.
 - Record missing transcript or hook sources explicitly in run manifests.
@@ -27,6 +27,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Use the repo-local `.codex/skills/decision-audit` skill when available; keep `docs/agent/SPEC_DECISION_AUDIT.md` as the normative root policy.
 - Before introducing a new domain or workflow label in design, investigation, remediation, causal-summary, or naming work, fix its concrete referent and preserve unresolved facts according to `docs/agent/SPEC_REFERENT_FIRST.md`; use `.codex/skills/define-referents-first` for the operational workflow. In chat naming work, show an unnamed referent and uncertainty stage before any candidate or controlled term.
 - Use repo-local generic Codex skills such as `.codex/skills/implementation-guidelines`, `.codex/skills/mcp-ops`, `.codex/skills/linear-ops`, `.codex/skills/graph-memory`, and `.codex/skills/plan-archive` only as auxiliary workflow guidance; keep project-specific values in `docs/agent/` policy files.
+- Before submitting a substantive progress update, proposal, explanation, blocking report, or final summary, follow `docs/agent/SPEC_USER_COMMUNICATION.md` and use `.codex/skills/write-for-reader` for its operational workflow.
 - When creating or updating Codex skills, follow `docs/agent/SPEC_SKILL_AUTHORING.md`.
 - Validate with `scripts/lint-project-workflow.sh` and `tests/smoke.sh` before completion.
 - Use Git for all changes.

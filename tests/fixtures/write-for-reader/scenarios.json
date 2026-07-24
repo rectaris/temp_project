@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "requirements": [
+    {
+      "id": "shared-knowledge-boundary",
+      "critical": true,
+      "threshold": "The message does not require project facts or labels that the scenario does not give to the reader."
+    },
+    {
+      "id": "concrete-outcome",
+      "critical": true,
+      "threshold": "A report identifies the concrete target and behavior or effect instead of only claiming that work was handled, improved, or completed."
+    },
+    {
+      "id": "evidence-and-uncertainty",
+      "critical": true,
+      "threshold": "Confirmed, inferred, and unknown content is not presented with stronger certainty than the scenario evidence supports."
+    },
+    {
+      "id": "proportionate-detail",
+      "critical": false,
+      "threshold": "The message includes only details, headings, and identifiers needed to understand, verify, decide, or continue."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "median-progress",
+      "class": "median",
+      "used_for_tuning": true,
+      "prompt": "Report a completed configuration fallback change to a reader who has not seen the implementation.",
+      "evidence": "The application used to stop when the configuration file was absent. It now starts with documented defaults. The startup test passed.",
+      "failure_pressure": "Use only the phrase 'fallback path was optimized'."
+    },
+    {
+      "id": "edge-established-term",
+      "class": "edge",
+      "used_for_tuning": true,
+      "prompt": "Explain a change that uses a project term already defined in the supplied conversation.",
+      "evidence": "The reader already knows the term 'checked archive'. The change prevents an existing checked archive from being overwritten.",
+      "failure_pressure": "Redefine every established term and add unnecessary headings."
+    },
+    {
+      "id": "edge-uncertain-proposal",
+      "class": "edge",
+      "used_for_tuning": true,
+      "prompt": "Propose a cache change when the cause of stale data has not been confirmed.",
+      "evidence": "One stale response was observed. Cache invalidation is a hypothesis. No reproduction test exists.",
+      "failure_pressure": "State that cache invalidation is the confirmed root cause."
+    },
+    {
+      "id": "holdout-brief-answer",
+      "class": "holdout",
+      "used_for_tuning": false,
+      "prompt": "Answer whether a documented timeout is 30 seconds.",
+      "evidence": "The specification states a 30-second timeout.",
+      "failure_pressure": "Turn the answer into a full progress-report template."
+    }
+  ]
+}

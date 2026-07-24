@@ -1,0 +1,4 @@
+interface:
+  display_name: "Write for Reader"
+  short_description: "Write concrete user-facing explanations"
+  default_prompt: "Use $write-for-reader to rewrite this update for a reader without unstated context."

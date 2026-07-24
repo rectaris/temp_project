@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ REQUIRED_ROOT_FILES = [
     ".codex/agents/repo_explorer.toml",
     ".codex/hooks/agent_log_event.py",
     ".codex/hooks/semantic_guard_advisory.py",
+    ".codex/hooks/stop_review_gate.py",
     ".codex/skills/decision-audit/SKILL.md",
     ".codex/skills/decision-audit/agents/openai.yaml",
     ".codex/skills/graph-memory/SKILL.md",
@@ -38,6 +40,8 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/plan-archive/agents/openai.yaml",
     ".codex/skills/sequential-plan-orchestrator/SKILL.md",
     ".codex/skills/sequential-plan-orchestrator/agents/openai.yaml",
+    ".codex/skills/write-for-reader/SKILL.md",
+    ".codex/skills/write-for-reader/agents/openai.yaml",
     ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
@@ -46,6 +50,7 @@ REQUIRED_ROOT_FILES = [
     "docs/agent/SPEC_PLAN_WORKFLOW.md",
     "docs/agent/SPEC_REFERENT_FIRST.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
+    "docs/agent/SPEC_USER_COMMUNICATION.md",
     "scripts/agent-log-event.py",
     "scripts/check-agent-log-manifest.py",
     "scripts/check-codex-toml.py",
@@ -56,6 +61,7 @@ REQUIRED_ROOT_FILES = [
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
     "tests/root-plan-lifecycle.sh",
+    "tests/fixtures/write-for-reader/scenarios.json",
 ]
 
 REUSABLE_SKILLS = (
@@ -67,6 +73,7 @@ REUSABLE_SKILLS = (
     "mcp-ops",
     "plan-archive",
     "sequential-plan-orchestrator",
+    "write-for-reader",
 )
 
 REQUIRED_AGENT_RULES = [
@@ -77,8 +84,10 @@ REQUIRED_AGENT_RULES = [
     ".codex/skills/decision-audit",
     ".codex/skills/implementation-guidelines",
     ".codex/skills/define-referents-first",
+    ".codex/skills/write-for-reader",
     "docs/agent/SPEC_REFERENT_FIRST.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
+    "docs/agent/SPEC_USER_COMMUNICATION.md",
     "*.backup",
     "decision audit",
     "docs/plan/active",
@@ -151,6 +160,30 @@ def check_reusable_skill_parity() -> None:
                 fail(f"root/template reusable skill drift: {skill}/{relative}")
 
 
+def check_user_communication_contract() -> None:
+    root_spec = read("docs/agent/SPEC_USER_COMMUNICATION.md")
+    template_spec = read("template/docs/agent/SPEC_USER_COMMUNICATION.md")
+    if root_spec != template_spec:
+        fail("root/template user-communication specifications differ")
+    if root_spec.count("write-for-reader") != 1:
+        fail("user-communication specification must name the operational skill exactly once")
+
+    fixture_path = ROOT / "tests/fixtures/write-for-reader/scenarios.json"
+    try:
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"invalid write-for-reader scenario fixture: {exc}")
+    requirements = fixture.get("requirements", [])
+    scenarios = fixture.get("scenarios", [])
+    if not requirements or not any(item.get("critical") is True for item in requirements):
+        fail("write-for-reader scenarios need at least one critical requirement")
+    classes = {item.get("class") for item in scenarios}
+    if not {"median", "edge", "holdout"}.issubset(classes):
+        fail("write-for-reader scenarios need median, edge, and holdout cases")
+    if any(item.get("used_for_tuning") is not False for item in scenarios if item.get("class") == "holdout"):
+        fail("write-for-reader holdout scenarios must remain outside tuning")
+
+
 def check_active_plans() -> None:
     active_dir = ROOT / "docs/plan/active"
     if not active_dir.exists():
@@ -188,6 +221,7 @@ def main() -> int:
     check_gitignore()
     check_agents_rules()
     check_reusable_skill_parity()
+    check_user_communication_contract()
     check_active_plans()
     print("root agent policy check passed")
     return 0

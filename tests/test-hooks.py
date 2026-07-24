@@ -477,12 +477,13 @@ class ContextCompressionBoundaryTest(unittest.TestCase):
 
 
 class StopReviewGateTest(unittest.TestCase):
-    def test_allows_clean_repository(self) -> None:
+    def test_requires_review_when_message_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
             output = run_hook(STOP_REVIEW, {}, cwd=repo)
-        self.assertEqual(output, {})
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("SPEC_USER_COMMUNICATION.md", output["reason"])
 
     def test_blocks_high_risk_untracked_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -493,6 +494,50 @@ class StopReviewGateTest(unittest.TestCase):
             output = run_hook(STOP_REVIEW, {}, cwd=repo)
         self.assertEqual(output["decision"], "block")
         self.assertIn("src/app.py", output["reason"])
+
+    def test_requires_review_for_substantive_user_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            output = run_hook(
+                STOP_REVIEW,
+                {
+                    "last_assistant_message": (
+                        "設定ファイルがない場合にも起動できるように修正しました。"
+                        "起動テストに合格し、既定値を使う動作を確認しました。"
+                    )
+                },
+                cwd=repo,
+            )
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("SPEC_USER_COMMUNICATION.md", output["reason"])
+        self.assertIn("write-for-reader", output["reason"])
+
+    def test_allows_brief_concrete_answer_without_review_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            output = run_hook(
+                STOP_REVIEW,
+                {"last_assistant_message": "設定上の待機時間は 30 秒です。"},
+                cwd=repo,
+            )
+        self.assertEqual(output, {})
+
+    def test_combines_implementation_and_communication_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            (repo / "src").mkdir()
+            (repo / "src/app.py").write_text("print('hello')\n", encoding="utf-8")
+            output = run_hook(
+                STOP_REVIEW,
+                {"last_assistant_message": "Implemented the requested startup fallback and validated it."},
+                cwd=repo,
+            )
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("src/app.py", output["reason"])
+        self.assertIn("SPEC_USER_COMMUNICATION.md", output["reason"])
 
     def test_completion_preflight_ignores_dirty_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -507,7 +552,16 @@ class StopReviewGateTest(unittest.TestCase):
         self.assertNotIn("dirty worktree", output["reason"])
 
     def test_allows_when_stop_hook_already_active(self) -> None:
-        output = run_hook(STOP_REVIEW, {"stop_hook_active": True})
+        output = run_hook(
+            STOP_REVIEW,
+            {
+                "stop_hook_active": True,
+                "last_assistant_message": (
+                    "設定ファイルがない場合にも起動できるように修正しました。"
+                    "起動テストに合格し、既定値を使う動作を確認しました。"
+                ),
+            },
+        )
         self.assertEqual(output, {})
 
 

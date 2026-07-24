@@ -6,6 +6,7 @@ project:
 
 default_reads:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
 
 task_types:
   planning_docs:
@@ -50,6 +51,16 @@ task_types:
       - path: docs/agent/SPEC_DECISION_AUDIT.md
         when: meaningful skill trigger, storage, validation, external-service, or generated-template boundary choices remain open.
 
+  user_communication:
+    summary: User-facing progress updates, proposals, explanations, blocking reports, review summaries, or completion messages.
+    required:
+      - docs/agent/SPEC_USER_COMMUNICATION.md
+    conditional:
+      - path: docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+        when: the user-facing message is written in Japanese.
+      - path: docs/agent/SPEC_REFERENT_FIRST.md
+        when: the message introduces a new or compressed label that could hide multiple concrete referents.
+
   referent_first:
     summary: New domain terms, workflow labels, state or event naming, investigation reports, causal summaries, or remediation proposals where one label could hide multiple concrete referents.
     required:
@@ -68,5 +79,6 @@ rules:
   - Union required entries from every matching route and add conditional entries only when their condition matches.
   - Read normative instructions directly; do not compress AGENTS.md or docs/agent files.
   - Use decision audit before non-trivial active-plan creation or material plan updates when meaningful choices remain open.
+  - Apply SPEC_USER_COMMUNICATION before submitting a substantive user-facing message.
   - Keep full decision-audit output out of docs/plan/active.
   - Keep raw logs and large artifacts local under .agent-logs/ and .agent-artifacts/.

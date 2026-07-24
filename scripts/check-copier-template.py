@@ -34,6 +34,7 @@ SOURCE_REQUIRED = [
     "docs/agent/SPEC_PLAN_WORKFLOW.md",
     "docs/agent/SPEC_REFERENT_FIRST.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
+    "docs/agent/SPEC_USER_COMMUNICATION.md",
     "scripts/agent-log-event.py",
     "scripts/check-agent-log-manifest.py",
     "scripts/check-codex-toml.py",
@@ -78,6 +79,8 @@ SOURCE_REQUIRED = [
     "template/.codex/skills/plan-archive/agents/openai.yaml",
     "template/.codex/skills/sequential-plan-orchestrator/SKILL.md",
     "template/.codex/skills/sequential-plan-orchestrator/agents/openai.yaml",
+    "template/.codex/skills/write-for-reader/SKILL.md",
+    "template/.codex/skills/write-for-reader/agents/openai.yaml",
     "template/[[ _copier_conf.answers_file ]].jinja",
     "template/docs/agent/spec-index.yaml.jinja",
     "template/docs/agent/CODEX_CI_AUTOFIX.md",
@@ -99,6 +102,7 @@ SOURCE_REQUIRED = [
     "template/docs/agent/SPEC_SECURITY.md",
     "template/docs/agent/SPEC_SKILL_AUTHORING.md",
     "template/docs/agent/SPEC_UI_DESIGN.md",
+    "template/docs/agent/SPEC_USER_COMMUNICATION.md",
     "template/docs/agent/PROJECT_ENVIRONMENT.md",
     "template/docs/agent/PROJECT_UI_DESIGN.md",
     "template/docs/plan/README.md",
@@ -154,6 +158,7 @@ SOURCE_REQUIRED = [
     "tests/test-referent-contract.py",
     "tests/fixtures/referent-contract/scenarios.json",
     "tests/fixtures/referent-contract/evaluation-protocol.md",
+    "tests/fixtures/write-for-reader/scenarios.json",
     "scripts/init-project-workflow.sh",
 ]
 
@@ -187,6 +192,8 @@ GENERATED_REQUIRED = [
     ".codex/skills/plan-archive/agents/openai.yaml",
     ".codex/skills/sequential-plan-orchestrator/SKILL.md",
     ".codex/skills/sequential-plan-orchestrator/agents/openai.yaml",
+    ".codex/skills/write-for-reader/SKILL.md",
+    ".codex/skills/write-for-reader/agents/openai.yaml",
     "AGENTS.md",
     "README.md",
     ".github/workflows/ci.yml",
@@ -210,6 +217,7 @@ GENERATED_REQUIRED = [
     "docs/agent/SPEC_SECURITY.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
     "docs/agent/SPEC_UI_DESIGN.md",
+    "docs/agent/SPEC_USER_COMMUNICATION.md",
     "docs/agent/PROJECT_ENVIRONMENT.md",
     "docs/agent/PROJECT_UI_DESIGN.md",
     "docs/agent/SPEC_VALIDATION.md",
@@ -378,6 +386,21 @@ def require_referent_first_alignment() -> None:
     for root_path, template_path in pairs:
         if read(root_path) != read(template_path):
             fail(f"referent-first root/template files differ: {root_path} != {template_path}")
+
+
+def require_user_communication_alignment() -> None:
+    pairs = (
+        ("docs/agent/SPEC_USER_COMMUNICATION.md", "template/docs/agent/SPEC_USER_COMMUNICATION.md"),
+        (".codex/skills/write-for-reader/SKILL.md", "template/.codex/skills/write-for-reader/SKILL.md"),
+        (
+            ".codex/skills/write-for-reader/agents/openai.yaml",
+            "template/.codex/skills/write-for-reader/agents/openai.yaml",
+        ),
+        (".codex/hooks/stop_review_gate.py", "template/.codex/hooks/stop_review_gate.py"),
+    )
+    for root_path, template_path in pairs:
+        if read(root_path) != read(template_path):
+            fail(f"user-communication root/template files differ: {root_path} != {template_path}")
 
 
 def parse_fixture(path: Path) -> dict[str, str]:
@@ -559,6 +582,7 @@ def main() -> int:
 
     require_sequential_worker()
     require_referent_first_alignment()
+    require_user_communication_alignment()
     require_template_manifest_complete()
 
     fixture_answers: list[dict[str, str]] = []
