@@ -16,7 +16,8 @@ esac
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
 id=$(basename "$src"); id=${id%%-*}
 case "$status" in
-  in_progress|deferred)
+  in_progress)
+    python3 scripts/lint-plan-docs.py --check-manifest "$src"
     python3 scripts/lint-plan-docs.py --check-active-mapping "$id" "$src" "$status"
     if grep -Eq '^[[:space:]]*[-*+][[:space:]]+\[ \]' "$src"; then
       echo "cannot mark plan ready: unchecked tasks remain in $src" >&2
@@ -38,6 +39,10 @@ case "$status" in
     }
     python3 scripts/lint-plan-docs.py --complete-transition "$id" "$src" "$status"
     echo "$src"
+    ;;
+  deferred)
+    echo "cannot mark deferred plan ready; return it to in_progress after its deferral condition is resolved: $src" >&2
+    exit 1
     ;;
   ready_to_archive)
     python3 scripts/lint-plan-docs.py --check-active-mapping "$id" "$src" ready_to_archive

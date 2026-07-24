@@ -1,6 +1,6 @@
 ---
 name: sequential-plan-orchestrator
-description: Execute numbered files in docs/plan/active sequentially by delegating one bounded plan at a time to a configurable worker, then reviewing, accepting, and updating dependent plans. Use when a project needs parent-controlled orchestration of multiple active implementation plans.
+description: Execute numbered files in docs/plan/active sequentially by delegating one bounded plan at a time to the generated sequential_plan_worker agent, then reviewing, accepting, and updating dependent plans. Use when a project needs parent-controlled orchestration of multiple active implementation plans.
 ---
 
 # Sequential Plan Orchestrator
@@ -12,7 +12,7 @@ Process active plans as a parent-owned sequence. Keep implementation in the work
 1. Enumerate `docs/plan/active/<number>-<name>.md` files and sort by the integer prefix.
    Stop on malformed names, duplicate numbers, ambiguous or blocked plans, or missing required inputs.
 2. Read the selected plan, every required spec, and the active-plan index before delegation.
-3. Resolve the configured worker agent name, defaulting to `sequential_plan_worker`.
+3. Use the generated `sequential_plan_worker` agent.
    Stop if that agent is unavailable.
 4. Delegate exactly one plan with its path, explicit read scope, explicit write scope, required validation commands, and this return contract: changed paths, implementation summary, validation results, blockers, cross-plan impacts, and remaining risks.
 5. Wait for the worker result.

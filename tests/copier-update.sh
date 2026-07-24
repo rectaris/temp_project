@@ -31,11 +31,24 @@ use_mcp_policy: true
 use_linear_sync: true
 use_graph_memory: true
 EOF
+legacy_disabled_answers="$tmp/legacy-disabled.answers.yml"
+cat >"$legacy_disabled_answers" <<'EOF'
+project_name: legacy-disabled
+project_slug: legacy-disabled
+project_purpose: Exercise disabled legacy activation answers.
+primary_language: docs
+use_hooks: false
+use_skillspector: false
+use_mcp_policy: false
+use_linear_sync: false
+use_graph_memory: false
+EOF
 
 prepare_lane() {
   lane=$1
   base_ref=$2
   answers=$3
+  shift 3
   out="$tmp/$lane"
   run_copier copy -q -f --vcs-ref "$base_ref" --data-file "$answers" "$root" "$out" >/dev/null
   git -C "$out" init -b main >/dev/null
@@ -61,7 +74,7 @@ Preserve this project-owned UI policy.
 EOF
   git -C "$out" add docs/agent/SPEC_PRODUCT.md docs/agent/PROJECT_ENVIRONMENT.md docs/agent/PROJECT_UI_DESIGN.md
   git -C "$out" commit -m "Add local project notes" >/dev/null
-  run_copier update -q -f --vcs-ref HEAD "$out" >/dev/null
+  run_copier update -q -f --vcs-ref HEAD "$@" "$out" >/dev/null
   printf '%s\n' "$out"
 }
 
@@ -89,6 +102,8 @@ validate_common_lane() {
   test -f "$out/scripts/format-plan-docs.sh"
   test -f "$out/scripts/validate-changes.py"
   test -f "$out/scripts/security-static-check.py"
+  test -f "$out/scripts/check-external-service-policy.py"
+  test -f "$out/scripts/migrate-legacy-template-files.py"
   grep -q 'Local project-owned agent notes.' "$out/docs/agent/SPEC_PRODUCT.md"
   grep -q 'Preserve this project-owned environment policy.' "$out/docs/agent/PROJECT_ENVIRONMENT.md"
   grep -q 'Preserve this project-owned UI policy.' "$out/docs/agent/PROJECT_UI_DESIGN.md"
@@ -107,6 +122,7 @@ validate_common_lane() {
   (cd "$out" && python3 scripts/lint-plan-docs.py)
   (cd "$out" && python3 scripts/format-plan-docs.py --check)
   (cd "$out" && python3 scripts/check-codex-toml.py >/dev/null)
+  (cd "$out" && python3 scripts/check-external-service-policy.py check >/dev/null)
   (cd "$out" && python3 scripts/structure-map.py --check >/dev/null)
   (cd "$out" && python3 scripts/security-static-check.py >/dev/null)
   python3 "$root/scripts/check-copier-template.py" --print-generated-required | while IFS= read -r path; do
@@ -116,6 +132,7 @@ validate_common_lane() {
 }
 
 oldest_out=$(prepare_lane oldest-supported "$oldest_ref" "$legacy_answers")
+(cd "$oldest_out" && python3 scripts/migrate-legacy-template-files.py >/dev/null)
 validate_common_lane "$oldest_out"
 grep -q 'Codex hooks mode: `install_templates`' "$oldest_out/AGENTS.md"
 grep -q 'SkillSpector mode: `document_optional`' "$oldest_out/AGENTS.md"
@@ -133,10 +150,62 @@ if grep -q 'state: configured' "$oldest_out/docs/agent/external-services.yaml"; 
 fi
 
 latest_out=$(prepare_lane latest-stable "$latest_ref" "$root/tests/fixtures/python.answers.yml")
+(cd "$latest_out" && python3 scripts/migrate-legacy-template-files.py >/dev/null)
 validate_common_lane "$latest_out"
 grep -q 'Codex hooks mode: `install_templates`' "$latest_out/AGENTS.md"
 grep -q 'SkillSpector mode: `disabled`' "$latest_out/AGENTS.md"
 grep -q 'MCP: `disabled`' "$latest_out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test ! -f "$latest_out/scripts/skillspector-scan.sh"
+
+legacy_disabled_out=$(prepare_lane oldest-disabled "$oldest_ref" "$legacy_disabled_answers")
+(cd "$legacy_disabled_out" && python3 scripts/migrate-legacy-template-files.py | grep -q 'removed obsolete template file')
+validate_common_lane "$legacy_disabled_out"
+grep -q 'Codex hooks mode: `disabled`' "$legacy_disabled_out/AGENTS.md"
+grep -q 'SkillSpector mode: `disabled`' "$legacy_disabled_out/AGENTS.md"
+grep -q 'MCP: `disabled`' "$legacy_disabled_out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear sync: `disabled`' "$legacy_disabled_out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Graph memory: `disabled`' "$legacy_disabled_out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+test ! -f "$legacy_disabled_out/scripts/skillspector-scan.sh"
+
+legacy_override_out=$(prepare_lane oldest-explicit-disabled "$oldest_ref" "$legacy_answers" \
+  --data codex_hooks_mode=disabled \
+  --data skillspector_mode=disabled \
+  --data mcp_policy_mode=disabled \
+  --data linear_sync_mode=disabled \
+  --data graph_memory_mode=disabled \
+  --data ci_autofix_mode=disabled)
+(cd "$legacy_override_out" && python3 scripts/migrate-legacy-template-files.py >/dev/null)
+validate_common_lane "$legacy_override_out"
+grep -q 'External service policy states: MCP=`disabled`, Linear=`disabled`, graph memory=`disabled`' "$legacy_override_out/AGENTS.md"
+grep -q 'MCP: `disabled`' "$legacy_override_out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear sync: `disabled`' "$legacy_override_out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Graph memory: `disabled`' "$legacy_override_out/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+if grep -q 'state: documented' "$legacy_override_out/docs/agent/external-services.yaml"; then
+  echo "legacy activation booleans overrode explicit disabled modes" >&2
+  exit 1
+fi
+test ! -f "$legacy_override_out/scripts/skillspector-scan.sh"
+
+modified_out="$tmp/oldest-modified-skillspector"
+run_copier copy -q -f --vcs-ref "$oldest_ref" --data-file "$legacy_disabled_answers" "$root" "$modified_out" >/dev/null
+git -C "$modified_out" init -b main >/dev/null
+git -C "$modified_out" config user.email "ci@example.invalid"
+git -C "$modified_out" config user.name "CI"
+git -C "$modified_out" add -A
+git -C "$modified_out" commit -m "Initial generated workflow" >/dev/null
+printf '\n# project-owned modification\n' >>"$modified_out/scripts/skillspector-scan.sh"
+git -C "$modified_out" add scripts/skillspector-scan.sh
+git -C "$modified_out" commit -m "Customize SkillSpector helper" >/dev/null
+run_copier update -q -f --vcs-ref HEAD "$modified_out" >/dev/null
+if (cd "$modified_out" && python3 scripts/migrate-legacy-template-files.py >"$tmp/migration.stdout" 2>"$tmp/migration.stderr"); then
+  echo "legacy migration deleted or accepted a modified SkillSpector helper" >&2
+  exit 1
+fi
+grep -q 'legacy template migration conflict' "$tmp/migration.stderr"
+grep -q 'manual review is required' "$tmp/migration.stderr"
+grep -q 'project-owned modification' "$modified_out/scripts/skillspector-scan.sh"
+test -f "$modified_out/scripts/migrate-legacy-template-files.py"
+(cd "$modified_out" && python3 scripts/check-external-service-policy.py check >/dev/null)
+git -C "$modified_out" diff --check
 
 echo "copier update test passed"

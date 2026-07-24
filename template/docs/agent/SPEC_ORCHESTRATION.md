@@ -14,7 +14,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 ## Rules
 
 - Delegate only bounded, independently useful tasks.
-- Keep write scopes non-overlapping.
+- Derive delegated write scope from the active plan's `write_scope`, keep it non-overlapping, and treat `context_files` as read-only.
 - Treat helper output as advisory until accepted.
 - Prefer local work when coordination cost is higher than task complexity.
 - Keep final interpretation, integration, validation acceptance, planning updates, commits, and completion reports in the main session.

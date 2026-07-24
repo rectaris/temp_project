@@ -209,10 +209,14 @@ version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "copier" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "copier", specifier = ">=9.6.0" }]
+requires-dist = [
+    { name = "copier", specifier = ">=9.6.0" },
+    { name = "pyyaml", specifier = "==6.0.3" },
+]
 
 [[package]]
 name = "prompt-toolkit"

@@ -38,6 +38,17 @@ cat >"$tmp/docs/plan/checked.md" <<'EOF'
 id	path
 EOF
 
+cp "$tmp/docs/plan/active/001-sample.md" "$tmp/docs/plan/active/002-deferred.md"
+sed -i 's/^status: in_progress$/status: deferred/' "$tmp/docs/plan/active/002-deferred.md"
+printf '002\tdocs/plan/active/002-deferred.md\tdeferred\n' >>"$tmp/docs/plan/plan.md"
+if (cd "$tmp" && scripts/complete-plan.sh docs/plan/active/002-deferred.md >/dev/null 2>&1); then
+  echo "root complete-plan archived deferred work" >&2
+  exit 1
+fi
+grep -q '^status: deferred$' "$tmp/docs/plan/active/002-deferred.md"
+sed -i '/^002\t/d' "$tmp/docs/plan/plan.md"
+rm "$tmp/docs/plan/active/002-deferred.md"
+
 if (cd "$tmp" && scripts/complete-plan.sh docs/plan/active/001-sample.md >/dev/null 2>&1); then
   echo "root complete-plan accepted unfinished tasks and pending evidence" >&2
   exit 1

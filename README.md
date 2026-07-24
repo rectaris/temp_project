@@ -62,9 +62,12 @@ copier copy -f /path/to/project-agent-workflow /path/to/repo
 
 ```sh
 copier update
+python3 scripts/migrate-legacy-template-files.py
 ```
 
 Copier の競合は、対象ファイル内の `<<<<<<<`、`=======`、`>>>>>>>` または `*.rej` ファイルとして現れる場合があります。
+移行 helper は、内容が既知の旧テンプレートと一致する廃止済みファイルだけを削除します。
+利用者が変更した旧ファイルは保持して非0終了するため、報告された競合を確認してください。
 コミット前に両方を検索し、差分へ必要な内容を統合してから競合表示を解消してください。
 `*.rej` は内容を採用または却下した後に削除します。
 
@@ -107,4 +110,7 @@ tests/test-hooks.py
 tests/copier-update.sh
 ```
 
-CI では `uv sync` したうえで、生成テストと更新テストを必須として実行します。PATH 上に `copier` が無い場合、`tests/smoke.sh` と `tests/copier-update.sh` は `uv run copier` を使います。`uv` も無い場合は生成系の検証をスキップします。
+CI は固定版の PyYAML で生成 YAML を解析し、checksum を確認した actionlint 1.7.12 で GitHub Actions workflow を検査します。
+CI では `uv sync` したうえで、生成テストと更新テストを必須として実行します。
+PATH 上に `copier` が無い場合、`tests/smoke.sh` と `tests/copier-update.sh` は `uv run copier` を使います。
+`uv` も無い場合は生成系の検証をスキップします。

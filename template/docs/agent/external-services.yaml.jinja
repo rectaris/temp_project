@@ -1,19 +1,20 @@
-[% set mcp_state = "documented" if ((mcp_policy_mode is defined and mcp_policy_mode == "document_optional") or (use_mcp_policy is defined and use_mcp_policy)) else "disabled" %]
-[% set linear_state = "documented" if ((linear_sync_mode is defined and linear_sync_mode == "document_optional") or (use_linear_sync is defined and use_linear_sync)) else "disabled" %]
-[% set graph_state = "documented" if ((graph_memory_mode is defined and graph_memory_mode == "document_optional") or (use_graph_memory is defined and use_graph_memory)) else "disabled" %]
+[% set mcp_state = "documented" if mcp_policy_mode == "document_optional" else "disabled" %]
+[% set linear_state = "documented" if linear_sync_mode == "document_optional" else "disabled" %]
+[% set graph_state = "documented" if graph_memory_mode == "document_optional" else "disabled" %]
 version: 1
 
 states:
   disabled: Policy exists, but service reads and writes are not authorized.
   documented: Setup guidance exists, but service reads and writes are not authorized.
-  configured_read_only: Required fields are complete and allowed_reads is non-empty.
-  configured_write_capable: Required fields are complete, allowed_writes is non-empty, and write_authorization_rule is explicit.
+  configured_read_only: Connection, authentication, credential reference, and allowed reads pass the common external-service gate.
+  configured_write_capable: Read requirements pass, allowed writes are non-empty, and the write-authorization check passes.
 
 external_services:
   mcp:
     state: [[ mcp_state ]]
     connection: ""
-    credential_env: ""
+    authentication: none
+    credential_reference: ""
     allowed_reads: []
     allowed_writes: []
     write_authorization_rule: ""
@@ -22,7 +23,8 @@ external_services:
   linear_sync:
     state: [[ linear_state ]]
     connection: ""
-    credential_env: ""
+    authentication: none
+    credential_reference: ""
     allowed_reads: []
     allowed_writes: []
     write_authorization_rule: ""
@@ -31,7 +33,8 @@ external_services:
   graph_memory:
     state: [[ graph_state ]]
     connection: ""
-    credential_env: ""
+    authentication: none
+    credential_reference: ""
     allowed_reads: []
     allowed_writes: []
     write_authorization_rule: ""

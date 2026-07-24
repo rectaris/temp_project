@@ -21,39 +21,29 @@ SHELL_METACHARS = frozenset(";|&<>`$\\\n\r")
 UNSUPPORTED_CHARS = frozenset("\"'~*?[]{}()")
 ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
-EXACT_COMMANDS = {
-    ("git", "diff", "--check"),
-    ("git", "diff", "--cached", "--check"),
-    ("python3", "scripts/check-codex-toml.py"),
-    ("python3", "scripts/lint-plan-docs.py"),
-    ("python3", "scripts/format-plan-docs.py", "--check"),
-    ("python3", "scripts/security-static-check.py"),
-    ("python3", "scripts/structure-map.py", "--check"),
-    ("python3", "scripts/validate-changes.py"),
-    ("python3", "scripts/validate-changes.py", "--all"),
-    ("python3", "scripts/validate-changes.py", "--all", "--json"),
-    ("python3", "scripts/validate-changes.py", "--print-only"),
-    ("python3", "scripts/validate-changes.py", "--print-only", "--json"),
-    ("python3", "scripts/validate-changes.py", "--all", "--print-only", "--json"),
-    ("python3", "scripts/validate-changes.py", "--staged", "--print-only", "--json"),
-    ("python3", "scripts/validate-changes.py", "--json"),
-    ("python3", "scripts/plan_validation_commands.py", "--self-test"),
-    ("sh", "scripts/lint-plan-docs.sh"),
-    ("sh", "scripts/format-plan-docs.sh", "--check"),
-    ("sh", "scripts/check-agent-completion.sh"),
-    ("scripts/lint-project-workflow.sh",),
-    ("tests/copier-minimum.sh",),
-    ("tests/copier-update.sh",),
-    ("tests/root-plan-lifecycle.sh",),
-    ("tests/smoke.sh",),
-    ("npm", "run", "build"),
-    ("npm", "run", "test"),
-    ("npm", "run", "test:unit"),
-    ("npm", "run", "lint"),
-    ("npm", "run", "verify"),
-    ("pytest",),
-    ("uv", "run", "pytest"),
+PYTHON_SCRIPT_ARGUMENTS = {
+    "scripts/check-codex-toml.py": {()},
+    "scripts/lint-plan-docs.py": {()},
+    "scripts/format-plan-docs.py": {("--check",)},
+    "scripts/security-static-check.py": {()},
+    "scripts/structure-map.py": {("--check",)},
+    "scripts/plan_validation_commands.py": {("--self-test",)},
 }
+VALIDATE_CHANGES_FLAGS = frozenset({"--all", "--staged", "--print-only", "--json"})
+SHELL_SCRIPT_ARGUMENTS = {
+    "scripts/lint-plan-docs.sh": {()},
+    "scripts/format-plan-docs.sh": {("--check",)},
+    "scripts/check-agent-completion.sh": {()},
+}
+DIRECT_SCRIPT_ARGUMENTS = {
+    "scripts/lint-project-workflow.sh": {()},
+    "tests/copier-minimum.sh": {()},
+    "tests/copier-update.sh": {()},
+    "tests/root-plan-lifecycle.sh": {()},
+    "tests/smoke.sh": {()},
+}
+NPM_VALIDATION_SCRIPTS = frozenset({"build", "test", "test:unit", "lint", "typecheck", "verify"})
+PYTEST_PREFIXES = (("pytest",), ("python3", "-m", "pytest"), ("uv", "run", "pytest"))
 
 
 @dataclass(frozen=True)
@@ -116,15 +106,67 @@ def parse_validation_command(command: str) -> ValidationCommand:
 
 
 def validate_argv(argv: tuple[str, ...], command: str) -> None:
-    if argv in EXACT_COMMANDS:
-        return
-    if is_script_syntax_check(argv):
-        return
-    if is_python_compile(argv):
-        return
-    if is_pytest_path_check(argv):
+    if any(
+        checker(argv)
+        for checker in (
+            is_git_diff_check,
+            is_python_script_check,
+            is_validate_changes,
+            is_shell_script_check,
+            is_direct_script_check,
+            is_npm_script_check,
+            is_script_syntax_check,
+            is_python_compile,
+            is_pytest_check,
+        )
+    ):
         return
     raise ValidationCommandError(f"validation command is not allowlisted: {command}")
+
+
+def has_allowed_suffix(
+    argv: tuple[str, ...],
+    prefix: tuple[str, ...],
+    suffixes: set[tuple[str, ...]],
+) -> bool:
+    return argv[: len(prefix)] == prefix and argv[len(prefix) :] in suffixes
+
+
+def is_git_diff_check(argv: tuple[str, ...]) -> bool:
+    return has_allowed_suffix(argv, ("git", "diff"), {("--check",), ("--cached", "--check")})
+
+
+def is_python_script_check(argv: tuple[str, ...]) -> bool:
+    if len(argv) < 2 or argv[0] != "python3":
+        return False
+    script = argv[1]
+    suffixes = PYTHON_SCRIPT_ARGUMENTS.get(script)
+    return suffixes is not None and tuple(argv[2:]) in suffixes
+
+
+def is_validate_changes(argv: tuple[str, ...]) -> bool:
+    if argv[:2] != ("python3", "scripts/validate-changes.py"):
+        return False
+    flags = argv[2:]
+    if len(flags) != len(set(flags)) or any(flag not in VALIDATE_CHANGES_FLAGS for flag in flags):
+        return False
+    return not ({"--all", "--staged"} <= set(flags))
+
+
+def is_shell_script_check(argv: tuple[str, ...]) -> bool:
+    if len(argv) < 2 or argv[0] != "sh":
+        return False
+    suffixes = SHELL_SCRIPT_ARGUMENTS.get(argv[1])
+    return suffixes is not None and tuple(argv[2:]) in suffixes
+
+
+def is_direct_script_check(argv: tuple[str, ...]) -> bool:
+    suffixes = DIRECT_SCRIPT_ARGUMENTS.get(argv[0])
+    return suffixes is not None and tuple(argv[1:]) in suffixes
+
+
+def is_npm_script_check(argv: tuple[str, ...]) -> bool:
+    return len(argv) == 3 and argv[:2] == ("npm", "run") and argv[2] in NPM_VALIDATION_SCRIPTS
 
 
 def is_script_syntax_check(argv: tuple[str, ...]) -> bool:
@@ -148,15 +190,11 @@ def is_python_compile(argv: tuple[str, ...]) -> bool:
     return True
 
 
-def is_pytest_path_check(argv: tuple[str, ...]) -> bool:
-    if len(argv) < 2:
+def is_pytest_check(argv: tuple[str, ...]) -> bool:
+    prefix = next((candidate for candidate in PYTEST_PREFIXES if argv[: len(candidate)] == candidate), None)
+    if prefix is None:
         return False
-    if argv[0] == "pytest":
-        paths = argv[1:]
-    elif len(argv) >= 4 and argv[:3] == ("uv", "run", "pytest"):
-        paths = argv[3:]
-    else:
-        return False
+    paths = argv[len(prefix) :]
     for raw_path in paths:
         path = Path(raw_path)
         if path.is_absolute() or ".." in path.parts or path.parts[0] != "tests":
@@ -181,8 +219,18 @@ def run_plan(path: Path) -> None:
 def self_test() -> None:
     parse_validation_command("git diff --check")
     parse_validation_command("python3 -m py_compile scripts/example.py tests/example.py")
+    parse_validation_command("python3 -m pytest")
+    parse_validation_command("npm run typecheck")
     parse_validation_command("sh -n scripts/example.sh")
-    for bad in ("git diff --check; rm -rf .", "FOO=1 pytest", "python3 - <<EOF"):
+    parse_validation_command("scripts/lint-project-workflow.sh")
+    parse_validation_command("tests/smoke.sh")
+    for bad in (
+        "git diff --check; rm -rf .",
+        "FOO=1 pytest",
+        "python3 - <<EOF",
+        "npm run prepublish",
+        "python3 -m pytest -q",
+    ):
         try:
             parse_validation_command(bad)
         except ValidationCommandError:

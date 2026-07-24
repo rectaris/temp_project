@@ -32,6 +32,11 @@ jobs:
       - name: Sync dependencies
         run: UV_CACHE_DIR=.uv-cache uv sync
 
+      - name: Install pinned actionlint
+        run: |
+          scripts/install-actionlint.sh "$RUNNER_TEMP/actionlint"
+          echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
+
       - name: Check Copier
         run: UV_CACHE_DIR=.uv-cache uv run copier --version
 
@@ -41,7 +46,13 @@ jobs:
       - name: Smoke test generated projects
         run: tests/smoke.sh
         env:
+          REQUIRE_ACTIONLINT: "1"
           REQUIRE_COPIER: "1"
+
+      - name: Validate YAML and GitHub Actions
+        run: |
+          UV_CACHE_DIR=.uv-cache uv run python scripts/check-yaml.py .
+          REQUIRE_ACTIONLINT=1 scripts/lint-github-actions.sh .
 
       - name: Test generated hooks
         run: tests/test-hooks.py
@@ -52,7 +63,24 @@ jobs:
           REQUIRE_COPIER: "1"
 
       - name: Check whitespace
-        run: git diff --check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = pull_request ]; then
+            git diff --check "$BASE_SHA...$PR_HEAD_SHA"
+          elif [ "$EVENT_NAME" = push ] &&
+            [ "$BEFORE_SHA" != 0000000000000000000000000000000000000000 ] &&
+            git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            git diff --check "$BEFORE_SHA..$HEAD_SHA"
+          else
+            EMPTY_TREE=$(git hash-object -t tree /dev/null)
+            git diff --check "$EMPTY_TREE" "$HEAD_SHA"
+          fi
 
   minimum-compatibility:
     runs-on: ubuntu-latest

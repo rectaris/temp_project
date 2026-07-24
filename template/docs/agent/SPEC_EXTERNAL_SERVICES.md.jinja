@@ -1,6 +1,6 @@
-[% set mcp_state = "documented" if ((mcp_policy_mode is defined and mcp_policy_mode == "document_optional") or (use_mcp_policy is defined and use_mcp_policy)) else "disabled" %]
-[% set linear_state = "documented" if ((linear_sync_mode is defined and linear_sync_mode == "document_optional") or (use_linear_sync is defined and use_linear_sync)) else "disabled" %]
-[% set graph_state = "documented" if ((graph_memory_mode is defined and graph_memory_mode == "document_optional") or (use_graph_memory is defined and use_graph_memory)) else "disabled" %]
+[% set mcp_state = "documented" if mcp_policy_mode == "document_optional" else "disabled" %]
+[% set linear_state = "documented" if linear_sync_mode == "document_optional" else "disabled" %]
+[% set graph_state = "documented" if graph_memory_mode == "document_optional" else "disabled" %]
 # External Services
 
 External services are optional. Generated policy state lives in:
@@ -32,14 +32,27 @@ Before any external read or write, the matching service entry in `docs/agent/ext
 
 - `state`
 - `connection`
-- `credential_env`
+- `authentication`
+- `credential_reference`
 - `allowed_reads`
 - `allowed_writes`
 - `write_authorization_rule`
 - `dry_run_or_local_validation`
 - `unavailable_fallback`
 
-`configured_read_only` requires a non-empty `connection`, a non-empty `credential_env`, and non-empty `allowed_reads`.
+authentication means the configured method by which an external service connection obtains credentials: none, environment, or platform.
+
+- `none`: the connection uses no credential, and `credential_reference` must be empty.
+- `environment`: `credential_reference` names a non-empty environment variable.
+- `platform`: `credential_reference` uses `binding:`, `secret:`, or `vault:` followed by a non-secret platform identifier.
+
+credential_reference means a non-secret environment-variable name or platform-managed binding identifier; it never contains credential material.
+
+write_authorization_check means the fail-closed predicate that must pass for the exact external write target and side effect before a provider call.
+
+external_service_gate means the common pre-call validation procedure in mcp-ops that denies an external operation when any required policy check fails.
+
+`configured_read_only` requires a non-empty `connection`, a valid `authentication` and `credential_reference` pair, and non-empty `allowed_reads`.
 
 `configured_write_capable` requires all `configured_read_only` fields plus non-empty `allowed_writes`, `write_authorization_rule`, and `dry_run_or_local_validation`.
 
@@ -82,11 +95,17 @@ Before any external read or write, the matching service entry in `docs/agent/ext
 ## Integration Checklist
 
 1. Read `docs/agent/external-services.yaml`.
-2. Confirm the service state authorizes the intended read or write class.
-3. Confirm `connection` and `credential_env` are non-empty before any external call.
-4. Confirm the requested operation is listed in `allowed_reads` or `allowed_writes`.
-5. Run the documented dry-run or local validation before any write-capable flow.
-6. Use `unavailable_fallback` when the service is offline or credentials are absent.
+2. Run `python3 scripts/check-external-service-policy.py check`.
+3. Confirm the service state authorizes the intended read or write class.
+4. Confirm `connection`, `authentication`, and `credential_reference` satisfy the required-field rules.
+5. Confirm the requested operation is listed in `allowed_reads` or `allowed_writes`.
+6. Run `python3 scripts/check-external-service-policy.py authorize <service> read <operation>` before a read.
+7. For a write, apply the common external-service gate from `.codex/skills/mcp-ops/SKILL.md`.
+8. Require the exact target and side effect to match current user intent or the lifecycle command named by `write_authorization_rule`.
+9. Run `python3 scripts/check-external-service-policy.py authorize <service> write <operation> --authorization-rule "<exact configured rule>"`.
+10. Run the documented dry-run or local validation before the provider call.
+11. Deny the call when any check is missing, ambiguous, stale, or mismatched.
+12. Use `unavailable_fallback` when the service is offline or credentials are absent.
 
 ## Local Configuration
 

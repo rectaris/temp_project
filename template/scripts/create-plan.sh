@@ -65,27 +65,31 @@ cat >"$path" <<EOF
 # $summary
 
 status: $( [ "$kind" = "active" ] && echo in_progress || echo backlog )
-task_type: environment_data_flow
+task_types:
+  - environment_data_flow
 review_class: B
 human_design_required: no
 human_approval_status: not_required
-target_files:
+write_scope:
   - TBD
+context_files:
+  - none
 target_json:
   - none
 required_specs:
   - docs/agent/SPEC_VALIDATION.md
   - docs/agent/SPEC_GIT_WORKFLOW.md
   - docs/agent/SPEC_FILE_MANAGEMENT.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/agent/SPEC_DEVELOPMENT_FLOW.md
   - docs/agent/SPEC_ENVIRONMENT.md
+  - docs/agent/PROJECT_ENVIRONMENT.md
 validation:
   - git diff --check
 acceptance:
   - TBD
 acceptance_focus:
   - TBD
-expected_output: full-implementation
 checked_summary_ja: $summary_ja
 
 ## Problem

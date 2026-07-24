@@ -24,6 +24,12 @@ Before reporting completion:
 
 Prefer checks that prove the rule directly. Do not use a green broad command as evidence unless it covers the changed behavior.
 
+## Template Package Syntax Checks
+
+- `python3 scripts/check-yaml.py .`: parses root and rendered YAML with the PyYAML version pinned in `uv.lock`.
+- `scripts/install-actionlint.sh <temporary-directory>`: downloads actionlint 1.7.12 and verifies the release archive checksum.
+- `REQUIRE_ACTIONLINT=1 scripts/lint-github-actions.sh <repository>`: validates GitHub Actions workflows and fails if the pinned actionlint is unavailable.
+
 ## Generated Selectors
 
 Generated repositories may include:

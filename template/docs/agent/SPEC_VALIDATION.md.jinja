@@ -47,6 +47,7 @@ Before final report:
 - Use `scripts/validate-changes.py` to select the smallest complete validation set from changed files.
 - It inspects staged files first, then unstaged files, unless `--all` is supplied.
 - Use `--staged` to force staged-only selection.
+- Use `--all` to inspect staged, unstaged, and untracked paths and to run whitespace checks against both staged and unstaged diffs.
 - Use `--print-only` to review selected commands without running them.
 - Selected commands are checked by `scripts/plan_validation_commands.py` before execution.
 - Treat selected commands as a floor, not a ceiling; add focused tests when risk requires it.
@@ -56,6 +57,7 @@ Before final report:
 - Use `python3 scripts/plan_validation_commands.py check-plan <plan>` to validate a plan manifest's `validation:` command list.
 - Use `python3 scripts/plan_validation_commands.py run-plan <plan>` only when the active plan's validation list is trusted and ready to execute.
 - Validation commands are parsed without a shell. Shell metacharacters, environment assignments, absolute paths, parent-directory traversal, and unsupported quoting are rejected.
+- The built-in argv allowlist covers the declared validation script families, including `npm run typecheck` and `python3 -m pytest`.
 - Add project-specific commands by editing `scripts/plan_validation_commands.py` in the generated project and documenting the rule here.
 
 ## Optional Checks

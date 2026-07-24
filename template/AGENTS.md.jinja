@@ -1,6 +1,6 @@
-[% set mcp_state = "documented" if ((mcp_policy_mode is defined and mcp_policy_mode == "document_optional") or (use_mcp_policy is defined and use_mcp_policy)) else "disabled" %]
-[% set linear_state = "documented" if ((linear_sync_mode is defined and linear_sync_mode == "document_optional") or (use_linear_sync is defined and use_linear_sync)) else "disabled" %]
-[% set graph_state = "documented" if ((graph_memory_mode is defined and graph_memory_mode == "document_optional") or (use_graph_memory is defined and use_graph_memory)) else "disabled" %]
+[% set mcp_state = "documented" if mcp_policy_mode == "document_optional" else "disabled" %]
+[% set linear_state = "documented" if linear_sync_mode == "document_optional" else "disabled" %]
+[% set graph_state = "documented" if graph_memory_mode == "document_optional" else "disabled" %]
 # AGENTS.md
 
 Agent entrypoint for `[[ project_slug ]]`.
@@ -24,7 +24,8 @@ Agent entrypoint for `[[ project_slug ]]`.
 - SkillSpector mode: `[[ skillspector_mode ]]`
 - Structure scanner: installed by default
 - Generic Codex skills: installed by default
-- Local agent logs: `true`
+- Agent logging policy and local helper scripts: installed by default
+- Automatic hook event capture: enabled only when Codex hooks mode is `enable_local_logging`
 - Context compression helper: optional, Headroom-aware when available
 - External service policy states: MCP=`[[ mcp_state ]]`, Linear=`[[ linear_state ]]`, graph memory=`[[ graph_state ]]`
 

@@ -56,7 +56,11 @@ def add_command(commands: list[list[str]], command: list[str]) -> None:
 
 def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
     commands: list[list[str]] = []
-    add_command(commands, ["git", "diff", "--cached", "--check"] if diff_mode == "staged" else ["git", "diff", "--check"])
+    if diff_mode == "staged":
+        add_command(commands, ["git", "diff", "--cached", "--check"])
+    else:
+        add_command(commands, ["git", "diff", "--cached", "--check"])
+        add_command(commands, ["git", "diff", "--check"])
 
     shell_paths = [path for path in paths if path.endswith(".sh") and existing(path)]
     for path in shell_paths:

@@ -54,7 +54,11 @@ def add_command(commands: list[list[str]], command: list[str]) -> None:
 
 def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
     commands: list[list[str]] = []
-    add_command(commands, ["git", "diff", "--cached", "--check"] if diff_mode == "staged" else ["git", "diff", "--check"])
+    if diff_mode == "staged":
+        add_command(commands, ["git", "diff", "--cached", "--check"])
+    else:
+        add_command(commands, ["git", "diff", "--cached", "--check"])
+        add_command(commands, ["git", "diff", "--check"])
 
     shell_paths = [path for path in paths if path.endswith(".sh") and existing(path)]
     for path in shell_paths:
@@ -75,6 +79,14 @@ def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
 
     if any(path.startswith(".github/") or path.startswith("scripts/") for path in paths) and existing("scripts/security-static-check.py"):
         add_command(commands, ["python3", "scripts/security-static-check.py"])
+
+    external_service_paths = {
+        "docs/agent/external-services.yaml",
+        "docs/agent/SPEC_EXTERNAL_SERVICES.md",
+        "scripts/check-external-service-policy.py",
+    }
+    if any(path in external_service_paths for path in paths) and existing("scripts/check-external-service-policy.py"):
+        add_command(commands, ["python3", "scripts/check-external-service-policy.py", "check"])
 
     if any(path in {"AGENTS.md", "docs/agent/spec-index.yaml"} or path.startswith("docs/agent/") for path in paths) and existing("scripts/structure-map.py"):
         add_command(commands, ["python3", "scripts/structure-map.py", "--check"])

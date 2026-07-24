@@ -22,6 +22,19 @@ PLAN_DIRS = [*OPEN_PLAN_DIRS, CHECKED_DIR]
 
 REQUIRED_FIELDS = (
     "status",
+    "task_types",
+    "review_class",
+    "human_design_required",
+    "human_approval_status",
+    "write_scope",
+    "context_files",
+    "required_specs",
+    "validation",
+    "acceptance",
+    "checked_summary_ja",
+)
+LEGACY_REQUIRED_FIELDS = (
+    "status",
     "task_type",
     "review_class",
     "human_design_required",
@@ -41,9 +54,13 @@ SCALAR_KEYS = {
     "human_approval_status",
     "expected_output",
     "checked_summary_ja",
+    "completion_deferred_reason",
 }
 LIST_KEYS = {
+    "task_types",
     "target_files",
+    "write_scope",
+    "context_files",
     "target_json",
     "required_specs",
     "validation",
@@ -51,22 +68,22 @@ LIST_KEYS = {
     "acceptance_focus",
 }
 CONTEXT_FIELDS = (
-    "TASK_TYPE",
+    "TASK_TYPES",
     "REQUIRED_SPECS",
-    "TARGET_FILES",
+    "WRITE_SCOPE",
+    "CONTEXT_FILES",
     "TARGET_JSON",
     "VALIDATION",
-    "EXPECTED_OUTPUT",
 )
 CONTEXT_KEYS = {
-    "TASK_TYPE": "task_type",
+    "TASK_TYPES": "task_types",
     "REQUIRED_SPECS": "required_specs",
-    "TARGET_FILES": "target_files",
+    "WRITE_SCOPE": "write_scope",
+    "CONTEXT_FILES": "context_files",
     "TARGET_JSON": "target_json",
     "VALIDATION": "validation",
-    "EXPECTED_OUTPUT": "expected_output",
 }
-CONTEXT_REQUIRED = ("task_type", "target_files", "required_specs", "validation", "expected_output")
+CONTEXT_REQUIRED = ("task_types", "write_scope", "context_files", "required_specs", "validation")
 class PlanError(ValueError):
     """Raised for invalid plan docs or indexes."""
 
@@ -95,22 +112,64 @@ def atomic_write_text(path: Path, content: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def task_type_values() -> set[str]:
+def routing_contract() -> tuple[set[str], dict[str, set[str]]]:
     if not SPEC_INDEX.is_file():
-        return set()
-    values: set[str] = set()
+        return set(), {}
+    default_reads: set[str] = set()
+    route_requirements: dict[str, set[str]] = {}
+    section = ""
     in_task_types = False
+    current_route = ""
     for line in SPEC_INDEX.read_text(encoding="utf-8").splitlines():
+        if line == "default_reads:":
+            section = "default_reads"
+            in_task_types = False
+            current_route = ""
+            continue
         if line == "task_types:":
+            section = "task_types"
             in_task_types = True
+            current_route = ""
             continue
         if in_task_types and line and not line.startswith(" "):
             break
-        if in_task_types:
-            match = re.fullmatch(r"  ([a-z][a-z0-9_]*):", line)
+        if section == "default_reads":
+            match = re.fullmatch(r"  - (.+)", line)
             if match:
-                values.add(match.group(1))
-    return values
+                default_reads.add(match.group(1))
+            continue
+        if not in_task_types:
+            continue
+        route_match = re.fullmatch(r"  ([a-z][a-z0-9_]*):", line)
+        if route_match:
+            current_route = route_match.group(1)
+            route_requirements[current_route] = set()
+            section = "task_types"
+            continue
+        if current_route and line == "    required:":
+            section = "required"
+            continue
+        if current_route and section == "required":
+            required_match = re.fullmatch(r"      - (.+)", line)
+            if required_match:
+                route_requirements[current_route].add(required_match.group(1))
+                continue
+            if line and not line.startswith("      "):
+                section = "task_types"
+    return default_reads, route_requirements
+
+
+def task_type_values() -> set[str]:
+    _, route_requirements = routing_contract()
+    return set(route_requirements)
+
+
+def required_specs_for(task_types: list[str]) -> set[str]:
+    default_reads, route_requirements = routing_contract()
+    required = set(default_reads)
+    for task_type in task_types:
+        required.update(route_requirements.get(task_type, set()))
+    return required
 
 
 def parse_manifest(path: Path) -> dict[str, str | list[str]]:
@@ -285,6 +344,8 @@ def set_active_status(plan_id: str, path: str, old_status: str, new_status: str)
 
 
 def complete_transition(plan_id: str, path: str, old_status: str) -> None:
+    if old_status != "in_progress":
+        raise PlanError(f"completion transition requires in_progress status, got: {old_status}")
     target = ROOT / path
     if target.parent != ACTIVE_DIR:
         raise PlanError(f"active plan path is outside active directory: {path}")

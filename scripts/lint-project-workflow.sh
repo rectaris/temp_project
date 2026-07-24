@@ -39,6 +39,7 @@ python3 "$root/scripts/check-copier-template.py"
 python3 "$root/scripts/check-root-agent-policy.py" --self-test
 python3 "$root/tests/test-hooks.py"
 python3 "$root/tests/test-referent-contract.py"
+python3 "$root/tests/test-validation-tools.py"
 "$root/tests/root-plan-lifecycle.sh"
 
 echo "workflow package lint passed"

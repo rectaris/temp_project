@@ -7,7 +7,14 @@ case "$src" in docs/plan/active/[0-9][0-9][0-9]-*.md) ;; *) echo "expected activ
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
 
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
-case "$status" in in_progress|deferred) ;; *) echo "cannot mark plan ready from status: $status" >&2; exit 1 ;; esac
+case "$status" in
+  in_progress) ;;
+  deferred)
+    echo "cannot mark deferred plan ready; return it to in_progress after its deferral condition is resolved: $src" >&2
+    exit 1
+    ;;
+  *) echo "cannot mark plan ready from status: $status" >&2; exit 1 ;;
+esac
 
 if grep -Eq '^[[:space:]]*[-*+][[:space:]]+\[ \]' "$src"; then
   echo "cannot mark plan ready: unchecked tasks remain in $src" >&2

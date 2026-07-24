@@ -6,6 +6,14 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/project-agent-workflow-smoke.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 . "$root/tests/lib-copier.sh"
 
+run_root_python() {
+  if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
+    (cd "$root" && UV_CACHE_DIR="$root/.uv-cache" uv run python "$@")
+  else
+    python3 "$@"
+  fi
+}
+
 python3 "$root/scripts/check-copier-template.py" >/dev/null
 
 if ! copier_available; then
@@ -26,6 +34,11 @@ render_fixture() {
   run_copier "$@" >/dev/null
 }
 
+render_defaults() {
+  out=$1
+  run_copier copy -q -f --defaults --vcs-ref HEAD "$root" "$out" >/dev/null
+}
+
 assert_generated_inventory() {
   out=$1
   fixture=$2
@@ -41,7 +54,13 @@ run_plan_lifecycle_smoke() {
   (cd "$out" && scripts/create-plan.sh active sample --summary "Sample work." --summary-ja "サンプル作業を行う。" >/dev/null)
   (cd "$out" && test -f docs/plan/active/001-sample.md)
   (cd "$out" && python3 scripts/lint-plan-docs.py)
-  (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPE=environment_data_flow$')
+  (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPES=environment_data_flow$')
+  (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^WRITE_SCOPE=TBD$')
+  (cd "$out" && scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^CONTEXT_FILES=$')
+  if grep -q '^expected_output:' "$out/docs/plan/active/001-sample.md"; then
+    echo "create-plan emitted removed expected_output field" >&2
+    exit 1
+  fi
   (cd "$out" && scripts/clean-handoffs.sh --dry-run >/dev/null)
   sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$out/docs/plan/active/001-sample.md"
   printf 'smoke validation passed\n' >>"$out/docs/plan/active/001-sample.md"
@@ -174,6 +193,32 @@ run_plan_fail_closed_smoke() {
 
   (cd "$out" && python3 scripts/lint-plan-docs.py --remove-active "$mapping_id")
   rm "$out/$mapping_plan"
+
+  unsafe_validation=$(cd "$out" && scripts/create-plan.sh active unsafe-validation --summary "Unsafe validation." --summary-ja "危険な検証コマンドを拒否する。")
+  unsafe_base=$(basename "$unsafe_validation")
+  unsafe_id=${unsafe_base%%-*}
+  sed -i 's|  - git diff --check|  - rm -rf .|' "$out/$unsafe_validation"
+  if (cd "$out" && python3 scripts/lint-plan-docs.py --check-manifest "$unsafe_validation" >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted an unsafe validation command" >&2
+    exit 1
+  fi
+  (cd "$out" && python3 scripts/lint-plan-docs.py --remove-active "$unsafe_id")
+  rm "$out/$unsafe_validation"
+
+  deferred_plan=$(cd "$out" && scripts/create-plan.sh active deferred-work --summary "Deferred work." --summary-ja "延期状態を確認する。")
+  deferred_base=$(basename "$deferred_plan")
+  deferred_id=${deferred_base%%-*}
+  sed -i 's/^status: in_progress$/status: deferred/; /^checked_summary_ja:/a completion_deferred_reason: Waiting for an external prerequisite.' "$out/$deferred_plan"
+  sed -i "s/^$deferred_id\t\(.*\)\tin_progress$/$deferred_id\t\1\tdeferred/" "$out/docs/plan/plan.md"
+  (cd "$out" && python3 scripts/lint-plan-docs.py)
+  if (cd "$out" && scripts/complete-plan.sh "$deferred_plan" >/dev/null 2>&1); then
+    echo "complete-plan archived deferred work" >&2
+    exit 1
+  fi
+  grep -q '^status: deferred$' "$out/$deferred_plan"
+  grep -q "^$deferred_id[[:space:]]$deferred_plan[[:space:]]deferred$" "$out/docs/plan/plan.md"
+  (cd "$out" && python3 scripts/lint-plan-docs.py --remove-active "$deferred_id")
+  rm "$out/$deferred_plan"
 }
 
 run_referent_contract_smoke() {
@@ -193,11 +238,51 @@ run_referent_contract_smoke() {
   (cd "$out" && python3 scripts/referent-contract.py semantic-diff "$contract" | grep -q 'Smoke term')
 }
 
+run_external_policy_smoke() {
+  out=$1
+  policy="$out/.agent-artifacts/external-services-configured.yaml"
+  mkdir -p "$out/.agent-artifacts"
+  cat >"$policy" <<'EOF_EXTERNAL_POLICY'
+version: 1
+external_services:
+  example:
+    state: configured_write_capable
+    connection: "local-example"
+    authentication: environment
+    credential_reference: "EXAMPLE_TOKEN"
+    allowed_reads:
+      - issue.read
+    allowed_writes:
+      - issue.update
+    write_authorization_rule: "explicit-user-request"
+    dry_run_or_local_validation: "preview"
+    unavailable_fallback: "Keep the change local."
+EOF_EXTERNAL_POLICY
+  (cd "$out" && python3 scripts/check-external-service-policy.py --policy "$policy" check)
+  (cd "$out" && python3 scripts/check-external-service-policy.py --policy "$policy" authorize example read issue.read)
+  (cd "$out" && python3 scripts/check-external-service-policy.py --policy "$policy" authorize example write issue.update --authorization-rule explicit-user-request)
+  if (cd "$out" && python3 scripts/check-external-service-policy.py --policy "$policy" authorize example write issue.update --authorization-rule stale-rule >/dev/null 2>&1); then
+    echo "external-service validator accepted a mismatched write authorization rule" >&2
+    exit 1
+  fi
+  sed -i 's|authentication: environment|authentication: platform|; s|credential_reference: "EXAMPLE_TOKEN"|credential_reference: "secret:example"|' "$policy"
+  (cd "$out" && python3 scripts/check-external-service-policy.py --policy "$policy" check)
+  sed -i 's|credential_reference: "secret:example"|credential_reference: "ghp_abcdefghijklmnopqrstuvwxyz1234567890"|' "$policy"
+  if (cd "$out" && python3 scripts/check-external-service-policy.py --policy "$policy" check >/dev/null 2>&1); then
+    echo "external-service validator accepted credential material as a platform identifier" >&2
+    exit 1
+  fi
+}
+
 for fixture in "$root"/tests/fixtures/*.answers.yml; do
   name=$(basename "$fixture" .answers.yml)
   out="$tmp/$name"
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
+  run_root_python "$root/tests/assert-generated-semantics.py" "$out"
+  run_root_python "$root/scripts/check-yaml.py" "$out" >/dev/null
+  REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
+  (cd "$out" && python3 scripts/check-external-service-policy.py check)
   git -C "$out" init -b main >/dev/null
   git -C "$out" diff --check
   git -C "$out" check-ignore .agent-logs/sample/manifest.json >/dev/null
@@ -227,7 +312,35 @@ while IFS="$tab" read -r case_name primary_language codex_hooks_mode skillspecto
   } >"$fixture"
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
+  run_root_python "$root/tests/assert-generated-semantics.py" "$out"
+  run_root_python "$root/scripts/check-yaml.py" "$out" >/dev/null
+  REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
 done <"$root/tests/fixtures/copier-pairwise.tsv"
+
+default_out="$tmp/defaults"
+render_defaults "$default_out"
+run_root_python "$root/tests/assert-generated-semantics.py" "$default_out"
+run_root_python "$root/scripts/check-yaml.py" "$default_out" >/dev/null
+(cd "$default_out" && python3 scripts/check-external-service-policy.py check)
+run_root_python - "$default_out/.copier-answers.yml" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+answers = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "primary_language": "mixed",
+    "codex_hooks_mode": "install_templates",
+    "skillspector_mode": "disabled",
+    "mcp_policy_mode": "disabled",
+    "linear_sync_mode": "disabled",
+    "graph_memory_mode": "disabled",
+    "ci_autofix_mode": "disabled",
+}
+actual = {key: answers.get(key) for key in expected}
+if actual != expected:
+    raise SystemExit(f"default Copier answers changed: expected={expected}, actual={actual}")
+PY
 
 assert_rejected_input() {
   label=$1
@@ -256,9 +369,23 @@ assert_rejected_input multiline-purpose project_purpose "$multiline_purpose"
 run_plan_lifecycle_smoke "$tmp/typescript"
 run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
+run_external_policy_smoke "$tmp/typescript"
+
+bad_design=$(cd "$tmp/typescript" && scripts/create-plan.sh backlog bad-human-design --summary "Bad human design." --summary-ja "設計承認の不整合を確認する。")
+sed -i 's/^human_design_required: .*/human_design_required: yes/' "$tmp/typescript/$bad_design"
+if (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py >/dev/null 2>&1); then
+  echo "lint-plan-docs accepted human design outside Class C" >&2
+  exit 1
+fi
+sed -i 's/^review_class: .*/review_class: C/' "$tmp/typescript/$bad_design"
+if (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py >/dev/null 2>&1); then
+  echo "lint-plan-docs accepted Class C with human_approval_status: not_required" >&2
+  exit 1
+fi
+rm "$tmp/typescript/$bad_design"
 
 class_c=$(cd "$tmp/typescript" && scripts/create-plan.sh backlog class-c-approval --summary "Class C approval." --summary-ja "承認待ち計画を確認する。")
-sed -i 's/^review_class: .*/review_class: C/; s/^human_approval_status: .*/human_approval_status: pending/' "$tmp/typescript/$class_c"
+sed -i 's/^review_class: .*/review_class: C/; s/^human_design_required: .*/human_design_required: yes/; s/^human_approval_status: .*/human_approval_status: pending/' "$tmp/typescript/$class_c"
 (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
 if (cd "$tmp/typescript" && scripts/promote-plan.sh "$class_c" >/dev/null 2>&1); then
   echo "promote-plan accepted an unapproved class C plan" >&2
@@ -271,6 +398,25 @@ sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$tmp/typescript/$class_c_active"
 printf 'class C lifecycle validation passed\n' >>"$tmp/typescript/$class_c_active"
 (cd "$tmp/typescript" && scripts/complete-plan.sh "$class_c_active" >/dev/null)
 (cd "$tmp/typescript" && scripts/finalize-active-plan.sh "$class_c_active" >/dev/null)
+
+route_union=$(cd "$tmp/typescript" && scripts/create-plan.sh active route-union --summary "Route union." --summary-ja "複数ルートを確認する。")
+sed -i '/^review_class:/i\  - security' "$tmp/typescript/$route_union"
+if (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py >/dev/null 2>&1); then
+  echo "lint-plan-docs accepted a route union with missing required specs" >&2
+  exit 1
+fi
+sed -i '/^validation:/i\  - docs/agent/SPEC_SECURITY.md' "$tmp/typescript/$route_union"
+(cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
+sed -i '/^context_files:/{n;s/  - none/  - TBD/;}' "$tmp/typescript/$route_union"
+if (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py >/dev/null 2>&1); then
+  echo "lint-plan-docs accepted overlapping write_scope and context_files" >&2
+  exit 1
+fi
+sed -i '/^context_files:/{n;s/  - TBD/  - none/;}' "$tmp/typescript/$route_union"
+route_base=$(basename "$route_union")
+route_id=${route_base%%-*}
+(cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py --remove-active "$route_id")
+rm "$tmp/typescript/$route_union"
 
 good_plan=$(cd "$tmp/typescript" && scripts/create-plan.sh active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
 (cd "$tmp/typescript" && python3 scripts/lint-plan-docs.py)
@@ -359,7 +505,11 @@ grep -q 'state: documented' "$tmp/typescript/docs/agent/external-services.yaml"
 grep -q 'Codex helper agents: installed by default' "$tmp/docs/AGENTS.md"
 grep -q 'Local workflow modules: installed by default and activated by task routing' "$tmp/docs/AGENTS.md"
 grep -q 'planning_style: "active_backlog_checked"' "$tmp/docs/docs/agent/spec-index.yaml"
-grep -q 'max_threads = 4' "$tmp/docs/.codex/config.toml"
+grep -q 'max_concurrent_threads_per_session = 4' "$tmp/docs/.codex/config.toml"
+if grep -q 'max_threads\|max_depth' "$tmp/docs/.codex/config.toml"; then
+  echo "generated project config used legacy or unsupported agent settings" >&2
+  exit 1
+fi
 if grep -q '^model = ' "$tmp/docs/.codex/config.toml"; then
   echo "generated project config pinned a project-wide model" >&2
   exit 1

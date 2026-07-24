@@ -1,6 +1,5 @@
 name = "change_reviewer"
 description = "Read-only reviewer focused on correctness, regressions, validation gaps, security-sensitive issues, and spec conflicts."
-model = "gpt-5.6-sol"
 model_reasoning_effort = "max"
 sandbox_mode = "read-only"
 

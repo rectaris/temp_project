@@ -9,12 +9,10 @@ Use this skill for Linear-backed plan, issue, status, comment, label, or sync wo
 
 ## Policy Gate
 
-1. Use `.codex/skills/mcp-ops/SKILL.md` first when it exists.
-2. Read `docs/agent/SPEC_EXTERNAL_SERVICES.md` and `docs/agent/external-services.yaml`.
-3. Locate `external_services.linear_sync`.
-4. If the state is `disabled` or `documented`, do not read or write Linear. Keep the local plan workflow active and record sync deferral only when it affects completion.
-5. If the state is `configured_read_only`, read only listed `allowed_reads`.
-6. If the state is `configured_write_capable`, writes still require explicit user intent or a documented lifecycle command.
+1. Apply `.codex/skills/mcp-ops/SKILL.md` as the common external-service gate.
+2. Use `external_services.linear_sync` and classify the exact Linear operation as a read or write.
+3. If the common gate denies the call, do not read or write Linear. Keep the local plan workflow active and record sync deferral only when it affects completion.
+4. Apply the Linear-specific rules below only after the common gate passes.
 
 Do not assume workspace, team, status, label, or project identifiers. They must come from the project-local policy or a linked project spec.
 
@@ -27,7 +25,7 @@ Do not assume workspace, team, status, label, or project identifiers. They must 
 
 ## Write Guardrails
 
-- Use dry-run or local payload validation before any write-capable flow.
+- Require the common write-authorization check to pass for the exact issue, project, comment, label, assignee, or status change.
 - Preserve human-authored issue content outside managed regions.
 - Use deterministic source markers or unique local plan IDs for duplicate prevention.
 - Fail closed when credentials, target team/status, labels, permissions, managed-region markers, or duplicate-prevention checks cannot be confirmed.

@@ -3,7 +3,7 @@
 ## Files
 
 - `docs/plan/plan.md`: short active-work index.
-- `docs/plan/active/*.md`: active executable tasks.
+- `docs/plan/active/*.md`: open executable tasks, including started tasks that are explicitly deferred while an unresolved condition remains.
 - `docs/plan/backlog/*.md`: future or condition-waiting work.
 - `docs/plan/checked.md`: completed-work index.
 - `docs/plan/checked/YYYY/MM/01-15/*.md`: durable completion records completed in the first half of a month.
@@ -67,15 +67,15 @@
 Required active/backlog fields:
 
 - `status`
-- `task_type`
+- `task_types`
 - `review_class`
 - `human_design_required`
 - `human_approval_status`
-- `target_files`
+- `write_scope`
+- `context_files`
 - `required_specs`
 - `validation`
 - `acceptance`
-- `expected_output`
 - `checked_summary_ja`
 
 Optional active/backlog fields:
@@ -90,28 +90,37 @@ Rules:
 - Class C work requires explicit human approval before implementation.
 - `human_design_required` is `yes` only when material architecture, product frame, story, or visual philosophy is in scope.
 - `human_approval_status` is `not_required`, `pending`, or `approved`.
-- Class C backlog or deferred plans may use `pending`, but promotion to active implementation requires `approved`.
-- `task_type` must match one route key in `docs/agent/spec-index.yaml`.
-- `target_files` should list planned edit or context paths.
-- `target_json` is optional structured context. JSON edit targets must also appear in `target_files`.
+- Class C plans must use `pending` or `approved`; backlog or deferred plans may remain `pending`, but promotion to active implementation requires `approved`.
+- Every `task_types` entry must match a route key in `docs/agent/spec-index.yaml`.
+- When work crosses categories, list every matching route in `task_types`.
+- `required_specs` must contain `default_reads` plus the union of every listed route's `required` entries.
+- Add matching conditional specs when the task or touched paths satisfy their conditions.
+- `write_scope` lists paths the implementing agent may edit.
+- `context_files` lists additional read-only paths needed to perform the work; use `none` when no additional paths are needed.
+- A path must not appear in both `write_scope` and `context_files`.
+- `target_json` is optional structured context. JSON edit targets must also appear in `write_scope`.
 - `validation` should list commands needed for completion.
 - Validate plan command lists with `python3 scripts/plan_validation_commands.py check-plan <plan>` when plan validation entries are edited manually.
+- Validate one manifest and its routed required-spec union with `python3 scripts/lint-plan-docs.py --check-manifest <plan>`.
 - Keep validation entries as single commands, not shell pipelines or compound commands.
 - `acceptance_focus` is optional and should stay to one to three short points.
 - `checked_summary_ja` is the human-facing Japanese one-line completion summary.
 - Keep active-plan bodies parseable by agents. English is preferred for manifest values and operational detail; Japanese is fine for user-facing summaries, domain terms, and `checked_summary_ja`.
-- `completion_deferred_reason` is only for intentionally incomplete work or concrete external blockers.
+- `completion_deferred_reason` is required when `status` is `deferred` and records the unresolved condition that keeps the plan open.
+- `human_design_required: yes` requires `review_class: C`.
 
 Lifecycle states:
 
 - Use `status: in_progress` for ongoing work and `status: deferred` for intentionally postponed work.
+- A deferred plan remains open and cannot transition to `ready_to_archive`; return it to `in_progress` only after its deferred condition is resolved.
 - Use `status: ready_to_archive` only after acceptance and validation evidence are recorded.
 - `ready_to_archive` is the only active-plan state that blocks the completion gate.
 - Set `ready_to_archive` with `scripts/complete-plan.sh`, then use `scripts/finalize-active-plan.sh` as the only archive transition.
-- `complete-plan.sh` fails while task checkboxes remain unchecked or `Validation Notes` are empty or pending.
+- `complete-plan.sh` fails while the manifest is invalid, task checkboxes remain unchecked, or `Validation Notes` are empty or pending.
 - `finalize-active-plan.sh` writes `status: checked` into the archived record.
 - Archive lint accepts legacy `completed` and `ready_to_archive` values created before terminal-status enforcement; new archives must use `checked`.
 - Finalization requires a non-empty `checked_summary_ja`, a non-empty `Validation Notes` section, a matching active index row, and a non-colliding date-based archive path.
+- Checked archives using the manifest field names generated before `task_types`, `write_scope`, and `context_files` remain readable as legacy history; open plans must use the current manifest.
 
 ## Handoff Queue
 
@@ -137,6 +146,7 @@ Lifecycle states:
 - Machine-readable workflow status: `scripts/workflow-status.sh --json`
 - Preview handoff cleanup: `scripts/clean-handoffs.sh --dry-run`
 - Apply handoff cleanup after durable records are saved: `scripts/clean-handoffs.sh --apply`
+- Single-plan manifest check: `python3 scripts/lint-plan-docs.py --check-manifest docs/plan/active/NNN-slug.md`
 - Plan lint wrapper: `scripts/lint-plan-docs.sh`
 - Plan format wrapper: `scripts/format-plan-docs.sh --check`
 

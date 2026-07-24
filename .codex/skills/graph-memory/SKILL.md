@@ -9,12 +9,10 @@ Use this skill for durable graph memory, including Neo4j-backed memory, candidat
 
 ## Policy Gate
 
-1. Use `.codex/skills/mcp-ops/SKILL.md` first when it exists.
-2. Read `docs/agent/SPEC_EXTERNAL_SERVICES.md` and `docs/agent/external-services.yaml`.
-3. Locate `external_services.graph_memory`.
-4. If the state is `disabled` or `documented`, do not read or write graph memory. Use repository files, checked plans, validation output, and Git history.
-5. If the state is `configured_read_only`, use only listed `allowed_reads`.
-6. If the state is `configured_write_capable`, writes still require explicit user intent or a documented project workflow.
+1. Apply `.codex/skills/mcp-ops/SKILL.md` as the common external-service gate.
+2. Use `external_services.graph_memory` and classify the exact graph operation as a read or write.
+3. If the common gate denies the call, do not read or write graph memory. Use repository files, checked plans, validation output, and Git history.
+4. Apply the graph-memory-specific rules below only after the common gate passes.
 
 Do not assume a project identifier, node labels, relationship types, or property names. They must come from project-local policy or a linked graph-memory spec.
 
@@ -28,6 +26,7 @@ Do not assume a project identifier, node labels, relationship types, or property
 
 ## Write Boundary
 
+- Require the common write-authorization check to pass for the exact project, node, relationship, property, and mutation.
 - Prefer candidate-memory proposals from reviewed repository artifacts.
 - Exclude secrets, credentials, private config, raw personal data, generated artifacts, build outputs, temporary logs, and speculative conclusions.
 - Record important implementation decisions in repository files even when graph memory is updated.

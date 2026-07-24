@@ -18,6 +18,7 @@ status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
   echo "cannot finalize $src: status is $status, expected ready_to_archive" >&2
   exit 1
 }
+python3 scripts/lint-plan-docs.py --check-manifest "$src"
 grep -q '^checked_summary_ja: .\+' "$src" || {
   echo "cannot finalize $src: missing non-empty checked_summary_ja" >&2
   exit 1

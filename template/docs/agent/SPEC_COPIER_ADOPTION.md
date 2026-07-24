@@ -32,14 +32,19 @@ Treat both forms as unresolved changes.
 
 Before committing an adoption or update:
 
-1. Search changed files for `<<<<<<<`, `=======`, and `>>>>>>>` markers.
-2. Inspect every `*.rej` file and compare it with the destination file.
-3. Preserve stronger project-owned rules and protected files while merging generic template changes.
-4. Remove a reject file only after its useful content has been merged or explicitly declined.
-5. Run `git diff --check` and the repository validation matrix.
+1. Run `python3 scripts/migrate-legacy-template-files.py` after `copier update`.
+2. If the migration helper reports a conflict, keep the modified legacy file and review it manually.
+3. Search changed files for `<<<<<<<`, `=======`, and `>>>>>>>` markers.
+4. Inspect every `*.rej` file and compare it with the destination file.
+5. Preserve stronger project-owned rules and protected files while merging generic template changes.
+6. Remove a reject file only after its useful content has been merged or explicitly declined.
+7. Run `git diff --check` and the repository validation matrix.
 
 For direct adoption into a mature repository, render into a temporary directory, review a recursive diff against the repository, and copy or merge only accepted paths.
 Do not use a force-copy command as a substitute for this review.
+
+Existing open plans are project-owned and are not rewritten by Copier or the legacy-file migration helper.
+When adopting the current plan schema, manually replace `task_type` with a `task_types` list, split `target_files` into non-overlapping `write_scope` and `context_files` lists, remove `expected_output`, and include the required-spec union for every listed route.
 
 ## Merge Boundaries
 

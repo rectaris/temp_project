@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import planlib
+import plan_validation_commands
 
 
 ROOT = planlib.ROOT
@@ -107,8 +108,34 @@ def lint_checked_index() -> None:
 
 
 def lint_manifest(path: Path) -> None:
+    if not path.is_absolute():
+        path = planlib.ROOT / path
+    text = path.read_text(encoding="utf-8")
+    parsed = planlib.parse_manifest(path)
+    is_checked = planlib.CHECKED_DIR in path.parents
+    is_legacy_checked = bool(
+        is_checked
+        and not parsed.get("task_types")
+        and planlib.manifest_scalar(parsed, "task_type")
+    )
+    if not is_legacy_checked:
+        legacy_fields = [
+            field
+            for field in ("task_type", "target_files", "expected_output")
+            if re.search(rf"^{field}:", text, flags=re.MULTILINE)
+        ]
+        if legacy_fields:
+            fail(f"{path} uses removed manifest fields: {', '.join(legacy_fields)}")
+        inline_lists = [
+            field
+            for field in ("task_types", "write_scope", "context_files", "required_specs")
+            if re.search(rf"^{field}:[ \t]+\S", text, flags=re.MULTILINE)
+        ]
+        if inline_lists:
+            fail(f"{path} list fields must use indented list items: {', '.join(inline_lists)}")
     try:
-        values = planlib.require_manifest_fields(path)
+        fields = planlib.LEGACY_REQUIRED_FIELDS if is_legacy_checked else planlib.REQUIRED_FIELDS
+        values = planlib.require_manifest_fields(path, fields)
     except planlib.PlanError as exc:
         fail(str(exc))
     review_value = planlib.manifest_scalar(values, "review_class")
@@ -117,14 +144,20 @@ def lint_manifest(path: Path) -> None:
     design_value = planlib.manifest_scalar(values, "human_design_required")
     if design_value not in HUMAN_DESIGN_VALUES:
         fail(f"{path} human_design_required must be yes or no")
-    task_type = planlib.manifest_scalar(values, "task_type")
-    if task_type not in planlib.task_type_values():
-        fail(f"{path} task_type must match a route key from docs/agent/spec-index.yaml")
+    if is_legacy_checked:
+        task_types = [planlib.manifest_scalar(values, "task_type")]
+    else:
+        task_types = values["task_types"]
+        assert isinstance(task_types, list)
+    if len(task_types) != len(set(task_types)):
+        fail(f"{path} task_types must not contain duplicates")
+    unknown_task_types = sorted(set(task_types) - planlib.task_type_values())
+    if unknown_task_types:
+        fail(f"{path} task_types must match route keys from docs/agent/spec-index.yaml: {', '.join(unknown_task_types)}")
     approval_value = planlib.manifest_scalar(values, "human_approval_status")
     if approval_value not in HUMAN_APPROVAL_VALUES:
         fail(f"{path} human_approval_status must be not_required, pending, or approved")
     status_value = planlib.manifest_scalar(values, "status")
-    is_checked = planlib.CHECKED_DIR in path.parents
     allowed_statuses = CLOSED_STATUS_VALUES if is_checked else OPEN_STATUS_VALUES
     if status_value not in allowed_statuses:
         allowed = ", ".join(sorted(allowed_statuses))
@@ -133,8 +166,31 @@ def lint_manifest(path: Path) -> None:
         fail(f"{path} active plan status must be in_progress, deferred, or ready_to_archive")
     if path.parent == planlib.BACKLOG_DIR and status_value not in {"backlog", "deferred"}:
         fail(f"{path} backlog plan status must be backlog or deferred")
+    if not is_legacy_checked and review_value == "C" and approval_value not in {"pending", "approved"}:
+        fail(f"{path} class C plan requires human_approval_status: pending or approved")
     if review_value == "C" and status_value in {"in_progress", "ready_to_archive"} and approval_value != "approved":
         fail(f"{path} class C implementation requires human_approval_status: approved")
+    if not is_legacy_checked and design_value == "yes" and review_value != "C":
+        fail(f"{path} human_design_required: yes requires review_class: C")
+    if status_value == "deferred" and not planlib.manifest_scalar(values, "completion_deferred_reason").strip():
+        fail(f"{path} status: deferred requires completion_deferred_reason")
+    if not is_legacy_checked:
+        try:
+            plan_validation_commands.check_plan(path)
+        except plan_validation_commands.ValidationCommandError as exc:
+            fail(f"{path} validation command is invalid: {exc}")
+        required_specs = values["required_specs"]
+        assert isinstance(required_specs, list)
+        missing_specs = sorted(planlib.required_specs_for(task_types) - set(required_specs))
+        if missing_specs:
+            fail(f"{path} required_specs is missing routed specs: {', '.join(missing_specs)}")
+        write_scope = values["write_scope"]
+        context_files = values["context_files"]
+        assert isinstance(write_scope, list)
+        assert isinstance(context_files, list)
+        overlap = sorted((set(write_scope) - {"none"}) & (set(context_files) - {"none"}))
+        if overlap:
+            fail(f"{path} write_scope and context_files overlap: {', '.join(overlap)}")
     if not planlib.manifest_scalar(values, "checked_summary_ja").strip():
         fail(f"{path} checked_summary_ja must be non-empty")
 
@@ -177,6 +233,7 @@ def lint_manifests() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--next-id", action="store_true", help="print the next available plan id")
+    parser.add_argument("--check-manifest", metavar="PLAN", help="validate one plan manifest")
     parser.add_argument("--print-context", metavar="PLAN", help="print shell context for a plan manifest")
     parser.add_argument("--add-active", nargs=2, metavar=("ID", "PATH"), help="add or replace an active index row")
     parser.add_argument("--remove-active", metavar="ID", help="remove an active index row")
@@ -191,6 +248,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.next_id:
         print(next_id())
+        return 0
+    if args.check_manifest:
+        lint_manifest(Path(args.check_manifest))
         return 0
     if args.print_context:
         try:
@@ -225,6 +285,7 @@ def main() -> int:
         return 0
     if args.check_promotion:
         try:
+            lint_manifest(Path(args.check_promotion[1]))
             planlib.check_promotion(*args.check_promotion)
         except planlib.PlanError as exc:
             fail(str(exc))
