@@ -23,6 +23,9 @@ VALIDATE_CHANGE_MODULES = (
     ROOT / "scripts/validate-changes.py",
     ROOT / "template/.project-agent-workflow/scripts/validate-changes.py",
 )
+SECURITY_RULE_MODULE = ROOT / "template/.project-agent-workflow/scripts/security_rules.py"
+SECURITY_CHECK_MODULE = ROOT / "template/.project-agent-workflow/scripts/security-static-check.py"
+LEGACY_MIGRATOR = ROOT / "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py"
 
 
 def load_module(path: Path, name: str) -> ModuleType:
@@ -102,6 +105,12 @@ class PlanValidationCommandsTest(unittest.TestCase):
             ".project-agent-workflow/hooks/stop_review_gate.py "
             ".project-agent-workflow/scripts/validate-changes.py"
         )
+        template_module.parse_validation_command(
+            "python3 .project-agent-workflow/scripts/security-static-check.py --changed"
+        )
+        template_module.parse_validation_command(
+            "python3 .project-agent-workflow/scripts/security-static-check.py --managed"
+        )
 
     def test_root_accepts_namespaced_template_shell_syntax_check(self) -> None:
         root_module = load_module(PLAN_COMMAND_MODULES[0], "root_namespaced_shell")
@@ -134,21 +143,94 @@ class ValidateChangesTest(unittest.TestCase):
                     [["git", "diff", "--cached", "--check"]],
                 )
 
+    def test_changed_files_exclude_migration_backup(self) -> None:
+        for index, (plan_path, validate_path) in enumerate(
+            zip(PLAN_COMMAND_MODULES, VALIDATE_CHANGE_MODULES, strict=True)
+        ):
+            with self.subTest(module=validate_path):
+                dependency = load_module(plan_path, "plan_validation_commands")
+                sys.modules["plan_validation_commands"] = dependency
+                module = load_module(validate_path, f"validate_changes_migration_backup_{index}")
+
+                def fake_git(args: list[str]) -> list[str]:
+                    values = {
+                        ("diff", "--cached", "--name-only"): [],
+                        ("diff", "--name-only"): ["src/current.py"],
+                        ("ls-files", "--others", "--exclude-standard"): [
+                            ".project-agent-workflow-migration/v1-pre-namespace/scripts/old.sh",
+                            "docs/current.md",
+                        ],
+                    }
+                    return values.get(tuple(args), [])
+
+                module.git = fake_git
+                paths, mode = module.changed_files("all")
+                self.assertEqual(paths, ["docs/current.md", "src/current.py"])
+                self.assertEqual(mode, "all")
+
+    def test_managed_plan_validation_requires_managed_index(self) -> None:
+        for index, (plan_path, validate_path) in enumerate(
+            zip(PLAN_COMMAND_MODULES, VALIDATE_CHANGE_MODULES, strict=True)
+        ):
+            with self.subTest(module=validate_path), tempfile.TemporaryDirectory() as tmp:
+                dependency = load_module(plan_path, "plan_validation_commands")
+                sys.modules["plan_validation_commands"] = dependency
+                module = load_module(validate_path, f"validate_changes_plan_format_{index}")
+                repo = Path(tmp)
+                plan_index = repo / "docs/plan/plan.md"
+                plan_index.parent.mkdir(parents=True)
+                module.ROOT = repo
+                module.existing = lambda _path: True
+
+                plan_index.write_text("# アクティブプラン\n\n既存プロジェクト形式\n", encoding="utf-8")
+                legacy_commands = module.select_commands(["docs/plan/active/.gitkeep"], "all")
+                self.assertFalse(
+                    any(any(part.endswith("lint-plan-docs.py") for part in command) for command in legacy_commands)
+                )
+                self.assertFalse(
+                    any(any(part.endswith("format-plan-docs.py") for part in command) for command in legacy_commands)
+                )
+
+                plan_index.write_text("# Active Plan\n\nNo active development items.\n", encoding="utf-8")
+                managed_commands = module.select_commands(["docs/plan/active/.gitkeep"], "all")
+                self.assertTrue(
+                    any(any(part.endswith("lint-plan-docs.py") for part in command) for command in managed_commands)
+                )
+                self.assertTrue(
+                    any(any(part.endswith("format-plan-docs.py") for part in command) for command in managed_commands)
+                )
+
     def test_template_selects_external_service_policy_check(self) -> None:
         dependency = load_module(PLAN_COMMAND_MODULES[1], "plan_validation_commands")
         sys.modules["plan_validation_commands"] = dependency
         module = load_module(VALIDATE_CHANGE_MODULES[1], "template_validate_changes_external_service")
         managed_script = ".project-agent-workflow/scripts/check-external-service-policy.py"
-        module.existing = lambda path: path == managed_script
-        command = ["python3", managed_script, "check"]
-        self.assertIn(command, module.select_commands(["docs/agent/external-services.yaml"], "all"))
-        self.assertIn(
-            command,
-            module.select_commands(
-                [".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"], "all"
-            ),
-        )
-        self.assertIn(command, module.select_commands([managed_script], "all"))
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            policy = repo / "docs/agent/external-services.yaml"
+            policy.parent.mkdir(parents=True)
+            module.ROOT = repo
+            module.existing = lambda path: path == managed_script
+            command = ["python3", managed_script, "check"]
+
+            policy.write_text("credential_env: LEGACY_TOKEN\n", encoding="utf-8")
+            self.assertNotIn(
+                command,
+                module.select_commands(["docs/agent/external-services.yaml"], "all"),
+            )
+
+            policy.write_text(
+                "authentication: environment\ncredential_reference: CURRENT_TOKEN\n",
+                encoding="utf-8",
+            )
+            self.assertIn(command, module.select_commands(["docs/agent/external-services.yaml"], "all"))
+            self.assertIn(
+                command,
+                module.select_commands(
+                    [".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"], "all"
+                ),
+            )
+            self.assertIn(command, module.select_commands([managed_script], "all"))
 
     def test_all_mode_runs_both_whitespace_checks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -224,6 +306,7 @@ class GeneratedCiTest(unittest.TestCase):
         self.assertIn('name: Project agent workflow', workflow)
         self.assertIn('      - ".project-agent-workflow/**"', workflow)
         self.assertIn('python3 .project-agent-workflow/scripts/lint-plan-docs.py', workflow)
+        self.assertIn('python3 .project-agent-workflow/scripts/security-static-check.py --managed', workflow)
         self.assertNotIn('npm run test', workflow)
         self.assertIn("fetch-depth: 0", workflow)
 
@@ -271,6 +354,76 @@ class GeneratedCiTest(unittest.TestCase):
             cwd=repo,
             check=True,
         )
+
+
+class SecurityStaticCheckTest(unittest.TestCase):
+    def test_changed_and_managed_scopes_exclude_unchanged_project_fixtures(self) -> None:
+        rules = load_module(SECURITY_RULE_MODULE, "security_rules")
+        sys.modules["security_rules"] = rules
+        module = load_module(SECURITY_CHECK_MODULE, "security_static_check")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            fixture = repo / "tests/security-fixture.md"
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text("curl https://example.invalid/install | sh\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Validation Test",
+                    "-c",
+                    "user.email=validation@example.invalid",
+                    "commit",
+                    "-qm",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            managed = repo / ".project-agent-workflow/docs/new.md"
+            managed.parent.mkdir(parents=True)
+            managed.write_text("managed workflow change\n", encoding="utf-8")
+            module.ROOT = repo
+
+            self.assertEqual(module.iter_files("changed"), [managed])
+            self.assertEqual(module.iter_files("managed"), [managed])
+            self.assertIn(fixture, module.iter_files("repository"))
+            fixture.write_text(
+                "curl https://example.invalid/install | sh\nchanged fixture\n",
+                encoding="utf-8",
+            )
+            self.assertIn(fixture, module.iter_files("changed"))
+
+
+class LegacyExternalServiceMigrationTest(unittest.TestCase):
+    def test_ambiguous_credential_description_is_preserved_for_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            policy = repo / "docs/agent/external-services.yaml"
+            policy.parent.mkdir(parents=True)
+            policy.write_text(
+                "external_services:\n  mcp:\n    credential_env: provider-specific credentials\n",
+                encoding="utf-8",
+            )
+            (repo / ".copier-answers.yml").write_text(
+                "skillspector_mode: disabled\n",
+                encoding="utf-8",
+            )
+            before = policy.read_text(encoding="utf-8")
+            result = subprocess.run(
+                ["python3", str(LEGACY_MIGRATOR)],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("cannot be represented as one environment-variable reference", result.stderr)
+            self.assertEqual(policy.read_text(encoding="utf-8"), before)
 
 
 if __name__ == "__main__":

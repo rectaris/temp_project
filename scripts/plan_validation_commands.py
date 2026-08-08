@@ -25,7 +25,7 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "scripts/check-codex-toml.py": {()},
     "scripts/lint-plan-docs.py": {()},
     "scripts/format-plan-docs.py": {("--check",)},
-    "scripts/security-static-check.py": {()},
+    "scripts/security-static-check.py": {(), ("--changed",), ("--managed",)},
     "scripts/structure-map.py": {("--check",)},
     "scripts/plan_validation_commands.py": {("--self-test",)},
 }

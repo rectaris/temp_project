@@ -62,7 +62,9 @@ Before final report:
 
 ## Optional Checks
 
-- Static security: `python3 .project-agent-workflow/scripts/security-static-check.py`
+- Static security for changed files: `python3 .project-agent-workflow/scripts/security-static-check.py --changed`
+- Static security for Copier-managed workflow files: `python3 .project-agent-workflow/scripts/security-static-check.py --managed`
+- Repository-wide static security, when compatible with project-owned fixtures: `python3 .project-agent-workflow/scripts/security-static-check.py`
 - Codex TOML parse check: `python3 .project-agent-workflow/scripts/check-codex-toml.py`
 [% if skillspector_mode == "document_optional" %]
 - SkillSpector agent-skill scan: `.project-agent-workflow/scripts/skillspector-scan.sh <skill-path>`

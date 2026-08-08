@@ -14,6 +14,7 @@ ANSWERS = Path(".copier-answers.yml")
 LEGACY_SKILLSPECTOR = Path("scripts/skillspector-scan.sh")
 LEGACY_SKILLSPECTOR_SHA256 = "a11271499deae5818c755bb7a88d20eb9d7e8883ecbb34e8fb5a4a327516f38b"
 EXTERNAL_SERVICES = Path("docs/agent/external-services.yaml")
+ENVIRONMENT_REFERENCE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
 def answer(name: str) -> str:
@@ -53,6 +54,21 @@ def migrate_external_services() -> bool:
     text = EXTERNAL_SERVICES.read_text(encoding="utf-8")
     if "credential_env:" not in text:
         return True
+
+    legacy_values = re.findall(r'(?m)^\s*credential_env:\s*([^#\n]*)$', text)
+    ambiguous = [
+        raw_value.strip().strip("\"'")
+        for raw_value in legacy_values
+        if raw_value.strip().strip("\"'")
+        and not ENVIRONMENT_REFERENCE.fullmatch(raw_value.strip().strip("\"'"))
+    ]
+    if ambiguous:
+        print(
+            f"legacy template migration conflict: {EXTERNAL_SERVICES} contains credential descriptions "
+            "that cannot be represented as one environment-variable reference; manual review is required",
+            file=sys.stderr,
+        )
+        return False
 
     def replace(match: re.Match[str]) -> str:
         indent, raw_value = match.groups()

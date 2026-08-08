@@ -25,8 +25,8 @@ update_source="$tmp/update-source"
 git clone -q "$root" "$update_source"
 git -C "$update_source" fetch -q "$root" "$target_commit"
 git -C "$update_source" switch -q -c migration-target FETCH_HEAD
-git -C "$update_source" tag -f v1.1.0
-target_ref=v1.1.0
+git -C "$update_source" tag -f v1.1.1
+target_ref=v1.1.1
 legacy_answers="$tmp/legacy-activation.answers.yml"
 cat >"$legacy_answers" <<'EOF'
 project_name: typescript-app
@@ -150,6 +150,9 @@ validate_common_lane() {
   test ! -f "$out/.github/workflows/codex-ci-autofix.yml"
   test -f "$out/.codex/hooks/agent_log_event.py"
   grep -q 'Compatibility bridge' "$out/.codex/hooks/agent_log_event.py"
+  if [ -f "$out/.codex/hooks.json" ]; then
+    grep -q 'stop_review_gate.py' "$out/.codex/hooks.json"
+  fi
   grep -q 'project-agent-workflow:managed-core:start' "$out/AGENTS.md"
   if git -C "$out" ls-files -u | grep -q .; then
     echo "namespaced adoption left an unmerged index: $out" >&2
@@ -179,7 +182,8 @@ validate_common_lane() {
   (cd "$out" && python3 .project-agent-workflow/scripts/check-codex-toml.py >/dev/null)
   (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
   (cd "$out" && python3 .project-agent-workflow/scripts/structure-map.py --check >/dev/null)
-  (cd "$out" && python3 .project-agent-workflow/scripts/security-static-check.py >/dev/null)
+  (cd "$out" && python3 .project-agent-workflow/scripts/security-static-check.py --managed >/dev/null)
+  (cd "$out" && python3 .project-agent-workflow/scripts/validate-changes.py --all >/dev/null)
   python3 "$root/scripts/check-copier-template.py" --print-generated-required | while IFS= read -r path; do
     [ -n "$path" ] || continue
     test -f "$out/$path"
@@ -291,6 +295,32 @@ printf '\n# project agent marker\n' >>"$mature_out/.codex/agents/docs_researcher
 printf '\n# project agent marker\n' >>"$mature_out/.codex/agents/scoped_worker.toml"
 printf '\n# legacy hook marker\n' >>"$mature_out/.codex/hooks/pre_tool_hardening_gate.py"
 printf '\n# legacy hook marker\n' >>"$mature_out/.codex/hooks/stop_review_gate.py"
+cat >"$mature_out/.codex/hooks.json" <<'EOF_MATURE_HOOKS'
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 scripts/project-hook.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/agent_log_event.py --event Stop"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF_MATURE_HOOKS
 printf '\nProject adoption policy marker.\n' >>"$mature_out/docs/agent/SPEC_COPIER_ADOPTION.md"
 printf '\nProject environment policy marker.\n' >>"$mature_out/docs/agent/SPEC_ENVIRONMENT.md"
 printf '\nProject UI policy marker.\n' >>"$mature_out/docs/agent/SPEC_UI_DESIGN.md"
@@ -343,8 +373,51 @@ if grep -q 'legacy hook marker' "$mature_out/.codex/hooks/pre_tool_hardening_gat
   exit 1
 fi
 grep -q 'Compatibility bridge' "$mature_out/.codex/hooks/pre_tool_hardening_gate.py"
-grep -q 'No-op bridge' "$mature_out/.codex/hooks/stop_review_gate.py"
+grep -q 'Compatibility bridge' "$mature_out/.codex/hooks/stop_review_gate.py"
+grep -q 'scripts/project-hook.py' "$mature_out/.codex/hooks.json"
+grep -q '.project-agent-workflow/hooks/stop_review_gate.py' "$mature_out/.codex/hooks.json"
+test "$(grep -c 'stop_review_gate.py' "$mature_out/.codex/hooks.json")" -eq 1
 grep -q 'scripts/validate-project-adoption.sh' "$mature_out/.project-agent-workflow-migration/v1-pre-namespace/manifest.json"
+
+repair_out="$tmp/v110-preserved-hooks"
+run_copier copy -q -f --vcs-ref v1.1.0 --data-file "$root/tests/fixtures/typescript.answers.yml" "$update_source" "$repair_out" >/dev/null
+git -C "$repair_out" init -b main >/dev/null
+git -C "$repair_out" config user.email "ci@example.invalid"
+git -C "$repair_out" config user.name "CI"
+cat >"$repair_out/.codex/hooks.json" <<'EOF_REPAIR_HOOKS'
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/agent_log_event.py --event Stop"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 scripts/project-hook.py"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF_REPAIR_HOOKS
+git -C "$repair_out" add -A
+git -C "$repair_out" commit -m "Preserve pre-v1 Hook configuration" >/dev/null
+run_copier update -q -f --trust --vcs-ref "$target_ref" "$repair_out" >/dev/null
+grep -q 'scripts/project-hook.py' "$repair_out/.codex/hooks.json"
+grep -q '.project-agent-workflow/hooks/stop_review_gate.py' "$repair_out/.codex/hooks.json"
+test "$(grep -c 'stop_review_gate.py' "$repair_out/.codex/hooks.json")" -eq 1
+grep -q 'Compatibility bridge' "$repair_out/.codex/hooks/stop_review_gate.py"
+git -C "$repair_out" diff --check
 
 future_source="$tmp/future-source"
 future_out="$tmp/future-project"

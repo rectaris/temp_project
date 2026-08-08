@@ -300,7 +300,7 @@ jobs:
         run: |
           set -eu
           git diff --check HEAD
-          python3 .project-agent-workflow/scripts/security-static-check.py
+          python3 .project-agent-workflow/scripts/security-static-check.py --changed
           protected=$(git diff --name-only HEAD | grep -E '^(\.github/workflows/|\.github/codex/|\.env($|\.)|.*production.*|.*deploy.*)' || true)
           if [ -n "$protected" ]; then
             echo "Codex patch touched protected paths:" >&2

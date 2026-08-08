@@ -482,15 +482,19 @@ class ContextCompressionBoundaryTest(unittest.TestCase):
 
 
 class StopReviewGateTest(unittest.TestCase):
-    def test_legacy_stop_bridge_never_duplicates_canonical_blocking(self) -> None:
+    def test_legacy_stop_bridge_forwards_to_managed_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
             scripts = repo / "scripts"
             scripts.mkdir()
-            (scripts / "check-agent-completion.sh").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            (scripts / "check-agent-completion.sh").write_text(
+                "#!/bin/sh\necho 'active plan remains' >&2\nexit 1\n",
+                encoding="utf-8",
+            )
             output = run_hook(LEGACY_STOP_BRIDGE, {"last_assistant_message": "brief"}, cwd=repo)
-        self.assertEqual(output, {})
+        self.assertEqual(output["decision"], "block")
+        self.assertEqual(output["reason"], "active plan remains")
 
     def test_allows_when_message_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -50,4 +50,4 @@ jobs:
           python3 .project-agent-workflow/scripts/format-plan-docs.py --check
           python3 .project-agent-workflow/scripts/check-codex-toml.py
           python3 .project-agent-workflow/scripts/structure-map.py --check
-          python3 .project-agent-workflow/scripts/security-static-check.py
+          python3 .project-agent-workflow/scripts/security-static-check.py --managed

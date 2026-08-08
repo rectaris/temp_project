@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -16,6 +15,7 @@ from typing import Any, Iterable
 
 
 BACKUP_RELATIVE = Path(".project-agent-workflow-migration/v1-pre-namespace")
+MIGRATION_ROOT = Path(".project-agent-workflow-migration")
 MANIFEST_NAME = "manifest.json"
 
 LEGACY_FILES = (
@@ -51,6 +51,7 @@ LEGACY_FILES = (
     "docs/agent/SPEC_UI_DESIGN.md",
     "docs/agent/SPEC_USER_COMMUNICATION.md",
     "docs/agent/SPEC_VALIDATION.md",
+    "docs/agent/external-services.yaml",
     "docs/agent/spec-index.yaml",
     "scripts/agent_log_manifest.py",
     "scripts/check-agent-completion.sh",
@@ -152,10 +153,12 @@ def require_repository_root(destination: Path) -> None:
 
 def require_safe_target_ref(target_ref: str) -> None:
     if target_ref == "v1.0.0":
-        raise SystemExit("v1.0.0 contains the unsafe smart-diff migration; use v1.1.0 or newer")
+        raise SystemExit("v1.0.0 contains the unsafe smart-diff migration; use v1.1.1 or newer")
+    if target_ref == "v1.1.0":
+        raise SystemExit("v1.1.0 contains incomplete adoption validation; use v1.1.1 or newer")
     match = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)", target_ref)
-    if not match or tuple(int(value) for value in match.groups()) < (1, 1, 0):
-        raise SystemExit("adoption requires a stable release tag at v1.1.0 or newer")
+    if not match or tuple(int(value) for value in match.groups()) < (1, 1, 1):
+        raise SystemExit("adoption requires a stable release tag at v1.1.1 or newer")
 
 
 def read_previous_ref(destination: Path) -> str:
@@ -370,6 +373,31 @@ def run_recopy(
         )
 
 
+def update_hook_wiring(destination: Path, check_only: bool = False) -> str:
+    helper = Path(__file__).resolve().with_name("update_hook_wiring.py")
+    command = [sys.executable, str(helper), "--destination", str(destination)]
+    if check_only:
+        command.append("--check")
+    result = subprocess.run(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip()
+        raise SystemExit(f"Hook configuration update failed: {message}")
+    try:
+        payload = json.loads(result.stdout)
+        status = payload["status"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise SystemExit("Hook configuration update returned an invalid result") from exc
+    if not isinstance(status, str):
+        raise SystemExit("Hook configuration update returned an invalid status")
+    return status
+
+
 def append_managed_instructions(destination: Path, previous_ref: str, backup_root: Path) -> None:
     agents = destination / "AGENTS.md"
     if not agents.is_file():
@@ -393,23 +421,36 @@ def conflict_paths(destination: Path) -> list[str]:
     conflicts = git(destination, "ls-files", "-u").stdout.splitlines()
     if conflicts:
         return sorted({line.split("\t", 1)[1] for line in conflicts if "\t" in line})
+    candidates = git(
+        destination,
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+    ).stdout.split("\0")
     found: list[str] = []
-    for root, dirs, files in os.walk(destination):
-        dirs[:] = [item for item in dirs if item not in {".git", ".project-agent-workflow-migration"}]
-        for name in files:
-            path = Path(root) / name
-            relative = path.relative_to(destination).as_posix()
-            if name.endswith(".rej"):
-                found.append(relative)
+    for value in candidates:
+        if not value:
+            continue
+        relative_path = Path(value)
+        if relative_path == MIGRATION_ROOT or MIGRATION_ROOT in relative_path.parents:
+            continue
+        path = destination / relative_path
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = relative_path.as_posix()
+        if path.name.endswith(".rej"):
+            found.append(relative)
+            continue
+        try:
+            if path.stat().st_size > 2 * 1024 * 1024:
                 continue
-            try:
-                if path.stat().st_size > 2 * 1024 * 1024:
-                    continue
-                content = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            if re.search(r"(?m)^(<<<<<<<|=======|>>>>>>>)", content):
-                found.append(relative)
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if re.search(r"(?m)^(<<<<<<<|=======|>>>>>>>)", content):
+            found.append(relative)
     return sorted(set(found))
 
 
@@ -428,6 +469,16 @@ def stale_ref_paths(destination: Path, previous_ref: str) -> list[str]:
     if result.returncode not in {0, 1}:
         raise SystemExit(f"could not search for project-owned references to {previous_ref}")
     return sorted(line for line in result.stdout.splitlines() if line)
+
+
+def legacy_schema_review_paths(destination: Path) -> list[str]:
+    relative = Path("docs/agent/external-services.yaml")
+    path = destination / relative
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [relative.as_posix()] if "credential_env:" in text else []
 
 
 def validate_result(destination: Path, allowed_deletions: Iterable[str] = ()) -> None:
@@ -460,6 +511,7 @@ def adopt(
     require_safe_target_ref(target_ref)
     require_repository_root(destination)
     previous_ref = read_previous_ref(destination)
+    update_hook_wiring(destination, check_only=True)
     backup_root = destination / BACKUP_RELATIVE
     manifest_path = backup_root / MANIFEST_NAME
     manifest = load_manifest(manifest_path)
@@ -476,14 +528,20 @@ def adopt(
     run_recopy(destination, copier_executable, target_ref, data)
     append_managed_instructions(destination, previous_ref, backup_root)
     retired, modified_optional = reconcile_unchanged_optional_paths(destination, manifest)
+    manifest["hook_configuration"] = update_hook_wiring(destination)
     validate_result(destination, retired)
     manifest["project_review_paths"] = stale_ref_paths(destination, previous_ref)
+    manifest["legacy_schema_review_paths"] = legacy_schema_review_paths(destination)
     write_manifest(manifest_path, manifest)
     print(f"completed non-destructive namespaced-layout adoption from {previous_ref} to {target_ref}")
     print(f"review backup manifest: {manifest_path.relative_to(destination)}")
     if manifest["project_review_paths"]:
         print("review project-owned references to the previous Copier version:")
         for path in manifest["project_review_paths"]:
+            print(f"- {path}")
+    if manifest["legacy_schema_review_paths"]:
+        print("review project-owned external-service policy before enabling the managed validator:")
+        for path in manifest["legacy_schema_review_paths"]:
             print(f"- {path}")
     if modified_optional:
         print("review modified legacy optional files preserved in place:")
@@ -494,7 +552,7 @@ def adopt(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--destination", type=Path, default=Path.cwd())
-    parser.add_argument("--vcs-ref", default="v1.1.0")
+    parser.add_argument("--vcs-ref", default="v1.1.1")
     parser.add_argument("--copier-executable")
     parser.add_argument("--data", action="append", default=[])
     args = parser.parse_args()

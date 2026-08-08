@@ -26,7 +26,7 @@ PYTHON_SCRIPT_ARGUMENTS = {
     ".project-agent-workflow/scripts/check-codex-toml.py": {()},
     ".project-agent-workflow/scripts/lint-plan-docs.py": {()},
     ".project-agent-workflow/scripts/format-plan-docs.py": {("--check",)},
-    ".project-agent-workflow/scripts/security-static-check.py": {()},
+    ".project-agent-workflow/scripts/security-static-check.py": {(), ("--changed",), ("--managed",)},
     ".project-agent-workflow/scripts/structure-map.py": {("--check",)},
     ".project-agent-workflow/scripts/plan_validation_commands.py": {("--self-test",)},
 }

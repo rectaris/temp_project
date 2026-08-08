@@ -188,6 +188,7 @@ SOURCE_REQUIRED = [
     "scripts/init-project-workflow.sh",
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",
+    "scripts/update_hook_wiring.py",
 ]
 
 GENERATED_REQUIRED = [
@@ -619,6 +620,8 @@ def require_update_boundaries(copier_yml: str) -> None:
         "_migrations:",
         "version: v1.0.0",
         "scripts/migrate-to-namespaced-layout.py",
+        "version: v1.1.1",
+        "scripts/update_hook_wiring.py",
         'when: "[[ _stage == \'before\' ]]"',
         'when: "[[ _stage == \'after\' ]]"',
     )

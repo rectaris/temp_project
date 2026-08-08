@@ -25,7 +25,7 @@ A bridge file is a small host-discovered file that points to the managed core wi
 - Root `AGENTS.md` routes agents to `.project-agent-workflow/AGENTS.md` and project-owned policy.
 - `.agents/skills/*/SKILL.md` routes Codex skill discovery to the corresponding managed skill.
 - `.codex/hooks.json` routes enabled project hooks to `.project-agent-workflow/hooks/`.
-- `.codex/hooks/*.py` preserves legacy path compatibility; the legacy Stop bridge is deliberately non-blocking.
+- `.codex/hooks/*.py` preserves legacy path compatibility; the legacy Stop bridge forwards to the managed lifecycle gate.
 - The dedicated GitHub workflows are host integrations that remain Copier-managed.
 
 Keep bridge content stable.
@@ -71,13 +71,33 @@ Repositories generated before this ownership model may contain generic policy un
 
 Treat the first transition to the namespaced layout as a one-time adoption operation rather than an ordinary update.
 
-Do not run `copier update --vcs-ref v1.0.0` from a v0 release.
+Do not run `copier update --vcs-ref v1.0.0` or `copier update --vcs-ref v1.1.0` from a v0 release.
 
 Copier smart diff can replay project changes from legacy generated files onto new bridge files and can leave an unmerged index even when the command exits successfully.
 
-Use a checked-out template source and run its `scripts/adopt-to-namespaced-layout.py` command at v1.1.0 or newer.
+The released v1.1.0 operation can scan Git-ignored dependency environments, validate archived migration code as current code, and omit managed Stop-gate wiring from a preserved Hook configuration.
+
+Use a checked-out template source and run its `scripts/adopt-to-namespaced-layout.py` command at v1.1.1 or newer.
 
 The command requires a clean repository, copies legacy generated files to `.project-agent-workflow-migration/v1-pre-namespace/`, runs `copier recopy`, installs stable Hook bridges, preserves project-owned paths, and rejects unresolved conflicts or unclassified tracked-file deletion.
+
+Conflict-marker validation reads Git-tracked files and unignored untracked files, not ignored dependency environments or the migration backup.
+
+Change-aware validation excludes the migration backup from command selection because its files are historical evidence rather than current executable workflow files.
+
+Managed plan lint and formatting are selected only when the project-owned `docs/plan/plan.md` uses the managed index format.
+
+Other project-owned plan formats remain under repository-specific validation.
+
+Managed external-service validation is selected only when the project-owned policy uses the managed authentication and credential-reference fields.
+
+A legacy `credential_env` policy remains unchanged and is reported for explicit project review when its meaning cannot be represented losslessly.
+
+Change-aware static security validation scans Git-visible changed files, so unchanged project-owned fixtures do not become adoption findings.
+
+Managed workflow CI scans Copier-owned workflow files; repository-wide scanning remains an explicit project choice.
+
+When `.codex/hooks.json` exists, adoption preserves its entries and adds the managed Stop lifecycle gate only when no Stop gate is already registered.
 
 The command may retire a legacy optional file or replace it with a compatibility bridge only when its content matches a known generated digest.
 
@@ -92,6 +112,8 @@ The command reports project-owned files that still reference the previous Copier
 Review and update those repository-specific assertions with project context instead of letting the generic migration rewrite them.
 
 After `.copier-answers.yml` records a v1-or-newer release and `.project-agent-workflow/` exists, use ordinary `copier update` for later template versions.
+
+When `.copier-answers.yml` already records v1.1.0, update to v1.1.1 or newer with `--trust` so the versioned Hook-wiring migration can run.
 
 ## Conflict Handling
 

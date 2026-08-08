@@ -17,6 +17,7 @@ import plan_validation_commands
 
 ROOT = Path.cwd()
 OUTPUT_LIMIT = 4000
+EXCLUDED_CHANGE_PREFIXES = (".project-agent-workflow-migration/",)
 
 
 def git(args: list[str]) -> list[str]:
@@ -34,7 +35,7 @@ def git(args: list[str]) -> list[str]:
 
 
 def changed_files(mode: str) -> tuple[list[str], str]:
-    staged = git(["diff", "--cached", "--name-only"])
+    staged = filter_changed_files(git(["diff", "--cached", "--name-only"]))
     if mode == "staged":
         return staged, "staged"
     if mode == "auto" and staged:
@@ -42,11 +43,32 @@ def changed_files(mode: str) -> tuple[list[str], str]:
     paths = set(staged)
     paths.update(git(["diff", "--name-only"]))
     paths.update(git(["ls-files", "--others", "--exclude-standard"]))
-    return sorted(paths), "all"
+    return filter_changed_files(paths), "all"
+
+
+def filter_changed_files(paths: list[str] | set[str]) -> list[str]:
+    return sorted(
+        path
+        for path in paths
+        if not any(path.startswith(prefix) for prefix in EXCLUDED_CHANGE_PREFIXES)
+    )
 
 
 def existing(path: str) -> bool:
     return (ROOT / path).exists()
+
+
+def uses_managed_plan_format() -> bool:
+    try:
+        text = (ROOT / "docs/plan/plan.md").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    lines = [line for line in text.splitlines() if line]
+    return bool(
+        lines
+        and lines[0] == "# Active Plan"
+        and (lines[1:] == ["No active development items."] or lines[1:2] == ["id\tpath\tstatus"])
+    )
 
 
 def add_command(commands: list[list[str]], command: list[str]) -> None:
@@ -73,14 +95,15 @@ def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
     if any(path.endswith(".toml") or path.startswith(".codex/") for path in paths) and existing("scripts/check-codex-toml.py"):
         add_command(commands, ["python3", "scripts/check-codex-toml.py"])
 
-    if any(path.startswith("docs/plan/") or path.startswith("scripts/") for path in paths) and existing("scripts/lint-plan-docs.py"):
+    managed_plan_format = uses_managed_plan_format()
+    if managed_plan_format and any(path.startswith("docs/plan/") or path.startswith("scripts/") for path in paths) and existing("scripts/lint-plan-docs.py"):
         add_command(commands, ["python3", "scripts/lint-plan-docs.py"])
 
-    if any(path.startswith("docs/plan/") for path in paths) and existing("scripts/format-plan-docs.py"):
+    if managed_plan_format and any(path.startswith("docs/plan/") for path in paths) and existing("scripts/format-plan-docs.py"):
         add_command(commands, ["python3", "scripts/format-plan-docs.py", "--check"])
 
     if any(path.startswith(".github/") or path.startswith("scripts/") for path in paths) and existing("scripts/security-static-check.py"):
-        add_command(commands, ["python3", "scripts/security-static-check.py"])
+        add_command(commands, ["python3", "scripts/security-static-check.py", "--changed"])
 
     if any(path in {"AGENTS.md", "docs/agent/spec-index.yaml"} or path.startswith("docs/agent/") for path in paths) and existing("scripts/structure-map.py"):
         add_command(commands, ["python3", "scripts/structure-map.py", "--check"])

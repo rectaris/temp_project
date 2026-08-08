@@ -45,6 +45,21 @@ _migrations:
       - "--stage"
       - "after"
     when: "[[ _stage == 'after' ]]"
+  - version: v1.1.1
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/update_hook_wiring.py"
+      - "--destination"
+      - "."
+      - "--check"
+    when: "[[ _stage == 'before' ]]"
+  - version: v1.1.1
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/update_hook_wiring.py"
+      - "--destination"
+      - "."
+    when: "[[ _stage == 'after' ]]"
 
 project_name:
   type: str
