@@ -75,19 +75,28 @@ copier copy -f /path/to/project-agent-workflow /path/to/repo
 copier update
 ```
 
-v0 系のルート配置から v1.0.0 へ初めて更新する場合は、更新前 migration の実行を許可するため、次のように `--trust` を付けます。
+v0 系のルート配置からは、`copier update --vcs-ref v1.0.0` を実行しないでください。
+
+公開済みの v1.0.0 は、カスタマイズ済みの旧ファイルを Copier の smart diff で新しい bridge へ再適用し、未解決競合や追跡ファイル削除を残す場合があります。
+
+v1.1.0 以降へ初めて移行する場合は、clean な生成先リポジトリで、checkout 済みテンプレートの専用スクリプトを実行します。
 
 ```sh
-copier update --trust --vcs-ref v1.0.0
+uv run --with copier python ../temp_project/scripts/adopt-to-namespaced-layout.py \
+  --destination . \
+  --vcs-ref v1.1.0
 ```
 
-この migration は、削除対象になる旧テンプレートファイルを `.project-agent-workflow-migration/v1-pre-namespace/` へ退避してから新しい配置を生成します。
-更新後は退避内容を確認し、必要なプロジェクト固有ルールだけを `docs/agent/` などの project-owned 領域へ統合してください。
-v1.0.0 以降の通常更新では migration が再実行されないため、通常の `copier update` を使います。
+この処理は旧ファイルを `.project-agent-workflow-migration/v1-pre-namespace/` へコピーしてから `copier recopy` を使い、新しい管理領域を追加します。
+既存のプロジェクト規則、スクリプト、Skill、計画、製品用 workflow は元のパスに残します。
+旧 Hook 実装だけはバックアップ後に安定した bridge へ置換します。
+更新後は manifest と、旧 Copier tag を参照しているプロジェクト所有ファイルを確認してください。
+`.copier-answers.yml` が v1 系を記録した後は、通常の `copier update` を使います。
 
 Copier の競合は、対象ファイル内の `<<<<<<<`、`=======`、`>>>>>>>` または `*.rej` ファイルとして現れる場合があります。
-移行 helper は、旧テンプレートファイルを削除せず退避します。
-利用者が変更した内容も退避先に残るため、migration manifest と差分を確認してください。
+導入スクリプトは、旧テンプレートファイルを先にバックアップします。
+旧テンプレートの生成内容と一致する任意機能のファイルだけは、新設定に応じて通常位置から廃止するか managed core への互換 bridge に置き換え、manifest に記録します。
+利用者が変更したファイルと分類できないファイルは削除せず、通常位置と退避先の両方に残すため、migration manifest と差分を確認してください。
 コミット前に両方を検索し、差分へ必要な内容を統合してから競合表示を解消してください。
 `*.rej` は内容を採用または却下した後に削除します。
 

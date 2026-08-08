@@ -26,6 +26,7 @@ _skip_if_exists:
   - "/.gitignore"
   - "/.codex/config.toml"
   - "/.codex/hooks.json"
+  - "/.codex/agents/*.toml"
   - "/docs/agent/**"
   - "/docs/plan/**"
 

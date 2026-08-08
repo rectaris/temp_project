@@ -16,8 +16,8 @@
 - Put domain-specific content under generated `docs/agent/` or another declared project extension, not in the managed core.
 - Keep host-discovered bridge files small and route them to the managed core.
 - Treat `*.rej` files from `copier update` as manual review blockers.
-- Use a versioned pre-migration when a breaking layout change would otherwise delete legacy same-path files.
-- Keep migration commands narrow, recoverable, and covered by updates from supported tags.
+- Use a versioned pre-update guard and a separate adoption command when a breaking layout change would otherwise delete or conflict with legacy same-path files.
+- Keep adoption commands narrow, recoverable, and covered by fixtures from supported tags.
 - Document that Copier requires `--trust` only while crossing a version whose migration executes.
 
 ## Managed Boundaries
@@ -26,7 +26,6 @@ Copier-managed:
 
 - `.project-agent-workflow/` policy, Skills, hooks, and scripts
 - generated generic `.agents/skills/*/SKILL.md` discovery bridges
-- reusable `.codex/agents/` definitions
 - legacy `.codex/hooks/*.py` compatibility bridges
 - `.github/workflows/project-agent-workflow.yml`
 - optional CI autofix workflow and prompt
@@ -40,6 +39,7 @@ External-service modules use generated policy states in `docs/agent/external-ser
 Repository-owned:
 
 - root `AGENTS.md`, `README.md`, `.gitignore`, `.codex/config.toml`, and `.codex/hooks.json`
+- seeded `.codex/agents/*.toml` helper-agent definitions
 - `.agents/skills/` entries whose names do not collide with generated generic skills
 - `docs/agent/` project policy and external-service settings
 - `docs/plan/` active state and history
@@ -53,7 +53,7 @@ Repository-owned:
 4. Run `scripts/lint-project-workflow.sh`.
 5. Run `tests/smoke.sh`.
 6. Run `tests/test-hooks.py`.
-7. Run `tests/copier-update.sh`.
+7. Run `tests/copier-update.sh`, including the direct-update guard and recopy-based pre-v1 adoption lanes.
 8. Generate at least one sample project with Copier when the CLI is available.
 9. Commit the change.
 10. Tag stable template versions for downstream `copier update`.

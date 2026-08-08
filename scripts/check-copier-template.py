@@ -179,12 +179,14 @@ SOURCE_REQUIRED = [
     "tests/smoke.sh",
     "tests/test-hooks.py",
     "tests/test-copier-migration.py",
+    "tests/test-copier-adoption.py",
     "tests/test-referent-contract.py",
     "tests/test-validation-tools.py",
     "tests/fixtures/referent-contract/scenarios.json",
     "tests/fixtures/referent-contract/evaluation-protocol.md",
     "tests/fixtures/write-for-reader/scenarios.json",
     "scripts/init-project-workflow.sh",
+    "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",
 ]
 
@@ -605,6 +607,7 @@ def require_update_boundaries(copier_yml: str) -> None:
         "/.gitignore",
         "/.codex/config.toml",
         "/.codex/hooks.json",
+        "/.codex/agents/*.toml",
         "/docs/agent/**",
         "/docs/plan/**",
     )

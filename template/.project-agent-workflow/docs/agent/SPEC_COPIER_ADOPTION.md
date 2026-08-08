@@ -14,6 +14,8 @@ Copier may replace content under that directory during an update, so project-spe
 
 Those paths are listed in `_skip_if_exists`, so later updates create a missing seed but do not overwrite an existing file.
 
+`.codex/agents/*.toml` files are project-owned after their initial creation because mature repositories may specialize helper-agent instructions.
+
 `.project-agent-workflow/ownership.yaml` is the machine-readable ownership inventory generated into every project.
 
 ## Bridge Files
@@ -24,7 +26,7 @@ A bridge file is a small host-discovered file that points to the managed core wi
 - `.agents/skills/*/SKILL.md` routes Codex skill discovery to the corresponding managed skill.
 - `.codex/hooks.json` routes enabled project hooks to `.project-agent-workflow/hooks/`.
 - `.codex/hooks/*.py` preserves legacy path compatibility; the legacy Stop bridge is deliberately non-blocking.
-- `.codex/agents/*.toml` and the dedicated GitHub workflow are host integrations that remain Copier-managed.
+- The dedicated GitHub workflows are host integrations that remain Copier-managed.
 
 Keep bridge content stable.
 
@@ -67,19 +69,29 @@ Move such changes into a project-owned extension before the next update.
 
 Repositories generated before this ownership model may contain generic policy under `docs/agent/`, workflow helpers under `scripts/`, and generic skills under `.codex/skills/`.
 
-Treat the first update to the namespaced layout as a one-time adoption migration rather than an ordinary update.
+Treat the first transition to the namespaced layout as a one-time adoption operation rather than an ordinary update.
 
-Run `copier update --trust --vcs-ref v1.0.0` when crossing from a v0 release because Copier requires explicit trust before it will execute the versioned migration.
+Do not run `copier update --vcs-ref v1.0.0` from a v0 release.
 
-The pre-migration moves legacy generated files into `.project-agent-workflow-migration/v1-pre-namespace/` before Copier can delete their old paths.
+Copier smart diff can replay project changes from legacy generated files onto new bridge files and can leave an unmerged index even when the command exits successfully.
 
-Render the new template into a temporary directory, compare each legacy same-path file, and preserve stronger project rules under `docs/agent/` or another project-owned extension.
+Use a checked-out template source and run its `scripts/adopt-to-namespaced-layout.py` command at v1.1.0 or newer.
 
-Do not delete a modified legacy file automatically.
+The command requires a clean repository, copies legacy generated files to `.project-agent-workflow-migration/v1-pre-namespace/`, runs `copier recopy`, installs stable Hook bridges, preserves project-owned paths, and rejects unresolved conflicts or unclassified tracked-file deletion.
 
-The migration helper may remove only legacy artifacts that it can identify safely and otherwise must stop with a manual-review message.
+The command may retire a legacy optional file or replace it with a compatibility bridge only when its content matches a known generated digest.
 
-After the bridge files route to the managed core and legacy duplicates are resolved, later Copier updates should touch the managed namespace and host projections without rewriting project state.
+The new configuration determines whether the old path is obsolete or must route to the managed core.
+
+Every retired file remains in the migration backup and is listed in the manifest.
+
+A modified optional file remains at its original path and is listed for manual review.
+
+The command reports project-owned files that still reference the previous Copier tag.
+
+Review and update those repository-specific assertions with project context instead of letting the generic migration rewrite them.
+
+After `.copier-answers.yml` records a v1-or-newer release and `.project-agent-workflow/` exists, use ordinary `copier update` for later template versions.
 
 ## Conflict Handling
 

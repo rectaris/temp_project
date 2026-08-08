@@ -22,6 +22,12 @@ SKIP_DIRS = {
     ".uv-tools",
     ".uv-home",
 }
+SKIP_FILES = {
+    Path("scripts/security-static-check.py"),
+    Path("scripts/security_rules.py"),
+    Path(".project-agent-workflow/scripts/security-static-check.py"),
+    Path(".project-agent-workflow/scripts/security_rules.py"),
+}
 TEXT_SUFFIXES = {".sh", ".py", ".js", ".mjs", ".ts", ".tsx", ".yml", ".yaml", ".toml", ".md", ".json"}
 RULES = [
     (security_rules.PRIVATE_KEY_MATERIAL, "private key material"),
@@ -36,9 +42,10 @@ def iter_files() -> list[Path]:
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
-        if path.resolve() == Path(__file__).resolve():
+        relative = path.relative_to(ROOT)
+        if path.resolve() == Path(__file__).resolve() or relative in SKIP_FILES:
             continue
-        if any(part in SKIP_DIRS for part in path.relative_to(ROOT).parts):
+        if any(part in SKIP_DIRS for part in relative.parts):
             continue
         if path.suffix in TEXT_SUFFIXES or path.name in {"Dockerfile", "Makefile"}:
             out.append(path)
