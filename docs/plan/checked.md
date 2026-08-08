@@ -36,3 +36,4 @@ id	path
 033	docs/plan/checked/2026/07/16-31/033-reader-ready-communication.md
 034	docs/plan/checked/2026/07/16-31/034-template-audit-remediation.md
 035	docs/plan/checked/2026/08/01-15/035-copier-owned-layout.md
+036	docs/plan/checked/2026/08/01-15/036-copier-v031-update-coverage.md

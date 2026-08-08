@@ -17,6 +17,7 @@ if ! copier_available; then
 fi
 
 mkdir -p "$tmp"
+earliest_ref=${COPIER_UPDATE_EARLIEST_REF:-v0.3.1}
 oldest_ref=${COPIER_UPDATE_OLDEST_REF:-v0.4.1}
 latest_ref=${COPIER_UPDATE_LATEST_REF:-v0.4.6}
 target_commit=${COPIER_UPDATE_TARGET_REF:-HEAD}
@@ -142,6 +143,16 @@ validate_common_lane() {
     test -f "$out/$path"
   done
 }
+
+earliest_out=$(prepare_lane earliest-supported "$earliest_ref" "$legacy_answers")
+(cd "$earliest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+validate_common_lane "$earliest_out"
+grep -q 'Codex hooks mode: `install_templates`' "$earliest_out/.project-agent-workflow/AGENTS.md"
+grep -q 'SkillSpector mode: `disabled`' "$earliest_out/.project-agent-workflow/AGENTS.md"
+grep -q 'MCP: `documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear sync: `documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Graph memory: `documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+test ! -f "$earliest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
 
 oldest_out=$(prepare_lane oldest-supported "$oldest_ref" "$legacy_answers")
 (cd "$oldest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
