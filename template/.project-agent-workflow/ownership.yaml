@@ -1,0 +1,46 @@
+version: 1
+
+copier_managed:
+  - .project-agent-workflow/**
+  - .agents/skills/decision-audit/SKILL.md
+  - .agents/skills/define-referents-first/SKILL.md
+  - .agents/skills/graph-memory/SKILL.md
+  - .agents/skills/implementation-guidelines/SKILL.md
+  - .agents/skills/linear-ops/SKILL.md
+  - .agents/skills/mcp-ops/SKILL.md
+  - .agents/skills/plan-archive/SKILL.md
+  - .agents/skills/sequential-plan-orchestrator/SKILL.md
+  - .agents/skills/write-for-reader/SKILL.md
+  - .codex/agents/change_reviewer.toml
+  - .codex/agents/docs_researcher.toml
+  - .codex/agents/repo_explorer.toml
+  - .codex/agents/scoped_worker.toml
+  - .codex/agents/sequential_plan_worker.toml
+  - .codex/hooks/agent_log_event.py
+  - .codex/hooks/pre_tool_hardening_gate.py
+  - .codex/hooks/semantic_guard_advisory.py
+  - .codex/hooks/stop_review_gate.py
+  - .github/codex/prompts/ci-autofix.md
+  - .github/workflows/project-agent-workflow.yml
+  - .github/workflows/codex-ci-autofix.yml
+
+seeded_project_owned:
+  - AGENTS.md
+  - README.md
+  - .gitignore
+  - .codex/config.toml
+  - .codex/hooks.json
+  - docs/agent/**
+  - docs/plan/**
+
+metadata:
+  - .copier-answers.yml
+
+migration_backup:
+  - .project-agent-workflow-migration/**
+
+project_owned_extension_roots:
+  - path: .agents/skills/
+    rule: Use a skill name not reserved by copier_managed.
+  - path: .github/workflows/
+    rule: Use a workflow name not reserved by copier_managed.

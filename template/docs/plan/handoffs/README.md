@@ -21,4 +21,4 @@
 
 ## AI エージェント向け情報
 
-AI エージェント向けの詳細なキュー形式、テンプレート、削除手順は、`docs/agent/SPEC_PLAN_WORKFLOW.md` と `docs/agent/SPEC_ORCHESTRATION.md` にあります。
+AI エージェント向けの詳細なキュー形式、テンプレート、削除手順は、`.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md` と `.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md` にあります。

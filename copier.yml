@@ -17,12 +17,33 @@ _exclude:
   - "__pycache__"
   - "*.pyc"
   - "[% if codex_hooks_mode != 'enable_local_logging' %].codex/hooks.json[% else %]__never_exclude_hooks_json__[% endif %]"
-  - "[% if skillspector_mode != 'document_optional' %]scripts/skillspector-scan.sh[% else %]__never_exclude_skillspector__[% endif %]"
+  - "[% if skillspector_mode != 'document_optional' %].project-agent-workflow/scripts/skillspector-scan.sh[% else %]__never_exclude_skillspector__[% endif %]"
   - "[% if ci_autofix_mode == 'disabled' %].github/workflows/codex-ci-autofix.yml[% else %]__never_exclude_ci_autofix__[% endif %]"
 
 _skip_if_exists:
-  - "docs/agent/PROJECT_ENVIRONMENT.md"
-  - "docs/agent/PROJECT_UI_DESIGN.md"
+  - "/AGENTS.md"
+  - "/README.md"
+  - "/.gitignore"
+  - "/.codex/config.toml"
+  - "/.codex/hooks.json"
+  - "/docs/agent/**"
+  - "/docs/plan/**"
+
+_migrations:
+  - version: v1.0.0
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/migrate-to-namespaced-layout.py"
+      - "--stage"
+      - "before"
+    when: "[[ _stage == 'before' ]]"
+  - version: v1.0.0
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/migrate-to-namespaced-layout.py"
+      - "--stage"
+      - "after"
+    when: "[[ _stage == 'after' ]]"
 
 project_name:
   type: str

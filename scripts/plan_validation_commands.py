@@ -175,7 +175,11 @@ def is_script_syntax_check(argv: tuple[str, ...]) -> bool:
     script = Path(argv[2])
     if script.is_absolute() or ".." in script.parts or script.suffix != ".sh":
         return False
-    return script.parts[0] in {"scripts", "tests"} or script.parts[:2] == ("template", "scripts")
+    return (
+        script.parts[0] in {"scripts", "tests"}
+        or script.parts[:2] == ("template", "scripts")
+        or script.parts[:3] == ("template", ".project-agent-workflow", "scripts")
+    )
 
 
 def is_python_compile(argv: tuple[str, ...]) -> bool:
@@ -185,7 +189,13 @@ def is_python_compile(argv: tuple[str, ...]) -> bool:
         path = Path(raw_path)
         if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
             return False
-        if path.parts[0] not in {"scripts", "tests", ".codex", "template"}:
+        if path.parts[0] not in {
+            "scripts",
+            "tests",
+            ".codex",
+            ".project-agent-workflow",
+            "template",
+        }:
             return False
     return True
 

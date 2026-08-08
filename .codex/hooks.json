@@ -6,13 +6,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event SessionStart",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/agent_log_event.py\" --event SessionStart",
             "timeout": 30,
             "statusMessage": "Logging Codex session start"
           },
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/semantic_guard_advisory.py\"",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/semantic_guard_advisory.py\"",
             "timeout": 30,
             "statusMessage": "Restoring active referent contracts"
           }
@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event UserPromptSubmit",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/agent_log_event.py\" --event UserPromptSubmit",
             "timeout": 30,
             "statusMessage": "Logging user prompt"
           }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PreToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/agent_log_event.py\" --event PreToolUse",
             "timeout": 30,
             "statusMessage": "Logging tool request"
           }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PostToolUse",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/agent_log_event.py\" --event PostToolUse",
             "timeout": 30,
             "statusMessage": "Logging tool result"
           }
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PreCompact",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/agent_log_event.py\" --event PreCompact",
             "timeout": 30,
             "statusMessage": "Logging pre-compact event"
           }
@@ -74,13 +74,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event PostCompact",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/agent_log_event.py\" --event PostCompact",
             "timeout": 30,
             "statusMessage": "Logging post-compact event"
           },
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/semantic_guard_advisory.py\"",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/semantic_guard_advisory.py\"",
             "timeout": 30,
             "statusMessage": "Restoring active referent contracts"
           }
@@ -92,19 +92,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_log_event.py\" --event Stop",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/agent_log_event.py\" --event Stop",
             "timeout": 30,
             "statusMessage": "Logging turn stop"
           },
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/semantic_guard_advisory.py\"",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/semantic_guard_advisory.py\"",
             "timeout": 30,
             "statusMessage": "Checking active referent contracts"
           },
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/stop_review_gate.py\"",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/stop_review_gate.py\"",
             "timeout": 30,
             "statusMessage": "Checking completion lifecycle"
           }

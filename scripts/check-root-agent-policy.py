@@ -23,6 +23,10 @@ REQUIRED_ROOT_FILES = [
     ".codex/hooks/agent_log_event.py",
     ".codex/hooks/semantic_guard_advisory.py",
     ".codex/hooks/stop_review_gate.py",
+    ".project-agent-workflow/hooks/agent_log_event.py",
+    ".project-agent-workflow/hooks/pre_tool_hardening_gate.py",
+    ".project-agent-workflow/hooks/semantic_guard_advisory.py",
+    ".project-agent-workflow/hooks/stop_review_gate.py",
     ".codex/skills/decision-audit/SKILL.md",
     ".codex/skills/decision-audit/agents/openai.yaml",
     ".codex/skills/graph-memory/SKILL.md",
@@ -153,16 +157,21 @@ def check_reusable_skill_parity() -> None:
     for skill in REUSABLE_SKILLS:
         for relative in ("SKILL.md", "agents/openai.yaml"):
             root_path = ROOT / ".codex" / "skills" / skill / relative
-            template_path = ROOT / "template" / ".codex" / "skills" / skill / relative
+            template_path = ROOT / "template" / ".project-agent-workflow" / "skills" / skill / relative
             if not root_path.is_file() or not template_path.is_file():
                 fail(f"missing reusable skill file for parity: {skill}/{relative}")
-            if root_path.read_text(encoding="utf-8") != template_path.read_text(encoding="utf-8"):
+            template_text = (
+                template_path.read_text(encoding="utf-8")
+                .replace(".project-agent-workflow/", "")
+                .replace(".agents/skills/", ".codex/skills/")
+            )
+            if root_path.read_text(encoding="utf-8") != template_text:
                 fail(f"root/template reusable skill drift: {skill}/{relative}")
 
 
 def check_user_communication_contract() -> None:
     root_spec = read("docs/agent/SPEC_USER_COMMUNICATION.md")
-    template_spec = read("template/docs/agent/SPEC_USER_COMMUNICATION.md")
+    template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md")
     if root_spec != template_spec:
         fail("root/template user-communication specifications differ")
     if root_spec.count("write-for-reader") != 1:

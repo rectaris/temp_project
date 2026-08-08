@@ -17,11 +17,11 @@ from types import ModuleType
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_COMMAND_MODULES = (
     ROOT / "scripts/plan_validation_commands.py",
-    ROOT / "template/scripts/plan_validation_commands.py",
+    ROOT / "template/.project-agent-workflow/scripts/plan_validation_commands.py",
 )
 VALIDATE_CHANGE_MODULES = (
     ROOT / "scripts/validate-changes.py",
-    ROOT / "template/scripts/validate-changes.py",
+    ROOT / "template/.project-agent-workflow/scripts/validate-changes.py",
 )
 
 
@@ -56,22 +56,23 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     )
 
     def test_argv_rules_accept_declared_families_and_reject_expansion(self) -> None:
-        accepted = (
+        common_accepted = (
             "git diff --cached --check",
             "npm run typecheck",
             "python3 -m pytest",
             "python3 -m pytest tests/test-validation-tools.py",
-            "python3 scripts/validate-changes.py --all --print-only --json",
         )
-        rejected = (
+        common_rejected = (
             "npm run prepublish",
             "python3 -m pytest -q",
             "python3 -m pytest ../outside.py",
-            "python3 scripts/validate-changes.py --all --staged",
             "git diff --check; rm -rf .",
         )
         for index, module_path in enumerate(PLAN_COMMAND_MODULES):
             module = load_module(module_path, f"plan_validation_rules_{index}")
+            prefix = "scripts" if index == 0 else ".project-agent-workflow/scripts"
+            accepted = (*common_accepted, f"python3 {prefix}/validate-changes.py --all --print-only --json")
+            rejected = (*common_rejected, f"python3 {prefix}/validate-changes.py --all --staged")
             for command in accepted:
                 with self.subTest(module=module_path, accepted=command):
                     module.parse_validation_command(command)
@@ -85,12 +86,31 @@ class PlanValidationCommandsTest(unittest.TestCase):
         template_module = load_module(PLAN_COMMAND_MODULES[1], "template_plan_validation_commands")
         root_module.parse_validation_command("scripts/lint-project-workflow.sh")
         root_module.parse_validation_command("tests/smoke.sh")
-        template_module.parse_validation_command("python3 scripts/check-external-service-policy.py check")
-        template_module.parse_validation_command("scripts/check-agent-completion.sh")
+        template_module.parse_validation_command(
+            "python3 .project-agent-workflow/scripts/check-external-service-policy.py check"
+        )
+        template_module.parse_validation_command(".project-agent-workflow/scripts/check-agent-completion.sh")
         with self.assertRaises(root_module.ValidationCommandError):
             root_module.parse_validation_command("python3 scripts/check-external-service-policy.py check")
         with self.assertRaises(template_module.ValidationCommandError):
             template_module.parse_validation_command("tests/smoke.sh")
+
+    def test_template_accepts_namespaced_hook_and_script_compilation(self) -> None:
+        template_module = load_module(PLAN_COMMAND_MODULES[1], "template_namespaced_compile")
+        template_module.parse_validation_command(
+            "python3 -m py_compile "
+            ".project-agent-workflow/hooks/stop_review_gate.py "
+            ".project-agent-workflow/scripts/validate-changes.py"
+        )
+
+    def test_root_accepts_namespaced_template_shell_syntax_check(self) -> None:
+        root_module = load_module(PLAN_COMMAND_MODULES[0], "root_namespaced_shell")
+        root_module.parse_validation_command(
+            "sh -n template/.project-agent-workflow/scripts/check-agent-completion.sh"
+        )
+        root_module.parse_validation_command(
+            "python3 -m py_compile .project-agent-workflow/hooks/stop_review_gate.py"
+        )
 
 
 class ValidateChangesTest(unittest.TestCase):
@@ -118,11 +138,17 @@ class ValidateChangesTest(unittest.TestCase):
         dependency = load_module(PLAN_COMMAND_MODULES[1], "plan_validation_commands")
         sys.modules["plan_validation_commands"] = dependency
         module = load_module(VALIDATE_CHANGE_MODULES[1], "template_validate_changes_external_service")
-        module.existing = lambda path: path == "scripts/check-external-service-policy.py"
-        command = ["python3", "scripts/check-external-service-policy.py", "check"]
+        managed_script = ".project-agent-workflow/scripts/check-external-service-policy.py"
+        module.existing = lambda path: path == managed_script
+        command = ["python3", managed_script, "check"]
         self.assertIn(command, module.select_commands(["docs/agent/external-services.yaml"], "all"))
-        self.assertIn(command, module.select_commands(["docs/agent/SPEC_EXTERNAL_SERVICES.md"], "all"))
-        self.assertIn(command, module.select_commands(["scripts/check-external-service-policy.py"], "all"))
+        self.assertIn(
+            command,
+            module.select_commands(
+                [".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"], "all"
+            ),
+        )
+        self.assertIn(command, module.select_commands([managed_script], "all"))
 
     def test_all_mode_runs_both_whitespace_checks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -189,16 +215,16 @@ class ValidateChangesTest(unittest.TestCase):
 
 
 class GeneratedCiTest(unittest.TestCase):
-    def test_whitespace_check_uses_event_commit_range(self) -> None:
+    def test_generated_workflow_is_namespaced_and_workflow_scoped(self) -> None:
         root_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        workflow = (ROOT / "template/.github/workflows/ci.yml").read_text(encoding="utf-8")
+        workflow = (ROOT / "template/.github/workflows/project-agent-workflow.yml").read_text(encoding="utf-8")
         self.assertIn('git diff --check "$BASE_SHA...$PR_HEAD_SHA"', root_workflow)
         self.assertIn('git diff --check "$BEFORE_SHA..$HEAD_SHA"', root_workflow)
         self.assertIn('git diff --check "$EMPTY_TREE" "$HEAD_SHA"', root_workflow)
-        self.assertIn('git diff --check "${PR_BASE_SHA}...${PR_HEAD_SHA}"', workflow)
-        self.assertIn('git diff --check "${PUSH_BEFORE_SHA}..${HEAD_SHA}"', workflow)
-        self.assertIn('git diff --check "$EMPTY_TREE" "$HEAD_SHA"', workflow)
-        self.assertIn('git cat-file -e "$PUSH_BEFORE_SHA^{commit}"', workflow)
+        self.assertIn('name: Project agent workflow', workflow)
+        self.assertIn('      - ".project-agent-workflow/**"', workflow)
+        self.assertIn('python3 .project-agent-workflow/scripts/lint-plan-docs.py', workflow)
+        self.assertNotIn('npm run test', workflow)
         self.assertIn("fetch-depth: 0", workflow)
 
     def test_empty_tree_range_checks_the_full_initial_push_tree(self) -> None:

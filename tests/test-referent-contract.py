@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts/referent-contract.py"
-TEMPLATE_CLI = ROOT / "template/scripts/referent-contract.py"
+TEMPLATE_CLI = ROOT / "template/.project-agent-workflow/scripts/referent-contract.py"
 SCENARIOS = ROOT / "tests/fixtures/referent-contract/scenarios.json"
 
 
@@ -243,7 +243,8 @@ class ReferentContractTest(unittest.TestCase):
             self.assertIn("final transition", result.stderr)
 
     def test_root_and_template_cli_remain_identical(self) -> None:
-        self.assertEqual(CLI.read_bytes(), TEMPLATE_CLI.read_bytes())
+        template_text = TEMPLATE_CLI.read_text(encoding="utf-8").replace(".project-agent-workflow/", "")
+        self.assertEqual(CLI.read_text(encoding="utf-8"), template_text)
 
     def test_evaluation_matrix_has_fixed_scenario_classes_and_critical_requirements(self) -> None:
         value = json.loads(SCENARIOS.read_text(encoding="utf-8"))

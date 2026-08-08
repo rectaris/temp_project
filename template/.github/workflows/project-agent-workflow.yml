@@ -1,0 +1,53 @@
+name: Project agent workflow
+
+on:
+  pull_request:
+    paths:
+      - ".project-agent-workflow/**"
+      - ".agents/skills/**"
+      - ".codex/**"
+      - "docs/agent/**"
+      - "docs/plan/**"
+      - "AGENTS.md"
+      - ".github/workflows/project-agent-workflow.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".project-agent-workflow/**"
+      - ".agents/skills/**"
+      - ".codex/**"
+      - "docs/agent/**"
+      - "docs/plan/**"
+      - "AGENTS.md"
+      - ".github/workflows/project-agent-workflow.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Validate project agent workflow
+        run: |
+          set -eu
+          python3 .project-agent-workflow/scripts/lint-plan-docs.py
+          python3 .project-agent-workflow/scripts/format-plan-docs.py --check
+          python3 .project-agent-workflow/scripts/check-codex-toml.py
+          python3 .project-agent-workflow/scripts/structure-map.py --check
+          python3 .project-agent-workflow/scripts/security-static-check.py

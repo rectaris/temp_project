@@ -1,0 +1,116 @@
+[% set mcp_state = "documented" if mcp_policy_mode == "document_optional" else "disabled" %]
+[% set linear_state = "documented" if linear_sync_mode == "document_optional" else "disabled" %]
+[% set graph_state = "documented" if graph_memory_mode == "document_optional" else "disabled" %]
+# External Services
+
+External services are optional. Generated policy state lives in:
+
+```text
+docs/agent/external-services.yaml
+```
+
+Generated states:
+
+- MCP: `[[ mcp_state ]]`
+- Linear sync: `[[ linear_state ]]`
+- Graph memory: `[[ graph_state ]]`
+
+## Baseline
+
+- External reads and writes are not required for normal repository work.
+- Read `docs/agent/external-services.yaml` before using MCP, Linear, graph memory, or another external service.
+- `disabled` and `documented` authorize no service reads and no service writes.
+- External writes require explicit user intent or a documented lifecycle command even when a service is `configured_write_capable`.
+- Keep credentials in environment variables or platform secret stores, never in repository files.
+- Dry-run or local payload validation must not perform external writes.
+- Local repository files, tests, validation output, and Git history remain the source of truth unless a project-specific spec says otherwise.
+- If an external service is unavailable, continue with the local workflow and record the fallback only when it changes scope, confidence, or validation.
+
+## Required Fields
+
+Before any external read or write, the matching service entry in `docs/agent/external-services.yaml` must define:
+
+- `state`
+- `connection`
+- `authentication`
+- `credential_reference`
+- `allowed_reads`
+- `allowed_writes`
+- `write_authorization_rule`
+- `dry_run_or_local_validation`
+- `unavailable_fallback`
+
+authentication means the configured method by which an external service connection obtains credentials: none, environment, or platform.
+
+- `none`: the connection uses no credential, and `credential_reference` must be empty.
+- `environment`: `credential_reference` names a non-empty environment variable.
+- `platform`: `credential_reference` uses `binding:`, `secret:`, or `vault:` followed by a non-secret platform identifier.
+
+credential_reference means a non-secret environment-variable name or platform-managed binding identifier; it never contains credential material.
+
+write_authorization_check means the fail-closed predicate that must pass for the exact external write target and side effect before a provider call.
+
+external_service_gate means the common pre-call validation procedure in mcp-ops that denies an external operation when any required policy check fails.
+
+`configured_read_only` requires a non-empty `connection`, a valid `authentication` and `credential_reference` pair, and non-empty `allowed_reads`.
+
+`configured_write_capable` requires all `configured_read_only` fields plus non-empty `allowed_writes`, `write_authorization_rule`, and `dry_run_or_local_validation`.
+
+## State Meanings
+
+- `disabled`: policy exists, but service reads and writes are not authorized.
+- `documented`: setup guidance exists, but service reads and writes are not authorized.
+- `configured_read_only`: required read fields are complete and only listed reads are authorized.
+- `configured_write_capable`: required read/write fields are complete, but writes still require explicit user intent or a documented lifecycle command.
+
+## MCP Policy
+
+- Use MCP only when the `mcp` state is `configured_read_only` or `configured_write_capable`.
+- Before using an MCP server, confirm the configured connection or server name and allowed operation list.
+- Separate read-only operations from write-capable operations.
+- Do not send secrets, private config, or unrelated local context to external tools.
+- Use write-capable MCP calls only after the task or lifecycle command clearly authorizes that side effect.
+
+## Linear Sync Policy
+
+- Use Linear only when the `linear_sync` state is `configured_read_only` or `configured_write_capable`.
+- Treat Linear as a human-facing planning surface, not the source of truth for code.
+- Local plan files remain the repository fallback.
+- `.project-agent-workflow/scripts/sync-plan-to-linear.sh <plan> --dry-run` may render a local draft without Linear reads or writes.
+- Read-capable Linear preview modes require `configured_read_only` or `configured_write_capable` and a project-specific adapter.
+- Write-capable issue creation, description updates, status updates, comments, labels, and assignees require explicit user intent or documented lifecycle opt-in.
+- Write-capable Linear modes require `configured_write_capable`; the generic template script still fails closed until a project-specific adapter is installed.
+- Managed issue regions must preserve human-authored text outside generated markers.
+- Duplicate prevention should use deterministic source markers and fail closed on ambiguity.
+- If Linear credentials are unavailable, keep local planning active and record whether completion or sync is deferred.
+
+## Graph Memory Policy
+
+- Use graph memory only when the `graph_memory` state is `configured_read_only` or `configured_write_capable`.
+- Graph memory is auxiliary to repository files, tests, validation output, and Git history.
+- Do not write graph memory unless the user explicitly requests a graph-memory write or an approved project workflow authorizes it.
+- Do not store secrets, credentials, private configuration, raw personal data, generated dependency artifacts, build artifacts, or temporary task logs in graph memory.
+- Record important implementation decisions in repository files even when graph memory is also updated.
+
+## Integration Checklist
+
+1. Read `docs/agent/external-services.yaml`.
+2. Run `python3 .project-agent-workflow/scripts/check-external-service-policy.py check`.
+3. Confirm the service state authorizes the intended read or write class.
+4. Confirm `connection`, `authentication`, and `credential_reference` satisfy the required-field rules.
+5. Confirm the requested operation is listed in `allowed_reads` or `allowed_writes`.
+6. Run `python3 .project-agent-workflow/scripts/check-external-service-policy.py authorize <service> read <operation>` before a read.
+7. For a write, apply the common external-service gate from `.agents/skills/mcp-ops/SKILL.md`.
+8. Require the exact target and side effect to match current user intent or the lifecycle command named by `write_authorization_rule`.
+9. Run `python3 .project-agent-workflow/scripts/check-external-service-policy.py authorize <service> write <operation> --authorization-rule "<exact configured rule>"`.
+10. Run the documented dry-run or local validation before the provider call.
+11. Deny the call when any check is missing, ambiguous, stale, or mismatched.
+12. Use `unavailable_fallback` when the service is offline or credentials are absent.
+
+## Local Configuration
+
+To enable a service, edit `docs/agent/external-services.yaml` in the generated project and add a project-specific spec if the workflow needs more detail.
+
+Do not move a service past `documented` until the required fields are complete and local validation or dry-run behavior is defined.
+
+When adopting this template into an existing repository, keep stronger project-specific external-service policy in a separate spec and reference it from this file or `SPEC_COPIER_ADOPTION.md`. Do not replace a concrete local adapter or service identifier with the generic disabled/documented stub.

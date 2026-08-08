@@ -1,0 +1,85 @@
+# Context Compression
+
+## Purpose
+
+Context compression creates derived views of large local evidence so agents can inspect enough signal without loading full logs or artifacts into context.
+
+Compression is optional. It must never become a required dependency for normal repository work.
+
+## Non-Compressed Sources
+
+Do not use context compression for normative project instructions:
+
+- `AGENTS.md`;
+- `docs/agent/`;
+- validation policy;
+- security policy;
+- active task instructions that must be followed exactly.
+
+Read those files as source text through the routing rules in `.project-agent-workflow/docs/agent/spec-index.yaml`.
+
+## Eligible Inputs
+
+Consider compression for:
+
+- large raw logs under `.agent-logs/`;
+- external transcript logs declared by `transcript_log`;
+- Codex hook event logs declared by `hook_event_log`;
+- long CI logs;
+- large stdout or stderr captures;
+- verbose JSON, trace, or telemetry dumps;
+- large generated text artifacts under `.agent-artifacts/`.
+
+Before compressing, check the run `manifest.json` and redaction report when they exist.
+For transcript and hook event logs, also check `coverage` and `missing_sources`.
+Do not use compressed transcript output as durable evidence when `redaction_status` is `pending_review`; cite only the run id and raw source path until review is resolved.
+
+## Decision Flow
+
+1. Read the active plan or task summary first.
+2. Use `spec-index.yaml` to decide whether agent logging or context compression policy applies.
+3. Inspect `manifest.json`, filenames, and search results before opening large files.
+4. Use targeted excerpts when they answer the question.
+5. Use `.project-agent-workflow/scripts/context-compress.sh` when the input is too large for direct review.
+6. Treat compressed output as a derived view. Return to the raw log for audit-critical claims.
+
+## Headroom
+
+Headroom is an optional backend. Use it only when the `headroom` command is already available on `PATH`.
+
+Do not install Headroom automatically, add it as a required package dependency, or fail normal workflow because it is unavailable.
+
+When Headroom is unavailable or fails, fall back to search, split reads, targeted excerpts, or the built-in fallback output from `.project-agent-workflow/scripts/context-compress.sh`.
+
+## Wrapper
+
+Use:
+
+```sh
+.project-agent-workflow/scripts/context-compress.sh <input-file> [run-id]
+```
+
+The input must resolve to a regular file inside the repository.
+The wrapper checks the canonical path so symlink aliases cannot bypass normative-path refusals.
+
+The wrapper writes compressed output under a source-specific path:
+
+```text
+.agent-logs/<run-id>/compressed/<source-basename>.<source-path-hash>.compressed.md
+```
+
+The source-path hash prevents different inputs with the same basename from overwriting each other within one run.
+
+Set `HEADROOM_DISABLED=1` to force the deterministic fallback path during tests or debugging.
+
+The wrapper refuses normative instruction files and policy paths that should be read directly.
+
+The wrapper updates the run manifest through `.project-agent-workflow/scripts/agent_log_manifest.py` and records paths relative to the run directory when the source is inside that directory.
+
+Run ids must contain only letters, numbers, underscores, and hyphens.
+
+## Output Use
+
+Compressed files may be cited in handoffs or plan notes as local derived views, but the raw log remains the source evidence.
+
+If a compressed view is used to make a durable decision, include the run id and the raw source path in the plan or checked record.

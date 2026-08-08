@@ -10,14 +10,17 @@ When it is unavailable, follow this file directly.
 Follow this file when adding, updating, vendoring, or reviewing:
 
 - root `.codex/skills/<skill-name>/` skills;
-- generated `template/.codex/skills/<skill-name>/` skills;
+- generated discovery bridges under `template/.agents/skills/<skill-name>/`;
+- generated managed skill bodies under `template/.project-agent-workflow/skills/<skill-name>/`;
 - skill `SKILL.md` files;
 - skill `agents/openai.yaml` metadata;
 - skill bundled `references/`, `scripts/`, or `assets/`.
 
 ## Placement
 
-- Put reusable generated-project skills under `template/.codex/skills/<skill-name>/`.
+- Put reusable generated-project skill bodies under `template/.project-agent-workflow/skills/<skill-name>/`.
+- Put only the host-discovery bridge in `template/.agents/skills/<skill-name>/` for template-managed skills.
+- Put project-specific generated-project skills directly under the generated repository's project-owned `.agents/skills/<skill-name>/` path.
 - Put root-only workflow skills under `.codex/skills/<skill-name>/` only when the root repository itself needs them.
 - Keep project-specific facts out of generic template skills.
 - Put project-specific values, service identifiers, schemas, credentials policy, and domain rules in generated project `docs/agent/` specs or project-owned files.
@@ -25,10 +28,12 @@ Follow this file when adding, updating, vendoring, or reviewing:
 
 ## Skill Shape
 
-Each skill directory must contain:
+Each full skill directory must contain:
 
 - `SKILL.md`;
 - `agents/openai.yaml` unless there is a documented reason to omit UI metadata.
+
+A generated discovery bridge contains only a concise `SKILL.md` that routes agents to the managed skill body.
 
 Optional resources:
 

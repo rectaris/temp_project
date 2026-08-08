@@ -1,0 +1,79 @@
+[% set mcp_state = "documented" if mcp_policy_mode == "document_optional" else "disabled" %]
+[% set linear_state = "documented" if linear_sync_mode == "document_optional" else "disabled" %]
+[% set graph_state = "documented" if graph_memory_mode == "document_optional" else "disabled" %]
+# AGENTS.md
+
+Agent entrypoint for `[[ project_slug ]]`.
+
+## Purpose
+
+[[ project_purpose ]]
+
+## Generated Profile
+
+- Project name: `[[ project_name ]]`
+- Primary language: `[[ primary_language ]]`
+- Planning style: `active_backlog_checked`
+- Local workflow modules: installed by default and activated by task routing
+- Codex helper agents: installed by default
+- Codex hooks mode: `[[ codex_hooks_mode ]]`
+- Plan lifecycle scripts: installed by default
+- Change-aware validation: installed by default
+- Static security checks: installed by default
+- CI autofix mode: `[[ ci_autofix_mode ]]`
+- SkillSpector mode: `[[ skillspector_mode ]]`
+- Structure scanner: installed by default
+- Generic Codex skills: installed by default
+- Agent logging policy and local helper scripts: installed by default
+- Automatic hook event capture: enabled only when Codex hooks mode is `enable_local_logging`
+- Context compression helper: optional, Headroom-aware when available
+- External service policy states: MCP=`[[ mcp_state ]]`, Linear=`[[ linear_state ]]`, graph memory=`[[ graph_state ]]`
+
+## Priority
+
+1. Follow this file first for repository-local behavior.
+2. Use parent workspace rules only for cross-repository coordination, security, or Git policy.
+3. Open `.project-agent-workflow/docs/agent/spec-index.yaml`.
+4. Union the `required` docs from every matching route.
+5. Before editing, read `default_reads`, the required-doc union, and each `conditional` doc whose condition matches the task or touched files.
+
+## Operating Rules
+
+- Keep project-specific implementation rules in project-owned `docs/agent/PROJECT_*.md` files or other routed project specs.
+- Track non-trivial implementation work in `docs/plan/plan.md`.
+- Keep Copier-managed workflow files updateable; put domain-specific details in separate specs.
+- For mature repositories, follow `.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md` before copying or updating template-managed files.
+- Use Git for every coherent work unit.
+- Preserve user changes you did not make.
+- Prefer deterministic checks over prose-only rules.
+- Use tmux for long-running, shared, or interactive commands when available; use normal command execution for short deterministic commands.
+- Ask before high-impact or ambiguous changes.
+- Treat `docs/plan/checked.md` and checked archives as lookup-only history; search metadata first when possible.
+- Keep human-facing README files separate from agent-facing operational policy.
+- Keep raw agent logs and large agent artifacts local under `.agent-logs/` and `.agent-artifacts/`; do not commit them.
+- Treat external transcript logs as primary full-turn evidence when available, and repo-local hook event logs as best-effort corroborating evidence.
+- Record missing transcript or hook sources explicitly in run manifests.
+- Use run manifests, search, excerpts, and optional context compression before loading large raw logs.
+- Read `AGENTS.md`, `docs/agent/`, validation policy, and security policy directly; do not route normative instructions through compression.
+- When writing or editing Japanese prose, follow `.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
+- Run decision audit before creating or materially updating active plans when meaningful design, storage, validation, lifecycle, security, or artifact-boundary choices remain open; keep the full audit out of `docs/plan/active`.
+- Use repo-local generic Codex skills as auxiliary workflow guidance; keep project-specific values in `docs/agent/PROJECT_*.md`, other project-owned specs, and `docs/agent/external-services.yaml`.
+- Before introducing a new domain or workflow label in design, investigation, remediation, causal-summary, or naming work, fix its concrete referent and preserve unresolved facts according to `.project-agent-workflow/docs/agent/SPEC_REFERENT_FIRST.md`; use the repo-local `define-referents-first` skill for the operational workflow. In chat naming work, show an unnamed referent and uncertainty stage before any candidate or controlled term.
+- Before submitting a substantive progress update, proposal, explanation, blocking report, or final summary, follow `.project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md` and use the repo-local `write-for-reader` skill for its operational workflow.
+- When creating or updating Codex skills, follow `.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md`.
+
+## CI Autofix Rules
+
+- Codex must make minimal changes when repairing CI failures.
+- Codex must not change unrelated behavior.
+- Codex must not weaken tests to make CI pass.
+- Codex must not delete failing tests unless the user explicitly requests it.
+- Codex must not modify secrets, deployment credentials, or production settings.
+- Codex must prefer fixing root causes over skipping checks.
+- Codex must stop and report when the failure is due to missing secrets, external service outages, or environment-only issues.
+
+## Reports
+
+- State touched repositories.
+- State link or public-path changes.
+- Report validation run and commit status.

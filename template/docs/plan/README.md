@@ -23,7 +23,7 @@
 
 ## AI エージェント向け情報
 
-AI エージェント向けの詳細な計画運用ルールは、`docs/agent/SPEC_PLAN_WORKFLOW.md` にあります。
+AI エージェント向けの詳細な計画運用ルールは、`.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md` にあります。
 
 この README は人間向けの概要です。
-作業ルーティングや検証ルールの正確な判断には、`docs/agent/spec-index.yaml` と `docs/agent/SPEC_*.md` を参照してください。
+作業ルーティングや検証ルールの正確な判断には、`.project-agent-workflow/docs/agent/spec-index.yaml` と `docs/agent/SPEC_*.md` を参照してください。

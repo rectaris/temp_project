@@ -11,27 +11,25 @@
 
 - Keep `.copier-answers.yml` generated and committed in downstream repositories.
 - Version this template repo with Git tags before recommending `copier update`.
-- Keep project-owned files small and clearly marked.
-- Put domain-specific content in generated repo specs, not in this template.
-- Avoid `_skip_if_exists` for managed files because skipped files do not receive template updates.
+- Keep replaceable workflow content under `.project-agent-workflow/`.
+- Use `_skip_if_exists` for root entrypoints and mutable repository state that Copier seeds but does not own after creation.
+- Put domain-specific content under generated `docs/agent/` or another declared project extension, not in the managed core.
+- Keep host-discovered bridge files small and route them to the managed core.
 - Treat `*.rej` files from `copier update` as manual review blockers.
+- Use a versioned pre-migration when a breaking layout change would otherwise delete legacy same-path files.
+- Keep migration commands narrow, recoverable, and covered by updates from supported tags.
+- Document that Copier requires `--trust` only while crossing a version whose migration executes.
 
 ## Managed Boundaries
 
 Copier-managed:
 
-- `AGENTS.md`
-- generic `docs/agent/SPEC_*.md`
-- `docs/agent/spec-index.yaml`
-- `docs/plan/` skeleton
-- human-facing plan README files
-- optional helper prompt templates under `docs/plan/sub-agents/`
+- `.project-agent-workflow/` policy, Skills, hooks, and scripts
+- generated generic `.agents/skills/*/SKILL.md` discovery bridges
 - reusable `.codex/agents/` definitions
-- deterministic hook templates
-- workflow utility scripts
-- generic plan lifecycle scripts
-- change-aware validation, static security, and structure scanner scripts
-- optional external-service policy stubs
+- legacy `.codex/hooks/*.py` compatibility bridges
+- `.github/workflows/project-agent-workflow.yml`
+- optional CI autofix workflow and prompt
 
 Codex helper agents are installed by default and recorded in generated docs/config.
 
@@ -41,11 +39,11 @@ External-service modules use generated policy states in `docs/agent/external-ser
 
 Repository-owned:
 
-- product specs
-- UI wording
-- domain data contracts
-- local validation commands
-- external integration settings
+- root `AGENTS.md`, `README.md`, `.gitignore`, `.codex/config.toml`, and `.codex/hooks.json`
+- `.agents/skills/` entries whose names do not collide with generated generic skills
+- `docs/agent/` project policy and external-service settings
+- `docs/plan/` active state and history
+- product specs, UI wording, domain data contracts, and local validation adapters
 
 ## Release Flow
 

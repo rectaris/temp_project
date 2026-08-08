@@ -13,14 +13,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-AGENT_LOG = ROOT / "template/.codex/hooks/agent_log_event.py"
-IMPORTER = ROOT / "template/scripts/import-codex-transcript.py"
-MANIFEST_HELPER = ROOT / "template/scripts/agent_log_manifest.py"
-MANIFEST_CHECKER = ROOT / "template/scripts/check-agent-log-manifest.py"
-CONTEXT_COMPRESS = ROOT / "template/scripts/context-compress.sh"
-PRE_TOOL = ROOT / "template/.codex/hooks/pre_tool_hardening_gate.py"
-STOP_REVIEW = ROOT / "template/.codex/hooks/stop_review_gate.py"
-SEMANTIC_GUARD = ROOT / "template/.codex/hooks/semantic_guard_advisory.py"
+AGENT_LOG = ROOT / "template/.project-agent-workflow/hooks/agent_log_event.py"
+IMPORTER = ROOT / "template/.project-agent-workflow/scripts/import-codex-transcript.py"
+MANIFEST_HELPER = ROOT / "template/.project-agent-workflow/scripts/agent_log_manifest.py"
+MANIFEST_CHECKER = ROOT / "template/.project-agent-workflow/scripts/check-agent-log-manifest.py"
+CONTEXT_COMPRESS = ROOT / "template/.project-agent-workflow/scripts/context-compress.sh"
+PRE_TOOL = ROOT / "template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py"
+STOP_REVIEW = ROOT / "template/.project-agent-workflow/hooks/stop_review_gate.py"
+LEGACY_STOP_BRIDGE = ROOT / "template/.codex/hooks/stop_review_gate.py"
+SEMANTIC_GUARD = ROOT / "template/.project-agent-workflow/hooks/semantic_guard_advisory.py"
 
 
 def run_hook(
@@ -292,8 +293,8 @@ class AgentLogEventTest(unittest.TestCase):
             repo = Path(tmp) / "repo"
             repo.mkdir()
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
-            scripts_dir = repo / "scripts"
-            scripts_dir.mkdir()
+            scripts_dir = repo / ".project-agent-workflow/scripts"
+            scripts_dir.mkdir(parents=True)
             shutil.copyfile(IMPORTER, scripts_dir / "import-codex-transcript.py")
             shutil.copyfile(MANIFEST_HELPER, scripts_dir / "agent_log_manifest.py")
             source = Path(tmp) / "session.jsonl"
@@ -353,8 +354,8 @@ class CodexTranscriptImportTest(unittest.TestCase):
 class ContextCompressionBoundaryTest(unittest.TestCase):
     def prepare_repo(self, root: Path) -> None:
         subprocess.run(["git", "init", "-b", "main"], cwd=root, stdout=subprocess.DEVNULL, check=True)
-        scripts = root / "scripts"
-        scripts.mkdir()
+        scripts = root / ".project-agent-workflow/scripts"
+        scripts.mkdir(parents=True)
         shutil.copyfile(CONTEXT_COMPRESS, scripts / "context-compress.sh")
         shutil.copyfile(MANIFEST_HELPER, scripts / "agent_log_manifest.py")
         shutil.copyfile(MANIFEST_CHECKER, scripts / "check-agent-log-manifest.py")
@@ -363,7 +364,7 @@ class ContextCompressionBoundaryTest(unittest.TestCase):
         env = os.environ.copy()
         env["HEADROOM_DISABLED"] = "1"
         return subprocess.run(
-            ["sh", "scripts/context-compress.sh", source, run_id],
+            ["sh", ".project-agent-workflow/scripts/context-compress.sh", source, run_id],
             cwd=repo,
             env=env,
             text=True,
@@ -401,7 +402,11 @@ class ContextCompressionBoundaryTest(unittest.TestCase):
             self.assertIn("first", outputs[0].read_text(encoding="utf-8") + outputs[1].read_text(encoding="utf-8"))
             self.assertIn("second", outputs[0].read_text(encoding="utf-8") + outputs[1].read_text(encoding="utf-8"))
             check = subprocess.run(
-                ["python3", "scripts/check-agent-log-manifest.py", ".agent-logs/same-run/manifest.json"],
+                [
+                    "python3",
+                    ".project-agent-workflow/scripts/check-agent-log-manifest.py",
+                    ".agent-logs/same-run/manifest.json",
+                ],
                 cwd=repo,
                 text=True,
                 stdout=subprocess.PIPE,
@@ -435,7 +440,7 @@ class ContextCompressionBoundaryTest(unittest.TestCase):
                     manifest[field] = value
                     manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
                     check = subprocess.run(
-                        ["python3", "scripts/check-agent-log-manifest.py", str(manifest_path)],
+                        ["python3", ".project-agent-workflow/scripts/check-agent-log-manifest.py", str(manifest_path)],
                         cwd=repo,
                         text=True,
                         stdout=subprocess.PIPE,
@@ -459,7 +464,7 @@ class ContextCompressionBoundaryTest(unittest.TestCase):
             env["HEADROOM_DISABLED"] = "1"
             processes = [
                 subprocess.Popen(
-                    ["sh", "scripts/context-compress.sh", source, "parallel-run"],
+                    ["sh", ".project-agent-workflow/scripts/context-compress.sh", source, "parallel-run"],
                     cwd=repo,
                     env=env,
                     text=True,
@@ -477,25 +482,33 @@ class ContextCompressionBoundaryTest(unittest.TestCase):
 
 
 class StopReviewGateTest(unittest.TestCase):
-    def test_requires_review_when_message_is_unavailable(self) -> None:
+    def test_legacy_stop_bridge_never_duplicates_canonical_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            scripts = repo / "scripts"
+            scripts.mkdir()
+            (scripts / "check-agent-completion.sh").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            output = run_hook(LEGACY_STOP_BRIDGE, {"last_assistant_message": "brief"}, cwd=repo)
+        self.assertEqual(output, {})
+
+    def test_allows_when_message_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
             output = run_hook(STOP_REVIEW, {}, cwd=repo)
-        self.assertEqual(output["decision"], "block")
-        self.assertIn("SPEC_USER_COMMUNICATION.md", output["reason"])
+        self.assertEqual(output, {})
 
-    def test_blocks_high_risk_untracked_path(self) -> None:
+    def test_allows_untracked_implementation_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
             (repo / "src").mkdir()
             (repo / "src/app.py").write_text("print('hello')\n", encoding="utf-8")
             output = run_hook(STOP_REVIEW, {}, cwd=repo)
-        self.assertEqual(output["decision"], "block")
-        self.assertIn("src/app.py", output["reason"])
+        self.assertEqual(output, {})
 
-    def test_requires_review_for_substantive_user_message(self) -> None:
+    def test_allows_substantive_user_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
@@ -509,9 +522,7 @@ class StopReviewGateTest(unittest.TestCase):
                 },
                 cwd=repo,
             )
-        self.assertEqual(output["decision"], "block")
-        self.assertIn("SPEC_USER_COMMUNICATION.md", output["reason"])
-        self.assertIn("write-for-reader", output["reason"])
+        self.assertEqual(output, {})
 
     def test_allows_brief_concrete_answer_without_review_loop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -524,7 +535,7 @@ class StopReviewGateTest(unittest.TestCase):
             )
         self.assertEqual(output, {})
 
-    def test_combines_implementation_and_communication_review(self) -> None:
+    def test_allows_message_and_implementation_without_heuristic_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
@@ -535,21 +546,21 @@ class StopReviewGateTest(unittest.TestCase):
                 {"last_assistant_message": "Implemented the requested startup fallback and validated it."},
                 cwd=repo,
             )
-        self.assertEqual(output["decision"], "block")
-        self.assertIn("src/app.py", output["reason"])
-        self.assertIn("SPEC_USER_COMMUNICATION.md", output["reason"])
+        self.assertEqual(output, {})
 
-    def test_completion_preflight_ignores_dirty_worktree(self) -> None:
+    def test_blocks_failed_completion_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
             scripts = repo / "scripts"
             scripts.mkdir()
-            shutil.copyfile(ROOT / "template/scripts/check-agent-completion.sh", scripts / "check-agent-completion.sh")
-            (repo / "notes.txt").write_text("dirty\n", encoding="utf-8")
+            (scripts / "check-agent-completion.sh").write_text(
+                "#!/bin/sh\necho 'active plan remains' >&2\nexit 1\n",
+                encoding="utf-8",
+            )
             output = run_hook(STOP_REVIEW, {}, cwd=repo)
         self.assertEqual(output["decision"], "block")
-        self.assertNotIn("dirty worktree", output["reason"])
+        self.assertEqual(output["reason"], "active plan remains")
 
     def test_allows_when_stop_hook_already_active(self) -> None:
         output = run_hook(

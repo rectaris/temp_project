@@ -11,11 +11,22 @@
 - `scripts/init-project-workflow.sh`: 簡単に導入するための Copier ラッパーです。
 - `scripts/lint-project-workflow.sh`: このパッケージが導入可能な状態かを検証します。
 
-生成先には、計画 lifecycle、変更差分に応じた検証選択、静的セキュリティ検査、任意の NVIDIA SkillSpector スキャン手順、構造スキャン、handoff 管理、active plan の文脈抽出、ローカル agent ログ方針、任意の context 圧縮 helper、Codex hook/config 検証の汎用ルールを導入できます。MCP、Linear、graph memory のような外部サービス依存ルールは Copier の回答で opt-in します。
+生成先には、計画 lifecycle、変更差分に応じた検証選択、静的セキュリティ検査、任意の NVIDIA SkillSpector スキャン手順、構造スキャン、handoff 管理、active plan の文脈抽出、ローカル agent ログ方針、任意の context 圧縮 helper、Codex hook/config 検証の汎用ルールを導入できます。
+MCP、Linear、graph memory のような外部サービス依存ルールは Copier の回答で opt-in します。
 
-ローカル agent ログは生成先の `.agent-logs/` と `.agent-artifacts/` に保存する方針を常に生成します。これらは Git 管理外の情報資産として扱い、`docs/plan` には raw log ではなく要約、判断、検証結果、必要な run id を残します。大きなログを読み返す場合は `docs/agent/spec-index.yaml` のルーティング、manifest、検索、抜粋、`scripts/context-compress.sh` を使います。Headroom は PATH 上にある場合だけ任意 backend として使い、テンプレートの必須依存にはしません。
+Copier が更新する汎用ファイルは、生成先の `.project-agent-workflow/` にまとめます。
+ルートの `AGENTS.md`、`README.md`、`docs/agent/`、`docs/plan/` など、開発中に変更するファイルは初回だけ生成し、以後の `copier update` では上書きしません。
+`.agents/skills/` には管理対象の汎用 Skill 用ブリッジを置き、予約名と衝突しないプロジェクト固有 Skill も追加できます。
+`.codex/` と `.github/` には、ホストが検出するための小さな橋渡しファイルまたは専用の統合ファイルだけを置きます。
 
-外部サービスを opt-in した生成先には、`docs/agent/SPEC_EXTERNAL_SERVICES.md` が生成されます。このドキュメントには、認証情報の置き場所、dry-run/read/write の分類、MCP server の記録項目、Linear の issue sync 境界、graph memory の project id と write review 境界を記載します。外部連携を無効にした場合も、同じファイルに「ローカル運用で十分であること」と後から有効化する際の追加項目を残します。
+ローカル agent ログは生成先の `.agent-logs/` と `.agent-artifacts/` に保存する方針を常に生成します。
+これらは Git 管理外の情報資産として扱い、`docs/plan` には raw log ではなく要約、判断、検証結果、必要な run id を残します。
+大きなログを読み返す場合は `.project-agent-workflow/docs/agent/spec-index.yaml` のルーティング、manifest、検索、抜粋、`.project-agent-workflow/scripts/context-compress.sh` を使います。
+Headroom は PATH 上にある場合だけ任意 backend として使い、テンプレートの必須依存にはしません。
+
+外部サービスを opt-in した生成先には、`.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md` が生成されます。
+このドキュメントには、認証情報の置き場所、dry-run/read/write の分類、MCP server の記録項目、Linear の issue sync 境界、graph memory の project id と write review 境界を記載します。
+外部連携を無効にした場合も、同じファイルに「ローカル運用で十分であること」と後から有効化する際の追加項目を残します。
 
 ## リポジトリへ導入する
 
@@ -62,12 +73,21 @@ copier copy -f /path/to/project-agent-workflow /path/to/repo
 
 ```sh
 copier update
-python3 scripts/migrate-legacy-template-files.py
 ```
 
+v0 系のルート配置から v1.0.0 へ初めて更新する場合は、更新前 migration の実行を許可するため、次のように `--trust` を付けます。
+
+```sh
+copier update --trust --vcs-ref v1.0.0
+```
+
+この migration は、削除対象になる旧テンプレートファイルを `.project-agent-workflow-migration/v1-pre-namespace/` へ退避してから新しい配置を生成します。
+更新後は退避内容を確認し、必要なプロジェクト固有ルールだけを `docs/agent/` などの project-owned 領域へ統合してください。
+v1.0.0 以降の通常更新では migration が再実行されないため、通常の `copier update` を使います。
+
 Copier の競合は、対象ファイル内の `<<<<<<<`、`=======`、`>>>>>>>` または `*.rej` ファイルとして現れる場合があります。
-移行 helper は、内容が既知の旧テンプレートと一致する廃止済みファイルだけを削除します。
-利用者が変更した旧ファイルは保持して非0終了するため、報告された競合を確認してください。
+移行 helper は、旧テンプレートファイルを削除せず退避します。
+利用者が変更した内容も退避先に残るため、migration manifest と差分を確認してください。
 コミット前に両方を検索し、差分へ必要な内容を統合してから競合表示を解消してください。
 `*.rej` は内容を採用または却下した後に削除します。
 

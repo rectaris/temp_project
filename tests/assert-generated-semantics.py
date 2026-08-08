@@ -23,7 +23,7 @@ def main() -> int:
     args = parser.parse_args()
     root = args.generated
     answers = yaml.safe_load((root / ".copier-answers.yml").read_text(encoding="utf-8"))
-    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    agents = (root / ".project-agent-workflow/AGENTS.md").read_text(encoding="utf-8")
 
     profile_answers = (
         ("primary_language", "Primary language"),
@@ -32,11 +32,17 @@ def main() -> int:
         ("ci_autofix_mode", "CI autofix mode"),
     )
     for key, label in profile_answers:
-        require(f"- {label}: `{answers[key]}`" in agents, f"AGENTS.md does not reflect {key}")
+        require(
+            f"- {label}: `{answers[key]}`" in agents,
+            f"managed AGENTS.md does not reflect {key}",
+        )
 
     conditional_files = (
         (".codex/hooks.json", answers["codex_hooks_mode"] == "enable_local_logging"),
-        ("scripts/skillspector-scan.sh", answers["skillspector_mode"] == "document_optional"),
+        (
+            ".project-agent-workflow/scripts/skillspector-scan.sh",
+            answers["skillspector_mode"] == "document_optional",
+        ),
         (".github/workflows/codex-ci-autofix.yml", answers["ci_autofix_mode"] != "disabled"),
     )
     for relative, expected in conditional_files:
@@ -63,7 +69,7 @@ def main() -> int:
     )
     require(
         f"- External service policy states: {', '.join(expected_profile)}" in agents,
-        "AGENTS.md external-service state summary does not match generated policy",
+        "managed AGENTS.md external-service state summary does not match generated policy",
     )
 
     config = (root / ".codex/config.toml").read_text(encoding="utf-8")
