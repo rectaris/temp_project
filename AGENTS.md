@@ -11,6 +11,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Keep `SKILL.md` concise; move detailed guidance into `references/`.
 - Keep installable repo files under `template/`.
 - Keep `copier.yml` as the long-term generation/update interface.
+- Treat non-destructive Copier evolution as a repository invariant: supported copy and update paths must preserve project-owned product code, policy, configuration, plan history, and validation behavior, and must stop on unresolved conflicts, rejection files, or unclassified tracked-file deletion.
 - Keep deterministic checks in `scripts/` or `tests/`.
 - Do not add project-specific `supportcard-status` facts to generic templates.
 - When writing or editing Japanese prose in this repository, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.

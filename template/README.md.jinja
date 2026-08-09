@@ -40,14 +40,19 @@ MCP、Linear、graph memory は任意機能です。
 `.copier-answers.yml` はコミットしてください。
 テンプレート更新を取り込むには、生成先リポジトリで次を実行します。
 
+このテンプレートは更新後に agent model の固定項目を正規化する task を実行するため、`--trust` が必要です。
+`--trust` は task の実行を許可するだけであり、更新差分の安全性を保証しません。
+
 ```sh
-copier update
+copier update --trust
 ```
 
 特定のタグへ更新する場合:
 
 ```sh
-copier update --vcs-ref vX.Y.Z
+copier update --trust --vcs-ref vX.Y.Z
 ```
 
-`*.rej` ファイルが生成された場合は、コミット前に手動で確認してください。
+clean な状態から更新し、製品コード、プロジェクト固有規則、設定、計画履歴が保持されていることを差分で確認してください。
+`*.rej`、未解決競合、分類できない Git 管理対象ファイルの削除がある場合は、コミットせずに原因を解消してください。
+`.codex/agents/*.toml` では `model` と `model_reasoning_effort` だけがテンプレートの固定値へ戻り、ほかのフィールドはプロジェクト所有のまま保持されます。

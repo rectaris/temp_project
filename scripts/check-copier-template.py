@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 SOURCE_REQUIRED = [
+    "CHANGELOG.md",
     ".github/workflows/ci.yml",
     ".github/workflows/codex-ci-autofix.yml",
     ".github/codex/prompts/ci-autofix.md",
@@ -704,6 +705,61 @@ def require_agent_profile_task() -> None:
             fail(f"copier.yml missing fixed agent-profile task marker: {marker}")
 
 
+def require_copier_documentation_contract() -> None:
+    command_docs = (
+        "README.md",
+        "template/README.md.jinja",
+    )
+    for path in command_docs:
+        for line in read(path).splitlines():
+            command = line.strip()
+            if command.startswith(("copier copy ", "copier update ")) and "--trust" not in command:
+                fail(f"{path} documents an untrusted Copier command: {command}")
+
+    required_markers = {
+        "AGENTS.md": (
+            "Treat non-destructive Copier evolution as a repository invariant",
+            "unclassified tracked-file deletion",
+        ),
+        "CHANGELOG.md": (
+            "## 未リリース",
+            "## v1.1.2",
+            "`model` と `model_reasoning_effort` だけを固定値へ正規化",
+            "生成先が削除した `docs/plan/` の `.gitkeep` を通常の update で再生成しない",
+        ),
+        "template/.project-agent-workflow/AGENTS.md.jinja": (
+            "project-owned product code, policy, configuration, plan history",
+            "unclassified tracked-file deletion",
+        ),
+        "references/template-development.md": (
+            "Require `--trust` for every documented copy and update command",
+            "template-fixed `model` and `model_reasoning_effort` fields",
+            "preserve instructions and every unrelated project-owned field",
+        ),
+        "template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md": (
+            "## Non-Destructive Update Contract",
+            "copier copy --trust",
+            "copier update --trust",
+            "The `model` and `model_reasoning_effort` fields are the only exceptions.",
+            "`--trust` authorizes the bundled task; it does not prove that the resulting diff is safe to commit.",
+        ),
+        "template/.project-agent-workflow/ownership.yaml": (
+            "field_overrides:",
+            "  - path: .codex/agents/*.toml",
+            "    template_fixed:\n      - model\n      - model_reasoning_effort",
+            "    project_owned_remainder: true",
+        ),
+    }
+    for path, markers in required_markers.items():
+        text = read(path)
+        for marker in markers:
+            if marker not in text:
+                fail(f"{path} missing Copier documentation contract marker: {marker}")
+
+    if "requires `--trust` only" in read("references/template-development.md"):
+        fail("template development documentation still limits --trust to migrations")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -738,6 +794,7 @@ def main() -> int:
     require_update_boundaries(copier_yml)
     require_context_compression_boundary()
     require_agent_profile_task()
+    require_copier_documentation_contract()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")

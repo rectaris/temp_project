@@ -9,6 +9,7 @@
 
 ## Update-Safe Design
 
+- Treat preservation of downstream product code, repository policy, configuration, plan history, and validation viability as a template-development invariant for every supported copy and update path.
 - Keep `.copier-answers.yml` generated and committed in downstream repositories.
 - Version this template repo with Git tags before recommending `copier update`.
 - Keep replaceable workflow content under `.project-agent-workflow/`.
@@ -16,9 +17,11 @@
 - Put domain-specific content under generated `docs/agent/` or another declared project extension, not in the managed core.
 - Keep host-discovered bridge files small and route them to the managed core.
 - Treat `*.rej` files from `copier update` as manual review blockers.
+- Reject an update fixture that leaves unresolved conflicts, unclassified tracked-file deletion, or broken repository-specific validation even when Copier exits successfully.
 - Use a versioned pre-update guard and a separate adoption command when a breaking layout change would otherwise delete or conflict with legacy same-path files.
 - Keep adoption commands narrow, recoverable, and covered by fixtures from supported tags.
-- Document that Copier requires `--trust` only while crossing a version whose migration executes.
+- Require `--trust` for every documented copy and update command because the template always runs the post-render agent-profile normalization task.
+- Explain that `--trust` authorizes template tasks but does not establish that an update is safe to commit.
 
 ## Managed Boundaries
 
@@ -39,11 +42,15 @@ External-service modules use generated policy states in `docs/agent/external-ser
 Repository-owned:
 
 - root `AGENTS.md`, `README.md`, `.gitignore`, `.codex/config.toml`, and `.codex/hooks.json`
-- seeded `.codex/agents/*.toml` helper-agent definitions
+- seeded `.codex/agents/*.toml` helper-agent definitions, except for the template-fixed `model` and `model_reasoning_effort` fields
 - `.agents/skills/` entries whose names do not collide with generated generic skills
 - `docs/agent/` project policy and external-service settings
 - `docs/plan/` active state and history
 - product specs, UI wording, domain data contracts, and local validation adapters
+
+The post-render profile task may replace only `model` and `model_reasoning_effort` in seeded helper-agent definitions.
+
+It must preserve instructions and every unrelated project-owned field.
 
 ## Release Flow
 

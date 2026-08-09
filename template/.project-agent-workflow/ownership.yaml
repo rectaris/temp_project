@@ -29,6 +29,13 @@ seeded_project_owned:
   - docs/agent/**
   - docs/plan/**
 
+field_overrides:
+  - path: .codex/agents/*.toml
+    template_fixed:
+      - model
+      - model_reasoning_effort
+    project_owned_remainder: true
+
 metadata:
   - .copier-answers.yml
 

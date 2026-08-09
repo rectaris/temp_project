@@ -44,3 +44,4 @@ id	path
 041	docs/plan/checked/2026/08/01-15/041-spark-worker-policy.md
 042	docs/plan/checked/2026/08/01-15/042-agent-profile-update-task.md
 043	docs/plan/checked/2026/08/01-15/043-luna-xhigh-evidence-synthesis.md
+044	docs/plan/checked/2026/08/01-15/044-copier-update-documentation-contract.md

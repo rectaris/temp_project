@@ -14,10 +14,18 @@
 生成先には、計画 lifecycle、変更差分に応じた検証選択、静的セキュリティ検査、任意の NVIDIA SkillSpector スキャン手順、構造スキャン、handoff 管理、active plan の文脈抽出、ローカル agent ログ方針、任意の context 圧縮 helper、Codex hook/config 検証の汎用ルールを導入できます。
 MCP、Linear、graph memory のような外部サービス依存ルールは Copier の回答で opt-in します。
 
+リリースごとの変更内容は [CHANGELOG.md](CHANGELOG.md) に記録します。
+
 Copier が更新する汎用ファイルは、生成先の `.project-agent-workflow/` にまとめます。
 ルートの `AGENTS.md`、`README.md`、`docs/agent/`、`docs/plan/` など、開発中に変更するファイルは初回だけ生成し、以後の `copier update` では上書きしません。
 `.agents/skills/` には管理対象の汎用 Skill 用ブリッジを置き、予約名と衝突しないプロジェクト固有 Skill も追加できます。
 `.codex/` と `.github/` には、ホストが検出するための小さな橋渡しファイルまたは専用の統合ファイルだけを置きます。
+`.codex/agents/*.toml` はプロジェクト所有ですが、`model` と `model_reasoning_effort` だけはテンプレートが固定し、copy/update 後の task で正規化します。
+agent の説明、指示、sandbox 設定など、ほかのフィールドは変更しません。
+
+このテンプレートは、対応する Copier の copy/update 経路で、生成先が所有する製品コード、規則、設定、計画履歴、検証処理を削除または上書きしないことを開発要件とします。
+更新テストでは、競合、`*.rej`、分類できない Git 管理対象ファイルの削除がなく、生成先固有の検証が引き続き実行できることを確認します。
+Copier 管理ファイルと、固定対象である agent model の2項目は更新されるため、すべてのファイルが不変になるという意味ではありません。
 
 ローカル agent ログは生成先の `.agent-logs/` と `.agent-artifacts/` に保存する方針を常に生成します。
 これらは Git 管理外の情報資産として扱い、`docs/plan` には raw log ではなく要約、判断、検証結果、必要な run id を残します。
@@ -38,19 +46,19 @@ Headroom は PATH 上にある場合だけ任意 backend として使い、テ�
 GitHub から直接導入する場合:
 
 ```sh
-copier copy https://github.com/rectaris/temp_project.git /path/to/repo
+copier copy --trust https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
 安定版タグを指定する場合:
 
 ```sh
-copier copy --vcs-ref v0.3.0 https://github.com/rectaris/temp_project.git /path/to/repo
+copier copy --trust --vcs-ref v0.3.0 https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
 推奨:
 
 ```sh
-copier copy /path/to/project-agent-workflow /path/to/repo
+copier copy --trust /path/to/project-agent-workflow /path/to/repo
 ```
 
 ラッパー:
@@ -62,17 +70,20 @@ scripts/init-project-workflow.sh /path/to/repo
 対話なしでデフォルト回答を使って生成する場合:
 
 ```sh
-copier copy -f /path/to/project-agent-workflow /path/to/repo
+copier copy -f --trust /path/to/project-agent-workflow /path/to/repo
 ```
 
 生成された `.copier-answers.yml` はコミットしてください。これにより、あとから `copier update` でテンプレート更新を追従できます。
+
+このテンプレートは copy/update 後に agent model の固定項目を正規化する task を実行するため、すべての Copier コマンドで `--trust` が必要です。
+`--trust` は同梱 task の実行を許可するだけであり、差分の安全性を保証しないため、既存リポジトリでは clean な状態から実行して差分と検証結果を確認してください。
 
 ## 生成済みリポジトリを更新する
 
 生成先リポジトリで次を実行します。
 
 ```sh
-copier update
+copier update --trust
 ```
 
 v0 系のルート配置からは、`copier update --vcs-ref v1.0.0` と `copier update --vcs-ref v1.1.0` を実行しないでください。
@@ -99,7 +110,7 @@ uv run --with copier python ../temp_project/scripts/adopt-to-namespaced-layout.p
 ほかの旧スクリプトから import される Python module は互換 bridge の対象にしません。
 v1.0.0 の tag には旧 `template/scripts/` がないため、v1.0.0 修復時の旧ルート CLI は自動置換せず保持します。
 更新後は manifest と、旧 Copier tag を参照しているプロジェクト所有ファイルを確認してください。
-`.copier-answers.yml` が v1 系を記録した後は、通常の `copier update` を使います。
+`.copier-answers.yml` が v1 系を記録した後は、通常の `copier update --trust` を使います。
 
 すでに v1.1.0 または v1.1.1 の導入結果を commit している場合は、`copier update --trust --vcs-ref v1.1.2` で managed core、Stop Hook の配線、context compression の拒否境界を修正します。
 
@@ -115,7 +126,7 @@ Copier の競合は、対象ファイル内の `<<<<<<<`、`=======`、`>>>>>>>`
 タグ付きバージョンへ明示的に更新する場合:
 
 ```sh
-copier update --vcs-ref v0.3.0
+copier update --trust --vcs-ref v0.3.0
 ```
 
 リリース時は、テンプレート変更をコミットしたあとにタグを作成して push します。
