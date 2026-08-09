@@ -5,6 +5,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 ## Helper Roles
 
 - `repo_explorer`: read-only discovery and impact analysis.
+- `fast_scoped_worker`: fast, low-ambiguity code changes with explicit write scope and predetermined validation.
 - `scoped_worker`: bounded implementation with explicit write scope.
 - `change_reviewer`: read-only correctness and regression review.
 - `docs_researcher`: read-only external or version-specific research.
@@ -15,6 +16,8 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 
 - Delegate only bounded, independently useful tasks.
 - Derive delegated write scope from the active plan's `write_scope`, keep it non-overlapping, and treat `context_files` as read-only.
+- Use `fast_scoped_worker` only when the expected edit and validation are known before delegation.
+- Stop a fast worker when it encounters architecture, policy, security, authorization, destructive-operation, external-write, or scope-expansion decisions.
 - Treat helper output as advisory until accepted.
 - Prefer local work when coordination cost is higher than task complexity.
 - Keep final interpretation, integration, validation acceptance, planning updates, commits, and completion reports in the main session.
@@ -32,7 +35,8 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 
 ## Decision Matrix
 
-- Use local execution for urgent critical-path work, direct user clarification, final specification judgment, validation acceptance, planning updates, commits, and completion reports.
+- Use local execution for short deterministic commands, urgent critical-path work, direct user clarification, final specification judgment, validation acceptance, planning updates, commits, tags, pushes, releases, and completion reports.
+- Use `fast_scoped_worker` for bounded, reversible code changes whose write scope and validation are predetermined.
 - Use `repo_explorer` for targeted discovery, impact analysis, and existing-pattern lookup.
 - Use `scoped_worker` for bounded implementation when write scope is explicit and non-overlapping.
 - Use `change_reviewer` for correctness, regression, validation-gap, security, and spec-conflict review.
@@ -47,6 +51,16 @@ Consider delegation or a separate review when:
 - a change touches data and runtime logic
 - a change affects validation rules, hooks, security checks, or orchestration
 - repeated low-level lookup would distract from final integration
+
+## Model Defaults
+
+- Use `gpt-5.6-luna` with low reasoning for `repo_explorer`.
+- Use `gpt-5.6-luna` with medium reasoning for `docs_researcher`.
+- Use `gpt-5.3-codex-spark` with medium reasoning for `fast_scoped_worker` and `sequential_plan_worker`.
+- Use `gpt-5.6-terra` with medium reasoning for `scoped_worker`.
+- Use `gpt-5.6-sol` with high reasoning for `change_reviewer`.
+- Use a higher one-off effort only when the delegated task remains bounded and the prompt states why the default is insufficient.
+- Reserve Sol with xhigh reasoning for exceptional final review of security, ownership, migration, or release risk.
 
 ## Stop Review Gate
 

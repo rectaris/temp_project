@@ -20,6 +20,7 @@ REQUIRED_ROOT_FILES = [
     ".codex/config.toml",
     ".codex/hooks.json",
     ".codex/agents/repo_explorer.toml",
+    ".codex/agents/fast_scoped_worker.toml",
     ".codex/hooks/agent_log_event.py",
     ".codex/hooks/semantic_guard_advisory.py",
     ".codex/hooks/stop_review_gate.py",
@@ -153,6 +154,56 @@ def check_agents_rules() -> None:
             fail(f"AGENTS.md missing root policy reference: {required}")
 
 
+def check_agent_model_profiles() -> None:
+    contracts = {
+        ".codex/agents/change_reviewer.toml": (
+            "gpt-5.6-sol",
+            "high",
+            'name = "change_reviewer"',
+        ),
+        ".codex/agents/docs_researcher.toml": (
+            "gpt-5.6-luna",
+            "medium",
+            'name = "docs_researcher"',
+        ),
+        ".codex/agents/fast_scoped_worker.toml": (
+            "gpt-5.3-codex-spark",
+            "medium",
+            'name = "fast_scoped_worker"',
+            "Require an explicit write scope and predetermined validation",
+            "Do not commit, tag, push, release",
+        ),
+        ".codex/agents/repo_explorer.toml": (
+            "gpt-5.6-luna",
+            "low",
+            'name = "repo_explorer"',
+        ),
+        ".codex/agents/scoped_worker.toml": (
+            "gpt-5.6-terra",
+            "medium",
+            'name = "scoped_worker"',
+            "Do not commit changes",
+        ),
+        ".codex/agents/sequential_plan_worker.toml": (
+            "gpt-5.3-codex-spark",
+            "medium",
+            'name = "sequential_plan_worker"',
+            "Do not process the next active plan",
+            "Do not commit changes",
+        ),
+    }
+    for relative, (model, effort, *role_markers) in contracts.items():
+        text = read(relative)
+        markers = (
+            f'model = "{model}"',
+            f'model_reasoning_effort = "{effort}"',
+            *role_markers,
+        )
+        for marker in markers:
+            if marker not in text:
+                fail(f"{relative} missing fixed agent contract: {marker}")
+
+
 def check_reusable_skill_parity() -> None:
     for skill in REUSABLE_SKILLS:
         for relative in ("SKILL.md", "agents/openai.yaml"):
@@ -229,6 +280,7 @@ def main() -> int:
     check_required_files()
     check_gitignore()
     check_agents_rules()
+    check_agent_model_profiles()
     check_reusable_skill_parity()
     check_user_communication_contract()
     check_active_plans()

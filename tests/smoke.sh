@@ -608,11 +608,22 @@ rm "$tmp/typescript/$bad_plan"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
 
 test -f "$tmp/typescript/.codex/agents/repo_explorer.toml"
+test -f "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
 test -f "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
-if grep -q 'gpt-5.3-codex-spark' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"; then
-  echo "sequential worker pinned an entitlement-specific preview model" >&2
-  exit 1
-fi
+grep -q '^model = "gpt-5.6-sol"$' "$tmp/typescript/.codex/agents/change_reviewer.toml"
+grep -q '^model_reasoning_effort = "high"$' "$tmp/typescript/.codex/agents/change_reviewer.toml"
+grep -q '^model = "gpt-5.6-luna"$' "$tmp/typescript/.codex/agents/docs_researcher.toml"
+grep -q '^model_reasoning_effort = "medium"$' "$tmp/typescript/.codex/agents/docs_researcher.toml"
+grep -q '^model = "gpt-5.6-luna"$' "$tmp/typescript/.codex/agents/repo_explorer.toml"
+grep -q '^model_reasoning_effort = "low"$' "$tmp/typescript/.codex/agents/repo_explorer.toml"
+grep -q '^model = "gpt-5.6-terra"$' "$tmp/typescript/.codex/agents/scoped_worker.toml"
+grep -q '^model_reasoning_effort = "medium"$' "$tmp/typescript/.codex/agents/scoped_worker.toml"
+grep -q '^model = "gpt-5.3-codex-spark"$' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
+grep -q '^model_reasoning_effort = "medium"$' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
+grep -q 'Require an explicit write scope and predetermined validation' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
+grep -q 'Do not commit, tag, push, release' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
+grep -q '^model = "gpt-5.3-codex-spark"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
+grep -q '^model_reasoning_effort = "medium"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q 'Do not process the next active plan' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q 'Do not spawn descendant agents' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q "Do not edit the assigned plan's status" "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
@@ -698,6 +709,8 @@ grep -Fq 'ref: ${{ needs.prepare.outputs.head_sha }}' "$tmp/typescript/.github/w
 grep -q 'Use tmux for long-running, shared, or interactive commands' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Command Sessions' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'sequential_plan_worker.*exactly one assigned active plan' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'fast_scoped_worker.*predetermined validation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'gpt-5.6-sol.*high reasoning.*change_reviewer' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Do not redefine it here as a custom candidate' "$tmp/typescript/docs/plan/sub-agents/custom-agents.md"
 grep -q 'Name tmux sessions descriptively' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'docs/agent/external-services.yaml' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"

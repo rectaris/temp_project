@@ -1,5 +1,6 @@
 name = "repo_explorer"
 description = "Read-only repository explorer for finding relevant files, symbols, existing patterns, and impact boundaries before implementation."
+model = "gpt-5.6-luna"
 model_reasoning_effort = "low"
 sandbox_mode = "read-only"
 

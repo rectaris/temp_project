@@ -61,6 +61,7 @@ SOURCE_REQUIRED = [
     "template/.codex/hooks.json.jinja",
     "template/.codex/agents/change_reviewer.toml",
     "template/.codex/agents/docs_researcher.toml",
+    "template/.codex/agents/fast_scoped_worker.toml",
     "template/.codex/agents/repo_explorer.toml",
     "template/.codex/agents/scoped_worker.toml",
     "template/.codex/agents/sequential_plan_worker.toml",
@@ -193,6 +194,7 @@ GENERATED_REQUIRED = [
     ".codex/config.toml",
     ".codex/agents/change_reviewer.toml",
     ".codex/agents/docs_researcher.toml",
+    ".codex/agents/fast_scoped_worker.toml",
     ".codex/agents/repo_explorer.toml",
     ".codex/agents/scoped_worker.toml",
     ".codex/agents/sequential_plan_worker.toml",
@@ -379,6 +381,8 @@ def require_sequential_worker() -> None:
     text = path.read_text(encoding="utf-8")
     required = (
         'name = "sequential_plan_worker"',
+        'model = "gpt-5.3-codex-spark"',
+        'model_reasoning_effort = "medium"',
         'sandbox_mode = "workspace-write"',
         "Do not process the next active plan",
         "Do not spawn descendant agents",
@@ -388,8 +392,40 @@ def require_sequential_worker() -> None:
     for marker in required:
         if marker not in text:
             fail(f"sequential worker missing required contract: {marker}")
-    if "gpt-5.3-codex-spark" in text:
-        fail("sequential worker must not require an entitlement-specific preview model")
+
+
+def require_agent_model_profiles() -> None:
+    expected = {
+        "change_reviewer": ("gpt-5.6-sol", "high"),
+        "docs_researcher": ("gpt-5.6-luna", "medium"),
+        "fast_scoped_worker": ("gpt-5.3-codex-spark", "medium"),
+        "repo_explorer": ("gpt-5.6-luna", "low"),
+        "scoped_worker": ("gpt-5.6-terra", "medium"),
+        "sequential_plan_worker": ("gpt-5.3-codex-spark", "medium"),
+    }
+    for name, (model, effort) in expected.items():
+        text = read(f"template/.codex/agents/{name}.toml")
+        for marker in (f'model = "{model}"', f'model_reasoning_effort = "{effort}"'):
+            if marker not in text:
+                fail(f"{name} missing fixed model profile: {marker}")
+
+
+def require_fast_scoped_worker() -> None:
+    path = ROOT / "template/.codex/agents/fast_scoped_worker.toml"
+    text = path.read_text(encoding="utf-8")
+    required = (
+        'name = "fast_scoped_worker"',
+        'model = "gpt-5.3-codex-spark"',
+        'model_reasoning_effort = "medium"',
+        'sandbox_mode = "workspace-write"',
+        "Require an explicit write scope and predetermined validation",
+        "Stop and report unexpected tracked-file deletion",
+        "Do not spawn descendant agents",
+        "Do not commit, tag, push, release",
+    )
+    for marker in required:
+        if marker not in text:
+            fail(f"fast scoped worker missing required contract: {marker}")
 
 
 def template_source_files() -> set[str]:
@@ -681,6 +717,8 @@ def main() -> int:
         fail("answers template must persist _copier_answers for future updates")
 
     require_sequential_worker()
+    require_agent_model_profiles()
+    require_fast_scoped_worker()
     require_referent_first_alignment()
     require_user_communication_alignment()
     require_template_manifest_complete()

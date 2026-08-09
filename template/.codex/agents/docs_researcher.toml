@@ -1,5 +1,6 @@
 name = "docs_researcher"
 description = "Read-only helper for official, current, version-specific documentation and external research."
+model = "gpt-5.6-luna"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 

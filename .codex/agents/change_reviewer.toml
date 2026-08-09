@@ -1,5 +1,6 @@
 name = "change_reviewer"
 description = "Read-only reviewer focused on correctness, regressions, validation gaps, security-sensitive issues, and spec conflicts."
+model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 
@@ -10,4 +11,3 @@ Include affected file or symbol, risk, and evidence.
 Avoid style-only comments unless they hide a real maintainability or correctness issue.
 Do not edit files.
 """
-

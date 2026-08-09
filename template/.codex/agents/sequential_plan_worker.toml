@@ -1,5 +1,7 @@
 name = "sequential_plan_worker"
 description = "Bounded implementation worker for one assigned active plan with structured evidence and no descendant delegation."
+model = "gpt-5.3-codex-spark"
+model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 
 developer_instructions = """

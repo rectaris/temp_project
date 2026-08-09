@@ -4,7 +4,7 @@ Use this file only when a repository repeatedly needs project-specific helper ro
 
 ## Rules
 
-- Prefer the generated `repo_explorer`, `scoped_worker`, `change_reviewer`, `docs_researcher`, and `sequential_plan_worker` roles first.
+- Prefer the generated `repo_explorer`, `fast_scoped_worker`, `scoped_worker`, `change_reviewer`, `docs_researcher`, and `sequential_plan_worker` roles first.
 - Add a custom role only after the repeated workflow, inputs, write scope, output contract, and validation expectation are clear.
 - Keep helper output advisory until the main session accepts it through repository validation.
 - Do not include secrets, unrelated local context, or external-service credentials in helper prompts.

@@ -78,9 +78,24 @@ def main() -> int:
         "generated Codex config lacks canonical concurrency setting",
     )
     require("max_threads" not in config and "max_depth" not in config, "generated Codex config uses legacy settings")
-    for name in ("change_reviewer", "docs_researcher", "repo_explorer", "scoped_worker"):
+    expected_profiles = {
+        "change_reviewer": ("gpt-5.6-sol", "high"),
+        "docs_researcher": ("gpt-5.6-luna", "medium"),
+        "fast_scoped_worker": ("gpt-5.3-codex-spark", "medium"),
+        "repo_explorer": ("gpt-5.6-luna", "low"),
+        "scoped_worker": ("gpt-5.6-terra", "medium"),
+        "sequential_plan_worker": ("gpt-5.3-codex-spark", "medium"),
+    }
+    for name, (model, effort) in expected_profiles.items():
         text = (root / ".codex" / "agents" / f"{name}.toml").read_text(encoding="utf-8")
-        require("\nmodel = " not in text, f"{name} pins a helper model")
+        require(
+            f'model = "{model}"' in text,
+            f"{name} does not pin its task-specific model",
+        )
+        require(
+            f'model_reasoning_effort = "{effort}"' in text,
+            f"{name} does not pin its task-specific reasoning effort",
+        )
     docs_researcher = (root / ".codex/agents/docs_researcher.toml").read_text(encoding="utf-8")
     require(
         "external-service policy authorizes" in docs_researcher
@@ -90,6 +105,12 @@ def main() -> int:
     require(
         "Do not commit changes." in (root / ".codex/agents/scoped_worker.toml").read_text(encoding="utf-8"),
         "scoped_worker does not preserve main-session commit ownership",
+    )
+    fast_worker = (root / ".codex/agents/fast_scoped_worker.toml").read_text(encoding="utf-8")
+    require(
+        "Require an explicit write scope and predetermined validation" in fast_worker
+        and "Do not commit, tag, push, release" in fast_worker,
+        "fast_scoped_worker lacks its bounded-work or main-session ownership contract",
     )
     return 0
 
