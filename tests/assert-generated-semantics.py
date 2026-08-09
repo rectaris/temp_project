@@ -27,6 +27,7 @@ def main() -> int:
 
     profile_answers = (
         ("primary_language", "Primary language"),
+        ("human_report_mode", "Human report mode"),
         ("codex_hooks_mode", "Codex hooks mode"),
         ("skillspector_mode", "SkillSpector mode"),
         ("ci_autofix_mode", "CI autofix mode"),
@@ -36,6 +37,12 @@ def main() -> int:
             f"- {label}: `{answers[key]}`" in agents,
             f"managed AGENTS.md does not reflect {key}",
         )
+
+    human_report_config = (root / ".project-agent-workflow/human-report.json").read_text(encoding="utf-8")
+    require(
+        f'"mode": "{answers["human_report_mode"]}"' in human_report_config,
+        "managed human report config does not reflect human_report_mode",
+    )
 
     conditional_files = (
         (".codex/hooks.json", answers["codex_hooks_mode"] == "enable_local_logging"),

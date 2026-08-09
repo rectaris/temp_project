@@ -96,6 +96,14 @@ primary_language:
     ドキュメント中心: docs
   default: "mixed"
 
+human_report_mode:
+  type: str
+  help: 開発者向け報告について、必要な場合だけローカル HTML を生成する機能を選んでください。
+  choices:
+    無効にする: disabled
+    AI エージェントが判断してローカル生成する: agent_select_local
+  default: "agent_select_local"
+
 codex_hooks_mode:
   type: str
   help: Codex hooks の導入方法を選んでください。

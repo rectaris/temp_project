@@ -12,6 +12,7 @@ default_reads:
   - .project-agent-workflow/docs/agent/SPEC_GIT_WORKFLOW.md
   - .project-agent-workflow/docs/agent/SPEC_FILE_MANAGEMENT.md
   - .project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md
+  - .project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md
 
 task_types:
   planning_docs:
@@ -120,6 +121,7 @@ task_types:
     required:
       - .project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - .project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md
+      - .project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md
     conditional:
       - path: .project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md
         when: the user-facing message is written in Japanese.

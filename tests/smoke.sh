@@ -395,6 +395,67 @@ run_referent_contract_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/referent-contract.py semantic-diff "$contract" | grep -q 'Smoke term')
 }
 
+run_human_report_smoke() {
+  out=$1
+  input=human-report-smoke.json
+  python3 - "$out/$input" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+report = {
+    "version": 1,
+    "title": "Generated <report>",
+    "language": "en",
+    "audience": "developer",
+    "purpose": "decision",
+    "summary": "Compare three generated-project options.",
+    "facts": [
+        {
+            "label": "Plan policy",
+            "value": "The generated plan README is present.",
+            "certainty": "confirmed",
+            "source": "docs/plan/README.md",
+        }
+    ],
+    "decisions": [
+        {
+            "question": "Which option should be selected?",
+            "options": [
+                {"label": label, "summary": label, "advantages": [], "disadvantages": []}
+                for label in ("A", "B", "C")
+            ],
+            "recommendation": "A",
+            "reason": "Smoke validation.",
+        }
+    ],
+    "relations": [],
+    "risks": [],
+    "next_actions": [],
+    "presentation": {
+        "explicit_html": False,
+        "needs_cross_comparison": True,
+        "needs_filtering": False,
+    },
+    "content_safety": {
+        "reviewed": True,
+        "contains_raw_logs": False,
+        "contains_unredacted_sensitive_data": False,
+    },
+    "sources": ["docs/plan/README.md"],
+}
+Path(sys.argv[1]).write_text(json.dumps(report), encoding="utf-8")
+PY
+  (cd "$out" && python3 .project-agent-workflow/scripts/human-report.py assess "$input" | grep -q '"decision": "generate"')
+  output=$(cd "$out" && python3 .project-agent-workflow/scripts/human-report.py render "$input" --report-id smoke-decision)
+  test "$output" = ".agent-artifacts/human-reports/smoke-decision/index.html"
+  test -f "$out/$output"
+  grep -q '&lt;report&gt;' "$out/$output"
+  grep -q 'docs/plan/README.md' "$out/$output"
+  git -C "$out" check-ignore "$output" >/dev/null
+  rm "$out/$input"
+}
+
 run_external_policy_smoke() {
   out=$1
   policy="$out/.agent-artifacts/external-services-configured.yaml"
@@ -450,7 +511,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
 done
 
 tab=$(printf '\t')
-while IFS="$tab" read -r case_name primary_language codex_hooks_mode skillspector_mode mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
+while IFS="$tab" read -r case_name primary_language human_report_mode codex_hooks_mode skillspector_mode mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
   [ "$case_name" != "case" ] || continue
   [ -n "$case_name" ] || continue
   fixture="$tmp/$case_name.answers.yml"
@@ -460,6 +521,7 @@ while IFS="$tab" read -r case_name primary_language codex_hooks_mode skillspecto
     printf 'project_slug: %s\n' "$case_name"
     printf 'project_purpose: Exercise Copier pairwise generation.\n'
     printf 'primary_language: %s\n' "$primary_language"
+    printf 'human_report_mode: %s\n' "$human_report_mode"
     printf 'codex_hooks_mode: %s\n' "$codex_hooks_mode"
     printf 'skillspector_mode: %s\n' "$skillspector_mode"
     printf 'mcp_policy_mode: %s\n' "$mcp_policy_mode"
@@ -487,6 +549,7 @@ import yaml
 answers = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = {
     "primary_language": "mixed",
+    "human_report_mode": "agent_select_local",
     "codex_hooks_mode": "install_templates",
     "skillspector_mode": "disabled",
     "mcp_policy_mode": "disabled",
@@ -528,6 +591,7 @@ run_plan_archive_compatibility_smoke "$tmp/typescript"
 run_pre_v1_plan_compatibility_smoke "$tmp/typescript"
 run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
+run_human_report_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"
 
 bad_design=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh backlog bad-human-design --summary "Bad human design." --summary-ja "設計承認の不整合を確認する。")

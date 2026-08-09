@@ -53,6 +53,7 @@ SOURCE_REQUIRED = [
     "template/README.md.jinja",
     "template/.project-agent-workflow/AGENTS.md.jinja",
     "template/.project-agent-workflow/README.md",
+    "template/.project-agent-workflow/human-report.json.jinja",
     "template/.project-agent-workflow/ownership.yaml",
     "template/.github/workflows/project-agent-workflow.yml",
     "template/.github/workflows/codex-ci-autofix.yml.jinja",
@@ -115,6 +116,7 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
     "template/.project-agent-workflow/docs/agent/SPEC_VALIDATION.md.jinja",
     "template/.project-agent-workflow/docs/agent/SPEC_GIT_WORKFLOW.md",
+    "template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md",
     "template/.project-agent-workflow/docs/agent/SPEC_FILE_MANAGEMENT.md",
     "template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md",
     "template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
@@ -147,6 +149,7 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/scripts/check-external-service-policy.py",
     "template/.project-agent-workflow/scripts/context-compress.sh",
     "template/.project-agent-workflow/scripts/import-codex-transcript.py",
+    "template/.project-agent-workflow/scripts/human-report.py",
     "template/.project-agent-workflow/scripts/lint-plan-docs.sh",
     "template/.project-agent-workflow/scripts/format-plan-docs.sh",
     "template/.project-agent-workflow/scripts/select-task-context.sh",
@@ -177,6 +180,7 @@ SOURCE_REQUIRED = [
     "tests/lib-copier.sh",
     "tests/smoke.sh",
     "tests/test-agent-model-profiles.py",
+    "tests/test-human-report.py",
     "tests/test-hooks.py",
     "tests/test-copier-migration.py",
     "tests/test-copier-adoption.py",
@@ -209,6 +213,7 @@ GENERATED_REQUIRED = [
     ".codex/hooks/stop_review_gate.py",
     ".project-agent-workflow/AGENTS.md",
     ".project-agent-workflow/README.md",
+    ".project-agent-workflow/human-report.json",
     ".project-agent-workflow/ownership.yaml",
     ".project-agent-workflow/hooks/agent_log_event.py",
     ".project-agent-workflow/hooks/pre_tool_hardening_gate.py",
@@ -258,6 +263,7 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
     "docs/agent/external-services.yaml",
     ".project-agent-workflow/docs/agent/SPEC_GIT_WORKFLOW.md",
+    ".project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md",
     ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
     ".project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md",
     ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
@@ -285,6 +291,7 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/scripts/check-external-service-policy.py",
     ".project-agent-workflow/scripts/context-compress.sh",
     ".project-agent-workflow/scripts/import-codex-transcript.py",
+    ".project-agent-workflow/scripts/human-report.py",
     ".project-agent-workflow/scripts/complete-plan.sh",
     ".project-agent-workflow/scripts/workflow-status.sh",
     ".project-agent-workflow/scripts/create-plan.sh",
@@ -317,6 +324,7 @@ QUESTIONS = {
     "project_slug",
     "project_purpose",
     "primary_language",
+    "human_report_mode",
     "codex_hooks_mode",
     "skillspector_mode",
     "mcp_policy_mode",
@@ -327,6 +335,7 @@ QUESTIONS = {
 
 EXPECTED_CHOICE_VALUES = {
     "primary_language": {"typescript", "python", "mixed", "docs"},
+    "human_report_mode": {"disabled", "agent_select_local"},
     "codex_hooks_mode": {"disabled", "install_templates", "enable_local_logging"},
     "skillspector_mode": {"disabled", "document_optional"},
     "mcp_policy_mode": {"disabled", "document_optional"},
@@ -336,6 +345,7 @@ EXPECTED_CHOICE_VALUES = {
 }
 
 EXPECTED_DEFAULT_VALUES = {
+    "human_report_mode": "agent_select_local",
     "ci_autofix_mode": "disabled",
 }
 

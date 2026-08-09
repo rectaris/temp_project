@@ -2,6 +2,7 @@ project_name: docs-workspace
 project_slug: docs-workspace
 project_purpose: Maintain a documentation workspace.
 primary_language: docs
+human_report_mode: agent_select_local
 codex_hooks_mode: disabled
 skillspector_mode: disabled
 mcp_policy_mode: disabled

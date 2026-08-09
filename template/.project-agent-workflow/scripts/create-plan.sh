@@ -82,6 +82,7 @@ required_specs:
   - .project-agent-workflow/docs/agent/SPEC_GIT_WORKFLOW.md
   - .project-agent-workflow/docs/agent/SPEC_FILE_MANAGEMENT.md
   - .project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md
+  - .project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md
   - .project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_FLOW.md
   - .project-agent-workflow/docs/agent/SPEC_ENVIRONMENT.md
   - docs/agent/PROJECT_ENVIRONMENT.md

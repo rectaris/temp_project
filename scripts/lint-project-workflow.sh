@@ -38,6 +38,7 @@ fi
 python3 "$root/scripts/check-copier-template.py"
 python3 "$root/scripts/check-root-agent-policy.py" --self-test
 python3 "$root/tests/test-hooks.py"
+python3 "$root/tests/test-human-report.py"
 python3 "$root/tests/test-agent-model-profiles.py"
 python3 "$root/tests/test-copier-migration.py"
 python3 "$root/tests/test-copier-adoption.py"
