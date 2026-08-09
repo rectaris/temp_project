@@ -33,9 +33,9 @@ if ! command -v copier >/dev/null 2>&1; then
 fi
 
 if [ "$force" -eq 1 ]; then
-  copier copy -f "$package_root" "$target"
+  copier copy -f --trust "$package_root" "$target"
 else
-  copier copy "$package_root" "$target"
+  copier copy --trust "$package_root" "$target"
 fi
 
 target_root=$(CDPATH= cd -- "$target" && pwd)

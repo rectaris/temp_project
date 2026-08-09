@@ -174,6 +174,7 @@ SOURCE_REQUIRED = [
     "tests/root-plan-lifecycle.sh",
     "tests/lib-copier.sh",
     "tests/smoke.sh",
+    "tests/test-agent-model-profiles.py",
     "tests/test-hooks.py",
     "tests/test-copier-migration.py",
     "tests/test-copier-adoption.py",
@@ -186,6 +187,7 @@ SOURCE_REQUIRED = [
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",
     "scripts/update_hook_wiring.py",
+    "scripts/update_agent_model_profiles.py",
 ]
 
 GENERATED_REQUIRED = [
@@ -669,6 +671,18 @@ def require_context_compression_boundary() -> None:
             fail(f"generated context compression is missing normative path refusal: {marker}")
 
 
+def require_agent_profile_task() -> None:
+    copier_yml = read("copier.yml")
+    required = (
+        "_tasks:",
+        '"[[ _copier_python ]]"',
+        '"[[ _copier_conf.src_path ]]/scripts/update_agent_model_profiles.py"',
+    )
+    for marker in required:
+        if marker not in copier_yml:
+            fail(f"copier.yml missing fixed agent-profile task marker: {marker}")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -702,6 +716,7 @@ def main() -> int:
     require_japanese_prompts(copier_yml)
     require_update_boundaries(copier_yml)
     require_context_compression_boundary()
+    require_agent_profile_task()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")

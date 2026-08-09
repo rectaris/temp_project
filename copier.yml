@@ -30,6 +30,13 @@ _skip_if_exists:
   - "/docs/agent/**"
   - "/docs/plan/**"
 
+_tasks:
+  - command:
+      - "[[ _copier_python ]]"
+      - "[[ _copier_conf.src_path ]]/scripts/update_agent_model_profiles.py"
+      - "--destination"
+      - "."
+
 _migrations:
   - version: v1.0.0
     command:

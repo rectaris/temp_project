@@ -42,3 +42,4 @@ id	path
 039	docs/plan/checked/2026/08/01-15/039-context-compression-namespaced-policy.md
 040	docs/plan/checked/2026/08/01-15/040-v112-four-project-adoption.md
 041	docs/plan/checked/2026/08/01-15/041-spark-worker-policy.md
+042	docs/plan/checked/2026/08/01-15/042-agent-profile-update-task.md

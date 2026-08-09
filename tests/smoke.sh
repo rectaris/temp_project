@@ -30,14 +30,14 @@ fi
 render_fixture() {
   fixture=$1
   out=$2
-  set -- copy -q -f --vcs-ref "$source_ref" --data-file "$fixture"
+  set -- copy -q -f --trust --vcs-ref "$source_ref" --data-file "$fixture"
   set -- "$@" "$root" "$out"
   run_copier "$@" >/dev/null
 }
 
 render_defaults() {
   out=$1
-  run_copier copy -q -f --defaults --vcs-ref "$source_ref" "$root" "$out" >/dev/null
+  run_copier copy -q -f --trust --defaults --vcs-ref "$source_ref" "$root" "$out" >/dev/null
 }
 
 assert_generated_inventory() {
@@ -503,13 +503,13 @@ assert_rejected_input() {
   label=$1
   question=$2
   value=$3
-  if run_copier copy -f --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data "$question=$value" "$root" "$tmp/invalid-$label" >/dev/null 2>&1; then
+  if run_copier copy -f --trust --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data "$question=$value" "$root" "$tmp/invalid-$label" >/dev/null 2>&1; then
     echo "copier accepted invalid input: $label" >&2
     exit 1
   fi
 }
 
-if run_copier copy -f --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data project_slug='invalid slug' "$root" "$tmp/invalid-slug" >/dev/null 2>&1; then
+if run_copier copy -f --trust --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data project_slug='invalid slug' "$root" "$tmp/invalid-slug" >/dev/null 2>&1; then
   echo "copier accepted an invalid project slug" >&2
   exit 1
 fi

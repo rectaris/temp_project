@@ -113,6 +113,22 @@ EOF
   printf '%s\n' "$out"
 }
 
+assert_agent_profiles() {
+  out=$1
+  grep -q '^model = "gpt-5.6-sol"$' "$out/.codex/agents/change_reviewer.toml"
+  grep -q '^model_reasoning_effort = "high"$' "$out/.codex/agents/change_reviewer.toml"
+  grep -q '^model = "gpt-5.6-luna"$' "$out/.codex/agents/docs_researcher.toml"
+  grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/docs_researcher.toml"
+  grep -q '^model = "gpt-5.6-luna"$' "$out/.codex/agents/repo_explorer.toml"
+  grep -q '^model_reasoning_effort = "low"$' "$out/.codex/agents/repo_explorer.toml"
+  grep -q '^model = "gpt-5.6-terra"$' "$out/.codex/agents/scoped_worker.toml"
+  grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/scoped_worker.toml"
+  grep -q '^model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/fast_scoped_worker.toml"
+  grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/fast_scoped_worker.toml"
+  grep -q '^model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/sequential_plan_worker.toml"
+  grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/sequential_plan_worker.toml"
+}
+
 validate_common_lane() {
   out=$1
   expect_legacy_root=${2:-1}
@@ -203,6 +219,7 @@ validate_common_lane() {
     [ -n "$path" ] || continue
     test -f "$out/$path"
   done
+  assert_agent_profiles "$out"
 }
 
 earliest_out=$(prepare_lane earliest-supported "$earliest_ref" "$legacy_answers")
@@ -616,6 +633,7 @@ for plan_dir in active backlog checked handoffs; do
 done
 git -C "$v111_out" commit -m "Remove plan directory placeholders" >/dev/null
 run_copier update -q -f --trust --vcs-ref "$target_ref" "$v111_out" >/dev/null
+assert_agent_profiles "$v111_out"
 for plan_dir in active backlog checked handoffs; do
   if [ -e "$v111_out/docs/plan/$plan_dir/.gitkeep" ]; then
     echo "copier update recreated removed plan placeholder: docs/plan/$plan_dir/.gitkeep" >&2
@@ -630,7 +648,7 @@ future_out="$tmp/future-project"
 git clone -q "$update_source" "$future_source"
 # Keep Copier bound to this mutable test source instead of the clone's origin.
 git -C "$future_source" remote remove origin
-run_copier copy -q -f --vcs-ref HEAD --data-file "$root/tests/fixtures/typescript.answers.yml" "$future_source" "$future_out" >/dev/null
+run_copier copy -q -f --trust --vcs-ref HEAD --data-file "$root/tests/fixtures/typescript.answers.yml" "$future_source" "$future_out" >/dev/null
 git -C "$future_out" init -b main >/dev/null
 git -C "$future_out" config user.email "ci@example.invalid"
 git -C "$future_out" config user.name "CI"
@@ -671,7 +689,7 @@ git -C "$future_out" commit -m "Add project-owned extensions" >/dev/null
 printf '\nFuture managed core marker.\n' >>"$future_source/template/.project-agent-workflow/README.md"
 git -C "$future_source" add template/.project-agent-workflow/README.md
 git -C "$future_source" -c user.email=ci@example.invalid -c user.name=CI commit -m "Update managed core" >/dev/null
-run_copier update -q -f --vcs-ref HEAD "$future_out" >/dev/null
+run_copier update -q -f --trust --vcs-ref HEAD "$future_out" >/dev/null
 
 grep -q 'Future managed core marker.' "$future_out/.project-agent-workflow/README.md"
 grep -q 'Project AGENTS marker.' "$future_out/AGENTS.md"
