@@ -39,3 +39,4 @@ id	path
 036	docs/plan/checked/2026/08/01-15/036-copier-v031-update-coverage.md
 037	docs/plan/checked/2026/08/01-15/037-copier-safe-legacy-adoption.md
 038	docs/plan/checked/2026/08/01-15/038-copier-v111-adoption-corrections.md
+039	docs/plan/checked/2026/08/01-15/039-context-compression-namespaced-policy.md

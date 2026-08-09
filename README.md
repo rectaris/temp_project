@@ -81,12 +81,14 @@ v0 系のルート配置からは、`copier update --vcs-ref v1.0.0` と `copier
 
 公開済みの v1.1.0 は、Git 管理対象外の依存環境を競合として誤検出し、migration backup を現行コードとして検証する場合があります。
 
-v1.1.1 以降へ初めて移行する場合は、clean な生成先リポジトリで、checkout 済みテンプレートの専用スクリプトを実行します。
+公開済みの v1.1.1 は、`.project-agent-workflow/docs/agent/` の規範文書を context compression の拒否対象に含めていません。
+
+v1.1.2 以降へ初めて移行する場合は、clean な生成先リポジトリで、checkout 済みテンプレートの専用スクリプトを実行します。
 
 ```sh
 uv run --with copier python ../temp_project/scripts/adopt-to-namespaced-layout.py \
   --destination . \
-  --vcs-ref v1.1.1
+  --vcs-ref v1.1.2
 ```
 
 この処理は旧ファイルを `.project-agent-workflow-migration/v1-pre-namespace/` へコピーしてから `copier recopy` を使い、新しい管理領域を追加します。
@@ -95,7 +97,7 @@ uv run --with copier python ../temp_project/scripts/adopt-to-namespaced-layout.p
 更新後は manifest と、旧 Copier tag を参照しているプロジェクト所有ファイルを確認してください。
 `.copier-answers.yml` が v1 系を記録した後は、通常の `copier update` を使います。
 
-すでに v1.1.0 の導入結果を commit している場合は、`copier update --trust --vcs-ref v1.1.1` で managed core と Stop Hook の配線を修正します。
+すでに v1.1.0 または v1.1.1 の導入結果を commit している場合は、`copier update --trust --vcs-ref v1.1.2` で managed core、Stop Hook の配線、context compression の拒否境界を修正します。
 
 Copier の競合は、対象ファイル内の `<<<<<<<`、`=======`、`>>>>>>>` または `*.rej` ファイルとして現れる場合があります。
 導入スクリプトは、旧テンプレートファイルを先にバックアップします。

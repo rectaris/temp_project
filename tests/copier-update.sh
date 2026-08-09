@@ -25,8 +25,8 @@ update_source="$tmp/update-source"
 git clone -q "$root" "$update_source"
 git -C "$update_source" fetch -q "$root" "$target_commit"
 git -C "$update_source" switch -q -c migration-target FETCH_HEAD
-git -C "$update_source" tag -f v1.1.1
-target_ref=v1.1.1
+git -C "$update_source" tag -f v1.1.2
+target_ref=v1.1.2
 legacy_answers="$tmp/legacy-activation.answers.yml"
 cat >"$legacy_answers" <<'EOF'
 project_name: typescript-app
@@ -115,6 +115,8 @@ EOF
 
 validate_common_lane() {
   out=$1
+  expect_legacy_root=${2:-1}
+  expected_ci_autofix=${3:-disabled}
   test -f "$out/.copier-answers.yml"
   test -f "$out/.project-agent-workflow/AGENTS.md"
   test -f "$out/.project-agent-workflow/docs/agent/spec-index.yaml"
@@ -140,14 +142,22 @@ validate_common_lane() {
   test -f "$out/.project-agent-workflow/scripts/check-external-service-policy.py"
   test -f "$out/.project-agent-workflow/scripts/migrate-legacy-template-files.py"
   test -f "$out/.project-agent-workflow-migration/v1-pre-namespace/manifest.json"
-  test -f "$out/scripts/create-plan.sh"
+  if [ "$expect_legacy_root" = "1" ]; then
+    test -f "$out/scripts/create-plan.sh"
+  else
+    test ! -f "$out/scripts/create-plan.sh"
+  fi
   grep -q 'Local project-owned agent notes.' "$out/docs/agent/SPEC_PRODUCT.md"
   grep -q 'Preserve this project-owned environment policy.' "$out/docs/agent/PROJECT_ENVIRONMENT.md"
   grep -q 'Preserve this project-owned UI policy.' "$out/docs/agent/PROJECT_UI_DESIGN.md"
   grep -q 'Integration Checklist' "$out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-  grep -q 'ci_autofix_mode: disabled' "$out/.copier-answers.yml"
-  grep -q 'CI autofix mode: `disabled`' "$out/.project-agent-workflow/AGENTS.md"
-  test ! -f "$out/.github/workflows/codex-ci-autofix.yml"
+  grep -q "ci_autofix_mode: $expected_ci_autofix" "$out/.copier-answers.yml"
+  grep -Fq "CI autofix mode: \`$expected_ci_autofix\`" "$out/.project-agent-workflow/AGENTS.md"
+  if [ "$expected_ci_autofix" = "disabled" ]; then
+    test ! -f "$out/.github/workflows/codex-ci-autofix.yml"
+  else
+    test -f "$out/.github/workflows/codex-ci-autofix.yml"
+  fi
   test -f "$out/.codex/hooks/agent_log_event.py"
   grep -q 'Compatibility bridge' "$out/.codex/hooks/agent_log_event.py"
   if [ -f "$out/.codex/hooks.json" ]; then
@@ -184,6 +194,11 @@ validate_common_lane() {
   (cd "$out" && python3 .project-agent-workflow/scripts/structure-map.py --check >/dev/null)
   (cd "$out" && python3 .project-agent-workflow/scripts/security-static-check.py --managed >/dev/null)
   (cd "$out" && python3 .project-agent-workflow/scripts/validate-changes.py --all >/dev/null)
+  if (cd "$out" && HEADROOM_DISABLED=1 .project-agent-workflow/scripts/context-compress.sh .project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md namespaced-policy >/dev/null 2>&1); then
+    echo "context-compress.sh accepted namespaced normative policy after adoption: $out" >&2
+    exit 1
+  fi
+  test ! -e "$out/.agent-logs/namespaced-policy"
   python3 "$root/scripts/check-copier-template.py" --print-generated-required | while IFS= read -r path; do
     [ -n "$path" ] || continue
     test -f "$out/$path"
@@ -231,6 +246,11 @@ grep -q 'Codex hooks mode: `install_templates`' "$latest_out/.project-agent-work
 grep -q 'SkillSpector mode: `disabled`' "$latest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP: `disabled`' "$latest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test ! -f "$latest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
+
+v100_out=$(prepare_lane v100-repair v1.0.0 "$root/tests/fixtures/python.answers.yml")
+(cd "$v100_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+validate_common_lane "$v100_out" 0 patch_only
+grep -q '^_commit: v1.1.2$' "$v100_out/.copier-answers.yml"
 
 legacy_disabled_out=$(prepare_lane oldest-disabled "$oldest_ref" "$legacy_disabled_answers")
 (cd "$legacy_disabled_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)

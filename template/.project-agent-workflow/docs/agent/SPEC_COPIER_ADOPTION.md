@@ -77,7 +77,9 @@ Copier smart diff can replay project changes from legacy generated files onto ne
 
 The released v1.1.0 operation can scan Git-ignored dependency environments, validate archived migration code as current code, and omit managed Stop-gate wiring from a preserved Hook configuration.
 
-Use a checked-out template source and run its `scripts/adopt-to-namespaced-layout.py` command at v1.1.1 or newer.
+The released v1.1.1 operation does not reject context compression of normative policy under `.project-agent-workflow/docs/agent/`.
+
+Use a checked-out template source and run its `scripts/adopt-to-namespaced-layout.py` command at v1.1.2 or newer.
 
 The command requires a clean repository, copies legacy generated files to `.project-agent-workflow-migration/v1-pre-namespace/`, runs `copier recopy`, installs stable Hook bridges, preserves project-owned paths, and rejects unresolved conflicts or unclassified tracked-file deletion.
 
@@ -113,7 +115,7 @@ Review and update those repository-specific assertions with project context inst
 
 After `.copier-answers.yml` records a v1-or-newer release and `.project-agent-workflow/` exists, use ordinary `copier update` for later template versions.
 
-When `.copier-answers.yml` already records v1.1.0, update to v1.1.1 or newer with `--trust` so the versioned Hook-wiring migration can run.
+When `.copier-answers.yml` already records v1.1.0 or v1.1.1, update to v1.1.2 or newer with `--trust` so the managed core and versioned Hook-wiring migration can be corrected.
 
 ## Conflict Handling
 

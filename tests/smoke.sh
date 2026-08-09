@@ -656,5 +656,10 @@ if (cd "$tmp/typescript" && .project-agent-workflow/scripts/context-compress.sh 
   echo "context-compress.sh accepted validation policy" >&2
   exit 1
 fi
+if (cd "$tmp/typescript" && HEADROOM_DISABLED=1 .project-agent-workflow/scripts/context-compress.sh .project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md namespaced-policy >/dev/null 2>&1); then
+  echo "context-compress.sh accepted namespaced normative policy" >&2
+  exit 1
+fi
+test ! -e "$tmp/typescript/.agent-logs/namespaced-policy"
 
 echo "smoke test passed"

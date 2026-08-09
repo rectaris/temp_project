@@ -630,6 +630,17 @@ def require_update_boundaries(copier_yml: str) -> None:
             fail(f"copier.yml missing namespaced-layout migration marker: {marker}")
 
 
+def require_context_compression_boundary() -> None:
+    wrapper = read("template/.project-agent-workflow/scripts/context-compress.sh")
+    required = (
+        ".project-agent-workflow/docs/agent|",
+        ".project-agent-workflow/docs/agent/*|",
+    )
+    for marker in required:
+        if marker not in wrapper:
+            fail(f"generated context compression is missing normative path refusal: {marker}")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -662,6 +673,7 @@ def main() -> int:
             fail(f"copier.yml missing question: {question}")
     require_japanese_prompts(copier_yml)
     require_update_boundaries(copier_yml)
+    require_context_compression_boundary()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")

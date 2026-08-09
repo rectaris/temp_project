@@ -385,6 +385,24 @@ class ContextCompressionBoundaryTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("refusing normative agent instruction", result.stderr)
 
+    def test_rejects_namespaced_normative_policy_before_writing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self.prepare_repo(repo)
+            policy = repo / ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+            policy.parent.mkdir(parents=True)
+            policy.write_text("normative plan policy\n", encoding="utf-8")
+
+            result = self.compress(
+                repo,
+                ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+                "namespaced-policy",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("refusing normative agent instruction", result.stderr)
+            self.assertFalse((repo / ".agent-logs/namespaced-policy").exists())
+
     def test_same_basename_sources_have_distinct_validated_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

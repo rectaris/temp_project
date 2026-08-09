@@ -153,12 +153,14 @@ def require_repository_root(destination: Path) -> None:
 
 def require_safe_target_ref(target_ref: str) -> None:
     if target_ref == "v1.0.0":
-        raise SystemExit("v1.0.0 contains the unsafe smart-diff migration; use v1.1.1 or newer")
+        raise SystemExit("v1.0.0 contains the unsafe smart-diff migration; use v1.1.2 or newer")
     if target_ref == "v1.1.0":
-        raise SystemExit("v1.1.0 contains incomplete adoption validation; use v1.1.1 or newer")
+        raise SystemExit("v1.1.0 contains incomplete adoption validation; use v1.1.2 or newer")
+    if target_ref == "v1.1.1":
+        raise SystemExit("v1.1.1 contains an incomplete namespaced policy boundary; use v1.1.2 or newer")
     match = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)", target_ref)
-    if not match or tuple(int(value) for value in match.groups()) < (1, 1, 1):
-        raise SystemExit("adoption requires a stable release tag at v1.1.1 or newer")
+    if not match or tuple(int(value) for value in match.groups()) < (1, 1, 2):
+        raise SystemExit("adoption requires a stable release tag at v1.1.2 or newer")
 
 
 def read_previous_ref(destination: Path) -> str:
@@ -552,7 +554,7 @@ def adopt(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--destination", type=Path, default=Path.cwd())
-    parser.add_argument("--vcs-ref", default="v1.1.1")
+    parser.add_argument("--vcs-ref", default="v1.1.2")
     parser.add_argument("--copier-executable")
     parser.add_argument("--data", action="append", default=[])
     args = parser.parse_args()

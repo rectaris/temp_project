@@ -16,7 +16,7 @@ refuse_if_normative() {
   base=$(basename -- "$rel")
 
   case "$rel" in
-    AGENTS.md|*/AGENTS.md|docs/agent|docs/agent/*|docs/plan/active|docs/plan/active/*)
+    AGENTS.md|*/AGENTS.md|docs/agent|docs/agent/*|.project-agent-workflow/docs/agent|.project-agent-workflow/docs/agent/*|docs/plan/active|docs/plan/active/*)
       fail "refusing normative agent instruction input: $path"
       ;;
   esac

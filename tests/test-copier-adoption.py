@@ -80,15 +80,15 @@ class CopierAdoptionTest(unittest.TestCase):
                 data: tuple[str, ...],
             ) -> None:
                 self.assertIsNone(copier_executable)
-                self.assertEqual(target_ref, "v1.1.1")
+                self.assertEqual(target_ref, "v1.1.2")
                 self.assertEqual(data, ())
-                self.write(destination / ".copier-answers.yml", "_commit: v1.1.1\n_src_path: local-template\n")
+                self.write(destination / ".copier-answers.yml", "_commit: v1.1.2\n_src_path: local-template\n")
                 self.write(destination / ".project-agent-workflow/AGENTS.md", "managed policy\n")
                 self.write(destination / ".project-agent-workflow/ownership.yaml", "version: 1\n")
                 self.write(destination / ".codex/hooks/stop_review_gate.py", "stable bridge\n")
 
             with patch.object(MODULE, "run_recopy", side_effect=fake_recopy):
-                MODULE.adopt(repo, "v1.1.1", None, ())
+                MODULE.adopt(repo, "v1.1.2", None, ())
 
             self.assertEqual(
                 (repo / "docs/agent/SPEC_ENVIRONMENT.md").read_text(encoding="utf-8"),
@@ -113,7 +113,7 @@ class CopierAdoptionTest(unittest.TestCase):
             manifest = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["operation"], "recopy_adoption")
             self.assertEqual(manifest["previous_ref"], "v0.4.5")
-            self.assertEqual(manifest["target_ref"], "v1.1.1")
+            self.assertEqual(manifest["target_ref"], "v1.1.2")
             self.assertEqual(manifest["hook_configuration"], "added")
             self.assertEqual(
                 manifest["legacy_schema_review_paths"],
@@ -148,6 +148,12 @@ class CopierAdoptionTest(unittest.TestCase):
             repo = Path(tmp).resolve()
             with self.assertRaisesRegex(SystemExit, "v1.1.0 contains incomplete"):
                 MODULE.adopt(repo, "v1.1.0", None, ())
+
+    def test_adoption_rejects_the_incomplete_v111_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp).resolve()
+            with self.assertRaisesRegex(SystemExit, "v1.1.1 contains an incomplete"):
+                MODULE.adopt(repo, "v1.1.1", None, ())
 
     def test_conflict_scan_uses_git_visible_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
