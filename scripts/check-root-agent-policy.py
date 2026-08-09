@@ -20,6 +20,7 @@ REQUIRED_ROOT_FILES = [
     ".codex/config.toml",
     ".codex/hooks.json",
     ".codex/agents/repo_explorer.toml",
+    ".codex/agents/evidence_synthesizer.toml",
     ".codex/agents/fast_scoped_worker.toml",
     ".codex/hooks/agent_log_event.py",
     ".codex/hooks/semantic_guard_advisory.py",
@@ -167,6 +168,14 @@ def check_agent_model_profiles() -> None:
             "gpt-5.6-luna",
             "medium",
             'name = "docs_researcher"',
+        ),
+        ".codex/agents/evidence_synthesizer.toml": (
+            "gpt-5.6-luna",
+            "xhigh",
+            'name = "evidence_synthesizer"',
+            'sandbox_mode = "read-only"',
+            "Do not edit files, execute external writes",
+            "final high-risk judgment",
         ),
         ".codex/agents/fast_scoped_worker.toml": (
             "gpt-5.3-codex-spark",

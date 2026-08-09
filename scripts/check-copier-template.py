@@ -61,6 +61,7 @@ SOURCE_REQUIRED = [
     "template/.codex/hooks.json.jinja",
     "template/.codex/agents/change_reviewer.toml",
     "template/.codex/agents/docs_researcher.toml",
+    "template/.codex/agents/evidence_synthesizer.toml",
     "template/.codex/agents/fast_scoped_worker.toml",
     "template/.codex/agents/repo_explorer.toml",
     "template/.codex/agents/scoped_worker.toml",
@@ -196,6 +197,7 @@ GENERATED_REQUIRED = [
     ".codex/config.toml",
     ".codex/agents/change_reviewer.toml",
     ".codex/agents/docs_researcher.toml",
+    ".codex/agents/evidence_synthesizer.toml",
     ".codex/agents/fast_scoped_worker.toml",
     ".codex/agents/repo_explorer.toml",
     ".codex/agents/scoped_worker.toml",
@@ -400,6 +402,7 @@ def require_agent_model_profiles() -> None:
     expected = {
         "change_reviewer": ("gpt-5.6-sol", "high"),
         "docs_researcher": ("gpt-5.6-luna", "medium"),
+        "evidence_synthesizer": ("gpt-5.6-luna", "xhigh"),
         "fast_scoped_worker": ("gpt-5.3-codex-spark", "medium"),
         "repo_explorer": ("gpt-5.6-luna", "low"),
         "scoped_worker": ("gpt-5.6-terra", "medium"),
@@ -428,6 +431,24 @@ def require_fast_scoped_worker() -> None:
     for marker in required:
         if marker not in text:
             fail(f"fast scoped worker missing required contract: {marker}")
+
+
+def require_evidence_synthesizer() -> None:
+    path = ROOT / "template/.codex/agents/evidence_synthesizer.toml"
+    text = path.read_text(encoding="utf-8")
+    required = (
+        'name = "evidence_synthesizer"',
+        'model = "gpt-5.6-luna"',
+        'model_reasoning_effort = "xhigh"',
+        'sandbox_mode = "read-only"',
+        "compares multiple repositories, logs, specifications, implementation alternatives, or cause hypotheses",
+        "Do not edit files, execute external writes",
+        "Do not spawn descendant agents",
+        "final high-risk judgment",
+    )
+    for marker in required:
+        if marker not in text:
+            fail(f"evidence synthesizer missing required contract: {marker}")
 
 
 def template_source_files() -> set[str]:
@@ -734,6 +755,7 @@ def main() -> int:
     require_sequential_worker()
     require_agent_model_profiles()
     require_fast_scoped_worker()
+    require_evidence_synthesizer()
     require_referent_first_alignment()
     require_user_communication_alignment()
     require_template_manifest_complete()

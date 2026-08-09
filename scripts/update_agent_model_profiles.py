@@ -15,6 +15,7 @@ from pathlib import Path
 PROFILES = {
     "change_reviewer": ("gpt-5.6-sol", "high"),
     "docs_researcher": ("gpt-5.6-luna", "medium"),
+    "evidence_synthesizer": ("gpt-5.6-luna", "xhigh"),
     "fast_scoped_worker": ("gpt-5.3-codex-spark", "medium"),
     "repo_explorer": ("gpt-5.6-luna", "low"),
     "scoped_worker": ("gpt-5.6-terra", "medium"),

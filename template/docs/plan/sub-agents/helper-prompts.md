@@ -29,6 +29,20 @@ Return:
 - risks
 ```
 
+## Comparative Evidence Synthesis
+
+```md
+Objective:
+Read scope:
+Evidence sources or hypotheses to compare:
+Acceptance criteria:
+Return:
+- agreements and contradictions
+- impact boundaries
+- unresolved questions and confidence
+- source evidence for parent verification
+```
+
 ## Change Review
 
 ```md

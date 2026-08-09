@@ -81,6 +81,7 @@ def main() -> int:
     expected_profiles = {
         "change_reviewer": ("gpt-5.6-sol", "high"),
         "docs_researcher": ("gpt-5.6-luna", "medium"),
+        "evidence_synthesizer": ("gpt-5.6-luna", "xhigh"),
         "fast_scoped_worker": ("gpt-5.3-codex-spark", "medium"),
         "repo_explorer": ("gpt-5.6-luna", "low"),
         "scoped_worker": ("gpt-5.6-terra", "medium"),
@@ -111,6 +112,13 @@ def main() -> int:
         "Require an explicit write scope and predetermined validation" in fast_worker
         and "Do not commit, tag, push, release" in fast_worker,
         "fast_scoped_worker lacks its bounded-work or main-session ownership contract",
+    )
+    evidence_synthesizer = (root / ".codex/agents/evidence_synthesizer.toml").read_text(encoding="utf-8")
+    require(
+        'sandbox_mode = "read-only"' in evidence_synthesizer
+        and "Do not edit files, execute external writes" in evidence_synthesizer
+        and "final high-risk judgment" in evidence_synthesizer,
+        "evidence_synthesizer lacks its read-only or parent-judgment boundary",
     )
     return 0
 

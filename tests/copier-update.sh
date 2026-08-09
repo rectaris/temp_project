@@ -119,6 +119,8 @@ assert_agent_profiles() {
   grep -q '^model_reasoning_effort = "high"$' "$out/.codex/agents/change_reviewer.toml"
   grep -q '^model = "gpt-5.6-luna"$' "$out/.codex/agents/docs_researcher.toml"
   grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/docs_researcher.toml"
+  grep -q '^model = "gpt-5.6-luna"$' "$out/.codex/agents/evidence_synthesizer.toml"
+  grep -q '^model_reasoning_effort = "xhigh"$' "$out/.codex/agents/evidence_synthesizer.toml"
   grep -q '^model = "gpt-5.6-luna"$' "$out/.codex/agents/repo_explorer.toml"
   grep -q '^model_reasoning_effort = "low"$' "$out/.codex/agents/repo_explorer.toml"
   grep -q '^model = "gpt-5.6-terra"$' "$out/.codex/agents/scoped_worker.toml"

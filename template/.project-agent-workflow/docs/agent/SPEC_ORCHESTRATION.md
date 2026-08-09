@@ -5,6 +5,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 ## Helper Roles
 
 - `repo_explorer`: read-only discovery and impact analysis.
+- `evidence_synthesizer`: read-only comparison of multiple evidence sources, alternatives, or hypotheses for parent verification.
 - `fast_scoped_worker`: fast, low-ambiguity code changes with explicit write scope and predetermined validation.
 - `scoped_worker`: bounded implementation with explicit write scope.
 - `change_reviewer`: read-only correctness and regression review.
@@ -16,6 +17,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 
 - Delegate only bounded, independently useful tasks.
 - Derive delegated write scope from the active plan's `write_scope`, keep it non-overlapping, and treat `context_files` as read-only.
+- Use `evidence_synthesizer` only for bounded comparison of multiple evidence sources, alternatives, or hypotheses whose result the parent can verify.
 - Use `fast_scoped_worker` only when the expected edit and validation are known before delegation.
 - Stop a fast worker when it encounters architecture, policy, security, authorization, destructive-operation, external-write, or scope-expansion decisions.
 - Treat helper output as advisory until accepted.
@@ -38,6 +40,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 - Use local execution for short deterministic commands, urgent critical-path work, direct user clarification, final specification judgment, validation acceptance, planning updates, commits, tags, pushes, releases, and completion reports.
 - Use `fast_scoped_worker` for bounded, reversible code changes whose write scope and validation are predetermined.
 - Use `repo_explorer` for targeted discovery, impact analysis, and existing-pattern lookup.
+- Use `evidence_synthesizer` for deep read-only comparison that must report agreements, contradictions, impact boundaries, unresolved questions, confidence, and source evidence.
 - Use `scoped_worker` for bounded implementation when write scope is explicit and non-overlapping.
 - Use `change_reviewer` for correctness, regression, validation-gap, security, and spec-conflict review.
 - Use `docs_researcher` for official, external, version-specific, or API facts that may have changed.
@@ -56,11 +59,21 @@ Consider delegation or a separate review when:
 
 - Use `gpt-5.6-luna` with low reasoning for `repo_explorer`.
 - Use `gpt-5.6-luna` with medium reasoning for `docs_researcher`.
+- Use `gpt-5.6-luna` with xhigh reasoning for `evidence_synthesizer`.
 - Use `gpt-5.3-codex-spark` with medium reasoning for `fast_scoped_worker` and `sequential_plan_worker`.
 - Use `gpt-5.6-terra` with medium reasoning for `scoped_worker`.
 - Use `gpt-5.6-sol` with high reasoning for `change_reviewer`.
 - Use a higher one-off effort only when the delegated task remains bounded and the prompt states why the default is insufficient.
 - Reserve Sol with xhigh reasoning for exceptional final review of security, ownership, migration, or release risk.
+
+## Luna Effort Selection
+
+- Use low for targeted repository searches and existing-pattern lookup.
+- Use medium for current documentation research and extraction of facts from several files.
+- Use high as a one-off override when bounded read-only work must reconcile conflicting evidence or analyze a long context and the prompt states the expected quality gain.
+- Use xhigh through `evidence_synthesizer` when the task compares multiple repositories, logs, specifications, implementation alternatives, or cause hypotheses and must report agreements, contradictions, impact boundaries, and unresolved questions.
+- Do not use Luna for deterministic pass-or-fail commands, code edits, or final security, ownership, migration, release, or policy judgment.
+- Do not define Luna max as a default helper profile. Move the hardest final judgment to Terra or Sol unless a representative evaluation demonstrates a measurable Luna max benefit.
 
 ## Stop Review Gate
 
