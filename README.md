@@ -92,8 +92,12 @@ uv run --with copier python ../temp_project/scripts/adopt-to-namespaced-layout.p
 ```
 
 この処理は旧ファイルを `.project-agent-workflow-migration/v1-pre-namespace/` へコピーしてから `copier recopy` を使い、新しい管理領域を追加します。
-既存のプロジェクト規則、スクリプト、Skill、計画、製品用 workflow は元のパスに残します。
+既存のプロジェクト規則、利用者が変更したスクリプト、Skill、計画、製品用 workflow は元のパスに残します。
 旧 Hook 実装だけはバックアップ後に安定した bridge へ置換します。
+旧ルート CLI は、移行元 tag の `template/scripts/` にある生成内容と通常位置のファイルが byte 単位で一致する場合だけ、managed core を実行する互換 bridge へ置換します。
+変更済みファイル、symbolic link、移行元 tag の Git object を取得できないファイルは通常位置に保持し、manifest と標準出力で手動確認を求めます。
+ほかの旧スクリプトから import される Python module は互換 bridge の対象にしません。
+v1.0.0 の tag には旧 `template/scripts/` がないため、v1.0.0 修復時の旧ルート CLI は自動置換せず保持します。
 更新後は manifest と、旧 Copier tag を参照しているプロジェクト所有ファイルを確認してください。
 `.copier-answers.yml` が v1 系を記録した後は、通常の `copier update` を使います。
 

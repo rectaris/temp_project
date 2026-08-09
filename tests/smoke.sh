@@ -78,6 +78,162 @@ run_plan_lifecycle_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
 }
 
+run_plan_archive_compatibility_smoke() {
+  out=$1
+  archive_path=$(cat "$out/.sample-archive-path")
+  original="$out/.sample-archive-original.md"
+  cp "$out/$archive_path" "$original"
+
+  sed -i \
+    -e '0,/  - git diff --check/s//  - historical-validation-record/' \
+    -e '0,/  - environment_data_flow/s//  - historical_removed_route/' \
+    -e '0,/  - \.project-agent-workflow\/docs\/agent\/SPEC_VALIDATION\.md/s//  - docs\/agent\/HISTORICAL_VALIDATION.md/' \
+    "$out/$archive_path"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+  if (cd "$out" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-plan "$archive_path" >/dev/null 2>&1); then
+    echo "explicit plan validation accepted a historical non-allowlisted command" >&2
+    exit 1
+  fi
+
+  sed -i '/^task_types:/a\  - historical_removed_route' "$out/$archive_path"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted duplicate historical task types" >&2
+    exit 1
+  fi
+  cp "$original" "$out/$archive_path"
+  sed -i '/^checked_summary_ja:/d' "$out/$archive_path"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted a checked archive with a missing required field" >&2
+    exit 1
+  fi
+  cp "$original" "$out/$archive_path"
+  rm "$original"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+}
+
+write_legacy_lint_bridge() {
+  destination=$1
+  mkdir -p "$destination/scripts"
+  cat >"$destination/scripts/lint-plan-docs.py" <<'EOF_LEGACY_LINT_BRIDGE'
+#!/usr/bin/env python3
+"""Compatibility bridge to Copier-managed workflow."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+managed = Path(__file__).resolve().parents[1] / ".project-agent-workflow/scripts/lint-plan-docs.py"
+os.execv(sys.executable, [sys.executable, str(managed), *sys.argv[1:]])
+EOF_LEGACY_LINT_BRIDGE
+  chmod 0755 "$destination/scripts/lint-plan-docs.py"
+}
+
+run_pre_v1_plan_compatibility_smoke() {
+  out=$1
+  mkdir -p "$out/docs/agent"
+  cat >"$out/docs/agent/spec-index.yaml" <<'EOF_LEGACY_SPEC_INDEX'
+version: 1
+
+default_reads:
+  - docs/agent/SPEC_VALIDATION.md
+
+task_types:
+  environment_data_flow:
+    required:
+      - docs/agent/SPEC_ENVIRONMENT.md
+
+rules: []
+EOF_LEGACY_SPEC_INDEX
+  write_legacy_lint_bridge "$out"
+
+  legacy_plan=docs/plan/active/997-pre-v1-plan.md
+  cat >"$out/$legacy_plan" <<'EOF_PRE_V1_PLAN'
+# Pre-v1 plan
+
+status: in_progress
+task_types:
+  - environment_data_flow
+review_class: B
+human_design_required: no
+human_approval_status: not_required
+write_scope:
+  - src/legacy.ts
+context_files:
+  - none
+required_specs:
+  - docs/agent/SPEC_VALIDATION.md
+  - docs/agent/SPEC_ENVIRONMENT.md
+validation:
+  - python3 scripts/lint-plan-docs.py
+  - git diff --check
+acceptance:
+  - Preserve the pre-v1 plan.
+checked_summary_ja: v1 より前の計画を維持する。
+
+## Tasks
+
+- [ ] Preserve the plan.
+EOF_PRE_V1_PLAN
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --add-active 997 "$legacy_plan")
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted root compatibility aliases without adoption provenance" >&2
+    exit 1
+  fi
+  mkdir -p "$out/.project-agent-workflow-migration/v1-pre-namespace"
+  cat >"$out/.project-agent-workflow-migration/v1-pre-namespace/manifest.json" <<'EOF_ADOPTION_MANIFEST'
+{
+  "adoption_copied": ["docs/agent/spec-index.yaml"],
+  "bridged_legacy_cli_paths": ["scripts/lint-plan-docs.py"],
+  "operation": "recopy_adoption",
+  "previous_ref": "v0.5.0"
+}
+EOF_ADOPTION_MANIFEST
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+
+  if (cd "$out" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-plan "$legacy_plan" >/dev/null 2>&1); then
+    echo "explicit plan validation accepted a pre-v1 root command alias" >&2
+    exit 1
+  fi
+  printf '# modified project script\n' >>"$out/scripts/lint-plan-docs.py"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted a modified pre-v1 root command alias" >&2
+    exit 1
+  fi
+  write_legacy_lint_bridge "$out"
+  sed -i 's|python3 scripts/lint-plan-docs.py|python3 scripts/lint-plan-docs.py; rm -rf .|' "$out/$legacy_plan"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted shell syntax in a pre-v1 validation command" >&2
+    exit 1
+  fi
+  sed -i 's|python3 scripts/lint-plan-docs.py; rm -rf .|python3 scripts/lint-plan-docs.py|' "$out/$legacy_plan"
+
+  managed_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active managed-root-alias --summary "Managed root alias." --summary-ja "managed 計画の root alias を拒否する。")
+  sed -i 's|  - git diff --check|  - python3 scripts/lint-plan-docs.py|' "$out/$managed_plan"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted a root command alias in a managed plan" >&2
+    exit 1
+  fi
+  sed -i 's|  - python3 scripts/lint-plan-docs.py|  - git diff --check|' "$out/$managed_plan"
+  sed -i '0,/  - \.project-agent-workflow\/docs\/agent\/SPEC_VALIDATION\.md/s//  - docs\/agent\/SPEC_VALIDATION.md/' "$out/$managed_plan"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted a root policy alias in a managed plan" >&2
+    exit 1
+  fi
+  managed_base=$(basename "$managed_plan")
+  managed_id=${managed_base%%-*}
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$managed_id")
+  rm "$out/$managed_plan"
+
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active 997)
+  rm "$out/$legacy_plan" "$out/scripts/lint-plan-docs.py" "$out/docs/agent/spec-index.yaml"
+  rm "$out/.project-agent-workflow-migration/v1-pre-namespace/manifest.json"
+  rmdir "$out/.project-agent-workflow-migration/v1-pre-namespace" "$out/.project-agent-workflow-migration"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+}
+
 run_plan_fail_closed_smoke() {
   out=$1
 
@@ -368,6 +524,8 @@ Second line'
 assert_rejected_input multiline-purpose project_purpose "$multiline_purpose"
 
 run_plan_lifecycle_smoke "$tmp/typescript"
+run_plan_archive_compatibility_smoke "$tmp/typescript"
+run_pre_v1_plan_compatibility_smoke "$tmp/typescript"
 run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"

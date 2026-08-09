@@ -121,6 +121,143 @@ class PlanValidationCommandsTest(unittest.TestCase):
             "python3 -m py_compile .project-agent-workflow/hooks/stop_review_gate.py"
         )
 
+    def test_template_lint_compatibility_uses_exact_v050_bridged_aliases(self) -> None:
+        module = load_module(PLAN_COMMAND_MODULES[1], "template_legacy_plan_commands")
+        commands = (
+            "python3 scripts/check-external-service-policy.py check",
+            "python3 scripts/check-codex-toml.py",
+            "python3 scripts/lint-plan-docs.py",
+            "python3 scripts/format-plan-docs.py --check",
+            "python3 scripts/security-static-check.py",
+            "python3 scripts/structure-map.py --check",
+            "python3 scripts/validate-changes.py --all --print-only --json",
+            "sh scripts/lint-plan-docs.sh",
+            "sh scripts/format-plan-docs.sh --check",
+            "sh scripts/check-agent-completion.sh",
+            "scripts/lint-plan-docs.sh",
+            "scripts/format-plan-docs.sh --check",
+            "scripts/check-agent-completion.sh",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            bridged_paths = sorted(
+                {
+                    script
+                    for command in commands
+                    if (script := module.legacy_bridge_script(tuple(command.split()))) is not None
+                }
+            )
+            manifest = repo / ".project-agent-workflow-migration/v1-pre-namespace/manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "bridged_legacy_cli_paths": bridged_paths,
+                        "operation": "recopy_adoption",
+                        "previous_ref": "v0.5.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for command in commands:
+                argv = tuple(command.split())
+                script = module.legacy_bridge_script(argv)
+                self.assertIsNotNone(script)
+                assert script is not None
+                bridge = repo / script
+                managed = repo / ".project-agent-workflow/scripts" / bridge.name
+                bridge.parent.mkdir(parents=True, exist_ok=True)
+                managed.parent.mkdir(parents=True, exist_ok=True)
+                managed.write_text("managed helper\n", encoding="utf-8")
+                managed.chmod(0o755)
+                content = (
+                    module.python_bridge_content(bridge.name)
+                    if bridge.suffix == ".py"
+                    else module.shell_bridge_content(bridge.name)
+                )
+                bridge.write_text(content, encoding="utf-8")
+                bridge.chmod(0o755)
+
+                with self.subTest(compatible=command):
+                    module.parse_validation_command(command, legacy_bridge_root=repo)
+                    with self.assertRaises(module.ValidationCommandError):
+                        module.parse_validation_command(command)
+
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "bridged_legacy_cli_paths": [],
+                        "operation": "recopy_adoption",
+                        "previous_ref": "v0.5.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(module.ValidationCommandError):
+                module.parse_validation_command(
+                    "python3 scripts/check-codex-toml.py",
+                    legacy_bridge_root=repo,
+                )
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "bridged_legacy_cli_paths": bridged_paths,
+                        "operation": "recopy_adoption",
+                        "previous_ref": "v0.5.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            modified = repo / "scripts/lint-plan-docs.py"
+            modified.write_text(modified.read_text(encoding="utf-8") + "# modified\n", encoding="utf-8")
+            with self.assertRaises(module.ValidationCommandError):
+                module.parse_validation_command(
+                    "python3 scripts/lint-plan-docs.py",
+                    legacy_bridge_root=repo,
+                )
+            with self.assertRaises(module.ValidationCommandError):
+                module.parse_validation_command(
+                    "python3 scripts/security-static-check.py --changed",
+                    legacy_bridge_root=repo,
+                )
+            with self.assertRaises(module.ValidationCommandError):
+                module.parse_validation_command(
+                    "python3 scripts/plan_validation_commands.py --self-test",
+                    legacy_bridge_root=repo,
+                )
+            direct_shell = repo / "scripts/check-agent-completion.sh"
+            direct_shell.chmod(0o644)
+            with self.assertRaises(module.ValidationCommandError):
+                module.parse_validation_command(
+                    "scripts/check-agent-completion.sh",
+                    legacy_bridge_root=repo,
+                )
+
+    def test_run_plan_rejects_checked_archive_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            archive = repo / "docs/plan/checked/2026/08/01-15/001-history.md"
+            archive.parent.mkdir(parents=True)
+            archive.write_text(
+                "# History\n\nvalidation:\n  - git diff --check\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PLAN_COMMAND_MODULES[1]),
+                    "run-plan",
+                    str(archive),
+                ],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("run-plan requires a numbered active plan path", result.stderr)
+
 
 class ValidateChangesTest(unittest.TestCase):
     def test_all_mode_checks_staged_and_unstaged_whitespace(self) -> None:

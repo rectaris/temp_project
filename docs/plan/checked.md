@@ -40,3 +40,4 @@ id	path
 037	docs/plan/checked/2026/08/01-15/037-copier-safe-legacy-adoption.md
 038	docs/plan/checked/2026/08/01-15/038-copier-v111-adoption-corrections.md
 039	docs/plan/checked/2026/08/01-15/039-context-compression-namespaced-policy.md
+040	docs/plan/checked/2026/08/01-15/040-v112-four-project-adoption.md

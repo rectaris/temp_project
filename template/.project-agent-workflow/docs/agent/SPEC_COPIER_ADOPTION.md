@@ -105,6 +105,16 @@ The command may retire a legacy optional file or replace it with a compatibility
 
 The new configuration determines whether the old path is obsolete or must route to the managed core.
 
+The command may replace a legacy root CLI with a deterministic compatibility bridge only when the regular file is byte-identical to `template/scripts/<path>` at the previous Copier Git ref.
+
+The compatibility bridge executes the corresponding helper under `.project-agent-workflow/scripts/`.
+
+Python modules imported by other legacy scripts remain at the root path and are not replaced by an execution-only bridge.
+
+A modified file, symbolic link, unreadable file, or file whose previous Git object is unavailable remains unchanged and is listed in the manifest and command output for manual review.
+
+The v1.0.0 template has no legacy `template/scripts/` objects, so v1.0.0 repair preserves root CLI files for manual review.
+
 Every retired file remains in the migration backup and is listed in the manifest.
 
 A modified optional file remains at its original path and is listed for manual review.

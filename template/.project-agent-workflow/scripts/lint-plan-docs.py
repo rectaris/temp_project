@@ -151,9 +151,23 @@ def lint_manifest(path: Path) -> None:
         assert isinstance(task_types, list)
     if len(task_types) != len(set(task_types)):
         fail(f"{path} task_types must not contain duplicates")
-    unknown_task_types = sorted(set(task_types) - planlib.task_type_values())
-    if unknown_task_types:
-        fail(f"{path} task_types must match route keys from .project-agent-workflow/docs/agent/spec-index.yaml: {', '.join(unknown_task_types)}")
+    required_specs = values["required_specs"]
+    assert isinstance(required_specs, list)
+    legacy_route_specs = planlib.required_specs_for(task_types, planlib.LEGACY_SPEC_INDEX)
+    is_pre_v1_open = bool(
+        not is_checked
+        and planlib.has_pre_v1_adoption_provenance()
+        and not any(spec.startswith(".project-agent-workflow/docs/agent/") for spec in required_specs)
+        and set(required_specs) & legacy_route_specs
+    )
+    spec_index = planlib.LEGACY_SPEC_INDEX if is_pre_v1_open else planlib.SPEC_INDEX
+    if not is_checked:
+        unknown_task_types = sorted(set(task_types) - planlib.task_type_values(spec_index))
+        if unknown_task_types:
+            fail(
+                f"{path} task_types must match route keys from {spec_index.relative_to(ROOT)}: "
+                f"{', '.join(unknown_task_types)}"
+            )
     approval_value = planlib.manifest_scalar(values, "human_approval_status")
     if approval_value not in HUMAN_APPROVAL_VALUES:
         fail(f"{path} human_approval_status must be not_required, pending, or approved")
@@ -174,16 +188,20 @@ def lint_manifest(path: Path) -> None:
         fail(f"{path} human_design_required: yes requires review_class: C")
     if status_value == "deferred" and not planlib.manifest_scalar(values, "completion_deferred_reason").strip():
         fail(f"{path} status: deferred requires completion_deferred_reason")
-    if not is_legacy_checked:
+    if not is_checked:
         try:
-            plan_validation_commands.check_plan(path)
+            if is_pre_v1_open:
+                plan_validation_commands.check_legacy_plan_for_lint(path, ROOT)
+            else:
+                plan_validation_commands.check_plan(path)
         except plan_validation_commands.ValidationCommandError as exc:
             fail(f"{path} validation command is invalid: {exc}")
-        required_specs = values["required_specs"]
-        assert isinstance(required_specs, list)
-        missing_specs = sorted(planlib.required_specs_for(task_types) - set(required_specs))
+        missing_specs = sorted(
+            planlib.required_specs_for(task_types, spec_index) - set(required_specs)
+        )
         if missing_specs:
             fail(f"{path} required_specs is missing routed specs: {', '.join(missing_specs)}")
+    if not is_legacy_checked:
         write_scope = values["write_scope"]
         context_files = values["context_files"]
         assert isinstance(write_scope, list)

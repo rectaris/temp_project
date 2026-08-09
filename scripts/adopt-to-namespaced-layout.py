@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -109,6 +111,34 @@ LEGACY_OPTIONAL_DIGESTS = {
     "scripts/skillspector-scan.sh": "a11271499deae5818c755bb7a88d20eb9d7e8883ecbb34e8fb5a4a327516f38b",
 }
 
+LEGACY_BRIDGEABLE_CLI_PATHS = (
+    "scripts/check-agent-completion.sh",
+    "scripts/check-agent-log-manifest.py",
+    "scripts/check-codex-toml.py",
+    "scripts/check-external-service-policy.py",
+    "scripts/clean-handoffs.sh",
+    "scripts/complete-plan.sh",
+    "scripts/context-compress.sh",
+    "scripts/create-plan.sh",
+    "scripts/finalize-active-plan.sh",
+    "scripts/format-plan-docs.py",
+    "scripts/format-plan-docs.sh",
+    "scripts/import-codex-transcript.py",
+    "scripts/lint-plan-docs.py",
+    "scripts/lint-plan-docs.sh",
+    "scripts/migrate-legacy-template-files.py",
+    "scripts/next-plan-id.sh",
+    "scripts/promote-plan.sh",
+    "scripts/referent-contract.py",
+    "scripts/search-plan-archive.py",
+    "scripts/security-static-check.py",
+    "scripts/select-task-context.sh",
+    "scripts/structure-map.py",
+    "scripts/sync-plan-to-linear.sh",
+    "scripts/validate-changes.py",
+    "scripts/workflow-status.sh",
+)
+
 MANAGED_SECTION = """
 <!-- project-agent-workflow:managed-core:start -->
 ## Managed project-agent-workflow
@@ -121,12 +151,29 @@ MANAGED_SECTION = """
 
 PRESERVED_SECTION_START = "<!-- project-agent-workflow:pre-v1-rules:start -->"
 PRESERVED_SECTION_END = "<!-- project-agent-workflow:pre-v1-rules:end -->"
-SKILLSPECTOR_BRIDGE = """#!/bin/sh
+PYTHON_CLI_BRIDGE_TEMPLATE = '''#!/usr/bin/env python3
+"""Compatibility bridge to Copier-managed workflow."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+managed = Path(__file__).resolve().parents[1] / ".project-agent-workflow/{managed_path}"
+os.execv(sys.executable, [sys.executable, str(managed), *sys.argv[1:]])
+'''
+SHELL_CLI_BRIDGE_TEMPLATE = """#!/bin/sh
+# Compatibility bridge to Copier-managed workflow.
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$script_dir/../.project-agent-workflow/scripts/skillspector-scan.sh" "$@"
+exec "$script_dir/../.project-agent-workflow/{managed_path}" "$@"
 """
+SKILLSPECTOR_BRIDGE = SHELL_CLI_BRIDGE_TEMPLATE.format(
+    managed_path="scripts/skillspector-scan.sh"
+)
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -304,6 +351,116 @@ def restore_missing_legacy_paths(
     manifest["adoption_restored"] = sorted(set(restored))
 
 
+def legacy_cli_bridge(relative: str) -> bytes:
+    if relative.endswith(".py"):
+        template = PYTHON_CLI_BRIDGE_TEMPLATE
+    elif relative.endswith(".sh"):
+        template = SHELL_CLI_BRIDGE_TEMPLATE
+    else:
+        raise ValueError(f"legacy CLI path has no supported interpreter: {relative}")
+    return template.format(managed_path=relative).encode("utf-8")
+
+
+def previous_template_entry(
+    source_repository: Path,
+    previous_ref: str,
+    relative: str,
+) -> bytes | None:
+    result = subprocess.run(
+        ["git", "show", f"{previous_ref}:template/{relative}"],
+        cwd=source_repository,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+def write_executable_atomic(path: Path, content: bytes) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+            os.fchmod(handle.fileno(), 0o755)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def reconcile_unchanged_legacy_cli_paths(
+    destination: Path,
+    source_repository: Path,
+    previous_ref: str,
+    manifest: dict[str, Any],
+) -> tuple[list[str], list[str], list[str]]:
+    bridged = {str(item) for item in manifest.get("bridged_legacy_cli_paths", [])}
+    modified = {str(item) for item in manifest.get("modified_legacy_cli_paths", [])}
+    unverified = {str(item) for item in manifest.get("unverified_legacy_cli_paths", [])}
+    reasons = {
+        str(path): str(reason)
+        for path, reason in manifest.get("unverified_legacy_cli_reasons", {}).items()
+    }
+
+    def classify(relative: str, category: str, reason: str | None = None) -> None:
+        bridged.discard(relative)
+        modified.discard(relative)
+        unverified.discard(relative)
+        reasons.pop(relative, None)
+        if category == "bridged":
+            bridged.add(relative)
+        elif category == "modified":
+            modified.add(relative)
+        else:
+            unverified.add(relative)
+            if reason:
+                reasons[relative] = reason
+
+    for relative in LEGACY_BRIDGEABLE_CLI_PATHS:
+        path = destination / relative
+        if path.is_symlink():
+            classify(relative, "unverified", "symbolic_link")
+            continue
+        if not path.exists():
+            continue
+        if not path.is_file():
+            classify(relative, "unverified", "not_a_regular_file")
+            continue
+        try:
+            current = path.read_bytes()
+        except OSError:
+            classify(relative, "unverified", "could_not_read_destination")
+            continue
+        bridge = legacy_cli_bridge(relative)
+        if current == bridge:
+            if path.stat().st_mode & 0o777 != 0o755:
+                write_executable_atomic(path, bridge)
+            classify(relative, "bridged")
+            continue
+        previous = previous_template_entry(source_repository, previous_ref, relative)
+        if previous is None:
+            classify(relative, "unverified", "previous_template_object_unavailable")
+            continue
+        if current != previous:
+            classify(relative, "modified")
+            continue
+        write_executable_atomic(path, bridge)
+        classify(relative, "bridged")
+
+    manifest["bridged_legacy_cli_paths"] = sorted(bridged)
+    manifest["modified_legacy_cli_paths"] = sorted(modified)
+    manifest["unverified_legacy_cli_paths"] = sorted(unverified)
+    manifest["unverified_legacy_cli_reasons"] = dict(sorted(reasons.items()))
+    return sorted(bridged), sorted(modified), sorted(unverified)
+
+
 def reconcile_unchanged_optional_paths(
     destination: Path,
     manifest: dict[str, Any],
@@ -325,8 +482,7 @@ def reconcile_unchanged_optional_paths(
         if value == "scripts/skillspector-scan.sh" and read_answer(
             destination, "skillspector_mode"
         ) == "document_optional":
-            path.write_text(SKILLSPECTOR_BRIDGE, encoding="utf-8")
-            path.chmod(0o755)
+            write_executable_atomic(path, SKILLSPECTOR_BRIDGE.encode("utf-8"))
             bridged.append(value)
         else:
             path.unlink()
@@ -529,7 +685,15 @@ def adopt(
     write_manifest(manifest_path, manifest)
     run_recopy(destination, copier_executable, target_ref, data)
     append_managed_instructions(destination, previous_ref, backup_root)
+    _, modified_cli, unverified_cli = reconcile_unchanged_legacy_cli_paths(
+        destination,
+        Path(__file__).resolve().parents[1],
+        previous_ref,
+        manifest,
+    )
+    write_manifest(manifest_path, manifest)
     retired, modified_optional = reconcile_unchanged_optional_paths(destination, manifest)
+    write_manifest(manifest_path, manifest)
     manifest["hook_configuration"] = update_hook_wiring(destination)
     validate_result(destination, retired)
     manifest["project_review_paths"] = stale_ref_paths(destination, previous_ref)
@@ -549,6 +713,15 @@ def adopt(
         print("review modified legacy optional files preserved in place:")
         for path in modified_optional:
             print(f"- {path}")
+    if modified_cli:
+        print("manual review required for modified legacy CLI files preserved in place:")
+        for path in modified_cli:
+            print(f"- {path}")
+    if unverified_cli:
+        print("manual review required for unverified legacy CLI files preserved in place:")
+        for path in unverified_cli:
+            reason = manifest["unverified_legacy_cli_reasons"].get(path, "unverified")
+            print(f"- {path}: {reason}")
 
 
 def main() -> int:

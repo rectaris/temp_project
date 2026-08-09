@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -197,6 +198,200 @@ class CopierAdoptionTest(unittest.TestCase):
                 manifest["bridged_legacy_optional_paths"],
                 ["scripts/skillspector-scan.sh"],
             )
+
+    def test_exact_legacy_cli_becomes_executable_bridge_after_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            source = root / "source"
+            destination = root / "destination"
+            relative = "scripts/validate-changes.py"
+            legacy = b"#!/usr/bin/env python3\nprint('legacy validator')\n"
+            self.init_source(source, "v0.9.0", {relative: legacy})
+            path = destination / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(legacy)
+            manifest: dict[str, object] = {}
+            backup = destination / MODULE.BACKUP_RELATIVE
+            with patch.object(MODULE, "LEGACY_FILES", (relative,)), patch.object(
+                MODULE, "LEGACY_SKILLS", ()
+            ):
+                MODULE.backup_legacy_paths(destination, backup, manifest)
+            with patch.object(MODULE, "LEGACY_BRIDGEABLE_CLI_PATHS", (relative,)):
+                bridged, modified, unverified = MODULE.reconcile_unchanged_legacy_cli_paths(
+                    destination,
+                    source,
+                    "v0.9.0",
+                    manifest,
+                )
+
+            self.assertEqual(bridged, [relative])
+            self.assertEqual(modified, [])
+            self.assertEqual(unverified, [])
+            self.assertEqual((backup / relative).read_bytes(), legacy)
+            self.assertEqual(path.read_bytes(), MODULE.legacy_cli_bridge(relative))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+
+    def test_modified_legacy_cli_is_preserved_for_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            source = root / "source"
+            destination = root / "destination"
+            relative = "scripts/validate-changes.py"
+            generated = b"#!/usr/bin/env python3\nprint('generated')\n"
+            modified_content = b"#!/usr/bin/env python3\nprint('project behavior')\n"
+            self.init_source(source, "v0.9.0", {relative: generated})
+            path = destination / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(modified_content)
+            manifest: dict[str, object] = {}
+
+            with patch.object(MODULE, "LEGACY_BRIDGEABLE_CLI_PATHS", (relative,)):
+                bridged, modified, unverified = MODULE.reconcile_unchanged_legacy_cli_paths(
+                    destination,
+                    source,
+                    "v0.9.0",
+                    manifest,
+                )
+
+            self.assertEqual(bridged, [])
+            self.assertEqual(modified, [relative])
+            self.assertEqual(unverified, [])
+            self.assertEqual(path.read_bytes(), modified_content)
+            self.assertEqual(manifest["modified_legacy_cli_paths"], [relative])
+
+    def test_missing_previous_object_and_symlink_are_unverified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            source = root / "source"
+            destination = root / "destination"
+            missing_object = "scripts/validate-changes.py"
+            linked = "scripts/workflow-status.sh"
+            self.init_source(source, "v1.0.0", {})
+            self.write(destination / missing_object, "legacy validator\n")
+            link_target = destination / "project-validator.sh"
+            self.write(link_target, "project validator\n")
+            link = destination / linked
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(link_target)
+            manifest: dict[str, object] = {}
+
+            with patch.object(
+                MODULE,
+                "LEGACY_BRIDGEABLE_CLI_PATHS",
+                (missing_object, linked),
+            ):
+                _, modified, unverified = MODULE.reconcile_unchanged_legacy_cli_paths(
+                    destination,
+                    source,
+                    "v1.0.0",
+                    manifest,
+                )
+
+            self.assertEqual(modified, [])
+            self.assertEqual(unverified, [missing_object, linked])
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(
+                manifest["unverified_legacy_cli_reasons"],
+                {
+                    missing_object: "previous_template_object_unavailable",
+                    linked: "symbolic_link",
+                },
+            )
+
+    def test_legacy_cli_bridge_reconciliation_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            source = root / "source"
+            destination = root / "destination"
+            relative = "scripts/workflow-status.sh"
+            legacy = b"#!/bin/sh\necho legacy\n"
+            self.init_source(source, "v0.9.0", {relative: legacy})
+            path = destination / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(legacy)
+            manifest: dict[str, object] = {}
+
+            with patch.object(MODULE, "LEGACY_BRIDGEABLE_CLI_PATHS", (relative,)):
+                first = MODULE.reconcile_unchanged_legacy_cli_paths(
+                    destination,
+                    source,
+                    "v0.9.0",
+                    manifest,
+                )
+                first_content = path.read_bytes()
+                first_manifest = json.dumps(manifest, sort_keys=True)
+                second = MODULE.reconcile_unchanged_legacy_cli_paths(
+                    destination,
+                    source,
+                    "v0.9.0",
+                    manifest,
+                )
+
+            self.assertEqual(second, first)
+            self.assertEqual(path.read_bytes(), first_content)
+            self.assertEqual(json.dumps(manifest, sort_keys=True), first_manifest)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+
+    def test_root_validate_bridge_executes_managed_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp).resolve()
+            relative = "scripts/validate-changes.py"
+            root_validator = repo / relative
+            root_validator.parent.mkdir(parents=True)
+            root_validator.write_bytes(MODULE.legacy_cli_bridge(relative))
+            root_validator.chmod(0o755)
+            self.write(
+                repo / ".project-agent-workflow/scripts/validate-changes.py",
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "import sys\n"
+                "print(json.dumps({'validator': 'managed', 'args': sys.argv[1:]}))\n",
+            )
+            self.write(
+                repo
+                / ".project-agent-workflow-migration/v1-pre-namespace/scripts/validate-changes.py",
+                "raise SystemExit('migration backup must not run')\n",
+            )
+
+            result = subprocess.run(
+                [sys.executable, str(root_validator), "--all"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                json.loads(result.stdout),
+                {"validator": "managed", "args": ["--all"]},
+            )
+
+    def test_importable_legacy_modules_are_not_execution_bridges(self) -> None:
+        importable_modules = {
+            "scripts/agent_log_manifest.py",
+            "scripts/plan_validation_commands.py",
+            "scripts/planlib.py",
+            "scripts/security_rules.py",
+        }
+
+        self.assertTrue(importable_modules.isdisjoint(MODULE.LEGACY_BRIDGEABLE_CLI_PATHS))
+
+    def init_source(self, repo: Path, tag: str, files: dict[str, bytes]) -> None:
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        if files:
+            for relative, content in files.items():
+                path = repo / "template" / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+        else:
+            self.write(repo / "template/.keep", "\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "template source"], cwd=repo, check=True)
+        subprocess.run(["git", "tag", tag], cwd=repo, check=True)
 
     @staticmethod
     def write(path: Path, content: str) -> None:

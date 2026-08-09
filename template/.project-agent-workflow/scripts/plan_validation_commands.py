@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -44,6 +46,28 @@ DIRECT_SCRIPT_ARGUMENTS = {
 NPM_VALIDATION_SCRIPTS = frozenset({"build", "test", "test:unit", "lint", "typecheck", "verify"})
 PYTEST_PREFIXES = (("pytest",), ("python3", "-m", "pytest"), ("uv", "run", "pytest"))
 
+# These are the bridgeable v0.5.0 managed CLI aliases that can remain in an open plan
+# after pre-v1 adoption. They are accepted by plan lint only when the root
+# script is the exact compatibility bridge installed by the adoption helper.
+LEGACY_PYTHON_SCRIPT_ARGUMENTS = {
+    "scripts/check-external-service-policy.py": {("check",)},
+    "scripts/check-codex-toml.py": {()},
+    "scripts/lint-plan-docs.py": {()},
+    "scripts/format-plan-docs.py": {("--check",)},
+    "scripts/security-static-check.py": {()},
+    "scripts/structure-map.py": {("--check",)},
+}
+LEGACY_SHELL_SCRIPT_ARGUMENTS = {
+    "scripts/lint-plan-docs.sh": {()},
+    "scripts/format-plan-docs.sh": {("--check",)},
+    "scripts/check-agent-completion.sh": {()},
+}
+LEGACY_DIRECT_SCRIPT_ARGUMENTS = {
+    "scripts/lint-plan-docs.sh": {()},
+    "scripts/format-plan-docs.sh": {("--check",)},
+    "scripts/check-agent-completion.sh": {()},
+}
+
 
 @dataclass(frozen=True)
 class ValidationCommand:
@@ -72,7 +96,11 @@ def extract_validation_commands(plan_path: Path) -> list[str]:
     return commands
 
 
-def parse_validation_command(command: str) -> ValidationCommand:
+def parse_validation_command(
+    command: str,
+    *,
+    legacy_bridge_root: Path | None = None,
+) -> ValidationCommand:
     if not command.strip():
         raise ValidationCommandError("validation command must not be empty")
     if command != command.strip():
@@ -100,11 +128,16 @@ def parse_validation_command(command: str) -> ValidationCommand:
     if ENV_ASSIGNMENT_RE.match(argv[0]):
         raise ValidationCommandError("environment assignment is not allowed in validation command")
 
-    validate_argv(argv, command)
+    validate_argv(argv, command, legacy_bridge_root=legacy_bridge_root)
     return ValidationCommand(raw=command, argv=argv)
 
 
-def validate_argv(argv: tuple[str, ...], command: str) -> None:
+def validate_argv(
+    argv: tuple[str, ...],
+    command: str,
+    *,
+    legacy_bridge_root: Path | None = None,
+) -> None:
     if any(
         checker(argv)
         for checker in (
@@ -119,6 +152,8 @@ def validate_argv(argv: tuple[str, ...], command: str) -> None:
             is_pytest_check,
         )
     ):
+        return
+    if legacy_bridge_root is not None and is_verified_legacy_bridge_check(argv, legacy_bridge_root):
         return
     raise ValidationCommandError(f"validation command is not allowlisted: {command}")
 
@@ -212,15 +247,134 @@ def is_pytest_check(argv: tuple[str, ...]) -> bool:
     return True
 
 
-def parse_validation_commands(commands: list[str]) -> list[ValidationCommand]:
-    return [parse_validation_command(command) for command in commands]
+def python_bridge_content(script_name: str) -> str:
+    return f'''#!/usr/bin/env python3
+"""Compatibility bridge to Copier-managed workflow."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+managed = Path(__file__).resolve().parents[1] / ".project-agent-workflow/scripts/{script_name}"
+os.execv(sys.executable, [sys.executable, str(managed), *sys.argv[1:]])
+'''
+
+
+def shell_bridge_content(script_name: str) -> str:
+    return f'''#!/bin/sh
+# Compatibility bridge to Copier-managed workflow.
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$script_dir/../.project-agent-workflow/scripts/{script_name}" "$@"
+'''
+
+
+def legacy_bridge_script(argv: tuple[str, ...]) -> str | None:
+    if len(argv) >= 2 and argv[0] == "python3":
+        script = argv[1]
+        suffixes = LEGACY_PYTHON_SCRIPT_ARGUMENTS.get(script)
+        if suffixes is not None and tuple(argv[2:]) in suffixes:
+            return script
+        if script == "scripts/validate-changes.py":
+            flags = argv[2:]
+            if (
+                len(flags) == len(set(flags))
+                and all(flag in VALIDATE_CHANGES_FLAGS for flag in flags)
+                and not ({"--all", "--staged"} <= set(flags))
+            ):
+                return script
+        return None
+    if len(argv) >= 2 and argv[0] == "sh":
+        script = argv[1]
+        suffixes = LEGACY_SHELL_SCRIPT_ARGUMENTS.get(script)
+        if suffixes is not None and tuple(argv[2:]) in suffixes:
+            return script
+        return None
+    script = argv[0]
+    suffixes = LEGACY_DIRECT_SCRIPT_ARGUMENTS.get(script)
+    if suffixes is not None and tuple(argv[1:]) in suffixes:
+        return script
+    return None
+
+
+def is_verified_legacy_bridge_check(argv: tuple[str, ...], repository_root: Path) -> bool:
+    script = legacy_bridge_script(argv)
+    if script is None:
+        return False
+    manifest_path = (
+        repository_root / ".project-agent-workflow-migration/v1-pre-namespace/manifest.json"
+    )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    previous_ref = manifest.get("previous_ref")
+    bridged = manifest.get("bridged_legacy_cli_paths")
+    if not (
+        manifest.get("operation") == "recopy_adoption"
+        and isinstance(previous_ref, str)
+        and re.fullmatch(r"v0\.[0-9]+\.[0-9]+", previous_ref)
+        and isinstance(bridged, list)
+        and script in bridged
+    ):
+        return False
+    bridge = repository_root / script
+    if bridge.is_symlink() or not bridge.is_file():
+        return False
+    managed = repository_root / ".project-agent-workflow/scripts" / bridge.name
+    if managed.is_symlink() or not managed.is_file():
+        return False
+    expected = (
+        python_bridge_content(bridge.name)
+        if bridge.suffix == ".py"
+        else shell_bridge_content(bridge.name)
+    )
+    try:
+        return bool(
+            stat.S_IMODE(bridge.stat().st_mode) == 0o755
+            and managed.stat().st_mode & stat.S_IXUSR
+            and bridge.read_text(encoding="utf-8") == expected
+        )
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def parse_validation_commands(
+    commands: list[str],
+    *,
+    legacy_bridge_root: Path | None = None,
+) -> list[ValidationCommand]:
+    return [
+        parse_validation_command(command, legacy_bridge_root=legacy_bridge_root)
+        for command in commands
+    ]
 
 
 def check_plan(path: Path) -> list[ValidationCommand]:
     return parse_validation_commands(extract_validation_commands(path))
 
 
+def check_legacy_plan_for_lint(path: Path, repository_root: Path) -> list[ValidationCommand]:
+    return parse_validation_commands(
+        extract_validation_commands(path),
+        legacy_bridge_root=repository_root,
+    )
+
+
 def run_plan(path: Path) -> None:
+    active_directory = (Path.cwd() / "docs/plan/active").resolve()
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ValidationCommandError(f"could not resolve active plan: {path}") from exc
+    if resolved.parent != active_directory or not re.fullmatch(r"[0-9]{3}-.+\.md", resolved.name):
+        raise ValidationCommandError(f"run-plan requires a numbered active plan path: {path}")
     for command in check_plan(path):
         print(f"+ {shlex.join(command.argv)}", flush=True)
         subprocess.run(command.argv, check=True)

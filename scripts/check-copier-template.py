@@ -132,10 +132,6 @@ SOURCE_REQUIRED = [
     "template/docs/plan/handoffs/README.md",
     "template/docs/plan/sub-agents/custom-agents.md",
     "template/docs/plan/sub-agents/helper-prompts.md",
-    "template/docs/plan/active/.gitkeep",
-    "template/docs/plan/backlog/.gitkeep",
-    "template/docs/plan/checked/.gitkeep",
-    "template/docs/plan/handoffs/.gitkeep",
     "template/.project-agent-workflow/scripts/create-plan.sh",
     "template/.project-agent-workflow/scripts/next-plan-id.sh",
     "template/.project-agent-workflow/scripts/promote-plan.sh",
@@ -274,10 +270,6 @@ GENERATED_REQUIRED = [
     "docs/plan/sub-agents/custom-agents.md",
     "docs/plan/sub-agents/helper-prompts.md",
     "docs/plan/plan.md",
-    "docs/plan/active/.gitkeep",
-    "docs/plan/backlog/.gitkeep",
-    "docs/plan/checked/.gitkeep",
-    "docs/plan/handoffs/.gitkeep",
     ".project-agent-workflow/scripts/check-agent-completion.sh",
     ".project-agent-workflow/scripts/finalize-active-plan.sh",
     ".project-agent-workflow/scripts/check-agent-log-manifest.py",
@@ -408,7 +400,7 @@ def template_source_files() -> set[str]:
         stdout=subprocess.PIPE,
         check=True,
     )
-    return {line for line in result.stdout.splitlines() if line}
+    return {line for line in result.stdout.splitlines() if line and (ROOT / line).is_file()}
 
 
 def require_template_manifest_complete() -> None:

@@ -247,6 +247,170 @@ grep -q 'SkillSpector mode: `disabled`' "$latest_out/.project-agent-workflow/AGE
 grep -q 'MCP: `disabled`' "$latest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test ! -f "$latest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
 
+pre_v1_plan_out="$tmp/v050-managed-index-plans"
+run_copier copy -q -f --vcs-ref v0.5.0 --data-file "$root/tests/fixtures/python.answers.yml" "$update_source" "$pre_v1_plan_out" >/dev/null
+git -C "$pre_v1_plan_out" init -b main >/dev/null
+git -C "$pre_v1_plan_out" config user.email "ci@example.invalid"
+git -C "$pre_v1_plan_out" config user.name "CI"
+git -C "$pre_v1_plan_out" add -A
+git -C "$pre_v1_plan_out" commit -m "Initial v0.5.0 workflow" >/dev/null
+
+pre_v1_active=docs/plan/active/901-pre-v1-validation.md
+pre_v1_checked=docs/plan/checked/2025/01/01-15/900-pre-v1-checked.md
+mkdir -p "$pre_v1_plan_out/docs/plan/active" "$pre_v1_plan_out/docs/plan/checked/2025/01/01-15"
+cat >"$pre_v1_plan_out/$pre_v1_active" <<'EOF_PRE_V1_ACTIVE'
+# Pre-v1 validation plan
+
+status: in_progress
+task_types:
+  - security
+review_class: B
+human_design_required: no
+human_approval_status: not_required
+write_scope:
+  - scripts/security-static-check.py
+context_files:
+  - docs/agent/spec-index.yaml
+required_specs:
+  - docs/agent/SPEC_VALIDATION.md
+  - docs/agent/SPEC_GIT_WORKFLOW.md
+  - docs/agent/SPEC_FILE_MANAGEMENT.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
+  - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+  - docs/agent/SPEC_SECURITY.md
+validation:
+  - python3 scripts/security-static-check.py
+  - python3 scripts/lint-plan-docs.py
+acceptance:
+  - Preserve the open plan across adoption.
+checked_summary_ja: 移行前の作業計画を維持する。
+
+## Tasks
+
+- [ ] Preserve the open plan.
+EOF_PRE_V1_ACTIVE
+cat >"$pre_v1_plan_out/$pre_v1_checked" <<'EOF_PRE_V1_CHECKED'
+# Pre-v1 checked plan
+
+status: checked
+task_types:
+  - security
+review_class: B
+human_design_required: no
+human_approval_status: not_required
+write_scope:
+  - scripts/security-static-check.py
+context_files:
+  - docs/agent/spec-index.yaml
+required_specs:
+  - docs/agent/SPEC_VALIDATION.md
+  - docs/agent/SPEC_GIT_WORKFLOW.md
+  - docs/agent/SPEC_FILE_MANAGEMENT.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
+  - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+  - docs/agent/SPEC_SECURITY.md
+validation:
+  - python3 scripts/security-static-check.py
+  - python3 scripts/lint-plan-docs.py
+acceptance:
+  - Preserve the checked plan across adoption.
+checked_summary_ja: 移行前の完了記録を維持する。
+
+## Tasks
+
+- [x] Preserve the checked plan.
+
+## Validation Notes
+
+- Pre-v1 validation passed.
+EOF_PRE_V1_CHECKED
+(cd "$pre_v1_plan_out" && python3 scripts/lint-plan-docs.py --add-active 901 "$pre_v1_active")
+(cd "$pre_v1_plan_out" && python3 scripts/lint-plan-docs.py --append-checked 900 "$pre_v1_checked")
+(cd "$pre_v1_plan_out" && python3 scripts/lint-plan-docs.py)
+git -C "$pre_v1_plan_out" add -A
+git -C "$pre_v1_plan_out" commit -m "Add pre-v1 managed-index plan history" >/dev/null
+active_digest_before=$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/$pre_v1_active")
+active_index_digest_before=$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/docs/plan/plan.md")
+checked_digest_before=$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/$pre_v1_checked")
+checked_index_digest_before=$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/docs/plan/checked.md")
+for legacy_cli in scripts/lint-plan-docs.py scripts/security-static-check.py scripts/validate-changes.py; do
+  source_digest=$(git -C "$update_source" show "v0.5.0:template/$legacy_cli" | git hash-object --stdin)
+  destination_digest=$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/$legacy_cli")
+  test "$destination_digest" = "$source_digest"
+done
+
+run_adoption "$pre_v1_plan_out" "$target_ref" >/dev/null
+manifest="$pre_v1_plan_out/.project-agent-workflow-migration/v1-pre-namespace/manifest.json"
+if ! grep -q '^def has_pre_v1_adoption_provenance()' "$pre_v1_plan_out/.project-agent-workflow/scripts/planlib.py"; then
+  echo "adoption did not install the candidate managed plan compatibility helper" >&2
+  exit 1
+fi
+python3 - "$manifest" "$pre_v1_plan_out" <<'PY_PRE_V1_BRIDGES'
+import json
+import stat
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+repository = Path(sys.argv[2])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+expected_paths = {
+    "scripts/lint-plan-docs.py",
+    "scripts/security-static-check.py",
+    "scripts/validate-changes.py",
+}
+bridged = set(manifest.get("bridged_legacy_cli_paths", []))
+missing = sorted(expected_paths - bridged)
+if missing:
+    raise SystemExit(f"adoption manifest is missing bridged legacy CLI paths: {missing}")
+if manifest.get("operation") != "recopy_adoption" or manifest.get("previous_ref") != "v0.5.0":
+    raise SystemExit("adoption manifest has unexpected pre-v1 provenance")
+if "docs/agent/spec-index.yaml" not in set(manifest.get("adoption_copied", [])):
+    raise SystemExit("adoption manifest did not preserve the pre-v1 routing index")
+
+for relative in sorted(expected_paths):
+    path = repository / relative
+    managed = f".project-agent-workflow/{relative}"
+    expected = f'''#!/usr/bin/env python3
+"""Compatibility bridge to Copier-managed workflow."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+managed = Path(__file__).resolve().parents[1] / "{managed}"
+os.execv(sys.executable, [sys.executable, str(managed), *sys.argv[1:]])
+'''
+    if path.read_text(encoding="utf-8") != expected:
+        raise SystemExit(f"legacy CLI is not the deterministic compatibility bridge: {relative}")
+    if stat.S_IMODE(path.stat().st_mode) != 0o755:
+        raise SystemExit(f"legacy CLI bridge is not executable: {relative}")
+PY_PRE_V1_BRIDGES
+test "$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/$pre_v1_active")" = "$active_digest_before"
+test "$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/docs/plan/plan.md")" = "$active_index_digest_before"
+test "$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/$pre_v1_checked")" = "$checked_digest_before"
+test "$(git -C "$pre_v1_plan_out" hash-object "$pre_v1_plan_out/docs/plan/checked.md")" = "$checked_index_digest_before"
+(cd "$pre_v1_plan_out" && PYTHONDONTWRITEBYTECODE=1 python3 - "$pre_v1_active" <<'PY_PRE_V1_PLAN'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, ".project-agent-workflow/scripts")
+import plan_validation_commands
+import planlib
+
+if not planlib.has_pre_v1_adoption_provenance():
+    raise SystemExit("managed plan lint did not recognize pre-v1 adoption provenance")
+plan_validation_commands.check_legacy_plan_for_lint(Path(sys.argv[1]), Path.cwd())
+PY_PRE_V1_PLAN
+)
+(cd "$pre_v1_plan_out" && python3 scripts/validate-changes.py --all >/dev/null)
+(cd "$pre_v1_plan_out" && python3 .project-agent-workflow/scripts/validate-changes.py --all >/dev/null)
+(cd "$pre_v1_plan_out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+git -C "$pre_v1_plan_out" diff --check
+
 v100_out=$(prepare_lane v100-repair v1.0.0 "$root/tests/fixtures/python.answers.yml")
 (cd "$v100_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
 validate_common_lane "$v100_out" 0 patch_only
@@ -438,6 +602,28 @@ grep -q '.project-agent-workflow/hooks/stop_review_gate.py' "$repair_out/.codex/
 test "$(grep -c 'stop_review_gate.py' "$repair_out/.codex/hooks.json")" -eq 1
 grep -q 'Compatibility bridge' "$repair_out/.codex/hooks/stop_review_gate.py"
 git -C "$repair_out" diff --check
+
+v111_out="$tmp/v111-without-plan-placeholders"
+run_copier copy -q -f --vcs-ref v1.1.1 --data-file "$root/tests/fixtures/python.answers.yml" "$update_source" "$v111_out" >/dev/null
+git -C "$v111_out" init -b main >/dev/null
+git -C "$v111_out" config user.email "ci@example.invalid"
+git -C "$v111_out" config user.name "CI"
+git -C "$v111_out" add -A
+git -C "$v111_out" commit -m "Initial v1.1.1 workflow" >/dev/null
+for plan_dir in active backlog checked handoffs; do
+  test -f "$v111_out/docs/plan/$plan_dir/.gitkeep"
+  git -C "$v111_out" rm -q "docs/plan/$plan_dir/.gitkeep"
+done
+git -C "$v111_out" commit -m "Remove plan directory placeholders" >/dev/null
+run_copier update -q -f --trust --vcs-ref "$target_ref" "$v111_out" >/dev/null
+for plan_dir in active backlog checked handoffs; do
+  if [ -e "$v111_out/docs/plan/$plan_dir/.gitkeep" ]; then
+    echo "copier update recreated removed plan placeholder: docs/plan/$plan_dir/.gitkeep" >&2
+    exit 1
+  fi
+done
+grep -q '^_commit: v1.1.2$' "$v111_out/.copier-answers.yml"
+git -C "$v111_out" diff --check
 
 future_source="$tmp/future-source"
 future_out="$tmp/future-project"

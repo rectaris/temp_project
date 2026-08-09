@@ -91,7 +91,7 @@ Rules:
 - `human_design_required` is `yes` only when material architecture, product frame, story, or visual philosophy is in scope.
 - `human_approval_status` is `not_required`, `pending`, or `approved`.
 - Class C plans must use `pending` or `approved`; backlog or deferred plans may remain `pending`, but promotion to active implementation requires `approved`.
-- Every `task_types` entry must match a route key in `.project-agent-workflow/docs/agent/spec-index.yaml`.
+- Every open-plan `task_types` entry must match a route key in `.project-agent-workflow/docs/agent/spec-index.yaml`.
 - When work crosses categories, list every matching route in `task_types`.
 - `required_specs` must contain `default_reads` plus the union of every listed route's `required` entries.
 - Add matching conditional specs when the task or touched paths satisfy their conditions.
@@ -121,6 +121,10 @@ Lifecycle states:
 - Archive lint accepts legacy `completed` and `ready_to_archive` values created before terminal-status enforcement; new archives must use `checked`.
 - Finalization requires a non-empty `checked_summary_ja`, a non-empty `Validation Notes` section, a matching active index row, and a non-colliding date-based archive path.
 - Checked archives using the manifest field names generated before `task_types`, `write_scope`, and `context_files` remain readable as legacy history; open plans must use the current manifest.
+- Full plan lint preserves checked archives as historical records without applying the current route keys, required-spec union, or validation-command allowlist retroactively.
+- Explicit `check-plan` remains strict, and `run-plan` accepts only a numbered file directly under `docs/plan/active/`; checked validation records are never execution targets.
+- After a recorded pre-v1 Copier adoption, open plans may retain the preserved root routing contract and old generic CLI paths only while the migration manifest proves the pre-v1 source and every referenced CLI is an unmodified compatibility bridge to the managed helper.
+- A mixed root and managed routing contract, a modified legacy CLI, or an unverified legacy CLI requires manual plan integration.
 
 ## Handoff Queue
 

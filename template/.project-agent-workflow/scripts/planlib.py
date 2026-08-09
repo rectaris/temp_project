@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
@@ -12,6 +13,8 @@ from pathlib import Path
 
 ROOT = Path.cwd()
 SPEC_INDEX = ROOT / ".project-agent-workflow/docs/agent/spec-index.yaml"
+LEGACY_SPEC_INDEX = ROOT / "docs/agent/spec-index.yaml"
+ADOPTION_MANIFEST = ROOT / ".project-agent-workflow-migration/v1-pre-namespace/manifest.json"
 PLAN = ROOT / "docs/plan/plan.md"
 CHECKED = ROOT / "docs/plan/checked.md"
 ACTIVE_DIR = ROOT / "docs/plan/active"
@@ -88,6 +91,24 @@ class PlanError(ValueError):
     """Raised for invalid plan docs or indexes."""
 
 
+def has_pre_v1_adoption_provenance() -> bool:
+    try:
+        manifest = json.loads(ADOPTION_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    previous_ref = manifest.get("previous_ref")
+    copied = manifest.get("adoption_copied")
+    return bool(
+        manifest.get("operation") == "recopy_adoption"
+        and isinstance(previous_ref, str)
+        and re.fullmatch(r"v0\.[0-9]+\.[0-9]+", previous_ref)
+        and isinstance(copied, list)
+        and "docs/agent/spec-index.yaml" in copied
+    )
+
+
 @contextmanager
 def lifecycle_lock():
     lock_dir = ROOT / ".agent-artifacts"
@@ -112,15 +133,15 @@ def atomic_write_text(path: Path, content: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def routing_contract() -> tuple[set[str], dict[str, set[str]]]:
-    if not SPEC_INDEX.is_file():
+def routing_contract(spec_index: Path = SPEC_INDEX) -> tuple[set[str], dict[str, set[str]]]:
+    if not spec_index.is_file():
         return set(), {}
     default_reads: set[str] = set()
     route_requirements: dict[str, set[str]] = {}
     section = ""
     in_task_types = False
     current_route = ""
-    for line in SPEC_INDEX.read_text(encoding="utf-8").splitlines():
+    for line in spec_index.read_text(encoding="utf-8").splitlines():
         if line == "default_reads:":
             section = "default_reads"
             in_task_types = False
@@ -159,13 +180,13 @@ def routing_contract() -> tuple[set[str], dict[str, set[str]]]:
     return default_reads, route_requirements
 
 
-def task_type_values() -> set[str]:
-    _, route_requirements = routing_contract()
+def task_type_values(spec_index: Path = SPEC_INDEX) -> set[str]:
+    _, route_requirements = routing_contract(spec_index)
     return set(route_requirements)
 
 
-def required_specs_for(task_types: list[str]) -> set[str]:
-    default_reads, route_requirements = routing_contract()
+def required_specs_for(task_types: list[str], spec_index: Path = SPEC_INDEX) -> set[str]:
+    default_reads, route_requirements = routing_contract(spec_index)
     required = set(default_reads)
     for task_type in task_types:
         required.update(route_requirements.get(task_type, set()))
