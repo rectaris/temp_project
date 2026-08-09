@@ -63,4 +63,4 @@ checked_summary_ja: 開発者向け報告を構造化入力から判定し、必
 - `tests/smoke.sh` passed all generated-project fixtures and pairwise Copier combinations, including execution of the generated human-report CLI and Git-ignore verification; actionlint was unavailable and skipped because no GitHub Actions file changed.
 - `tests/copier-minimum.sh` passed the minimum supported Copier and Python compatibility lane.
 - `python3 scripts/validate-changes.py --all` and `git diff --check` passed.
-- `tests/copier-update.sh` now asserts that supported updates install the managed policy, configuration, and CLI with the safe local default; this test requires a committed target ref and is run after the implementation commit.
+- `COPIER_UPDATE_TARGET_REF=a169890ace1eda2b088d9b1803c4d939c07a9577 REQUIRE_COPIER=1 tests/copier-update.sh` passed and proved that supported updates install the managed policy, configuration, and CLI with the safe local default.
