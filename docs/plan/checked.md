@@ -46,3 +46,4 @@ id	path
 043	docs/plan/checked/2026/08/01-15/043-luna-xhigh-evidence-synthesis.md
 044	docs/plan/checked/2026/08/01-15/044-copier-update-documentation-contract.md
 045	docs/plan/checked/2026/08/01-15/045-local-human-report-html.md
+047	docs/plan/checked/2026/08/01-15/047-release-v120.md

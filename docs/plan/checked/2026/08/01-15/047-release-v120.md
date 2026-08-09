@@ -1,6 +1,6 @@
 # Release v1.2.1 after v1.2.0 CI recovery
 
-status: in_progress
+status: checked
 task_types:
   - security
   - template_workflow
@@ -53,10 +53,10 @@ checked_summary_ja: v1.2.0 の tag push で判明した whitespace gate を修�
 - [x] Update the changelog for v1.2.0 and its v1.2.1 CI correction.
 - [x] Run the documented release validation with pinned tools.
 - [x] Fix and validate the new-tag whitespace comparison.
-- [ ] Archive this release plan and commit the release record.
-- [ ] Create and verify the annotated v1.2.1 tag.
-- [ ] Push main and v1.2.1 to origin.
-- [ ] Confirm release-triggered GitHub Actions complete successfully.
+- [x] Archive this release plan and commit the release record.
+- [x] Create and verify the annotated v1.2.1 tag.
+- [x] Push main and v1.2.1 to origin.
+- [x] Confirm release-triggered GitHub Actions complete successfully.
 
 ## Validation Notes
 
@@ -73,3 +73,6 @@ checked_summary_ja: v1.2.0 の tag push で判明した whitespace gate を修�
 - The concurrent main run passed through hooks and failed in Copier update without a reported assertion; the same commit's tag run and the pre-release local run passed Copier update, so v1.2.1 must re-run both release-triggered workflows before completion.
 - The Copier update failure reproduced after publishing v1.2.0 because the fixture moved `v1.1.2` onto a commit that already had the real `v1.2.0` tag; an empty test-only commit now keeps the expected fixture tag unambiguous.
 - The tag-range regression test, pinned actionlint, root workflow lint, smoke test, 28 hook tests, Copier update test, Python 3.11.12 with Copier 9.6.0 minimum-compatibility test, YAML parse, and `git diff --check` passed after both corrections.
+- Annotated tag `v1.2.1` points to commit `1488a7b043aad32079fa4e0d43b6ff1ed568a2a9`, and the atomic push published that tag with main.
+- The tag workflow run `31308792283` and main workflow run `31308792334` both passed their `validate` and `minimum-compatibility` jobs.
+- Both successful runs reported the upstream Node.js 20 deprecation warning for `actions/checkout@v4` and `actions/setup-python@v5`; this warning did not affect the release checks and remains future maintenance work.
