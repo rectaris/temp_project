@@ -2,6 +2,11 @@
 
 ## 未リリース
 
+## v1.2.1
+
+- 新規 tag の push で `before` が全ゼロになる場合は、CI の whitespace gate が tag commit と直前 commit の差分だけを検査するようにしました。
+- Copier 更新テストの target tag を専用 commit に分離し、同じ commit に実際の release tag が存在しても回答ファイルの期待値が変わらないようにしました。
+
 ## v1.2.0
 
 - タスクに応じた固定モデルと reasoning effort を Codex helper agent に設定しました。

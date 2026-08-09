@@ -69,10 +69,15 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_SHA: ${{ github.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           set -eu
           if [ "$EVENT_NAME" = pull_request ]; then
             git diff --check "$BASE_SHA...$PR_HEAD_SHA"
+          elif [ "$EVENT_NAME" = push ] &&
+            [ "$REF_TYPE" = tag ] &&
+            git cat-file -e "$HEAD_SHA^" 2>/dev/null; then
+            git diff --check "$HEAD_SHA^..$HEAD_SHA"
           elif [ "$EVENT_NAME" = push ] &&
             [ "$BEFORE_SHA" != 0000000000000000000000000000000000000000 ] &&
             git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then

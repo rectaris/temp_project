@@ -25,6 +25,8 @@ update_source="$tmp/update-source"
 git clone -q "$root" "$update_source"
 git -C "$update_source" fetch -q "$root" "$target_commit"
 git -C "$update_source" switch -q -c migration-target FETCH_HEAD
+git -C "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
+  commit --allow-empty -qm "Create isolated Copier update target"
 git -C "$update_source" tag -f v1.1.2
 target_ref=v1.1.2
 legacy_answers="$tmp/legacy-activation.answers.yml"

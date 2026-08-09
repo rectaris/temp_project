@@ -438,6 +438,8 @@ class GeneratedCiTest(unittest.TestCase):
         root_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         workflow = (ROOT / "template/.github/workflows/project-agent-workflow.yml").read_text(encoding="utf-8")
         self.assertIn('git diff --check "$BASE_SHA...$PR_HEAD_SHA"', root_workflow)
+        self.assertIn('[ "$REF_TYPE" = tag ]', root_workflow)
+        self.assertIn('git diff --check "$HEAD_SHA^..$HEAD_SHA"', root_workflow)
         self.assertIn('git diff --check "$BEFORE_SHA..$HEAD_SHA"', root_workflow)
         self.assertIn('git diff --check "$EMPTY_TREE" "$HEAD_SHA"', root_workflow)
         self.assertIn('name: Project agent workflow', workflow)
@@ -474,6 +476,40 @@ class GeneratedCiTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 2)
             self.assertIn("bad.md:1: trailing whitespace", result.stdout)
+
+    def test_tag_range_checks_only_the_tagged_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            historical = repo / "historical.md"
+            historical.write_text("historical trailing whitespace \n", encoding="utf-8")
+            subprocess.run(["git", "add", "historical.md"], cwd=repo, check=True)
+            self.commit(repo, "historical")
+            (repo / "clean.md").write_text("clean\n", encoding="utf-8")
+            subprocess.run(["git", "add", "clean.md"], cwd=repo, check=True)
+            self.commit(repo, "release")
+
+            clean_result = subprocess.run(
+                ["git", "diff", "--check", "HEAD^..HEAD"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(clean_result.returncode, 0)
+
+            (repo / "new.md").write_text("new trailing whitespace \n", encoding="utf-8")
+            subprocess.run(["git", "add", "new.md"], cwd=repo, check=True)
+            self.commit(repo, "bad release")
+            bad_result = subprocess.run(
+                ["git", "diff", "--check", "HEAD^..HEAD"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(bad_result.returncode, 2)
+            self.assertIn("new.md:1: trailing whitespace", bad_result.stdout)
 
     @staticmethod
     def commit(repo: Path, message: str) -> None:
