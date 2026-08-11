@@ -47,3 +47,4 @@ id	path
 044	docs/plan/checked/2026/08/01-15/044-copier-update-documentation-contract.md
 045	docs/plan/checked/2026/08/01-15/045-local-human-report-html.md
 047	docs/plan/checked/2026/08/01-15/047-release-v120.md
+048	docs/plan/checked/2026/08/01-15/048-ci-autofix-boundaries.md

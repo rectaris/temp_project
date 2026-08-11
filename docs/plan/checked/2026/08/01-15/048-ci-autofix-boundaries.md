@@ -1,6 +1,6 @@
 # Harden root CI autofix artifact and write boundaries
 
-status: in_progress
+status: checked
 task_types:
   - security
   - template_workflow
@@ -51,11 +51,15 @@ The generated workflow template already implements the intended controls, while 
 
 ## Tasks
 
-- [ ] Add root-workflow regression assertions for exact-SHA checkout, temporary artifact paths, boundary validation, protected paths, and test-deletion rejection.
-- [ ] Port the established generated-workflow controls into the root workflow with the root repository's available security-checker path.
-- [ ] Confirm that every boundary failure prevents patch upload and the write-capable apply job.
-- [ ] Run required workflow and repository validation.
+- [x] Add root-workflow regression assertions for exact-SHA checkout, temporary artifact paths, boundary validation, protected paths, and test-deletion rejection.
+- [x] Port the established generated-workflow controls into the root workflow with the root repository's available security-checker path.
+- [x] Confirm that every boundary failure prevents patch upload and the write-capable apply job.
+- [x] Run required workflow and repository validation.
 
 ## Validation Notes
 
-Pending implementation.
+- The root workflow now checks out the prepared pull-request SHA for both generation and application, stores the prompt, output, and patch below `runner.temp`, and validates the diff before artifact upload.
+- The root boundary step runs the template-hosted static security checker, rejects protected paths and deleted tests, and leaves the existing autofix modes, attempt limit, and notifications unchanged.
+- `scripts/check-copier-template.py` now rejects regressions in the exact-SHA, temporary-artifact, protected-path, deleted-test, and patch-application markers.
+- Pinned actionlint 1.7.12 was installed with checksum verification under `.agent-artifacts/tools/actionlint-1.7.12/`.
+- `scripts/lint-project-workflow.sh`, actionlint, `tests/smoke.sh`, YAML parsing, the root static security scan, `python3 scripts/validate-changes.py --all`, and `git diff --check` passed.

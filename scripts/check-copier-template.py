@@ -770,6 +770,27 @@ def require_copier_documentation_contract() -> None:
         fail("template development documentation still limits --trust to migrations")
 
 
+def require_ci_autofix_root_boundaries() -> None:
+    text = read(".github/workflows/codex-ci-autofix.yml")
+    required = (
+        "ref: ${{ needs.prepare.outputs.head_sha }}",
+        'cp .github/codex/prompts/ci-autofix.md "$RUNNER_TEMP/codex-ci-autofix-prompt.md"',
+        'prompt-file: ${{ runner.temp }}/codex-ci-autofix-prompt.md',
+        'output-file: ${{ runner.temp }}/codex-ci-autofix-output.md',
+        'git diff --binary HEAD > "$RUNNER_TEMP/codex-ci-autofix.patch"',
+        "git diff --check HEAD",
+        "python3 template/.project-agent-workflow/scripts/security-static-check.py --changed",
+        'path: ${{ runner.temp }}/codex-ci-autofix.patch',
+        'path: ${{ runner.temp }}/codex-ci-autofix-output.md',
+        'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
+        'protected=$(git diff --name-only HEAD | grep -E \'^(\\.github/workflows/|\\.github/codex/|\\.env($|\\.)|.*production.*|.*deploy.*)\' || true)',
+        'deleted_tests=$(git diff --diff-filter=D --name-only HEAD -- tests || true)',
+    )
+    for marker in required:
+        if marker not in text:
+            fail(f"root CI autofix workflow must include boundary guard marker: {marker}")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -805,6 +826,7 @@ def main() -> int:
     require_context_compression_boundary()
     require_agent_profile_task()
     require_copier_documentation_contract()
+    require_ci_autofix_root_boundaries()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")
