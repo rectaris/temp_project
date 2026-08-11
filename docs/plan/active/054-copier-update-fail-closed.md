@@ -33,6 +33,8 @@ acceptance:
   - A clean initial copy remains supported outside a Git repository.
   - A conflict-free update continues to preserve project-owned files and validation behavior.
   - An intentionally overlapping managed-file update fixture proves the failure is surfaced by the supported command itself.
+  - The update test refuses any fixture repository that resolves outside its temporary directory or resolves to the source repository.
+  - The source repository HEAD and worktree remain unchanged across the update test.
 checked_summary_ja: 文書化された Copier update 経路を競合、rej、未分類削除で失敗させ、成功終了のまま不整合を残さない。
 
 ## Context
@@ -46,12 +48,16 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Keep Copier and `copier.yml` as the long-term interface.
 - Run the result gate as part of the trusted Copier task sequence rather than relying on a separate optional manual command.
 - Detect complete conflict blocks so valid Markdown setext headings are not rejected.
+- Resolve every mutable fixture path before Git writes, require it to be below the test temporary directory, and reject the source repository explicitly.
+- Snapshot the source repository HEAD and worktree before the test and require both to remain unchanged afterward.
+- Keep the update source's Copier provenance valid so the supported update command can detect its previous version.
 
 ## Tasks
 
 - [ ] Add a post-copy/update result validator that is safe for initial non-Git copies.
 - [ ] Wire the validator into the trusted Copier task sequence.
 - [ ] Add a conflict-producing update fixture and retain the conflict-free update lane.
+- [ ] Add fail-closed fixture-path guards and a source-repository immutability assertion.
 - [ ] Align generated update documentation with the enforced behavior.
 - [ ] Run the required validation commands.
 
