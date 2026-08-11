@@ -56,6 +56,9 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Separate source-repository reads from fixture writes; every Git command that can mutate state must reject the source repository and any path outside the test temporary directory.
 - Use consecutive explicit semantic-version tags for the mutable-source copy and update instead of `HEAD` provenance.
 - Treat Git inspection errors as validator failures, except for the explicit non-Git destination check used by initial copies.
+- Recognize only Git's explicit not-a-repository result as the initial-copy exception; any other nonzero Git result, including an injected inspection failure, is fatal.
+- Classify only `.github/workflows/codex-ci-autofix.yml` and `scripts/skillspector-scan.sh` as expected update deletions; do not allow deletion by directory prefix.
+- Guard every fixture Git mutation at the command boundary: resolved `-C` repositories and clone destinations must remain below the test temporary directory and must never equal the source repository.
 
 ## Tasks
 
@@ -63,9 +66,10 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - [ ] Wire the validator into the trusted Copier task sequence.
 - [ ] Add a conflict-producing update fixture and retain the conflict-free update lane.
 - [ ] Add fail-closed fixture-path guards and a source-repository immutability assertion.
+- [ ] Add an injected Git inspection-failure fixture and explicit deletion-classification coverage.
 - [ ] Align generated update documentation with the enforced behavior.
 - [ ] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- Rejected sandbox candidate `fe2670d159f5f2ff39133e13a066144085ecc83c41c4f1d0c93bfa208ddd6ecf`: it treated every initial Git probe failure as non-Git, allowed broad deletion prefixes, and did not guard each fixture Git mutation target.
