@@ -42,6 +42,7 @@ acceptance:
   - Trusted post-worker materialization copies only writable-shadow results into the candidate clone before patch collection and preserves deletion semantics for prefix scopes.
   - Exact-file entries fail closed for unsupported removal or atomic replacement; a plan must grant a directory prefix when those operations are required.
   - Scratch remains writable for temporary diagnostics and tool caches, and the default worker prompt directs all transient artifacts to `SANDBOXED_PLAN_WORKER_SCRATCH_DIR`.
+  - Worker environment setup assigns each reserved variable once and routes Python bytecode, pip cache, uv cache, and uv project environments under scratch; a focused test asserts those exact paths.
   - Bubblewrap or filtered-shadow setup failure exits nonzero without falling back to a whole-clone writable mount.
   - Root and template runners remain byte-identical and executable.
 checked_summary_ja: 隔離クローン全体を読み取り専用にし、write_scope の shadow mount だけを書き込み可能にする。
@@ -68,6 +69,7 @@ Plan 054 remains suspended until this plan is implemented, validated, archived, 
 - Do not add a whole-clone writable fallback.
 - Collapse redundant exact or nested-prefix entries already covered by a broader prefix before creating mounts.
 - Route Python bytecode and `uv` cache/project-environment writes to scratch so required validation does not require an unscoped repository-local `.venv` or `__pycache__`.
+- Set `PYTHONDONTWRITEBYTECODE`, `PYTHONPYCACHEPREFIX`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, and `UV_PROJECT_ENVIRONMENT` explicitly, without duplicate reserved environment assignments.
 
 ## Tasks
 
@@ -87,3 +89,4 @@ Plan 054 remains suspended until this plan is implemented, validated, archived, 
 - Rejected sandbox candidate `716e6314f678a070386025e7e2b9bc105de23211d1e915a42512cd17289b954f`: 13 of 24 host-side tests failed. Scratch-before-shadow and cache routing were added, but patch collection still mounted the clone read-only; denial-test source text evaluated an unescaped outer f-string name; exact and source probe fixtures remained inconsistent; and legacy commit, out-of-scope, and clean-filter tests still expected post-worker behavior that the physical mount now denies inside the worker.
 - Implement two explicit Bubblewrap mount modes: worker mode uses read-only clone plus scratch then shadow binds, while patch-collection mode uses a writable temporary clone without shadows and still keeps host/source read-only. Update legacy tests to expect worker-time denial for `.git` mutation and unscoped writes. Configure the malicious clean filter through scratch HOME/global Git config, not writable clone `.git` metadata. Create every exact-scope fixture file before the baseline commit, escape generated worker-script braces, and pass `manifest.json` rather than `candidate.patch` to the apply command.
 - Sandbox candidate `48061983cc1d35255df40f080c4df8928186c4fa17eac07f10be3fd849add15f` passed 23 of 24 host-side focused tests, runner self-test, default-prompt runtime evaluation, diff check, and root/template parity. The only failure is `test_bubblewrap_probe_blocks_source_and_host_temp_writes`, whose exact `probe.txt` scope target is absent from the committed fixture baseline. Preserve the accepted runner implementation and fix that fixture precondition before final validation.
+- Rejected sandbox candidate `08ecee7628dd50f8ba0c712a05ca266905a2aae36e4a89debcd3282336e1f8ff` after main-session review despite all listed commands passing in its review clone: `SANDBOXED_PLAN_WORKER_PLAN_PATH` was assigned twice, while `PIP_CACHE_DIR` and `PYTHONDONTWRITEBYTECODE` were absent and no focused assertion covered the required cache routing. Preserve the otherwise accepted physical-mount implementation, correct only this environment setup and its focused test, and rerun all validations.
