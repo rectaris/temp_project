@@ -66,6 +66,8 @@ Plan 054 remains suspended until this plan is implemented, validated, archived, 
 - Set Python and common tool cache locations to scratch where deterministic validation requires temporary writes.
 - Keep candidate patch admission as a second independent check after physical write filtering.
 - Do not add a whole-clone writable fallback.
+- Collapse redundant exact or nested-prefix entries already covered by a broader prefix before creating mounts.
+- Route Python bytecode and `uv` cache/project-environment writes to scratch so required validation does not require an unscoped repository-local `.venv` or `__pycache__`.
 
 ## Tasks
 
@@ -79,4 +81,4 @@ Plan 054 remains suspended until this plan is implemented, validated, archived, 
 
 ## Validation Notes
 
-- Pending.
+- Rejected sandbox candidate `bf9846e9f33843084bcc3173ef7261d39416a89ac9c2b15738e2f8ebdeee5ffa`: the default prompt contained an invalid f-string expansion, the source/outside denial test had dirty-source and inverted postconditions, clone-sibling denial coverage was incomplete, scratch cache routing was incomplete, and overlapping scope entries were not collapsed.
