@@ -49,15 +49,12 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 
 ## Tasks
 
-- [x] Add a post-copy/update result validator that is safe for initial non-Git copies.
-- [x] Wire the validator into the trusted Copier task sequence.
-- [x] Add a conflict-producing update fixture and retain the conflict-free update lane.
-- [x] Align generated update documentation with the enforced behavior.
-- [x] Run the required validation commands.
+- [ ] Add a post-copy/update result validator that is safe for initial non-Git copies.
+- [ ] Wire the validator into the trusted Copier task sequence.
+- [ ] Add a conflict-producing update fixture and retain the conflict-free update lane.
+- [ ] Align generated update documentation with the enforced behavior.
+- [ ] Run the required validation commands.
 
 ## Validation Notes
 
-- Added `scripts/validate-copier-update-result.py` and wired it into `copier.yml` as a trust-gated post-render task.
-- Updated `tests/copier-update.sh` with a non-Git copy scenario and a managed-file conflict fixture proving `copier update --trust` fails as expected.
-- Hardened conflict-marker checks to require complete conflict blocks in regression verification.
-- Updated template copy/update docs (`template/README.md.jinja`, `template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md`) to describe nonzero failure behavior on unresolved conflicts, rejections, or unclassified deletions.
+- Pending.

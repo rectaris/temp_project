@@ -42,7 +42,6 @@ MCP、Linear、graph memory は任意機能です。
 
 このテンプレートは更新後に agent model の固定項目を正規化する task を実行するため、`--trust` が必要です。
 `--trust` は task の実行を許可するだけであり、更新差分の安全性を保証しません。
-`copier update --trust` は、更新後に非破壊チェックを実行し、競合、`.rej` ファイル、完全な競合ブロック、未分類の追跡済み削除が残る場合は非0終了します。
 
 ```sh
 copier update --trust
