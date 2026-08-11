@@ -34,12 +34,13 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 - `scoped_worker`: bounded implementation with explicit write scope.
 - `change_reviewer`: read-only correctness, regression, validation, and security review.
 - `docs_researcher`: read-only external or version-specific research.
-- `sequential_plan_worker`: implementation of exactly one assigned active plan without descendant delegation.
+- `sequential_plan_worker`: read-only implementation contract for exactly one assigned active plan; writable execution must route through `scripts/run-sandboxed-plan-worker.py`.
 
 ## Delegation Rules
 
 - Delegate only concrete, bounded, independently useful work.
 - Assign non-overlapping write scopes.
+- For writable sequential active-plan implementation, use `scripts/run-sandboxed-plan-worker.py run` and `scripts/run-sandboxed-plan-worker.py apply`; do not grant direct repository write access to the built-in `sequential_plan_worker` profile.
 - Use `evidence_synthesizer` only for bounded comparison of multiple evidence sources, alternatives, or hypotheses whose result the parent can verify.
 - Use `fast_scoped_worker` only when the expected edit and validation are known before delegation.
 - Stop a fast worker when it encounters architecture, policy, security, authorization, destructive-operation, external-write, or scope-expansion decisions.

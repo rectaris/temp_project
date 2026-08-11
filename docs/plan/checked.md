@@ -53,3 +53,4 @@ id	path
 051	docs/plan/checked/2026/08/01-15/051-skill-copier-trust-commands.md
 052	docs/plan/checked/2026/08/01-15/052-proactive-bounded-subagents.md
 053	docs/plan/checked/2026/08/01-15/053-root-hook-allowlist.md
+046	docs/plan/checked/2026/08/01-15/046-sandboxed-plan-worker.md

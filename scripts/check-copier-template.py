@@ -50,6 +50,7 @@ SOURCE_REQUIRED = [
     "scripts/install-actionlint.sh",
     "scripts/lint-github-actions.sh",
     "scripts/plan_validation_commands.py",
+    "scripts/run-sandboxed-plan-worker.py",
     "scripts/referent-contract.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
@@ -162,6 +163,7 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py",
     "template/.project-agent-workflow/scripts/planlib.py",
     "template/.project-agent-workflow/scripts/plan_validation_commands.py",
+    "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     "template/.project-agent-workflow/scripts/referent-contract.py",
     "template/.project-agent-workflow/scripts/format-plan-docs.py",
     "template/.project-agent-workflow/scripts/search-plan-archive.py",
@@ -189,6 +191,7 @@ SOURCE_REQUIRED = [
     "tests/test-copier-migration.py",
     "tests/test-copier-adoption.py",
     "tests/test-referent-contract.py",
+    "tests/test-sandboxed-plan-worker.py",
     "tests/test-validation-tools.py",
     "tests/fixtures/referent-contract/scenarios.json",
     "tests/fixtures/referent-contract/evaluation-protocol.md",
@@ -309,6 +312,7 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/scripts/next-plan-id.sh",
     ".project-agent-workflow/scripts/planlib.py",
     ".project-agent-workflow/scripts/plan_validation_commands.py",
+    ".project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     ".project-agent-workflow/scripts/referent-contract.py",
     ".project-agent-workflow/scripts/promote-plan.sh",
     ".project-agent-workflow/scripts/search-plan-archive.py",
@@ -402,11 +406,12 @@ def require_sequential_worker() -> None:
         'name = "sequential_plan_worker"',
         'model = "gpt-5.3-codex-spark"',
         'model_reasoning_effort = "medium"',
-        'sandbox_mode = "workspace-write"',
+        'sandbox_mode = "read-only"',
         "Do not process the next active plan",
         "Do not spawn descendant agents",
         "Do not edit the assigned plan's status",
         "Do not commit changes",
+        ".project-agent-workflow/scripts/run-sandboxed-plan-worker.py run <plan>",
     )
     for marker in required:
         if marker not in text:
@@ -495,6 +500,8 @@ def require_orchestration_policy_markers() -> None:
         "final report",
         "role",
         "acceptance",
+        "run-sandboxed-plan-worker.py run",
+        "read-only",
     )
     for marker in shared_markers:
         if marker not in template_spec:
@@ -513,6 +520,8 @@ def require_orchestration_policy_markers() -> None:
         "role",
         "scope",
         "acceptance",
+        "run-sandboxed-plan-worker.py",
+        "read-only",
     ):
         if marker not in template_agents:
             fail(f"template managed AGENTS missing marker: {marker}")
@@ -538,6 +547,8 @@ def require_orchestration_policy_markers() -> None:
         "final high-risk",
         "write scope",
         "acceptance",
+        "run-sandboxed-plan-worker.py run",
+        "read-only",
     ):
         if marker not in root_orchestration:
             fail(f"root orchestration policy missing marker for template parity: {marker}")
@@ -610,6 +621,29 @@ def require_user_communication_alignment() -> None:
             template_text = normalized_template_core(template_path)
         if read(root_path) != template_text:
             fail(f"user-communication root/template files differ: {root_path} != {template_path}")
+
+
+def require_sandboxed_plan_worker_alignment() -> None:
+    if read("scripts/run-sandboxed-plan-worker.py") != read(
+        "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    ):
+        fail("sandboxed plan worker root/template scripts differ")
+    root_mode = os.stat(ROOT / "scripts/run-sandboxed-plan-worker.py").st_mode & 0o777
+    template_mode = os.stat(ROOT / "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py").st_mode & 0o777
+    if root_mode != template_mode:
+        fail("sandboxed plan worker root/template script modes differ")
+    if root_mode & 0o111 == 0:
+        fail("sandboxed plan worker scripts must be executable")
+    pairs = (
+        (
+            ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+            "template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md",
+        ),
+    )
+    for root_path, template_path in pairs:
+        template_text = normalized_template_core(template_path)
+        if read(root_path) != template_text:
+            fail(f"sandboxed plan worker orchestration text differs: {root_path} != {template_path}")
 
 
 def run_hook_payload(script_path: str, run_id: str, payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
@@ -1089,6 +1123,7 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_user_communication_alignment()
+    require_sandboxed_plan_worker_alignment()
     require_hook_logging_parity()
     require_orchestration_policy_markers()
     require_template_manifest_complete()

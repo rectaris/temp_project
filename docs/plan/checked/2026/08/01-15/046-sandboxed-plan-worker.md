@@ -1,6 +1,6 @@
 # Enforce physical isolation for delegated plan implementation
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -88,14 +88,22 @@ The root scripts and orchestration policy plus the template managed scripts and 
 
 ## Tasks
 
-- [ ] Add the root sandboxed plan-worker runner with run, apply, and self-test commands.
-- [ ] Add deterministic plan-scope parsing, candidate-patch admission, base revision, digest, and clean-worktree checks.
-- [ ] Add Bubblewrap isolation tests that attempt writes inside and outside the isolated workspace.
-- [ ] Make the built-in sequential_plan_worker read-only and route writable sequential implementation through the runner.
-- [ ] Add the equivalent generated runner, agent profile, Skill instructions, and orchestration policy under template/.
-- [ ] Add root/template parity and generated-project smoke coverage.
-- [ ] Run every required validation command.
+- [x] Add the root sandboxed plan-worker runner with run, apply, and self-test commands.
+- [x] Add deterministic plan-scope parsing, candidate-patch admission, base revision, digest, and clean-worktree checks.
+- [x] Add Bubblewrap isolation tests that attempt writes inside and outside the isolated workspace.
+- [x] Make the built-in sequential_plan_worker read-only and route writable sequential implementation through the runner.
+- [x] Add the equivalent generated runner, agent profile, Skill instructions, and orchestration policy under template/.
+- [x] Add root/template parity and generated-project smoke coverage.
+- [x] Run every required validation command.
 
 ## Validation Notes
 
-- Pending.
+- `python3 tests/test-sandboxed-plan-worker.py`: passed, 20 tests.
+- `python3 scripts/run-sandboxed-plan-worker.py self-test`: passed.
+- `scripts/lint-project-workflow.sh`: passed.
+- `tests/smoke.sh`: passed after the rejected plan 054 worktree edits were preserved under ignored `.agent-artifacts/rejected-054/` and removed from the validation worktree.
+- `python3 scripts/validate-changes.py --all`: passed.
+- `git diff --check`: passed.
+- A live default-Codex fixture run completed inside Bubblewrap, changed only `allowed.txt` in its temporary clone, and emitted a matching candidate manifest without mutating the fixture source before admission.
+- Root and template runners are byte-identical and executable with mode `0755`.
+- Residual boundary: this first backend enforces write isolation; it does not provide host-file read confidentiality or network isolation. Secret handling and delegated external writes remain prohibited by parent policy.

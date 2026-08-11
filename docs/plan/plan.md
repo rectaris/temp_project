@@ -1,7 +1,6 @@
 # Active Plan
 
 id	path	status
-046	docs/plan/active/046-sandboxed-plan-worker.md	in_progress
 054	docs/plan/active/054-copier-update-fail-closed.md	in_progress
 055	docs/plan/active/055-agent-profile-toml-aware.md	in_progress
 056	docs/plan/active/056-ci-autofix-required-validation.md	in_progress
