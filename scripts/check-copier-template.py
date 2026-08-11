@@ -719,12 +719,36 @@ def require_copier_documentation_contract() -> None:
     command_docs = (
         "README.md",
         "template/README.md.jinja",
+        "SKILL.md",
     )
+    skill_copy_commands: list[str] = []
     for path in command_docs:
         for line in read(path).splitlines():
             command = line.strip()
             if command.startswith(("copier copy ", "copier update ")) and "--trust" not in command:
                 fail(f"{path} documents an untrusted Copier command: {command}")
+            if path == "SKILL.md" and command.startswith("copier copy "):
+                skill_copy_commands.append(command)
+                tokens = command.split()
+                if "--defaults" in tokens and any(token in ("-f", "--force") for token in tokens):
+                    fail(f"SKILL.md non-interactive Copier command uses overwrite forcing: {command}")
+
+    skill_trusted_noninteractive = 0
+    skill_trusted_default = 0
+    for command in skill_copy_commands:
+        tokens = command.split()
+        if "--trust" not in tokens:
+            fail(f"SKILL.md documented Copier command is untrusted: {command}")
+        if "--defaults" in tokens:
+            if "--trust" in tokens:
+                skill_trusted_noninteractive += 1
+        elif "--trust" in tokens:
+            skill_trusted_default += 1
+
+    if skill_trusted_default == 0:
+        fail("SKILL.md must document a trusted Copier copy command without --defaults")
+    if skill_trusted_noninteractive == 0:
+        fail("SKILL.md must document a trusted Copier copy command with --defaults")
 
     required_markers = {
         "AGENTS.md": (

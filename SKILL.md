@@ -25,13 +25,13 @@ When generated lifecycle scripts are present, prefer `.project-agent-workflow/sc
 Preferred:
 
 ```sh
-copier copy /path/to/project-agent-workflow /path/to/repo
+copier copy --trust /path/to/project-agent-workflow /path/to/repo
 ```
 
 For non-interactive defaults:
 
 ```sh
-copier copy -f /path/to/project-agent-workflow /path/to/repo
+copier copy --defaults --trust /path/to/project-agent-workflow /path/to/repo
 ```
 
 The wrapper `scripts/init-project-workflow.sh` is available for local convenience, but Copier is the long-term interface. Commit the generated `.copier-answers.yml` so future `copier update` runs can reuse answers and apply template changes.
