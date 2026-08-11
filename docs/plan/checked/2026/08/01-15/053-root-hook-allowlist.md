@@ -1,6 +1,6 @@
 # Restrict the root Hook log to allowlisted metadata
 
-status: in_progress
+status: checked
 task_types:
   - security
 review_class: B
@@ -47,11 +47,15 @@ The root Hook path currently uses an older implementation that records the compl
 
 ## Tasks
 
-- [ ] Add a regression test that reaches the root-wired implementation and proves arbitrary payload content is excluded.
-- [ ] Replace or synchronize the root implementation with the allowlisted implementation.
-- [ ] Add deterministic root/template drift coverage for the logging Hook.
-- [ ] Run the required validation commands.
+- [x] Add a regression test that reaches the root-wired implementation and proves arbitrary payload content is excluded.
+- [x] Replace or synchronize the root implementation with the allowlisted implementation.
+- [x] Add deterministic root/template drift coverage for the logging Hook.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- `python3 tests/test-hooks.py` passed with 30 tests.
+- `scripts/lint-project-workflow.sh` passed, including the root/template Hook parity check.
+- `python3 scripts/validate-changes.py --all` passed for all changed Python paths.
+- `git diff --check` passed.
+- Main-session review accepted the worker diff because it excludes arbitrary payload content through the root-wired implementation and adds direct runtime coverage without touching later plans.

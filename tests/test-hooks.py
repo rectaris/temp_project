@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOG = ROOT / "template/.project-agent-workflow/hooks/agent_log_event.py"
+ROOT_HOOK_LOG = ROOT / ".project-agent-workflow/hooks/agent_log_event.py"
 IMPORTER = ROOT / "template/.project-agent-workflow/scripts/import-codex-transcript.py"
 MANIFEST_HELPER = ROOT / "template/.project-agent-workflow/scripts/agent_log_manifest.py"
 MANIFEST_CHECKER = ROOT / "template/.project-agent-workflow/scripts/check-agent-log-manifest.py"
@@ -129,6 +130,62 @@ class PreToolHardeningGateTest(unittest.TestCase):
 
 
 class AgentLogEventTest(unittest.TestCase):
+    def test_root_hook_wired_from_session_start_config(self) -> None:
+        hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+        for event, matchers in hooks["hooks"].items():
+            for matcher in matchers:
+                hooks_to_check = matcher.get("hooks") or []
+                for entry in hooks_to_check:
+                    command = entry.get("command", "")
+                    if "agent_log_event.py" not in command:
+                        continue
+                    self.assertNotIn("template/.project-agent-workflow/hooks/agent_log_event.py", command)
+                    self.assertIn(".project-agent-workflow/hooks/agent_log_event.py", command)
+
+    def test_root_hook_logs_only_allowlisted_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            payload = {
+                "prompt": "AWS_SECRET_ACCESS_KEY=must-not-persist",
+                "tool_input": "cat /etc/passwd",
+                "tool": "Bash",
+                "tool_name": "Bash",
+                "response": "tool output",
+                "api_key": "sk-abcdefghijklmnopqrstuvwxyz",
+                "session_id": "session-metadata-root",
+                "hook_event_name": "UserPromptSubmit",
+                "tool_result": "should-not-log",
+                "stop_hook_active": True,
+            }
+            output = run_hook(
+                ROOT_HOOK_LOG,
+                payload,
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "test-root-run"},
+                args=["--event", "UserPromptSubmit"],
+            )
+            self.assertEqual(output, {})
+            event_path = repo / ".agent-logs/test-root-run/raw/events.jsonl"
+            manifest_path = repo / ".agent-logs/test-root-run/manifest.json"
+            self.assertTrue(event_path.is_file())
+            self.assertTrue(manifest_path.is_file())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertIn("raw/events.jsonl", manifest["raw_logs"])
+            record = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(record["event"], "UserPromptSubmit")
+            self.assertEqual(record["payload"]["session_id"], "session-metadata-root")
+            self.assertEqual(record["payload"]["hook_event_name"], "UserPromptSubmit")
+            self.assertEqual(record["payload"]["tool"], "Bash")
+            self.assertTrue(record["payload"]["stop_hook_active"])
+            self.assertNotIn("transcript_available", record["payload"])
+            self.assertNotIn("prompt", record["payload"])
+            self.assertNotIn("api_key", record["payload"])
+            self.assertNotIn("tool_input", record["payload"])
+            self.assertNotIn("tool_result", record["payload"])
+            self.assertNotIn("response", record["payload"])
+            self.assertNotIn("must-not-persist", event_path.read_text(encoding="utf-8"))
+
     def test_logs_allowlisted_metadata_without_prompt_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

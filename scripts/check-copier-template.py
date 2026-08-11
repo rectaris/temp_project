@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import re
 import subprocess
 import sys
+import os
+from typing import Any
 from itertools import combinations, product
 from pathlib import Path
 
@@ -608,6 +612,65 @@ def require_user_communication_alignment() -> None:
             fail(f"user-communication root/template files differ: {root_path} != {template_path}")
 
 
+def run_hook_payload(script_path: str, run_id: str, payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
+    env = dict(os.environ)
+    env["CODEX_AGENT_LOG_RUN_ID"] = run_id
+    result = subprocess.run(
+        [sys.executable, str(ROOT / script_path), "--event", str(payload.get("hook_event_name", "UserPromptSubmit"))],
+        input=json.dumps(payload),
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    if result.returncode != 0:
+        fail(f"hook logger execution failed for {script_path}: {result.stderr}")
+    event_path = cwd / ".agent-logs" / run_id / "raw" / "events.jsonl"
+    if not event_path.is_file():
+        fail(f"hook log file missing for {script_path}: {event_path}")
+    lines = [line for line in event_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        fail(f"hook log file empty for {script_path}: {event_path}")
+    try:
+        return json.loads(lines[-1])
+    except Exception as exc:
+        fail(f"invalid hook log JSON for {script_path}: {event_path}: {exc}")
+
+
+def require_hook_logging_parity() -> None:
+    payload = {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "hook-parity-session",
+        "tool": "Bash",
+        "tool_name": "bash",
+        "prompt": "secret=should-not-log",
+        "tool_input": "rm -rf /",
+        "response": "tool result should not log",
+        "output": "tool output should not log",
+        "api_key": "sk-abcdefghijklmnopqrstuvwxyz",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        root_record = run_hook_payload(".project-agent-workflow/hooks/agent_log_event.py", "root-parity", payload, repo)
+        template_record = run_hook_payload("template/.project-agent-workflow/hooks/agent_log_event.py", "template-parity", payload, repo)
+    if root_record.get("event") != template_record.get("event"):
+        fail("root/template hook event field diverged")
+    if root_record.get("payload", {}).get("session_id") != payload["session_id"]:
+        fail("root hook payload stopped logging session_id")
+    if template_record.get("payload", {}).get("session_id") != payload["session_id"]:
+        fail("template hook payload stopped logging session_id")
+    for field in ("prompt", "tool_input", "response", "output", "api_key"):
+        if field in root_record.get("payload", {}):
+            fail(f"root hook payload leaked disallowed field: {field}")
+        if field in template_record.get("payload", {}):
+            fail(f"template hook payload leaked disallowed field: {field}")
+
+    if root_record.get("payload", {}) != template_record.get("payload", {}):
+        fail("root/template hook payload structure diverged")
+
+
 def parse_fixture(path: Path) -> dict[str, str]:
     data: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -1026,6 +1089,7 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_user_communication_alignment()
+    require_hook_logging_parity()
     require_orchestration_policy_markers()
     require_template_manifest_complete()
 
