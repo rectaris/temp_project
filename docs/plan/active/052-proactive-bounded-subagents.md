@@ -34,6 +34,7 @@ validation:
   - python3 scripts/validate-changes.py --all
   - git diff --check
 acceptance:
+  - Implement semantically equivalent proactive-use criteria, non-use cases, main-agent ownership, and safety boundaries in both the root repository policy and the Copier-managed template policy.
   - Allow the main agent to delegate without a per-task user instruction and require proactive bounded delegation for repository-wide investigations when independent work is available and materially useful.
   - Define positive triggers for multiple independent areas, large or dense sources, cross-spec reconciliation, and validation, security, or orchestration review.
   - Retain local execution for short deterministic work and avoid delegation when coordination cost exceeds its expected value.
@@ -53,6 +54,7 @@ The user explicitly authorized subagent use without a per-task request and reque
 
 - Implement this plan after plans 050 and 051 so orchestration policy and validation use the corrected paths and final Skill content.
 - Apply the rule to both the root repository and generated-project orchestration policy.
+- Keep the root and template requirements semantically equivalent, changing only paths and wording required by their different repository locations.
 - Treat repository-wide investigation, independent multi-area analysis, cross-spec reconciliation, and security or regression review as positive delegation triggers.
 - Preserve the existing cost gate, role boundaries, concurrency limit, descendant-delegation restrictions in helper profiles, and main-agent ownership.
 - Require the final report to state whether subagents were used, their bounded roles, and how the main agent accepted their results.
@@ -61,10 +63,11 @@ The user explicitly authorized subagent use without a per-task request and reque
 
 ## Tasks
 
-- [ ] Add the proactive bounded-delegation rule to root and generated agent entrypoints and orchestration guidance.
+- [ ] Add the proactive bounded-delegation rule to the root AGENTS entrypoint and root orchestration guidance.
+- [ ] Add the same proactive-use criteria, non-use cases, main-agent ownership, and safety boundaries to the Copier-managed AGENTS entrypoint and orchestration specification.
 - [ ] Define positive delegation triggers and explicit cases where local execution remains appropriate.
 - [ ] Preserve write-scope, read-only context, external-write, secret, destructive-action, and final-judgment boundaries.
-- [ ] Add deterministic root and generated checks for both proactive use and retained safety constraints.
+- [ ] Add deterministic checks that compare required root and template policy markers for both proactive use and retained safety constraints.
 - [ ] Extend smoke and Copier update assertions for the generated policy.
 - [ ] Define fixed median, edge, negative-trigger, and hold-out scenarios with a requirements checklist containing critical delegation and non-delegation boundaries.
 - [ ] Run fresh independent subagent evaluations, correct one policy theme at a time, and confirm critical requirements pass without hold-out regression.
