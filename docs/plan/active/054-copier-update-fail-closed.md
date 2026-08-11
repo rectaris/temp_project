@@ -13,7 +13,9 @@ write_scope:
   - scripts/
   - template/README.md.jinja
   - template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md
+  - template/.project-agent-workflow/scripts/
   - tests/copier-update.sh
+  - tests/smoke.sh
 context_files:
   - AGENTS.md
   - references/template-development.md
@@ -29,11 +31,13 @@ validation:
   - python3 scripts/validate-changes.py --all
   - git diff --check
 acceptance:
-  - The documented `copier update --trust` path exits nonzero when unresolved index conflicts, rejection files, complete inline conflict blocks, or unclassified tracked-file deletions remain.
+  - The generated and documented `.project-agent-workflow/scripts/update-from-copier.sh` path exits nonzero when Copier fails or unresolved index conflicts, rejection files, complete inline conflict blocks, or unclassified tracked-file deletions remain.
+  - The one-time v1.2.2 `after` migration validates the final merge result so an existing v1.2.1 project cannot cross the wrapper-installation boundary with unresolved state while raw Copier reports success.
   - A clean initial copy remains supported outside a Git repository.
   - A conflict-free update continues to preserve project-owned files and validation behavior.
-  - An intentionally overlapping managed-file update fixture proves the failure is surfaced by the supported command itself.
-  - The overlap fixture modifies the same existing line to two different values and invokes `copier update --defaults --trust` without `--force`/`-f`, matching the documented update semantics rather than suppressing the conflict.
+  - Intentionally overlapping managed-file fixtures prove both the v1.2.1-to-v1.2.2 migration boundary and the generated wrapper surface the failure through their supported command.
+  - The overlap fixtures modify the same existing line to two different values and never use `--force`/`-f`.
+  - The generated wrapper rejects `--force` and `-f` before invoking Copier.
   - The update test refuses any fixture repository that resolves outside its temporary directory or resolves to the source repository.
   - The source repository HEAD and worktree remain unchanged across the update test.
   - Git inspection failures make the post-update validator exit nonzero instead of being interpreted as an empty clean result.
@@ -48,10 +52,15 @@ The documented Copier update path must exit nonzero when conflicts, rejection fi
 
 Copier can return success while leaving an unresolved Git conflict, but the generated documentation currently directs users to the raw command without a deterministic post-update gate.
 
+Copier 9.15.1 executes ordinary `_tasks` while rendering temporary old/new copies during update. Only an `after` migration runs after the final smart-merge result, and a versioned migration runs only when crossing its version boundary. Therefore an ordinary task cannot enforce recurring post-update validation.
+
 ## Decisions
 
 - Keep Copier and `copier.yml` as the long-term interface.
-- Run the result gate as part of the trusted Copier task sequence rather than relying on a separate optional manual command.
+- Do not wire final-result validation through ordinary `_tasks`; that lifecycle cannot observe the final update merge.
+- Add a v1.2.2 `after` migration that validates the first update which installs the recurring wrapper.
+- Generate `.project-agent-workflow/scripts/update-from-copier.sh` as the documented recurring update command. It runs Copier without force and then runs the generated validator against the repository root.
+- Keep the source and generated validator implementations byte-identical and cover their parity deterministically.
 - Detect complete conflict blocks so valid Markdown setext headings are not rejected.
 - Resolve every mutable fixture path before Git writes, require it to be below the test temporary directory, and reject the source repository explicitly.
 - Snapshot the source repository HEAD and worktree before the test and require both to remain unchanged afterward.
@@ -60,7 +69,7 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Separate source-repository reads from fixture writes; every Git command that can mutate state must reject the source repository and any path outside the test temporary directory.
 - Use consecutive explicit semantic-version tags for the mutable-source copy and update instead of `HEAD` provenance.
 - Treat Git inspection errors as validator failures, except for the explicit non-Git destination check used by initial copies.
-- Recognize only Git's explicit not-a-repository result as the initial-copy exception; any other nonzero Git result, including an injected inspection failure, is fatal.
+- Recognize only Git return code 128 plus its C-locale explicit not-a-repository diagnosis as the initial-copy exception; any other nonzero Git result, including the same text with a different return code or an injected inspection failure, is fatal.
 - Classify only `.github/workflows/codex-ci-autofix.yml` and `scripts/skillspector-scan.sh` as expected update deletions; do not allow deletion by directory prefix.
 - Guard every fixture Git mutation at the command boundary: resolved `-C` repositories and clone destinations must remain below the test temporary directory and must never equal the source repository.
 - Store transient validation and diagnostic logs only under `SANDBOXED_PLAN_WORKER_SCRATCH_DIR`; do not leave root-level log files or other diagnostic artifacts in the candidate repository.
@@ -70,7 +79,7 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 ## Tasks
 
 - [ ] Add a post-copy/update result validator that is safe for initial non-Git copies.
-- [ ] Wire the validator into the trusted Copier task sequence.
+- [ ] Wire the validator into the v1.2.2 after migration and add the generated recurring update wrapper.
 - [ ] Add a conflict-producing update fixture and retain the conflict-free update lane.
 - [ ] Add fail-closed fixture-path guards and a source-repository immutability assertion.
 - [ ] Add an injected Git inspection-failure fixture and explicit deletion-classification coverage.
@@ -83,3 +92,4 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Rejected sandbox run from source `c6f1c91`: it became unresponsive after validation and left root-level `copier-update*.log` diagnostics outside `write_scope`; the run was interrupted and its temporary clone was removed without a manifest or source mutation.
 - Rejected physically scoped candidate `af3cca8ad993e15e8ad9cec46da1b5c9f1620f77f4a6366969768446d33173bb` after independent review: the exact listed command `REQUIRE_COPIER=1 tests/copier-update.sh` exited 2 because it unconditionally required `SANDBOXED_PLAN_WORKER_SCRATCH_DIR`, so it passed only inside the delegated runner. Its validator also followed file symlinks during conflict scanning and classified Git stderr without fixing the locale. Preserve the fail-closed Git/deletion implementation and fixture guards, add the safe host temporary fallback and non-following scan, and rerun every listed command outside the worker environment in the review clone.
 - Rejected physically scoped candidate `f03686488d39e25107c9082e85f788c6f171941ef33a4afcf5f9c2d4aadf7953` after the exact host-side `REQUIRE_COPIER=1 tests/copier-update.sh` reached the conflict lane and failed with `overlapping managed-file update unexpectedly succeeded`. The fixture appended different lines, which merged cleanly, and invoked update with `-f`, unlike the documented command. Preserve the portable scratch fallback, non-following scan, locale, exact deletion allowlist, and Git guards; change both sides of one existing managed line to distinct values and run `update --defaults --trust` without force.
+- Rejected physically scoped candidate `b6e0ba02f98c2a5512d3a8126b03f0d68fd1ae9de3b0cf3709486529b220ceab` after the corrected same-line/non-force fixture still failed with `overlapping managed-file update unexpectedly succeeded` in the exact host-side suite. Copier 9.15.1 source confirms ordinary tasks run in temporary `run_copy()` render phases, while only post-migration tasks run after the smart merge. Replace the ineffective ordinary-task design with a v1.2.2 after-migration gate for first installation plus a generated recurring wrapper. Also restore the explicit return-code-128 condition and use explicit semantic-version tags in every mutable-source update lane.
