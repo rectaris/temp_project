@@ -35,6 +35,8 @@ acceptance:
   - An intentionally overlapping managed-file update fixture proves the failure is surfaced by the supported command itself.
   - The update test refuses any fixture repository that resolves outside its temporary directory or resolves to the source repository.
   - The source repository HEAD and worktree remain unchanged across the update test.
+  - Git inspection failures make the post-update validator exit nonzero instead of being interpreted as an empty clean result.
+  - The mutable-source update fixture copies from one explicit semantic-version tag and updates to a later explicit semantic-version tag.
 checked_summary_ja: 文書化された Copier update 経路を競合、rej、未分類削除で失敗させ、成功終了のまま不整合を残さない。
 
 ## Context
@@ -51,6 +53,9 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Resolve every mutable fixture path before Git writes, require it to be below the test temporary directory, and reject the source repository explicitly.
 - Snapshot the source repository HEAD and worktree before the test and require both to remain unchanged afterward.
 - Keep the update source's Copier provenance valid so the supported update command can detect its previous version.
+- Separate source-repository reads from fixture writes; every Git command that can mutate state must reject the source repository and any path outside the test temporary directory.
+- Use consecutive explicit semantic-version tags for the mutable-source copy and update instead of `HEAD` provenance.
+- Treat Git inspection errors as validator failures, except for the explicit non-Git destination check used by initial copies.
 
 ## Tasks
 
