@@ -1,6 +1,6 @@
 # Accept valid customized TOML formatting during agent profile normalization
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
 review_class: B
@@ -48,12 +48,15 @@ The current parser accepts an indented top-level key, but the subsequent line ma
 
 ## Tasks
 
-- [ ] Make fixed-field and insertion-anchor matching accept supported leading whitespace without broadening the editable field set.
-- [ ] Add tests for indented existing fields, indented insertion anchors, idempotence, and preservation of project-owned content.
-- [ ] Retain and exercise invalid, duplicate, missing-file, and symlink failure cases.
-- [ ] Add or extend a Copier update fixture only as needed to prove customized whitespace survives the supported update path.
-- [ ] Run required unit, generated-project, and update validation.
+- [x] Make fixed-field and insertion-anchor matching accept supported leading whitespace without broadening the editable field set.
+- [x] Add tests for indented existing fields, indented insertion anchors, idempotence, and preservation of project-owned content.
+- [x] Retain and exercise invalid, duplicate, missing-file, and symlink failure cases.
+- [x] Add or extend a Copier update fixture only as needed to prove customized whitespace survives the supported update path.
+- [x] Run required unit, generated-project, and update validation.
 
 ## Validation Notes
 
-Pending implementation.
+- The normalizer now recognizes TOML-permitted leading horizontal whitespace on the two fixed model fields and on the name or description insertion anchor, while retaining the original indentation.
+- Focused tests cover indented replacement and insertion, idempotence, invalid and duplicate TOML, missing profiles, symlinks, and preservation of project-owned profile content.
+- The mature-project Copier fixture proves that customized indented profiles retain unrelated fields and instructions while only the fixed model values are normalized.
+- `python3 tests/test-agent-model-profiles.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `COPIER_UPDATE_TARGET_REF=437b950 REQUIRE_COPIER=1 tests/copier-update.sh`, `python3 scripts/validate-changes.py --all`, and `git diff --check` passed.
