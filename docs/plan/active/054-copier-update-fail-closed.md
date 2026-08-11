@@ -33,6 +33,7 @@ acceptance:
   - A clean initial copy remains supported outside a Git repository.
   - A conflict-free update continues to preserve project-owned files and validation behavior.
   - An intentionally overlapping managed-file update fixture proves the failure is surfaced by the supported command itself.
+  - The overlap fixture modifies the same existing line to two different values and invokes `copier update --defaults --trust` without `--force`/`-f`, matching the documented update semantics rather than suppressing the conflict.
   - The update test refuses any fixture repository that resolves outside its temporary directory or resolves to the source repository.
   - The source repository HEAD and worktree remain unchanged across the update test.
   - Git inspection failures make the post-update validator exit nonzero instead of being interpreted as an empty clean result.
@@ -55,6 +56,7 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Resolve every mutable fixture path before Git writes, require it to be below the test temporary directory, and reject the source repository explicitly.
 - Snapshot the source repository HEAD and worktree before the test and require both to remain unchanged afterward.
 - Keep the update source's Copier provenance valid so the supported update command can detect its previous version.
+- Build the conflict lane by replacing the same baseline managed-file line in the project and the later template tag with distinct values; invoke the update noninteractively with `--defaults` but never force it.
 - Separate source-repository reads from fixture writes; every Git command that can mutate state must reject the source repository and any path outside the test temporary directory.
 - Use consecutive explicit semantic-version tags for the mutable-source copy and update instead of `HEAD` provenance.
 - Treat Git inspection errors as validator failures, except for the explicit non-Git destination check used by initial copies.
@@ -80,3 +82,4 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Rejected sandbox candidate `fe2670d159f5f2ff39133e13a066144085ecc83c41c4f1d0c93bfa208ddd6ecf`: it treated every initial Git probe failure as non-Git, allowed broad deletion prefixes, and did not guard each fixture Git mutation target.
 - Rejected sandbox run from source `c6f1c91`: it became unresponsive after validation and left root-level `copier-update*.log` diagnostics outside `write_scope`; the run was interrupted and its temporary clone was removed without a manifest or source mutation.
 - Rejected physically scoped candidate `af3cca8ad993e15e8ad9cec46da1b5c9f1620f77f4a6366969768446d33173bb` after independent review: the exact listed command `REQUIRE_COPIER=1 tests/copier-update.sh` exited 2 because it unconditionally required `SANDBOXED_PLAN_WORKER_SCRATCH_DIR`, so it passed only inside the delegated runner. Its validator also followed file symlinks during conflict scanning and classified Git stderr without fixing the locale. Preserve the fail-closed Git/deletion implementation and fixture guards, add the safe host temporary fallback and non-following scan, and rerun every listed command outside the worker environment in the review clone.
+- Rejected physically scoped candidate `f03686488d39e25107c9082e85f788c6f171941ef33a4afcf5f9c2d4aadf7953` after the exact host-side `REQUIRE_COPIER=1 tests/copier-update.sh` reached the conflict lane and failed with `overlapping managed-file update unexpectedly succeeded`. The fixture appended different lines, which merged cleanly, and invoked update with `-f`, unlike the documented command. Preserve the portable scratch fallback, non-following scan, locale, exact deletion allowlist, and Git guards; change both sides of one existing managed line to distinct values and run `update --defaults --trust` without force.
