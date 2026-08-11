@@ -14,7 +14,7 @@ Process active plans as a parent-owned sequence. Keep implementation in the work
 2. Read the selected plan, every required spec, and the active-plan index before delegation.
 3. Verify `scripts/run-sandboxed-plan-worker.py` is available and keep the built-in `sequential_plan_worker` profile read-only.
    Stop if the sandboxed runner is unavailable.
-4. Run `scripts/run-sandboxed-plan-worker.py run <plan>` to create a candidate patch and manifest from an isolated clone.
+4. Run `scripts/run-sandboxed-plan-worker.py run <plan>` to create a candidate patch and manifest from an isolated clone. The runner mounts the clone read-only and over-mounts writable shadows only for normalized `write_scope` entries; temporary artifacts belong under the worker scratch directory.
    Pass the selected plan path and keep the plan's `context_files` read-only.
 5. Inspect the candidate patch, manifest, and worker result.
    Treat them as advisory until the parent validates the repository.
@@ -27,7 +27,7 @@ Process active plans as a parent-owned sequence. Keep implementation in the work
 
 ## Boundaries
 
-- The worker may modify only the assigned plan's explicit write scope inside its isolated clone, and the parent may admit only a candidate patch that stays inside that scope.
+- The worker may modify only the assigned plan's explicit write scope: unlisted clone paths, including `.git`, are read-only during execution, and the parent independently admits only an in-scope candidate patch.
 - The parent may modify orchestration metadata, affected active-plan instructions, concise validation notes, and local evidence references.
 - The parent must not implement product or code changes directly.
 - Do not process the next plan, spawn descendants, perform external-service writes, weaken tests, commit unrelated changes, or bypass `scripts/run-sandboxed-plan-worker.py`.

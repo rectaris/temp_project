@@ -40,7 +40,7 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 
 - Delegate only concrete, bounded, independently useful work.
 - Assign non-overlapping write scopes.
-- For writable sequential active-plan implementation, use `scripts/run-sandboxed-plan-worker.py run` and `scripts/run-sandboxed-plan-worker.py apply`; do not grant direct repository write access to the built-in `sequential_plan_worker` profile.
+- For writable sequential active-plan implementation, use `scripts/run-sandboxed-plan-worker.py run` and `scripts/run-sandboxed-plan-worker.py apply`; the worker sees a read-only clone with writable shadow mounts only for normalized `write_scope` entries. Do not grant direct repository write access to the built-in `sequential_plan_worker` profile.
 - Use `evidence_synthesizer` only for bounded comparison of multiple evidence sources, alternatives, or hypotheses whose result the parent can verify.
 - Use `fast_scoped_worker` only when the expected edit and validation are known before delegation.
 - Stop a fast worker when it encounters architecture, policy, security, authorization, destructive-operation, external-write, or scope-expansion decisions.

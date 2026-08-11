@@ -255,6 +255,26 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             self.assertNotIn("CODEX_HOME", env)
             self.assertFalse((scratch_dir / "codex-home").exists())
 
+    def test_worker_environment_routes_caches_to_scratch_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scratch_dir = root / "scratch"
+            scratch_dir.mkdir()
+            env = RUNNER.prepare_worker_environment(
+                source_repo=root / "source",
+                clone_dir=root / "clone",
+                scratch_dir=scratch_dir,
+                plan_rel="docs/plan/active/001-test.md",
+                extra_env=(),
+                include_codex_home=False,
+            )
+            self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
+            self.assertEqual(env["PYTHONPYCACHEPREFIX"], str(scratch_dir / "python-pycache"))
+            self.assertEqual(env["PIP_CACHE_DIR"], str(scratch_dir / "pip-cache"))
+            self.assertEqual(env["UV_CACHE_DIR"], str(scratch_dir / "uv-cache"))
+            self.assertEqual(env["UV_PROJECT_ENVIRONMENT"], str(scratch_dir / "uv-project-environment"))
+            self.assertEqual(len(env), len(set(env)))
+
     def test_workspace_temporary_directory_cleanup_removes_staged_auth(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -367,7 +387,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             '(worker_repo / "forbidden.txt").write_text("oops\\n", encoding="utf-8")',
         )
         self.assertEqual(result.returncode, 1)
-        self.assertIn("outside write_scope", result.stderr)
+        self.assertIn("worker exited", result.stderr)
 
     def test_apply_rejects_mismatched_head(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
@@ -417,7 +437,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             ),
         )
         self.assertEqual(result.returncode, 1)
-        self.assertIn("clone HEAD", result.stderr)
+        self.assertIn("worker exited", result.stderr)
 
     def test_apply_rejects_mismatched_plan_digest(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
@@ -462,7 +482,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertIn("candidate patch digest no longer matches", apply.stderr)
 
     def test_bubblewrap_probe_blocks_source_and_host_temp_writes(self) -> None:
-        temporary, repo, plan_path = self.make_repo(["probe.txt"])
+        temporary, repo, plan_path = self.make_repo(["probe.txt"], {"probe.txt": "original\\n"})
         self.addCleanup(temporary.cleanup)
         outside_path = Path(temporary.name) / "outside-host.txt"
         output_dir = Path(temporary.name) / "artifacts"
@@ -535,10 +555,10 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 filter_script.chmod(0o755)
-                subprocess.run(["git", "config", "filter.leak.clean", str(filter_script)], cwd=worker_repo, check=True)
-                info_dir = worker_repo / ".git" / "info"
-                info_dir.mkdir(parents=True, exist_ok=True)
-                (info_dir / "attributes").write_text("allowed.txt filter=leak\\n", encoding="utf-8")
+                subprocess.run(["git", "config", "--global", "filter.leak.clean", str(filter_script)], cwd=worker_repo, check=True)
+                attributes = Path(os.environ["HOME"]) / "global-attributes"
+                attributes.write_text("allowed.txt filter=leak\\n", encoding="utf-8")
+                subprocess.run(["git", "config", "--global", "core.attributesfile", str(attributes)], cwd=worker_repo, check=True)
                 (worker_repo / "allowed.txt").write_text("through filter\\n", encoding="utf-8")
                 """
             ),
@@ -549,6 +569,131 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertFalse(outside_path.exists())
         manifest = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
         self.assertEqual(manifest["changed_paths"], ["allowed.txt"])
+
+    def test_exact_scope_denies_all_unscoped_mutations_during_worker_execution(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"], {"allowed.txt": "original\n", "outside.txt": "outside\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        result, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            textwrap.dedent(
+                """\
+                denied = []
+                targets = (
+                    (worker_repo / "outside.txt", lambda p: p.write_text("changed\\n", encoding="utf-8")),
+                    (worker_repo / "created.txt", lambda p: p.write_text("created\\n", encoding="utf-8")),
+                    (worker_repo / "outside.txt", lambda p: p.unlink()),
+                    (worker_repo / "outside.txt", lambda p: p.chmod(0o755)),
+                    (worker_repo / "outside.txt", lambda p: p.rename(worker_repo / "renamed.txt")),
+                )
+                for target, operation in targets:
+                    try:
+                        operation(target)
+                    except OSError:
+                        denied.append(target.name)
+                    else:
+                        raise SystemExit("unscoped mutation unexpectedly succeeded")
+                if len(denied) != 5:
+                    raise SystemExit(f"unexpected denied operations: {denied}")
+                (worker_repo / "allowed.txt").write_text("allowed\\n", encoding="utf-8")
+                """
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["changed_paths"], ["allowed.txt"])
+
+    def test_exact_scope_rejects_removal_and_atomic_replacement(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        result, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            textwrap.dedent(
+                """\
+                replacement = scratch_dir / "replacement.txt"
+                replacement.write_text("replacement\\n", encoding="utf-8")
+                for operation in (
+                    lambda: (worker_repo / "allowed.txt").unlink(),
+                    lambda: replacement.replace(worker_repo / "allowed.txt"),
+                ):
+                    try:
+                        operation()
+                    except OSError:
+                        pass
+                    else:
+                        raise SystemExit("exact-file replacement unexpectedly succeeded")
+                (worker_repo / "allowed.txt").write_text("updated\\n", encoding="utf-8")
+                """
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_prefix_scope_materializes_creates_modifications_and_deletions_only_below_prefix(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["dir/"], {"allowed.txt": "sibling\n", "dir/keep.txt": "before\n", "dir/remove.txt": "remove\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        result, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            textwrap.dedent(
+                """\
+                (worker_repo / "dir" / "keep.txt").write_text("after\\n", encoding="utf-8")
+                (worker_repo / "dir" / "remove.txt").unlink()
+                (worker_repo / "dir" / "new.txt").write_text("new\\n", encoding="utf-8")
+                try:
+                    (worker_repo / "allowed.txt").write_text("blocked\\n", encoding="utf-8")
+                except OSError:
+                    pass
+                else:
+                    raise SystemExit("sibling write unexpectedly succeeded")
+                """
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["changed_paths"], ["dir/keep.txt", "dir/new.txt", "dir/remove.txt"])
+        apply = run_cli(repo, "apply", result.stdout.strip())
+        self.assertEqual(apply.returncode, 0, apply.stderr)
+        self.assertEqual((repo / "dir" / "keep.txt").read_text(encoding="utf-8"), "after\n")
+        self.assertEqual((repo / "dir" / "new.txt").read_text(encoding="utf-8"), "new\n")
+        self.assertFalse((repo / "dir" / "remove.txt").exists())
+
+    def test_shadow_setup_rejects_invalid_exact_targets_and_symlink_ancestors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            clone = root / "clone"
+            scratch = root / "scratch"
+            clone.mkdir()
+            scratch.mkdir()
+            (clone / "directory").mkdir()
+            (clone / "regular.txt").write_text("regular\n", encoding="utf-8")
+            (clone / "link.txt").symlink_to("regular.txt")
+            (clone / "linked-parent").symlink_to(root)
+            for scope, expected in (
+                (["directory"], "existing regular file"),
+                (["link.txt"], "path resolves through a symlink"),
+                (["linked-parent/new/"], "path resolves through a symlink"),
+            ):
+                with self.subTest(scope=scope):
+                    with self.assertRaisesRegex(RUNNER.RunnerError, expected):
+                        RUNNER.prepare_writable_shadows(clone_dir=clone, scratch_dir=scratch, scope_entries=scope)
+            self.assertFalse((root / "new").exists())
+
+    def test_prefix_shadow_copy_preserves_contained_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            clone = root / "clone"
+            scratch = root / "scratch"
+            (clone / "dir").mkdir(parents=True)
+            scratch.mkdir()
+            (clone / "dir" / "target.txt").write_text("target\n", encoding="utf-8")
+            (clone / "dir" / "inside-link").symlink_to("target.txt")
+            shadows = RUNNER.prepare_writable_shadows(clone_dir=clone, scratch_dir=scratch, scope_entries=["dir/"])
+            self.assertTrue((shadows[0][0] / "inside-link").is_symlink())
 
     def test_run_rejects_symlinked_or_preexisting_output_artifacts(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])

@@ -1,6 +1,6 @@
 # Enforce write_scope inside the isolated clone
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
   - security
@@ -77,13 +77,13 @@ Plan 054 remains suspended until this plan is implemented, validated, archived, 
 
 ## Tasks
 
-- [ ] Build normalized writable shadows for exact-file and prefix-directory scope entries.
-- [ ] Mount the clone read-only and bind only shadow entries writable in the worker Bubblewrap command.
-- [ ] Materialize shadow results into the candidate clone before sandboxed patch collection.
-- [ ] Add physical denial tests for content, creation, deletion, rename, and mode changes outside scope.
-- [ ] Add exact-file and prefix-directory behavior tests plus cleanup and parity coverage.
-- [ ] Align root and generated orchestration instructions with the stronger boundary.
-- [ ] Run every required validation command.
+- [x] Build normalized writable shadows for exact-file and prefix-directory scope entries.
+- [x] Mount the clone read-only and bind only shadow entries writable in the worker Bubblewrap command.
+- [x] Materialize shadow results into the candidate clone before sandboxed patch collection.
+- [x] Add physical denial tests for content, creation, deletion, rename, and mode changes outside scope.
+- [x] Add exact-file and prefix-directory behavior tests plus cleanup and parity coverage.
+- [x] Align root and generated orchestration instructions with the stronger boundary.
+- [x] Run every required validation command.
 
 ## Validation Notes
 
@@ -97,3 +97,5 @@ Plan 054 remains suspended until this plan is implemented, validated, archived, 
 - Rejected sandbox candidate `b3098159140f7b8ed0d518fbbb2b5b9b6830e72f8a56ddace3134f2910baec88` during main-session patch review before host validation: `prepare_writable_shadows()` accepted an exact-scope directory or symbolic link and delegated both to the generic copy helper. This violates the exact-file contract and leaves mount-target resolution ambiguous. Preserve the cache-routing correction, require an existing non-symlink regular file for exact scope, preserve contained symlinks only while copying prefix trees, and add direct rejection tests for both invalid exact targets.
 - Rejected sandbox candidate `c2500885fcc5da1c9ca4abf31ebd0732576194344df0c9f59ba6d7ae2ae7089c` during main-session path review before host validation: it rejected a symbolic link at the mount target but did not reject a symbolic-link ancestor. A scope such as `link/new/`, where `link` resolves elsewhere in the clone, could make trusted shadow preparation or materialization traverse outside the normalized scope. Reuse the existing component-walk guard against the candidate clone before any target creation or copy, and add a regression test that proves no path is created through the link.
 - Rejected sandbox candidate `bbb452605249d626d3795197bb9a3c816b54c369734002023d59e9eb062cc296` after independent review-clone validation: `python3 tests/test-sandboxed-plan-worker.py` failed 1 of 24 tests because the exact symbolic-link fixture expected the later regular-file error while the newly required component-walk guard correctly rejected it earlier with `path resolves through a symlink`. Preserve the implementation and change only that assertion to accept the actual fail-closed component-guard result, then rerun every required command.
+- Accepted sandbox candidate `8725f2077560538cc524a14564138baff75a8b32cc4cc763b2ce7073a450b853` after manifest/path review, source-head and plan-digest verification, code review of both Bubblewrap mount modes and symlink guards, and independent review-clone validation.
+- Main-session validation after application: `python3 tests/test-sandboxed-plan-worker.py` passed 26 tests; runner `self-test`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `python3 scripts/validate-changes.py --all`, `git diff --check`, root/template byte comparison, and executable-mode comparison all passed.

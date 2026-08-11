@@ -42,6 +42,11 @@ RESERVED_WORKER_ENV = frozenset(
         "TMP",
         "TEMP",
         "CODEX_HOME",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONPYCACHEPREFIX",
+        "PIP_CACHE_DIR",
+        "UV_CACHE_DIR",
+        "UV_PROJECT_ENVIRONMENT",
         f"{ENV_PREFIX}SOURCE_REPO",
         f"{ENV_PREFIX}WORKER_REPO",
         f"{ENV_PREFIX}SCRATCH_DIR",
@@ -232,7 +237,12 @@ def parse_write_scope(entries: Sequence[str]) -> list[str]:
             continue
         normalized.append(value)
         seen.add(value)
-    return normalized
+    collapsed: list[str] = []
+    for entry in normalized:
+        if any(parent.endswith("/") and entry.startswith(parent) for parent in normalized if parent != entry):
+            continue
+        collapsed.append(entry)
+    return collapsed
 
 
 def scope_allows_path(scope_entries: Sequence[str], relative_path: str) -> bool:
@@ -328,6 +338,8 @@ def build_worker_prompt(plan_rel: str, plan_digest: str) -> str:
         - Keep context bounded: read the plan, AGENTS.md, the listed context/spec files, and only implementation files needed for this task.
         - Do not inspect logs or unrelated plans.
         - Run every validation command listed in the plan before finishing.
+        - Write transient diagnostics, tool caches, and temporary artifacts only under
+          $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
 
         The parent will reject any changed path outside write_scope.
         Report changed paths, validation results, blockers, remaining risks, and confirm whether any out-of-scope path changed.
@@ -374,6 +386,8 @@ def build_bwrap_command(
     scratch_dir: Path,
     command: Sequence[str],
     env_vars: dict[str, str],
+    writable_shadows: Sequence[tuple[Path, Path]] = (),
+    writable_clone: bool = False,
 ) -> list[str]:
     argv = [
         bwrap_bin,
@@ -389,7 +403,7 @@ def build_bwrap_command(
         "--ro-bind",
         "/",
         "/",
-        "--bind",
+        "--ro-bind" if not writable_clone else "--bind",
         str(clone_dir),
         str(clone_dir),
         "--bind",
@@ -402,11 +416,57 @@ def build_bwrap_command(
         "--chdir",
         str(clone_dir),
     ]
+    for shadow_path, clone_target in writable_shadows:
+        argv.extend(("--bind", str(shadow_path), str(clone_target)))
     for key, value in env_vars.items():
         argv.extend(["--setenv", key, value])
     argv.append("--")
     argv.extend(command)
     return argv
+
+
+def prepare_writable_shadows(
+    *, clone_dir: Path, scratch_dir: Path, scope_entries: Sequence[str]
+) -> list[tuple[Path, Path, bool]]:
+    """Create writable copies for scope entries without resolving repository symlinks."""
+    shadows_root = scratch_dir / "writable-shadows"
+    prepared: list[tuple[Path, Path, bool]] = []
+    for entry in scope_entries:
+        relative, is_prefix = normalize_repo_relpath(entry, allow_prefix=True, label="write_scope entry")
+        body = relative[:-1] if is_prefix else relative
+        ensure_no_symlink_path_trick(clone_dir, body)
+        target = clone_dir / body
+        shadow = shadows_root / body
+        shadow.parent.mkdir(parents=True, exist_ok=True)
+        if is_prefix:
+            if target.exists():
+                if not target.is_dir() or target.is_symlink():
+                    raise RunnerError(f"prefix write_scope target must be a directory: {relative}")
+                shutil.copytree(target, shadow, symlinks=True)
+            else:
+                target.mkdir(parents=True, exist_ok=False)
+                shadow.mkdir()
+        else:
+            if not target.is_file() or target.is_symlink():
+                raise RunnerError(f"exact write_scope target must be an existing regular file: {relative}")
+            shutil.copy2(target, shadow, follow_symlinks=False)
+        prepared.append((shadow, target, is_prefix))
+    return prepared
+
+
+def materialize_writable_shadows(shadows: Sequence[tuple[Path, Path, bool]]) -> None:
+    """Copy only scope-shadow results back into the disposable candidate clone."""
+    for shadow, target, is_prefix in shadows:
+        if is_prefix:
+            if target.exists() or target.is_symlink():
+                if target.is_symlink() or not target.is_dir():
+                    raise RunnerError(f"prefix write_scope target changed shape: {target}")
+                shutil.rmtree(target)
+            shutil.copytree(shadow, target, symlinks=True)
+        else:
+            if not target.is_file() or target.is_symlink():
+                raise RunnerError(f"exact write_scope target changed shape: {target}")
+            shutil.copy2(shadow, target, follow_symlinks=False)
 
 def derive_changed_paths_from_patch(repo_root: Path, git_bin: str, patch_path: Path, base_rev: str) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="sandboxed-plan-worker-apply-index-") as tmp:
@@ -469,8 +529,14 @@ def prepare_worker_environment(
 ) -> dict[str, str]:
     scratch_home = scratch_dir / "home"
     scratch_tmp = scratch_dir / "tmp"
+    scratch_pycache = scratch_dir / "python-pycache"
+    scratch_pip_cache = scratch_dir / "pip-cache"
+    scratch_uv_cache = scratch_dir / "uv-cache"
+    scratch_uv_environment = scratch_dir / "uv-project-environment"
     scratch_home.mkdir(parents=True, exist_ok=True)
     scratch_tmp.mkdir(parents=True, exist_ok=True)
+    for directory in (scratch_pycache, scratch_pip_cache, scratch_uv_cache, scratch_uv_environment):
+        directory.mkdir(parents=True, exist_ok=True)
     locale = os.environ.get("LC_ALL") or os.environ.get("LANG") or "C.UTF-8"
     env_vars = {
         "PATH": os.environ.get("PATH", DEFAULT_PATH),
@@ -480,6 +546,11 @@ def prepare_worker_environment(
         "TMPDIR": str(scratch_tmp),
         "TMP": str(scratch_tmp),
         "TEMP": str(scratch_tmp),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPYCACHEPREFIX": str(scratch_pycache),
+        "PIP_CACHE_DIR": str(scratch_pip_cache),
+        "UV_CACHE_DIR": str(scratch_uv_cache),
+        "UV_PROJECT_ENVIRONMENT": str(scratch_uv_environment),
         f"{ENV_PREFIX}SOURCE_REPO": str(source_repo),
         f"{ENV_PREFIX}WORKER_REPO": str(clone_dir),
         f"{ENV_PREFIX}SCRATCH_DIR": str(scratch_dir),
@@ -572,6 +643,7 @@ def collect_candidate_patch_in_sandbox(
             scratch_dir=scratch_dir,
             command=command,
             env_vars=env_vars,
+            writable_clone=True,
         ),
         cwd=clone_dir,
         env=sanitize_process_env(),
@@ -606,6 +678,11 @@ def run_worker(args: argparse.Namespace) -> int:
         scratch_dir.mkdir(parents=True, exist_ok=True)
         clone_at_head(repo_root, git_bin, head, clone_dir)
         initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
+        shadows = prepare_writable_shadows(
+            clone_dir=clone_dir,
+            scratch_dir=scratch_dir,
+            scope_entries=normalized_scope,
+        )
 
         stdout_path = reserved_artifacts["worker.stdout"]
         stderr_path = reserved_artifacts["worker.stderr"]
@@ -645,6 +722,7 @@ def run_worker(args: argparse.Namespace) -> int:
             scratch_dir=scratch_dir,
             command=command,
             env_vars=env_vars,
+            writable_shadows=[(shadow, target) for shadow, target, _is_prefix in shadows],
         )
         result = run_subprocess(
             bwrap_command,
@@ -659,6 +737,8 @@ def run_worker(args: argparse.Namespace) -> int:
             raise RunnerError(
                 f"worker exited with {result.returncode}; stdout/stderr saved under {output_dir}"
             )
+
+        materialize_writable_shadows(shadows)
 
         patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
             bwrap_bin=bwrap_bin,
