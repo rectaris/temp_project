@@ -255,6 +255,47 @@ def check_user_communication_contract() -> None:
         fail("write-for-reader holdout scenarios must remain outside tuning")
 
 
+def check_namespaced_documentation_targets() -> None:
+    required_target = "template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
+    stale_target = "template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
+    for path in ("AGENTS.md", "docs/agent/SPEC_JAPANESE_TECH_WRITING.md"):
+        text = read(path)
+        if required_target not in text:
+            fail(f"{path} missing generated documentation sync target: {required_target}")
+        if stale_target in text:
+            fail(f"{path} still references removed generated documentation sync target: {stale_target}")
+
+    skill = read("SKILL.md")
+    if ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md" not in skill:
+        fail("SKILL.md missing reusable external-services spec path: .project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md")
+    if "`SPEC_EXTERNAL_SERVICES.md`" in skill:
+        fail("SKILL.md still references stale external-services spec path: `SPEC_EXTERNAL_SERVICES.md`")
+
+    planning = read("references/planning.md")
+    planning_required = (
+        "`.project-agent-workflow/scripts/check-agent-completion.sh`",
+        "`.project-agent-workflow/scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/search-plan-archive.py --text <term>`",
+    )
+    for marker in planning_required:
+        if marker not in planning:
+            fail(f"references/planning.md missing managed path marker: {marker}")
+
+    validation = read("references/validation.md")
+    validation_required = (
+        "`.project-agent-workflow/scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
+        "`.project-agent-workflow/scripts/security-static-check.py`: scans common high-signal static risks.",
+        "`.project-agent-workflow/scripts/format-plan-docs.py --check`: verifies plan Markdown whitespace.",
+    )
+    for marker in validation_required:
+        if marker not in validation:
+            fail(f"references/validation.md missing managed path marker: {marker}")
+
+    stale_validation = "`scripts/validate-changes.py`: selects validation commands from staged or unstaged paths."
+    if stale_validation in validation:
+        fail(f"references/validation.md still references stale managed path: {stale_validation}")
+
+
 def check_active_plans() -> None:
     active_dir = ROOT / "docs/plan/active"
     if not active_dir.exists():
@@ -294,6 +335,7 @@ def main() -> int:
     check_agent_model_profiles()
     check_reusable_skill_parity()
     check_user_communication_contract()
+    check_namespaced_documentation_targets()
     check_active_plans()
     print("root agent policy check passed")
     return 0

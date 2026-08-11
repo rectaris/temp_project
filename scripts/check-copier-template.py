@@ -791,6 +791,83 @@ def require_ci_autofix_root_boundaries() -> None:
             fail(f"root CI autofix workflow must include boundary guard marker: {marker}")
 
 
+def require_namespaced_reference_paths() -> None:
+    agents = read("AGENTS.md")
+    japanese = read("docs/agent/SPEC_JAPANESE_TECH_WRITING.md")
+
+    required_target = "template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
+    forbidden_target = "template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
+    for path, text in (("AGENTS.md", agents), ("docs/agent/SPEC_JAPANESE_TECH_WRITING.md", japanese)):
+        if required_target not in text:
+            fail(f"{path} missing generated Japanese-writing sync target: {required_target}")
+        if forbidden_target in text:
+            fail(f"{path} still references removed generated-writing sync target: {forbidden_target}")
+
+    skill = read("SKILL.md")
+    if ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md" not in skill:
+        fail("SKILL.md missing reusable external-services spec path: .project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md")
+    if "`SPEC_EXTERNAL_SERVICES.md`" in skill:
+        fail("SKILL.md still references stale external-services spec path: `SPEC_EXTERNAL_SERVICES.md`")
+
+    planning = read("references/planning.md")
+    planning_required = (
+        "`.project-agent-workflow/scripts/create-plan.sh active <slug>`",
+        "`.project-agent-workflow/scripts/create-plan.sh backlog <slug>`",
+        "`.project-agent-workflow/scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/complete-plan.sh docs/plan/active/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/check-agent-completion.sh`",
+        "`.project-agent-workflow/scripts/select-task-context.sh docs/plan/active/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/clean-handoffs.sh --dry-run`",
+        "`.project-agent-workflow/scripts/lint-plan-docs.py`",
+        "`.project-agent-workflow/scripts/lint-plan-docs.sh`",
+        "`.project-agent-workflow/scripts/format-plan-docs.py`",
+        "`.project-agent-workflow/scripts/format-plan-docs.sh --check`",
+        "`.project-agent-workflow/scripts/search-plan-archive.py --text <term>`",
+    )
+    for marker in planning_required:
+        if marker not in planning:
+            fail(f"references/planning.md missing managed path marker: {marker}")
+
+    planning_forbidden = (
+        "`scripts/create-plan.sh active <slug>`",
+        "`scripts/create-plan.sh backlog <slug>`",
+        "`scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`",
+        "`scripts/complete-plan.sh docs/plan/active/NNN-slug.md`",
+        "`scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`",
+        "`scripts/check-agent-completion.sh`",
+        "`scripts/select-task-context.sh docs/plan/active/NNN-slug.md`",
+        "`scripts/clean-handoffs.sh --dry-run`",
+        "`scripts/format-plan-docs.py --check`",
+    )
+    for marker in planning_forbidden:
+        if marker in planning:
+            fail(f"references/planning.md still contains stale managed path marker: {marker}")
+
+    validation = read("references/validation.md")
+    validation_required = (
+        "`.project-agent-workflow/scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
+        "`.project-agent-workflow/scripts/security-static-check.py`: scans common high-signal static risks.",
+        "`.project-agent-workflow/scripts/skillspector-scan.sh`: optional NVIDIA SkillSpector wrapper for AI agent skill scans.",
+        "`.project-agent-workflow/scripts/structure-map.py --check`: verifies basic agent workflow structure.",
+        "`.project-agent-workflow/scripts/format-plan-docs.py --check`: verifies plan Markdown whitespace.",
+    )
+    for marker in validation_required:
+        if marker not in validation:
+            fail(f"references/validation.md missing managed path marker: {marker}")
+
+    validation_forbidden = (
+        "`scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
+        "`scripts/security-static-check.py`: scans common high-signal static risks.",
+        "`scripts/skillspector-scan.sh`: optional NVIDIA SkillSpector wrapper for AI agent skill scans.",
+        "`scripts/structure-map.py --check`: verifies basic agent workflow structure.",
+        "`scripts/format-plan-docs.py --check`: verifies plan Markdown whitespace.",
+    )
+    for marker in validation_forbidden:
+        if marker in validation:
+            fail(f"references/validation.md still contains stale managed path marker: {marker}")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -827,6 +904,7 @@ def main() -> int:
     require_agent_profile_task()
     require_copier_documentation_contract()
     require_ci_autofix_root_boundaries()
+    require_namespaced_reference_paths()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")

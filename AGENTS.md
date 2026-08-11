@@ -15,7 +15,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Keep deterministic checks in `scripts/` or `tests/`.
 - Do not add project-specific `supportcard-status` facts to generic templates.
 - When writing or editing Japanese prose in this repository, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
-- When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
+- When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
 - Use `docs/agent/spec-index.yaml` to route root-level agent policy when the task concerns planning, logging, compression, decision audit, user-facing communication, or Japanese prose.
 - Keep raw agent logs and large agent artifacts local under `.agent-logs/` and `.agent-artifacts/`; do not commit them.
 - Treat external transcript logs as primary full-turn evidence when available, and repo-local hook event logs as best-effort corroborating evidence.
