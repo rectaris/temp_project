@@ -1,0 +1,82 @@
+# Enforce write_scope inside the isolated clone
+
+status: in_progress
+task_types:
+  - template_workflow
+  - security
+review_class: B
+human_design_required: no
+human_approval_status: not_required
+write_scope:
+  - .codex/skills/sequential-plan-orchestrator/SKILL.md
+  - docs/plan/active/062-filtered-write-scope-sandbox.md
+  - references/orchestration.md
+  - scripts/check-copier-template.py
+  - scripts/run-sandboxed-plan-worker.py
+  - template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
+  - template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py
+  - template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md
+  - tests/smoke.sh
+  - tests/test-sandboxed-plan-worker.py
+context_files:
+  - AGENTS.md
+  - docs/agent/SPEC_PLAN_WORKFLOW.md
+  - docs/agent/SPEC_SECURITY.md
+  - docs/plan/checked/2026/08/01-15/046-sandboxed-plan-worker.md
+  - scripts/run-sandboxed-plan-worker.py
+required_specs:
+  - docs/agent/SPEC_PLAN_WORKFLOW.md
+  - docs/agent/SPEC_SECURITY.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
+validation:
+  - python3 tests/test-sandboxed-plan-worker.py
+  - python3 scripts/run-sandboxed-plan-worker.py self-test
+  - scripts/lint-project-workflow.sh
+  - tests/smoke.sh
+  - python3 scripts/validate-changes.py --all
+  - git diff --check
+acceptance:
+  - The worker sees the repository at its normal clone path, but the clone root is mounted read-only and only normalized write_scope entries are over-mounted from writable scratch storage.
+  - An integration test proves an exact-file scope permits in-place content writes while create, content modification, removal, mode change, and rename attempts outside scope fail during worker execution.
+  - A prefix-directory scope permits file creation, modification, and deletion below that prefix and denies sibling writes.
+  - Trusted post-worker materialization copies only writable-shadow results into the candidate clone before patch collection and preserves deletion semantics for prefix scopes.
+  - Exact-file entries fail closed for unsupported removal or atomic replacement; a plan must grant a directory prefix when those operations are required.
+  - Scratch remains writable for temporary diagnostics and tool caches, and the default worker prompt directs all transient artifacts to `SANDBOXED_PLAN_WORKER_SCRATCH_DIR`.
+  - Bubblewrap or filtered-shadow setup failure exits nonzero without falling back to a whole-clone writable mount.
+  - Root and template runners remain byte-identical and executable.
+checked_summary_ja: 隔離クローン全体を読み取り専用にし、write_scope の shadow mount だけを書き込み可能にする。
+
+## Context
+
+Plan 046 protects the source repository and rejects out-of-scope candidate paths, but its temporary clone is writable in full.
+
+Plan 054 workers repeatedly created root-level diagnostic files despite explicit scope instructions. The source repository remained protected, but the behavior demonstrated that candidate admission alone does not physically constrain writes inside the clone.
+
+Plan 054 remains suspended until this plan is implemented, validated, archived, and committed.
+
+## Decisions
+
+- Keep Bubblewrap as the mandatory isolation backend.
+- Mount the temporary clone read-only inside the worker namespace.
+- Prepare writable shadow content under scratch for normalized write_scope entries and bind those entries over their normal clone paths.
+- Copy prefix-directory scope trees and exact-file scope content without hard links.
+- Materialize shadow results into the candidate clone only after the worker exits successfully and only for normalized scope entries.
+- Preserve exact-file mode and content writes, but fail closed when an exact-file operation requires unlink or atomic rename; use a prefix-directory scope for those operations.
+- Keep `.git` and every unlisted clone path read-only during delegated execution.
+- Set Python and common tool cache locations to scratch where deterministic validation requires temporary writes.
+- Keep candidate patch admission as a second independent check after physical write filtering.
+- Do not add a whole-clone writable fallback.
+
+## Tasks
+
+- [ ] Build normalized writable shadows for exact-file and prefix-directory scope entries.
+- [ ] Mount the clone read-only and bind only shadow entries writable in the worker Bubblewrap command.
+- [ ] Materialize shadow results into the candidate clone before sandboxed patch collection.
+- [ ] Add physical denial tests for content, creation, deletion, rename, and mode changes outside scope.
+- [ ] Add exact-file and prefix-directory behavior tests plus cleanup and parity coverage.
+- [ ] Align root and generated orchestration instructions with the stronger boundary.
+- [ ] Run every required validation command.
+
+## Validation Notes
+
+- Pending.
