@@ -18,20 +18,20 @@ Use this skill to set up or operate a repository that needs predictable coding-a
 7. Validate with the smallest complete command set for the changed files.
 8. Commit each coherent work unit.
 
-When generated lifecycle scripts are present, prefer them for plan creation, promotion, completion, archive search, plan linting, handoff cleanup, task-context selection, and change-aware validation. Keep external-service workflows optional unless the target repository enables them in `SPEC_EXTERNAL_SERVICES.md`; use that spec for setup steps, credentials, dry-run/read/write classification, and fallback behavior.
+When generated lifecycle scripts are present, prefer `.project-agent-workflow/scripts/*` for plan creation, promotion, completion, archive search, plan linting, handoff cleanup, task-context selection, and change-aware validation. Keep external-service workflows optional unless the target repository enables them in `.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md`; use that spec for setup steps, credentials, dry-run/read/write classification, and fallback behavior.
 
 ## Install Templates
 
 Preferred:
 
 ```sh
-copier copy /path/to/project-agent-workflow /path/to/repo
+copier copy --trust /path/to/project-agent-workflow /path/to/repo
 ```
 
 For non-interactive defaults:
 
 ```sh
-copier copy -f /path/to/project-agent-workflow /path/to/repo
+copier copy --defaults --trust /path/to/project-agent-workflow /path/to/repo
 ```
 
 The wrapper `scripts/init-project-workflow.sh` is available for local convenience, but Copier is the long-term interface. Commit the generated `.copier-answers.yml` so future `copier update` runs can reuse answers and apply template changes.

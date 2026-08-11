@@ -2,6 +2,29 @@
 
 The main agent owns task interpretation, integration, validation acceptance, planning updates, commits, and the final report.
 
+## Proactive bounded delegation for repository-wide work
+
+- Delegate repository-wide work proactively without requiring a per-task user instruction when independent helper work is available and coordination is materially useful.
+- Trigger delegation when at least one applies:
+  - multiple independent files, directories, or domains require parallel reading,
+  - cross-specification reconciliation is required,
+  - validation, security, or orchestration review needs multi-area context,
+  - large or dense sources benefit from bounded reduction by multiple helpers.
+- Use explicit `write_scope` per helper, non-overlapping scopes, and deterministic acceptance criteria.
+- Keep delegated write scopes bounded and context files read-only.
+- Keep non-delegation as the default for short deterministic commands, direct user clarification, and local tasks where coordination cost exceeds expected value.
+- Keep authorization decisions and final high-risk judgment in the main session.
+- Keep secrets, external writes, destructive operations, and authorization actions outside delegated authority unless a separate explicit policy grants that authority.
+
+## Boundaries and non-delegation
+
+- Non-delegation rule: these cases remain in the main session.
+
+- Do not delegate short deterministic commands, direct user clarification, final interpretation, validation acceptance, planning updates, commits, release decisions, or completion reports.
+- Do not delegate secret handling, external writes, destructive operations, authorization decisions, or final high-risk policy/architecture judgment.
+- The main agent must reconcile helper output before integrating changes.
+- Final report transparency is mandatory: include whether helpers were used, each helper's role, scope, and the acceptance rationale applied by the main session.
+
 ## Helper Roles
 
 - `repo_explorer`: read-only discovery and impact analysis.
@@ -34,6 +57,7 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 - Before starting a duplicate long-running process, check for an existing relevant tmux session.
 - When human intervention is needed, report the attach command instead of re-running or abandoning the process.
 - Stop tmux sessions that are no longer needed unless the user asked to keep them running.
+- Record delegation usage, helper role, scope, and acceptance in the final report.
 
 ## Decision Matrix
 
@@ -51,7 +75,7 @@ Consider delegation or a separate review when:
 
 - a single file is large or semantically dense
 - source/spec reconciliation is required
-- a change touches data and runtime logic
+- a change affects data and runtime logic
 - a change affects validation rules, hooks, security checks, or orchestration
 - repeated low-level lookup would distract from final integration
 

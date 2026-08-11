@@ -29,6 +29,10 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Automatic hook event capture: enabled only when Codex hooks mode is `enable_local_logging`
 - Context compression helper: optional, Headroom-aware when available
 - External service policy states: MCP=`[[ mcp_state ]]`, Linear=`[[ linear_state ]]`, graph memory=`[[ graph_state ]]`
+- Delegate repository-wide work proactively, without waiting for per-task user instruction, when independent helper work is available and materially useful, and split cleanly into non-overlapping helper scopes.
+- Keep final ownership of interpretation, integration, validation acceptance, planning updates, commits, and completion reporting in the main session.
+- Do not delegate short deterministic commands, direct user clarification, final policy judgment, authorization decisions, commit/release decisions, secret handling, external writes, destructive changes, or final reporting unless a separate explicit policy grants that authority.
+- Final report must state whether helpers were used; if used, include each helper role, scope, and the main-session acceptance decision.
 
 ## Priority
 
@@ -45,6 +49,7 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Keep Copier-managed workflow files updateable; put domain-specific details in separate specs.
 - For mature repositories, follow `.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md` before copying or updating template-managed files.
 - Treat a Copier update as incomplete until project-owned product code, policy, configuration, plan history, and repository-specific validation remain intact and unresolved conflicts, rejection files, and unclassified tracked-file deletion are absent.
+- Treat helper output as advisory until validation acceptance in the main session.
 - Use Git for every coherent work unit.
 - Preserve user changes you did not make.
 - Prefer deterministic checks over prose-only rules.

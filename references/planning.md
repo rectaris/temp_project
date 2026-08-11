@@ -53,18 +53,18 @@ Prefer English for manifest values and operational detail so agents can parse pl
 
 Generated repositories may include local-only plan lifecycle helpers:
 
-- `scripts/create-plan.sh active <slug>`
-- `scripts/create-plan.sh backlog <slug>`
-- `scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`
-- `scripts/complete-plan.sh docs/plan/active/NNN-slug.md`
-- `scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`
-- `scripts/check-agent-completion.sh`
-- `scripts/select-task-context.sh docs/plan/active/NNN-slug.md`
-- `scripts/clean-handoffs.sh --dry-run`
-- `scripts/lint-plan-docs.py`
-- `scripts/lint-plan-docs.sh`
-- `scripts/format-plan-docs.py`
-- `scripts/format-plan-docs.sh --check`
-- `scripts/search-plan-archive.py --text <term>`
+- `.project-agent-workflow/scripts/create-plan.sh active <slug>`
+- `.project-agent-workflow/scripts/create-plan.sh backlog <slug>`
+- `.project-agent-workflow/scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`
+- `.project-agent-workflow/scripts/complete-plan.sh docs/plan/active/NNN-slug.md`
+- `.project-agent-workflow/scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`
+- `.project-agent-workflow/scripts/check-agent-completion.sh`
+- `.project-agent-workflow/scripts/select-task-context.sh docs/plan/active/NNN-slug.md`
+- `.project-agent-workflow/scripts/clean-handoffs.sh --dry-run`
+- `.project-agent-workflow/scripts/lint-plan-docs.py`
+- `.project-agent-workflow/scripts/lint-plan-docs.sh`
+- `.project-agent-workflow/scripts/format-plan-docs.py`
+- `.project-agent-workflow/scripts/format-plan-docs.sh --check`
+- `.project-agent-workflow/scripts/search-plan-archive.py --text <term>`
 
 These helpers must remain local-only. External issue or memory sync belongs in an optional module.

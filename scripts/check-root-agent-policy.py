@@ -255,6 +255,131 @@ def check_user_communication_contract() -> None:
         fail("write-for-reader holdout scenarios must remain outside tuning")
 
 
+def check_namespaced_documentation_targets() -> None:
+    required_target = "template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
+    stale_target = "template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
+    for path in ("AGENTS.md", "docs/agent/SPEC_JAPANESE_TECH_WRITING.md"):
+        text = read(path)
+        if required_target not in text:
+            fail(f"{path} missing generated documentation sync target: {required_target}")
+        if stale_target in text:
+            fail(f"{path} still references removed generated documentation sync target: {stale_target}")
+
+    skill = read("SKILL.md")
+    if ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md" not in skill:
+        fail("SKILL.md missing reusable external-services spec path: .project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md")
+    if "`SPEC_EXTERNAL_SERVICES.md`" in skill:
+        fail("SKILL.md still references stale external-services spec path: `SPEC_EXTERNAL_SERVICES.md`")
+
+    planning = read("references/planning.md")
+    planning_required = (
+        "`.project-agent-workflow/scripts/check-agent-completion.sh`",
+        "`.project-agent-workflow/scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/search-plan-archive.py --text <term>`",
+    )
+    for marker in planning_required:
+        if marker not in planning:
+            fail(f"references/planning.md missing managed path marker: {marker}")
+
+    validation = read("references/validation.md")
+    validation_required = (
+        "`.project-agent-workflow/scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
+        "`.project-agent-workflow/scripts/security-static-check.py`: scans common high-signal static risks.",
+        "`.project-agent-workflow/scripts/format-plan-docs.py --check`: verifies plan Markdown whitespace.",
+    )
+    for marker in validation_required:
+        if marker not in validation:
+            fail(f"references/validation.md missing managed path marker: {marker}")
+
+    stale_validation = "`scripts/validate-changes.py`: selects validation commands from staged or unstaged paths."
+    if stale_validation in validation:
+        fail(f"references/validation.md still references stale managed path: {stale_validation}")
+
+
+def check_orchestration_policy() -> None:
+    policy = read("references/orchestration.md").lower()
+    shared_markers = (
+        "per-task user instruction",
+        "without waiting for a per-task user instruction",
+        "repository-wide",
+        "independent helper work",
+        "main agent owns",
+        "multiple independent",
+        "cross-specification",
+        "validation, security, or orchestration",
+        "large or dense",
+        "proactively",
+        "short deterministic",
+        "cost",
+        "external writes",
+        "context files read-only",
+        "advisory",
+        "authorization decisions",
+        "secrets",
+        "destructive",
+        "do not delegate",
+        "separate explicit policy",
+        "final high-risk",
+        "final report",
+        "role",
+        "write scope",
+    )
+    for marker in shared_markers:
+        if marker not in policy:
+            fail(f"references/orchestration.md missing orchestration marker: {marker}")
+
+    agents = read("AGENTS.md").lower()
+    if "references/orchestration.md" not in agents:
+        fail("AGENTS.md must reference references/orchestration.md")
+    for marker in (
+        "references/orchestration.md",
+        "completion reporting",
+        "final integration",
+        "validation acceptance",
+        "final ownership",
+        "short deterministic commands",
+        "external writes",
+        "destructive",
+        "authorization decisions",
+        "per-task user instruction",
+        "main session",
+        "advisory",
+    ):
+        if marker not in agents:
+            fail(f"AGENTS.md missing orchestration ownership marker: {marker}")
+
+    try:
+        fixture = json.loads((ROOT / "tests/fixtures/orchestration/proactive-bounded-subagents.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"invalid orchestration fixture: {exc}")
+
+    requirements = fixture.get("requirements", [])
+    scenarios = fixture.get("scenarios", [])
+    if not isinstance(requirements, list) or not isinstance(scenarios, list):
+        fail("orchestration fixture must contain requirements and scenarios arrays")
+    if not requirements or not any(item.get("critical") is True for item in requirements):
+        fail("orchestration requirements need at least one critical requirement")
+    for requirement in requirements:
+        if not isinstance(requirement, dict) or requirement.get("id") is None:
+            fail("orchestration requirements must each be an object with an id")
+        if "threshold" not in requirement:
+            fail(f"orchestration requirement missing threshold: {requirement.get('id')}")
+
+    required_classes = {"median", "edge", "negative", "holdout"}
+    observed = {item.get("class") for item in scenarios if isinstance(item, dict) and "class" in item}
+    if not required_classes.issubset(observed):
+        fail(f"orchestration fixture missing scenario classes: {sorted(required_classes - observed)}")
+
+    for scenario in scenarios:
+        if not isinstance(scenario, dict):
+            fail("orchestration scenario must be an object")
+        for key in ("id", "class", "task", "source", "expected"):
+            if key not in scenario:
+                fail(f"orchestration scenario missing {key}: {scenario}")
+        if scenario.get("class") == "holdout" and scenario.get("used_for_tuning") is not False:
+            fail("orchestration holdout scenario must set used_for_tuning=false")
+
+
 def check_active_plans() -> None:
     active_dir = ROOT / "docs/plan/active"
     if not active_dir.exists():
@@ -294,6 +419,8 @@ def main() -> int:
     check_agent_model_profiles()
     check_reusable_skill_parity()
     check_user_communication_contract()
+    check_namespaced_documentation_targets()
+    check_orchestration_policy()
     check_active_plans()
     print("root agent policy check passed")
     return 0

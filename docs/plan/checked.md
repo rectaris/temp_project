@@ -47,3 +47,8 @@ id	path
 044	docs/plan/checked/2026/08/01-15/044-copier-update-documentation-contract.md
 045	docs/plan/checked/2026/08/01-15/045-local-human-report-html.md
 047	docs/plan/checked/2026/08/01-15/047-release-v120.md
+048	docs/plan/checked/2026/08/01-15/048-ci-autofix-boundaries.md
+049	docs/plan/checked/2026/08/01-15/049-agent-profile-toml-formatting.md
+050	docs/plan/checked/2026/08/01-15/050-namespaced-documentation-paths.md
+051	docs/plan/checked/2026/08/01-15/051-skill-copier-trust-commands.md
+052	docs/plan/checked/2026/08/01-15/052-proactive-bounded-subagents.md

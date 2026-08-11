@@ -462,6 +462,83 @@ def require_evidence_synthesizer() -> None:
             fail(f"evidence synthesizer missing required contract: {marker}")
 
 
+def require_orchestration_policy_markers() -> None:
+    template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md").lower()
+    template_agents = read("template/.project-agent-workflow/AGENTS.md.jinja").lower()
+    root_orchestration = read("references/orchestration.md").lower()
+    shared_markers = (
+        "per-task user instruction",
+        "repository-wide",
+        "independent helper work",
+        "main agent owns",
+        "multiple independent",
+        "cross-specification",
+        "validation, security, or orchestration",
+        "large or dense",
+        "proactively",
+        "non-overlapping",
+        "short deterministic",
+        "cost",
+        "write scope",
+        "context files read-only",
+        "advisory",
+        "external writes",
+        "authorization",
+        "destructive",
+        "secrets",
+        "separate explicit policy",
+        "final high-risk",
+        "final report",
+        "role",
+        "acceptance",
+    )
+    for marker in shared_markers:
+        if marker not in template_spec:
+            fail(f"template managed SPEC_ORCHESTRATION missing marker: {marker}")
+    for marker in (
+        "per-task user instruction",
+        "repository-wide",
+        "do not delegate",
+        "final ownership",
+        "main session",
+        "external writes",
+        "secrets",
+        "short deterministic",
+        "authorization",
+        "advisory",
+        "role",
+        "scope",
+        "acceptance",
+    ):
+        if marker not in template_agents:
+            fail(f"template managed AGENTS missing marker: {marker}")
+    for marker in (
+        "per-task user instruction",
+        "without waiting for a per-task user instruction",
+        "repository-wide",
+        "proactively",
+        "independent helper work",
+        "short deterministic",
+        "multiple independent",
+        "cross-specification",
+        "validation, security, or orchestration",
+        "large or dense",
+        "context files read-only",
+        "advisory",
+        "external writes",
+        "authorization",
+        "separate explicit policy",
+        "secrets",
+        "destructive",
+        "final report",
+        "final high-risk",
+        "write scope",
+        "acceptance",
+    ):
+        if marker not in root_orchestration:
+            fail(f"root orchestration policy missing marker for template parity: {marker}")
+
+
 def template_source_files() -> set[str]:
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "template"],
@@ -719,12 +796,36 @@ def require_copier_documentation_contract() -> None:
     command_docs = (
         "README.md",
         "template/README.md.jinja",
+        "SKILL.md",
     )
+    skill_copy_commands: list[str] = []
     for path in command_docs:
         for line in read(path).splitlines():
             command = line.strip()
             if command.startswith(("copier copy ", "copier update ")) and "--trust" not in command:
                 fail(f"{path} documents an untrusted Copier command: {command}")
+            if path == "SKILL.md" and command.startswith("copier copy "):
+                skill_copy_commands.append(command)
+                tokens = command.split()
+                if "--defaults" in tokens and any(token in ("-f", "--force") for token in tokens):
+                    fail(f"SKILL.md non-interactive Copier command uses overwrite forcing: {command}")
+
+    skill_trusted_noninteractive = 0
+    skill_trusted_default = 0
+    for command in skill_copy_commands:
+        tokens = command.split()
+        if "--trust" not in tokens:
+            fail(f"SKILL.md documented Copier command is untrusted: {command}")
+        if "--defaults" in tokens:
+            if "--trust" in tokens:
+                skill_trusted_noninteractive += 1
+        elif "--trust" in tokens:
+            skill_trusted_default += 1
+
+    if skill_trusted_default == 0:
+        fail("SKILL.md must document a trusted Copier copy command without --defaults")
+    if skill_trusted_noninteractive == 0:
+        fail("SKILL.md must document a trusted Copier copy command with --defaults")
 
     required_markers = {
         "AGENTS.md": (
@@ -770,6 +871,104 @@ def require_copier_documentation_contract() -> None:
         fail("template development documentation still limits --trust to migrations")
 
 
+def require_ci_autofix_root_boundaries() -> None:
+    text = read(".github/workflows/codex-ci-autofix.yml")
+    required = (
+        "ref: ${{ needs.prepare.outputs.head_sha }}",
+        'cp .github/codex/prompts/ci-autofix.md "$RUNNER_TEMP/codex-ci-autofix-prompt.md"',
+        'prompt-file: ${{ runner.temp }}/codex-ci-autofix-prompt.md',
+        'output-file: ${{ runner.temp }}/codex-ci-autofix-output.md',
+        'git diff --binary HEAD > "$RUNNER_TEMP/codex-ci-autofix.patch"',
+        "git diff --check HEAD",
+        "python3 template/.project-agent-workflow/scripts/security-static-check.py --changed",
+        'path: ${{ runner.temp }}/codex-ci-autofix.patch',
+        'path: ${{ runner.temp }}/codex-ci-autofix-output.md',
+        'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
+        'protected=$(git diff --name-only HEAD | grep -E \'^(\\.github/workflows/|\\.github/codex/|\\.env($|\\.)|.*production.*|.*deploy.*)\' || true)',
+        'deleted_tests=$(git diff --diff-filter=D --name-only HEAD -- tests || true)',
+    )
+    for marker in required:
+        if marker not in text:
+            fail(f"root CI autofix workflow must include boundary guard marker: {marker}")
+
+
+def require_namespaced_reference_paths() -> None:
+    agents = read("AGENTS.md")
+    japanese = read("docs/agent/SPEC_JAPANESE_TECH_WRITING.md")
+
+    required_target = "template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
+    forbidden_target = "template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
+    for path, text in (("AGENTS.md", agents), ("docs/agent/SPEC_JAPANESE_TECH_WRITING.md", japanese)):
+        if required_target not in text:
+            fail(f"{path} missing generated Japanese-writing sync target: {required_target}")
+        if forbidden_target in text:
+            fail(f"{path} still references removed generated-writing sync target: {forbidden_target}")
+
+    skill = read("SKILL.md")
+    if ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md" not in skill:
+        fail("SKILL.md missing reusable external-services spec path: .project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md")
+    if "`SPEC_EXTERNAL_SERVICES.md`" in skill:
+        fail("SKILL.md still references stale external-services spec path: `SPEC_EXTERNAL_SERVICES.md`")
+
+    planning = read("references/planning.md")
+    planning_required = (
+        "`.project-agent-workflow/scripts/create-plan.sh active <slug>`",
+        "`.project-agent-workflow/scripts/create-plan.sh backlog <slug>`",
+        "`.project-agent-workflow/scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/complete-plan.sh docs/plan/active/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/check-agent-completion.sh`",
+        "`.project-agent-workflow/scripts/select-task-context.sh docs/plan/active/NNN-slug.md`",
+        "`.project-agent-workflow/scripts/clean-handoffs.sh --dry-run`",
+        "`.project-agent-workflow/scripts/lint-plan-docs.py`",
+        "`.project-agent-workflow/scripts/lint-plan-docs.sh`",
+        "`.project-agent-workflow/scripts/format-plan-docs.py`",
+        "`.project-agent-workflow/scripts/format-plan-docs.sh --check`",
+        "`.project-agent-workflow/scripts/search-plan-archive.py --text <term>`",
+    )
+    for marker in planning_required:
+        if marker not in planning:
+            fail(f"references/planning.md missing managed path marker: {marker}")
+
+    planning_forbidden = (
+        "`scripts/create-plan.sh active <slug>`",
+        "`scripts/create-plan.sh backlog <slug>`",
+        "`scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`",
+        "`scripts/complete-plan.sh docs/plan/active/NNN-slug.md`",
+        "`scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`",
+        "`scripts/check-agent-completion.sh`",
+        "`scripts/select-task-context.sh docs/plan/active/NNN-slug.md`",
+        "`scripts/clean-handoffs.sh --dry-run`",
+        "`scripts/format-plan-docs.py --check`",
+    )
+    for marker in planning_forbidden:
+        if marker in planning:
+            fail(f"references/planning.md still contains stale managed path marker: {marker}")
+
+    validation = read("references/validation.md")
+    validation_required = (
+        "`.project-agent-workflow/scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
+        "`.project-agent-workflow/scripts/security-static-check.py`: scans common high-signal static risks.",
+        "`.project-agent-workflow/scripts/skillspector-scan.sh`: optional NVIDIA SkillSpector wrapper for AI agent skill scans.",
+        "`.project-agent-workflow/scripts/structure-map.py --check`: verifies basic agent workflow structure.",
+        "`.project-agent-workflow/scripts/format-plan-docs.py --check`: verifies plan Markdown whitespace.",
+    )
+    for marker in validation_required:
+        if marker not in validation:
+            fail(f"references/validation.md missing managed path marker: {marker}")
+
+    validation_forbidden = (
+        "`scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
+        "`scripts/security-static-check.py`: scans common high-signal static risks.",
+        "`scripts/skillspector-scan.sh`: optional NVIDIA SkillSpector wrapper for AI agent skill scans.",
+        "`scripts/structure-map.py --check`: verifies basic agent workflow structure.",
+        "`scripts/format-plan-docs.py --check`: verifies plan Markdown whitespace.",
+    )
+    for marker in validation_forbidden:
+        if marker in validation:
+            fail(f"references/validation.md still contains stale managed path marker: {marker}")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -805,6 +1004,8 @@ def main() -> int:
     require_context_compression_boundary()
     require_agent_profile_task()
     require_copier_documentation_contract()
+    require_ci_autofix_root_boundaries()
+    require_namespaced_reference_paths()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")
@@ -825,6 +1026,7 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_user_communication_alignment()
+    require_orchestration_policy_markers()
     require_template_manifest_complete()
 
     fixture_answers: list[dict[str, str]] = []

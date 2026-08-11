@@ -12,6 +12,7 @@
 - `scripts/lint-project-workflow.sh`: このパッケージが導入可能な状態かを検証します。
 
 生成先には、計画 lifecycle、変更差分に応じた検証選択、静的セキュリティ検査、任意の NVIDIA SkillSpector スキャン手順、構造スキャン、handoff 管理、active plan の文脈抽出、ローカル agent ログ方針、任意の context 圧縮 helper、Codex hook/config 検証の汎用ルールを導入できます。
+タスクに応じた固定モデルの helper agent と、必要な場合だけ Git 管理対象外の HTML を生成する human report helper も導入できます。
 MCP、Linear、graph memory のような外部サービス依存ルールは Copier の回答で opt-in します。
 
 リリースごとの変更内容は [CHANGELOG.md](CHANGELOG.md) に記録します。
@@ -43,34 +44,49 @@ Headroom は PATH 上にある場合だけ任意 backend として使い、テ�
 既存のエージェント規範や計画履歴を持つリポジトリでは、一時ディレクトリへ生成し、対象リポジトリとの差分を確認してからファイル単位で取り込んでください。
 同名ファイルは直接上書きせず、プロジェクト固有の規則を保持して手動で統合します。
 
-GitHub から直接導入する場合:
+GitHub から**最新安定版**を直接導入する場合は、次のコマンドを推奨します。
+
+**最新安定版**：Copier が PEP 440 に従って Git tag から選ぶ最新の prerelease ではない版です。
+`--vcs-ref` を省略すると、Copier は GitHub リポジトリの最新安定版 tag を自動的に選ぶため、バージョン番号を調べて指定する必要はありません。
 
 ```sh
 copier copy --trust https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
-安定版タグを指定する場合:
+Copier のバージョン選択の詳細は、公式文書の [Templates versions](https://copier.readthedocs.io/en/stable/generating/#templates-versions) を参照してください。
+
+導入する版を現在の最新安定版である `v1.2.1` に固定する場合：
 
 ```sh
-copier copy --trust --vcs-ref v0.3.0 https://github.com/rectaris/temp_project.git /path/to/repo
+copier copy --trust --vcs-ref v1.2.1 https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
-推奨:
+GitHub 上の**開発版の最新コミット**を導入する場合は、`HEAD` を明示します。
+
+**開発版の最新コミット**：GitHub リポジトリの `HEAD` が指す、未リリースの変更を含む場合があるコミットです。
 
 ```sh
-copier copy --trust /path/to/project-agent-workflow /path/to/repo
+copier copy --trust --vcs-ref HEAD https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
-ラッパー:
+この方法は安定版 tag を選ばないため、未リリースの変更を検証するときだけ使用してください。
+
+ローカルクローンで現在 checkout しているコミットを導入する場合：
+
+```sh
+copier copy --trust --vcs-ref HEAD /path/to/project-agent-workflow /path/to/repo
+```
+
+ローカルクローンから最新安定版を導入するラッパー：
 
 ```sh
 scripts/init-project-workflow.sh /path/to/repo
 ```
 
-対話なしでデフォルト回答を使って生成する場合:
+GitHub から最新安定版を取得し、対話なしでデフォルト回答を使って生成する場合：
 
 ```sh
-copier copy -f --trust /path/to/project-agent-workflow /path/to/repo
+copier copy --defaults --trust https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
 生成された `.copier-answers.yml` はコミットしてください。これにより、あとから `copier update` でテンプレート更新を追従できます。
@@ -126,7 +142,7 @@ Copier の競合は、対象ファイル内の `<<<<<<<`、`=======`、`>>>>>>>`
 タグ付きバージョンへ明示的に更新する場合:
 
 ```sh
-copier update --trust --vcs-ref v0.3.0
+copier update --trust --vcs-ref v1.2.1
 ```
 
 リリース時は、テンプレート変更をコミットしたあとにタグを作成して push します。

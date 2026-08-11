@@ -1,6 +1,30 @@
 # Orchestration
 
-The main agent owns interpretation, final integration, validation acceptance, planning updates, and commits.
+The main agent owns interpretation, final integration, validation acceptance, planning updates, commits, and completion reporting.
+
+## Proactive bounded delegation
+
+- Delegate repository-wide work proactively, without waiting for a per-task user instruction, when independent helper work is available and coordination is expected to be materially useful.
+- Trigger proactive delegation when at least one applies:
+  - multiple independent code or documentation areas are affected,
+  - cross-specification reconciliation is required,
+  - validation, security, or orchestration review crosses several policy areas,
+  - large or dense sources benefit from parallel bounded context reduction and expected return justifies the overhead.
+- Keep delegation bounded:
+  - use explicit `write_scope` per helper,
+  - keep helper write scopes non-overlapping,
+  - keep context files read-only,
+  - require an explicit acceptance note before the main session integrates results.
+- Keep non-delegation as the default for short deterministic commands, direct user clarification, and local tasks where coordination cost exceeds expected benefit.
+- Keep authorization decisions and final high-risk judgment in the main session.
+- Keep secrets, external writes, destructive operations, and authorization actions outside delegated authority unless a separate explicit policy grants that authority.
+
+## Non-delegation boundaries
+
+- Do not delegate short deterministic commands, direct user clarification, final interpretation, final validation acceptance, commit/release decisions, or final report generation.
+- Do not delegate work involving external writes, secrets, secret handling, destructive operations, authorization decisions, or final high-risk policy or architectural judgment.
+- The main session must reconcile findings and decide what is accepted before planning updates and commits.
+- Final report transparency is mandatory: state whether helpers were used, and when used, each helper's role and write scope plus the main-session acceptance rationale.
 
 ## Helper Roles
 
@@ -29,6 +53,7 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 
 Use local execution for short deterministic commands, direct user clarification, final integration, validation acceptance, commits, tags, pushes, releases, and high-risk decisions.
 Use helpers when context pressure, file size, semantic risk, or review value outweighs coordination cost.
+When helper output is used, include role, scope, and acceptance summary in the final report.
 
 ## Model Defaults
 

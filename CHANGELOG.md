@@ -2,6 +2,8 @@
 
 ## 未リリース
 
+- README の Copier 導入手順を現在の `v1.2.1` に合わせ、バージョンを指定しない最新安定版、固定 tag、開発版の最新コミットの選択方法を区別しました。
+
 ## v1.2.1
 
 - 新規 tag の push で `before` が全ゼロになる場合は、CI の whitespace gate が tag commit と直前 commit の差分だけを検査するようにしました。

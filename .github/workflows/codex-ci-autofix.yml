@@ -171,7 +171,7 @@ jobs:
       - name: Check out pull request branch
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.prepare.outputs.head_branch }}
+          ref: ${{ needs.prepare.outputs.head_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -239,7 +239,7 @@ jobs:
         if: steps.guard.outputs.skipped != 'true'
         run: |
           set -eu
-          cp .github/codex/prompts/ci-autofix.md codex-ci-autofix-prompt.md
+          cp .github/codex/prompts/ci-autofix.md "$RUNNER_TEMP/codex-ci-autofix-prompt.md"
           {
             echo
             echo "Runtime context:"
@@ -257,7 +257,7 @@ jobs:
             echo "- BASE_BRANCH"
             echo "- HEAD_BRANCH"
             echo "- HEAD_SHA"
-          } >> codex-ci-autofix-prompt.md
+          } >> "$RUNNER_TEMP/codex-ci-autofix-prompt.md"
         env:
           FAILED_RUN_ID: ${{ needs.prepare.outputs.failed_run_id }}
           PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
@@ -279,8 +279,8 @@ jobs:
           HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: codex-ci-autofix-prompt.md
-          output-file: codex-ci-autofix-output.md
+          prompt-file: ${{ runner.temp }}/codex-ci-autofix-prompt.md
+          output-file: ${{ runner.temp }}/codex-ci-autofix-output.md
           sandbox: workspace-write
           safety-strategy: drop-sudo
 
@@ -290,11 +290,30 @@ jobs:
         run: |
           set -eu
           git add -N .
-          git diff --binary HEAD > codex-ci-autofix.patch
-          if [ -s codex-ci-autofix.patch ]; then
+          git diff --binary HEAD > "$RUNNER_TEMP/codex-ci-autofix.patch"
+          if [ -s "$RUNNER_TEMP/codex-ci-autofix.patch" ]; then
             echo "has_patch=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_patch=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate generated patch boundaries
+        if: steps.diff.outputs.has_patch == 'true'
+        run: |
+          set -eu
+          git diff --check HEAD
+          python3 template/.project-agent-workflow/scripts/security-static-check.py --changed
+          protected=$(git diff --name-only HEAD | grep -E '^(\.github/workflows/|\.github/codex/|\.env($|\.)|.*production.*|.*deploy.*)' || true)
+          if [ -n "$protected" ]; then
+            echo "Codex patch touched protected paths:" >&2
+            echo "$protected" >&2
+            exit 1
+          fi
+          deleted_tests=$(git diff --diff-filter=D --name-only HEAD -- tests || true)
+          if [ -n "$deleted_tests" ]; then
+            echo "Codex patch deleted tests:" >&2
+            echo "$deleted_tests" >&2
+            exit 1
           fi
 
       - name: Upload patch artifact
@@ -302,7 +321,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: codex-ci-autofix-patch-${{ needs.prepare.outputs.pr_number }}
-          path: codex-ci-autofix.patch
+          path: ${{ runner.temp }}/codex-ci-autofix.patch
           if-no-files-found: error
 
       - name: Upload Codex summary
@@ -310,7 +329,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: codex-ci-autofix-summary-${{ needs.prepare.outputs.pr_number }}
-          path: codex-ci-autofix-output.md
+          path: ${{ runner.temp }}/codex-ci-autofix-output.md
           if-no-files-found: ignore
 
   apply-patch:
@@ -328,18 +347,19 @@ jobs:
       - name: Check out pull request branch
         uses: actions/checkout@v5
         with:
-          ref: ${{ needs.prepare.outputs.head_branch }}
+          ref: ${{ needs.prepare.outputs.head_sha }}
           fetch-depth: 0
 
       - name: Download Codex patch
         uses: actions/download-artifact@v4
         with:
           name: codex-ci-autofix-patch-${{ needs.prepare.outputs.pr_number }}
+          path: ${{ runner.temp }}
 
       - name: Apply patch and commit
         run: |
           set -eu
-          git apply --index codex-ci-autofix.patch
+          git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"
           if git diff --cached --quiet; then
             echo "Codex produced no staged changes."
             exit 0
