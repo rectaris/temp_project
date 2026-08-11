@@ -29,6 +29,37 @@ git -C "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
   commit --allow-empty -qm "Create isolated Copier update target"
 git -C "$update_source" tag -f v1.1.2
 target_ref=v1.1.2
+conflict_ref=v1.1.2-conflict
+conflict_source_file="$update_source/template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
+python3 - "$conflict_source_file" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+marker = " (update-source conflict fixture)"
+variants = [
+    "Copier may represent a conflict with inline conflict markers or a `*.rej` file.",
+    "Copier may represent a conflict with complete inline conflict blocks or a `*.rej` file.",
+]
+changed = False
+for old in variants:
+    replacement = f"{old}{marker}"
+    if replacement not in text and old in text:
+        text = text.replace(old, replacement)
+        changed = True
+        break
+if not changed and marker not in text:
+    text = (
+        f"{text}\n"
+        "Copier may represent a conflict with complete inline conflict blocks or "
+        "a `*.rej` file. (update-source conflict fixture)\n"
+    )
+path.write_text(text, encoding="utf-8")
+PY
+git -C "$update_source" -c user.name=CI -c user.email=ci@example.invalid add template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md
+git -C "$update_source" -c user.name=CI -c user.email=ci@example.invalid commit -m "Inject copier-update conflict fixture source change"
+git -C "$update_source" tag -f "$conflict_ref"
 legacy_answers="$tmp/legacy-activation.answers.yml"
 cat >"$legacy_answers" <<'EOF'
 project_name: typescript-app
@@ -57,6 +88,61 @@ run_adoption() {
       --copier-executable "$copier_executable" "$@"
   fi
 }
+
+find_complete_conflict_block_file() {
+  root=$1
+  python3 - "$root" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+start = re.compile(r"^<<<<<<<")
+middle = re.compile(r"^=======")
+end = re.compile(r"^>>>>>>>")
+
+
+def has_complete_conflict_block(path: Path) -> bool:
+  in_block = False
+  saw_middle = False
+  try:
+    text = path.read_text(encoding="utf-8")
+  except (OSError, UnicodeDecodeError):
+    return False
+  for line in text.splitlines():
+    if not in_block:
+      if start.match(line):
+        in_block = True
+        saw_middle = False
+      continue
+
+    if end.match(line):
+      if saw_middle:
+        return True
+      in_block = False
+      saw_middle = False
+      continue
+
+    if middle.match(line):
+      saw_middle = True
+      continue
+
+    if start.match(line):
+      saw_middle = False
+
+  return False
+
+
+root = Path(sys.argv[1]).resolve()
+for path in root.rglob("*"):
+  if not path.is_file() or ".git" in path.parts:
+    continue
+  if has_complete_conflict_block(path):
+    print(path.relative_to(root).as_posix())
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 legacy_disabled_answers="$tmp/legacy-disabled.answers.yml"
 cat >"$legacy_disabled_answers" <<'EOF'
 project_name: legacy-disabled
@@ -70,11 +156,10 @@ use_linear_sync: false
 use_graph_memory: false
 EOF
 
-prepare_lane() {
+prepare_base_project() {
   lane=$1
   base_ref=$2
   answers=$3
-  shift 3
   out="$tmp/$lane"
   run_copier copy -q -f --vcs-ref "$base_ref" --data-file "$answers" "$update_source" "$out" >/dev/null
   git -C "$out" init -b main >/dev/null
@@ -100,6 +185,16 @@ Preserve this project-owned UI policy.
 EOF
   git -C "$out" add docs/agent/SPEC_PRODUCT.md docs/agent/PROJECT_ENVIRONMENT.md docs/agent/PROJECT_UI_DESIGN.md
   git -C "$out" commit -m "Add local project notes" >/dev/null
+
+  printf '%s\n' "$out"
+}
+
+prepare_lane() {
+  lane=$1
+  base_ref=$2
+  answers=$3
+  shift 3
+  out=$(prepare_base_project "$lane" "$base_ref" "$answers")
   if [ "$lane" = "earliest-supported" ]; then
     status_before=$(git -C "$out" status --porcelain=v1)
     if run_copier update -q -f --trust --vcs-ref "$target_ref" "$out" >/dev/null 2>&1; then
@@ -230,10 +325,11 @@ validate_common_lane() {
     echo "copier update produced rejection files: $out" >&2
     exit 1
   fi
-  if grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' "$out" --exclude-dir=.git >/dev/null; then
-    echo "copier update produced inline conflict markers: $out" >&2
+  if conflict_file=$(find_complete_conflict_block_file "$out"); then
+    echo "copier update produced inline conflict markers: $out/$conflict_file" >&2
     exit 1
   fi
+
   git -C "$out" diff --check
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
   (cd "$out" && python3 .project-agent-workflow/scripts/format-plan-docs.py --check)
@@ -295,6 +391,52 @@ grep -q 'Codex hooks mode: `install_templates`' "$latest_out/.project-agent-work
 grep -q 'SkillSpector mode: `disabled`' "$latest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP: `disabled`' "$latest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test ! -f "$latest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
+
+non_git_out="$tmp/non-git-lane"
+run_copier copy -q --trust --vcs-ref "$latest_ref" --data-file "$root/tests/fixtures/python.answers.yml" "$update_source" "$non_git_out" >/dev/null
+test -d "$non_git_out"
+
+conflict_out=$(prepare_base_project conflict-managed "$latest_ref" "$root/tests/fixtures/python.answers.yml")
+if [ -f "$conflict_out/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md" ]; then
+  conflict_source="$conflict_out/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
+elif [ -f "$conflict_out/docs/agent/SPEC_COPIER_ADOPTION.md" ]; then
+  conflict_source="$conflict_out/docs/agent/SPEC_COPIER_ADOPTION.md"
+else
+  echo "cannot locate SPEC_COPIER_ADOPTION.md for conflict fixture: $conflict_out" >&2
+  exit 1
+fi
+python3 - "$conflict_source" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+marker = " (update-local conflict fixture)"
+variants = [
+    "Copier may represent a conflict with inline conflict markers or a `*.rej` file.",
+    "Copier may represent a conflict with complete inline conflict blocks or a `*.rej` file.",
+]
+changed = False
+for old in variants:
+    replacement = f"{old}{marker}"
+    if replacement not in text and old in text:
+        text = text.replace(old, replacement)
+        changed = True
+        break
+if not changed and marker not in text:
+    text = (
+        f"{text}\n"
+        "Copier may represent a conflict with complete inline conflict blocks or "
+        "a `*.rej` file. (update-local conflict fixture)\n"
+    )
+path.write_text(text, encoding="utf-8")
+PY
+git -C "$conflict_out" add "$(printf '%s' "$conflict_source" | sed "s#^$conflict_out/##")"
+git -C "$conflict_out" commit -m "Create managed-file conflict fixture" >/dev/null
+if run_copier update -q --trust --vcs-ref "$conflict_ref" "$conflict_out" >/dev/null 2>&1; then
+  echo "managed-file update did not fail on conflict as expected" >&2
+  exit 1
+fi
 
 pre_v1_plan_out="$tmp/v050-managed-index-plans"
 run_copier copy -q -f --vcs-ref v0.5.0 --data-file "$root/tests/fixtures/python.answers.yml" "$update_source" "$pre_v1_plan_out" >/dev/null
@@ -770,8 +912,9 @@ if find "$future_out" -name '*.rej' -print -quit | grep -q .; then
   echo "namespaced copier update produced rejection files" >&2
   exit 1
 fi
-if grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' "$future_out" --exclude-dir=.git >/dev/null; then
+if conflict_file=$(find_complete_conflict_block_file "$future_out"); then
   echo "namespaced copier update produced inline conflict markers" >&2
+  echo "first file: $future_out/$conflict_file" >&2
   exit 1
 fi
 git -C "$future_out" diff --check

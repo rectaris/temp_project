@@ -36,6 +36,11 @@ _tasks:
       - "[[ _copier_conf.src_path ]]/scripts/update_agent_model_profiles.py"
       - "--destination"
       - "."
+  - command:
+      - "[[ _copier_python ]]"
+      - "[[ _copier_conf.src_path ]]/scripts/validate-copier-update-result.py"
+      - "--destination"
+      - "."
 
 _migrations:
   - version: v1.0.0
