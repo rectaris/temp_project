@@ -23,8 +23,12 @@ PROFILES = {
 }
 
 FIELD_PATTERNS = {
-    "model": re.compile(r'^model\s*=.*$'),
-    "model_reasoning_effort": re.compile(r'^model_reasoning_effort\s*=.*$'),
+    "model": re.compile(r"^(?P<indent>[ \t]*)model\s*=.*$"),
+    "model_reasoning_effort": re.compile(r"^(?P<indent>[ \t]*)model_reasoning_effort\s*=.*$"),
+}
+ANCHOR_PATTERNS = {
+    "name": re.compile(r"^(?P<indent>[ \t]*)name\s*=.*$"),
+    "description": re.compile(r"^(?P<indent>[ \t]*)description\s*=.*$"),
 }
 
 
@@ -44,26 +48,49 @@ def render_profile(text: str, model: str, effort: str) -> str:
     lines = text.splitlines()
     expected = {"model": model, "model_reasoning_effort": effort}
     missing: list[tuple[str, str]] = []
+    insertion_indent = ""
     for field, value in expected.items():
-        matches = [index for index, line in enumerate(lines) if FIELD_PATTERNS[field].fullmatch(line)]
+        matches = [
+            (index, match.group("indent"))
+            for index, line in enumerate(lines)
+            if (match := FIELD_PATTERNS[field].fullmatch(line))
+        ]
         if len(matches) > 1:
             raise ProfileError(f"agent TOML defines {field} more than once")
-        replacement = f'{field} = "{value}"'
         if matches:
-            lines[matches[0]] = replacement
+            index, indent = matches[0]
+            lines[index] = f'{indent}{field} = "{value}"'
+            if not insertion_indent:
+                insertion_indent = indent
         else:
-            missing.append((field, replacement))
+            missing.append((field, value))
 
     if missing:
-        insert_after = next(
-            (index for index, line in enumerate(lines) if line.startswith("description = ")),
-            next(index for index, line in enumerate(lines) if line.startswith("name = ")),
+        description_anchor = next(
+            (index for index, line in enumerate(lines) if ANCHOR_PATTERNS["description"].fullmatch(line)),
+            None,
         )
-        for _, replacement in reversed(missing):
-            lines.insert(insert_after + 1, replacement)
+        name_anchor = next(
+            (index for index, line in enumerate(lines) if ANCHOR_PATTERNS["name"].fullmatch(line)),
+            None,
+        )
+        insert_after = description_anchor if description_anchor is not None else name_anchor
+        if insert_after is None:
+            raise ProfileError("agent TOML is missing name or description anchor")
+
+        if (match := ANCHOR_PATTERNS["description"].fullmatch(lines[insert_after])):
+            insertion_indent = match.group("indent")
+        elif (match := ANCHOR_PATTERNS["name"].fullmatch(lines[insert_after])):
+            insertion_indent = match.group("indent")
+
+        for field, value in reversed(missing):
+            lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"')
 
     rendered = "\n".join(lines).rstrip() + "\n"
-    normalized = tomllib.loads(rendered)
+    try:
+        normalized = tomllib.loads(rendered)
+    except tomllib.TOMLDecodeError as exc:
+        raise ProfileError(f"agent TOML did not remain valid TOML after normalization: {exc}") from exc
     for field, value in expected.items():
         if normalized.get(field) != value:
             raise ProfileError(f"agent TOML did not normalize {field}")
@@ -92,7 +119,10 @@ def normalize_destination(destination: Path, *, check: bool = False) -> list[Pat
         if not path.is_file():
             raise ProfileError(f"missing built-in agent profile: {relative}")
         original = path.read_text(encoding="utf-8")
-        rendered = render_profile(original, model, effort)
+        try:
+            rendered = render_profile(original, model, effort)
+        except ProfileError as exc:
+            raise ProfileError(f"{relative}: {exc}") from exc
         if rendered == original:
             continue
         changed.append(relative)

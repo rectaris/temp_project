@@ -117,20 +117,20 @@ EOF
 
 assert_agent_profiles() {
   out=$1
-  grep -q '^model = "gpt-5.6-sol"$' "$out/.codex/agents/change_reviewer.toml"
-  grep -q '^model_reasoning_effort = "high"$' "$out/.codex/agents/change_reviewer.toml"
-  grep -q '^model = "gpt-5.6-luna"$' "$out/.codex/agents/docs_researcher.toml"
-  grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/docs_researcher.toml"
-  grep -q '^model = "gpt-5.6-luna"$' "$out/.codex/agents/evidence_synthesizer.toml"
-  grep -q '^model_reasoning_effort = "xhigh"$' "$out/.codex/agents/evidence_synthesizer.toml"
-  grep -q '^model = "gpt-5.6-luna"$' "$out/.codex/agents/repo_explorer.toml"
-  grep -q '^model_reasoning_effort = "low"$' "$out/.codex/agents/repo_explorer.toml"
-  grep -q '^model = "gpt-5.6-terra"$' "$out/.codex/agents/scoped_worker.toml"
-  grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/scoped_worker.toml"
-  grep -q '^model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/fast_scoped_worker.toml"
-  grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/fast_scoped_worker.toml"
-  grep -q '^model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/sequential_plan_worker.toml"
-  grep -q '^model_reasoning_effort = "medium"$' "$out/.codex/agents/sequential_plan_worker.toml"
+  grep -qE '^[[:space:]]*model = "gpt-5.6-sol"$' "$out/.codex/agents/change_reviewer.toml"
+  grep -qE '^[[:space:]]*model_reasoning_effort = "high"$' "$out/.codex/agents/change_reviewer.toml"
+  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/docs_researcher.toml"
+  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/docs_researcher.toml"
+  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/evidence_synthesizer.toml"
+  grep -qE '^[[:space:]]*model_reasoning_effort = "xhigh"$' "$out/.codex/agents/evidence_synthesizer.toml"
+  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/repo_explorer.toml"
+  grep -qE '^[[:space:]]*model_reasoning_effort = "low"$' "$out/.codex/agents/repo_explorer.toml"
+  grep -qE '^[[:space:]]*model = "gpt-5.6-terra"$' "$out/.codex/agents/scoped_worker.toml"
+  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/scoped_worker.toml"
+  grep -qE '^[[:space:]]*model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/fast_scoped_worker.toml"
+  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/fast_scoped_worker.toml"
+  grep -qE '^[[:space:]]*model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/sequential_plan_worker.toml"
+  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/sequential_plan_worker.toml"
 }
 
 validate_common_lane() {
@@ -551,6 +551,26 @@ cat >"$mature_out/docs/agent/PROJECT_UI_DESIGN.md" <<'EOF_MATURE_UI'
 
 Preserve this project-owned UI policy.
 EOF_MATURE_UI
+cat >"$mature_out/.codex/agents/docs_researcher.toml" <<'EOF_MATURE_DOCS_RESEARCHER'
+name = "docs_researcher"
+description = "Customized docs_researcher profile."
+  model = "legacy-model"
+  model_reasoning_effort = "legacy-effort"
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Keep this project instruction.
+"""
+EOF_MATURE_DOCS_RESEARCHER
+cat >"$mature_out/.codex/agents/repo_explorer.toml" <<'EOF_MATURE_REPO_EXPLORER'
+  name = "repo_explorer"
+  description = "Customized repo_explorer profile."
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Keep this project instruction.
+"""
+EOF_MATURE_REPO_EXPLORER
 mkdir -p "$mature_out/.github/workflows"
 cat >"$mature_out/.github/workflows/product-verify.yml" <<'EOF_MATURE_WORKFLOW'
 name: Product verification
@@ -568,8 +588,18 @@ git -C "$mature_out" commit -m "Customize mature project workflow" >/dev/null
 run_adoption "$mature_out" "$target_ref" >/dev/null
 (cd "$mature_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
 validate_common_lane "$mature_out"
-grep -q 'project agent marker' "$mature_out/.codex/agents/docs_researcher.toml"
-grep -q 'project agent marker' "$mature_out/.codex/agents/scoped_worker.toml"
+grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/docs_researcher.toml"
+grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/repo_explorer.toml"
+grep -q '^  model = "gpt-5.6-luna"$' "$mature_out/.codex/agents/docs_researcher.toml"
+grep -q '^  model_reasoning_effort = "medium"$' "$mature_out/.codex/agents/docs_researcher.toml"
+if grep -q 'legacy-model' "$mature_out/.codex/agents/docs_researcher.toml" || grep -q 'legacy-effort' "$mature_out/.codex/agents/docs_researcher.toml"; then
+  echo "normalized agent profile left legacy model values" >&2
+  exit 1
+fi
+grep -q '^  model = "gpt-5.6-luna"$' "$mature_out/.codex/agents/repo_explorer.toml"
+grep -q '^  model_reasoning_effort = "low"$' "$mature_out/.codex/agents/repo_explorer.toml"
+grep -q '^  name = "repo_explorer"$' "$mature_out/.codex/agents/repo_explorer.toml"
+grep -q '^  description = "Customized repo_explorer profile\."' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q 'Project adoption policy marker.' "$mature_out/docs/agent/SPEC_COPIER_ADOPTION.md"
 grep -q 'Project environment policy marker.' "$mature_out/docs/agent/SPEC_ENVIRONMENT.md"
 grep -q 'Project UI policy marker.' "$mature_out/docs/agent/SPEC_UI_DESIGN.md"
