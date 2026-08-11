@@ -59,6 +59,7 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Recognize only Git's explicit not-a-repository result as the initial-copy exception; any other nonzero Git result, including an injected inspection failure, is fatal.
 - Classify only `.github/workflows/codex-ci-autofix.yml` and `scripts/skillspector-scan.sh` as expected update deletions; do not allow deletion by directory prefix.
 - Guard every fixture Git mutation at the command boundary: resolved `-C` repositories and clone destinations must remain below the test temporary directory and must never equal the source repository.
+- Store transient validation and diagnostic logs only under `SANDBOXED_PLAN_WORKER_SCRATCH_DIR`; do not leave root-level log files or other diagnostic artifacts in the candidate repository.
 
 ## Tasks
 
@@ -73,3 +74,4 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 ## Validation Notes
 
 - Rejected sandbox candidate `fe2670d159f5f2ff39133e13a066144085ecc83c41c4f1d0c93bfa208ddd6ecf`: it treated every initial Git probe failure as non-Git, allowed broad deletion prefixes, and did not guard each fixture Git mutation target.
+- Rejected sandbox run from source `c6f1c91`: it became unresponsive after validation and left root-level `copier-update*.log` diagnostics outside `write_scope`; the run was interrupted and its temporary clone was removed without a manifest or source mutation.
