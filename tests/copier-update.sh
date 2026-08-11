@@ -137,6 +137,25 @@ validate_common_lane() {
   out=$1
   expect_legacy_root=${2:-1}
   expected_ci_autofix=${3:-disabled}
+  managed_agents="$out/.project-agent-workflow/AGENTS.md"
+  managed_orchestration="$out/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+
+  assert_managed_orchestration_reports() {
+    test -f "$managed_agents"
+    test -f "$managed_orchestration"
+    grep -Eqi 'without waiting for per-task user instruction|without requiring a per-task user instruction' "$managed_agents" "$managed_orchestration"
+    grep -qi 'final ownership' "$managed_agents"
+    grep -q 'final high-risk' "$managed_agents" "$managed_orchestration"
+    grep -q 'authorization decisions' "$managed_agents" "$managed_orchestration"
+    grep -q 'external writes' "$managed_agents" "$managed_orchestration"
+    grep -q 'main session' "$managed_agents" "$managed_orchestration"
+    grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
+    grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
+    grep -qi 'context files read-only' "$managed_orchestration" "$managed_agents"
+  }
+
+  assert_managed_orchestration_reports
+
   test -f "$out/.copier-answers.yml"
   test -f "$out/.project-agent-workflow/AGENTS.md"
   test -f "$out/.project-agent-workflow/docs/agent/spec-index.yaml"
@@ -188,6 +207,10 @@ validate_common_lane() {
   if [ -f "$out/.codex/hooks.json" ]; then
     grep -q 'stop_review_gate.py' "$out/.codex/hooks.json"
   fi
+  grep -q 'repository-wide' "$out/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+  grep -q 'main agent owns' "$out/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+  grep -q 'Do not delegate short deterministic commands' "$out/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+  grep -q 'external writes' "$out/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
   grep -q 'project-agent-workflow:managed-core:start' "$out/AGENTS.md"
   if git -C "$out" ls-files -u | grep -q .; then
     echo "namespaced adoption left an unmerged index: $out" >&2

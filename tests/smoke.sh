@@ -50,6 +50,21 @@ assert_generated_inventory() {
   diff -u "$expected" "$actual"
 }
 
+assert_managed_orchestration_reports() {
+  out=$1
+  managed_agents="$out/.project-agent-workflow/AGENTS.md"
+  managed_orchestration="$out/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+
+  grep -Eqi 'without waiting for per-task user instruction|without requiring a per-task user instruction' "$managed_agents" "$managed_orchestration"
+  grep -qi 'final ownership' "$managed_agents"
+  grep -q 'authorization decisions' "$managed_agents" "$managed_orchestration"
+  grep -q 'external writes' "$managed_agents" "$managed_orchestration"
+  grep -q 'main session' "$managed_agents" "$managed_orchestration"
+  grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
+  grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
+  grep -qi 'advisory' "$managed_orchestration"
+}
+
 run_plan_lifecycle_smoke() {
   out=$1
   (cd "$out" && .project-agent-workflow/scripts/create-plan.sh active sample --summary "Sample work." --summary-ja "サンプル作業を行う。" >/dev/null)
@@ -497,6 +512,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   out="$tmp/$name"
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
+  assert_managed_orchestration_reports "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
   run_root_python "$root/scripts/check-yaml.py" "$out" >/dev/null
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
@@ -531,6 +547,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode codex_hook
   } >"$fixture"
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
+  assert_managed_orchestration_reports "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
   run_root_python "$root/scripts/check-yaml.py" "$out" >/dev/null
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
@@ -538,6 +555,7 @@ done <"$root/tests/fixtures/copier-pairwise.tsv"
 
 default_out="$tmp/defaults"
 render_defaults "$default_out"
+assert_managed_orchestration_reports "$default_out"
 run_root_python "$root/tests/assert-generated-semantics.py" "$default_out"
 run_root_python "$root/scripts/check-yaml.py" "$default_out" >/dev/null
 (cd "$default_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check)
@@ -777,6 +795,11 @@ grep -q 'mode = "patch-only";' "$tmp/python/.github/workflows/codex-ci-autofix.y
 grep -Fq 'ref: ${{ needs.prepare.outputs.head_sha }}' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 grep -q 'Use tmux for long-running, shared, or interactive commands' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Command Sessions' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'Proactive bounded delegation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'main agent owns' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'non-delegation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'Do not delegate short deterministic commands' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'external writes' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'sequential_plan_worker.*exactly one assigned active plan' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'fast_scoped_worker.*predetermined validation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'evidence_synthesizer.*multiple evidence sources' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"

@@ -462,6 +462,83 @@ def require_evidence_synthesizer() -> None:
             fail(f"evidence synthesizer missing required contract: {marker}")
 
 
+def require_orchestration_policy_markers() -> None:
+    template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md").lower()
+    template_agents = read("template/.project-agent-workflow/AGENTS.md.jinja").lower()
+    root_orchestration = read("references/orchestration.md").lower()
+    shared_markers = (
+        "per-task user instruction",
+        "repository-wide",
+        "independent helper work",
+        "main agent owns",
+        "multiple independent",
+        "cross-specification",
+        "validation, security, or orchestration",
+        "large or dense",
+        "proactively",
+        "non-overlapping",
+        "short deterministic",
+        "cost",
+        "write scope",
+        "context files read-only",
+        "advisory",
+        "external writes",
+        "authorization",
+        "destructive",
+        "secrets",
+        "separate explicit policy",
+        "final high-risk",
+        "final report",
+        "role",
+        "acceptance",
+    )
+    for marker in shared_markers:
+        if marker not in template_spec:
+            fail(f"template managed SPEC_ORCHESTRATION missing marker: {marker}")
+    for marker in (
+        "per-task user instruction",
+        "repository-wide",
+        "do not delegate",
+        "final ownership",
+        "main session",
+        "external writes",
+        "secrets",
+        "short deterministic",
+        "authorization",
+        "advisory",
+        "role",
+        "scope",
+        "acceptance",
+    ):
+        if marker not in template_agents:
+            fail(f"template managed AGENTS missing marker: {marker}")
+    for marker in (
+        "per-task user instruction",
+        "without waiting for a per-task user instruction",
+        "repository-wide",
+        "proactively",
+        "independent helper work",
+        "short deterministic",
+        "multiple independent",
+        "cross-specification",
+        "validation, security, or orchestration",
+        "large or dense",
+        "context files read-only",
+        "advisory",
+        "external writes",
+        "authorization",
+        "separate explicit policy",
+        "secrets",
+        "destructive",
+        "final report",
+        "final high-risk",
+        "write scope",
+        "acceptance",
+    ):
+        if marker not in root_orchestration:
+            fail(f"root orchestration policy missing marker for template parity: {marker}")
+
+
 def template_source_files() -> set[str]:
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "template"],
@@ -949,6 +1026,7 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_user_communication_alignment()
+    require_orchestration_policy_markers()
     require_template_manifest_complete()
 
     fixture_answers: list[dict[str, str]] = []

@@ -13,6 +13,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Keep `copier.yml` as the long-term generation/update interface.
 - Treat non-destructive Copier evolution as a repository invariant: supported copy and update paths must preserve project-owned product code, policy, configuration, plan history, and validation behavior, and must stop on unresolved conflicts, rejection files, or unclassified tracked-file deletion.
 - Keep deterministic checks in `scripts/` or `tests/`.
+- Use `references/orchestration.md` for bounded delegation triggers, final ownership, and safety boundaries.
 - Do not add project-specific `supportcard-status` facts to generic templates.
 - When writing or editing Japanese prose in this repository, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
 - When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
@@ -49,6 +50,15 @@ This repository packages reusable coding-agent project management, file routing,
 - Codex must not modify secrets, deployment credentials, or production settings.
 - Codex must prefer fixing root causes over skipping checks.
 - Codex must stop and report when the failure is due to missing secrets, external service outages, or environment-only issues.
+
+## Delegation Safety and Ownership
+
+- Delegate repository-wide work proactively without requiring a separate per-task user instruction when independent helper work is available and materially useful, bounded, and can be split into independent helper roles.
+- Keep final ownership in the main agent for interpretation, final integration, validation acceptance, planning updates, commits, and the final report/completion reporting.
+- Do not delegate short deterministic commands (including pass/fail commands), direct user clarification, final policy judgment, authorization decisions, external writes, secret handling, or destructive changes unless an explicit external policy grants that authority.
+- Keep helper delegation bounded by `write_scope`, keep context files read-only, and keep final acceptance and reporting in the main session.
+- Final report must state whether helpers were used; if used, include role, write scope, and the main-session acceptance decision path.
+- Treat helper output as advisory until validated in the main session.
 
 ## Reports
 
