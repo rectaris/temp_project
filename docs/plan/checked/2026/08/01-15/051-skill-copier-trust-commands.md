@@ -1,6 +1,6 @@
 # Make Skill Copier copy commands trusted and non-destructive
 
-status: in_progress
+status: checked
 task_types:
   - skill_authoring
   - template_workflow
@@ -47,12 +47,15 @@ The current commands omit `--trust`, and the non-interactive example uses `-f`, 
 
 ## Tasks
 
-- [ ] Update both Copier copy examples in the root Skill.
-- [ ] Add direct static checks for trusted ordinary copy and trusted non-interactive defaults.
-- [ ] Add a negative assertion that the non-interactive example does not use `-f` or `--force`.
-- [ ] Confirm that no generated template file changes are required.
-- [ ] Run required static and generated-project validation.
+- [x] Update both Copier copy examples in the root Skill.
+- [x] Add direct static checks for trusted ordinary copy and trusted non-interactive defaults.
+- [x] Add a negative assertion that the non-interactive example does not use `-f` or `--force`.
+- [x] Confirm that no generated template file changes are required.
+- [x] Run required static and generated-project validation.
 
 ## Validation Notes
 
-Pending implementation.
+- The ordinary Skill example now uses `copier copy --trust`, and the non-interactive example uses `copier copy --defaults --trust` without enabling overwrite.
+- The Copier documentation contract now requires both trusted forms and rejects force flags in the non-interactive defaults form.
+- `copier.yml` and generated template files remained unchanged.
+- `python3 scripts/check-copier-template.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `python3 scripts/validate-changes.py --all`, and `git diff --check` passed with pinned actionlint 1.7.12 available on `PATH`.
