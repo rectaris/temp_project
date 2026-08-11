@@ -1,6 +1,6 @@
 # Use bounded subagents proactively for repository-wide work
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
 review_class: B
@@ -63,16 +63,23 @@ The user explicitly authorized subagent use without a per-task request and reque
 
 ## Tasks
 
-- [ ] Add the proactive bounded-delegation rule to the root AGENTS entrypoint and root orchestration guidance.
-- [ ] Add the same proactive-use criteria, non-use cases, main-agent ownership, and safety boundaries to the Copier-managed AGENTS entrypoint and orchestration specification.
-- [ ] Define positive delegation triggers and explicit cases where local execution remains appropriate.
-- [ ] Preserve write-scope, read-only context, external-write, secret, destructive-action, and final-judgment boundaries.
-- [ ] Add deterministic checks that compare required root and template policy markers for both proactive use and retained safety constraints.
-- [ ] Extend smoke and Copier update assertions for the generated policy.
-- [ ] Define fixed median, edge, negative-trigger, and hold-out scenarios with a requirements checklist containing critical delegation and non-delegation boundaries.
-- [ ] Run fresh independent subagent evaluations, correct one policy theme at a time, and confirm critical requirements pass without hold-out regression.
-- [ ] Run required repository, generated-project, and update validation.
+- [x] Add the proactive bounded-delegation rule to the root AGENTS entrypoint and root orchestration guidance.
+- [x] Add the same proactive-use criteria, non-use cases, main-agent ownership, and safety boundaries to the Copier-managed AGENTS entrypoint and orchestration specification.
+- [x] Define positive delegation triggers and explicit cases where local execution remains appropriate.
+- [x] Preserve write-scope, read-only context, external-write, secret, destructive-action, and final-judgment boundaries.
+- [x] Add deterministic checks that compare required root and template policy markers for both proactive use and retained safety constraints.
+- [x] Extend smoke and Copier update assertions for the generated policy.
+- [x] Define fixed median, edge, negative-trigger, and hold-out scenarios with a requirements checklist containing critical delegation and non-delegation boundaries.
+- [x] Run fresh independent subagent evaluations, correct one policy theme at a time, and confirm critical requirements pass without hold-out regression.
+- [x] Run required repository, generated-project, and update validation.
 
 ## Validation Notes
 
-Pending implementation.
+- Root and Copier-managed policy now require bounded delegation for materially useful repository-wide work without waiting for a per-task user instruction, while retaining local execution for short deterministic work and high-cost coordination.
+- Both policy surfaces preserve explicit write scopes, read-only context, advisory helper output, main-agent acceptance, and the secret, external-write, destructive-action, authorization, and final-high-risk-judgment boundaries.
+- Static checks compare the required root and template markers, and generated-project smoke and Copier update checks cover the managed AGENTS entrypoint and orchestration specification.
+- Fixed median, edge, negative, and hold-out scenarios and critical thresholds live under `tests/fixtures/orchestration/`; the hold-out is marked outside tuning.
+- Fresh `change_reviewer` evaluators `/root/eval_052_median`, `/root/eval_052_edge`, `/root/eval_052_negative`, and `/root/eval_052_holdout` passed every critical and non-critical requirement with zero retries. The negative scenario selected local execution with no helper; the hold-out retained bounded read-only discovery and main-agent ownership without regression.
+- Evaluators preserved scenario-specific unknowns about exact file scopes and cross-spec precedence for main-session discovery or clarification; neither unknown changed the delegation decision or exposed a policy ambiguity requiring tuning.
+- Full evaluator reports are kept in ignored local evidence under `.agent-artifacts/evaluations/052/`; only accepted results are recorded here.
+- `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `COPIER_UPDATE_TARGET_REF=1dad35e REQUIRE_COPIER=1 tests/copier-update.sh`, `python3 scripts/validate-changes.py --all`, and `git diff --check` passed with pinned actionlint 1.7.12 available on `PATH`.
