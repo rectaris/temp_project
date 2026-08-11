@@ -37,6 +37,8 @@ acceptance:
   - The source repository HEAD and worktree remain unchanged across the update test.
   - Git inspection failures make the post-update validator exit nonzero instead of being interpreted as an empty clean result.
   - The mutable-source update fixture copies from one explicit semantic-version tag and updates to a later explicit semantic-version tag.
+  - The listed host-side validation command works without sandbox-only environment variables; the test prefers `SANDBOXED_PLAN_WORKER_SCRATCH_DIR` when present and otherwise creates its disposable tree below `TMPDIR` without writing into the repository.
+  - Result scanning does not follow symbolic links outside the destination, and Git's explicit non-repository diagnosis is evaluated under a deterministic C locale.
 checked_summary_ja: 文書化された Copier update 経路を競合、rej、未分類削除で失敗させ、成功終了のまま不整合を残さない。
 
 ## Context
@@ -60,6 +62,8 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 - Classify only `.github/workflows/codex-ci-autofix.yml` and `scripts/skillspector-scan.sh` as expected update deletions; do not allow deletion by directory prefix.
 - Guard every fixture Git mutation at the command boundary: resolved `-C` repositories and clone destinations must remain below the test temporary directory and must never equal the source repository.
 - Store transient validation and diagnostic logs only under `SANDBOXED_PLAN_WORKER_SCRATCH_DIR`; do not leave root-level log files or other diagnostic artifacts in the candidate repository.
+- When the sandbox scratch variable is absent during normal host validation, use `TMPDIR` (or the system temporary directory) as the disposable fixture parent; never require a sandbox-only variable in the documented validation command.
+- Skip symbolic links while scanning result files for conflict blocks and force `LC_ALL=C` for validator Git subprocesses before classifying the explicit non-repository result.
 
 ## Tasks
 
@@ -75,3 +79,4 @@ Copier can return success while leaving an unresolved Git conflict, but the gene
 
 - Rejected sandbox candidate `fe2670d159f5f2ff39133e13a066144085ecc83c41c4f1d0c93bfa208ddd6ecf`: it treated every initial Git probe failure as non-Git, allowed broad deletion prefixes, and did not guard each fixture Git mutation target.
 - Rejected sandbox run from source `c6f1c91`: it became unresponsive after validation and left root-level `copier-update*.log` diagnostics outside `write_scope`; the run was interrupted and its temporary clone was removed without a manifest or source mutation.
+- Rejected physically scoped candidate `af3cca8ad993e15e8ad9cec46da1b5c9f1620f77f4a6366969768446d33173bb` after independent review: the exact listed command `REQUIRE_COPIER=1 tests/copier-update.sh` exited 2 because it unconditionally required `SANDBOXED_PLAN_WORKER_SCRATCH_DIR`, so it passed only inside the delegated runner. Its validator also followed file symlinks during conflict scanning and classified Git stderr without fixing the locale. Preserve the fail-closed Git/deletion implementation and fixture guards, add the safe host temporary fallback and non-following scan, and rerun every listed command outside the worker environment in the review clone.
