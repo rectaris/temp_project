@@ -1,6 +1,6 @@
 # Align operational documentation with the namespaced generated layout
 
-status: in_progress
+status: checked
 task_types:
   - japanese_prose
   - skill_authoring
@@ -58,13 +58,16 @@ The current Skill and references name pre-namespace helper locations, and the ro
 
 ## Tasks
 
-- [ ] Correct the generated-project routing path in the root Skill.
-- [ ] Correct generated lifecycle and validation helper paths in the planning and validation references.
-- [ ] Correct the root AGENTS rule and Japanese-writing specification to name the existing template synchronization target.
-- [ ] Add targeted static assertions for current managed paths and the removed stale path.
-- [ ] Confirm that intentional project-owned `docs/agent/` and `template/docs/agent/` references remain intact.
-- [ ] Run required static, generated-project, and repository validation.
+- [x] Correct the generated-project routing path in the root Skill.
+- [x] Correct generated lifecycle and validation helper paths in the planning and validation references.
+- [x] Correct the root AGENTS rule and Japanese-writing specification to name the existing template synchronization target.
+- [x] Add targeted static assertions for current managed paths and the removed stale path.
+- [x] Confirm that intentional project-owned `docs/agent/` and `template/docs/agent/` references remain intact.
+- [x] Run required static, generated-project, and repository validation.
 
 ## Validation Notes
 
-Pending implementation.
+- The root Skill and its planning and validation references now route reusable generated-project policy and helpers through `.project-agent-workflow/`.
+- The root AGENTS rule and Japanese-writing specification now point to the existing namespaced template specification while preserving intentional project-owned `docs/agent/` references.
+- Both root static checkers require the current managed paths and reject the removed Japanese-writing synchronization path and selected pre-namespace helper paths.
+- `python3 scripts/check-copier-template.py`, `python3 scripts/check-root-agent-policy.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `python3 scripts/validate-changes.py --all`, and `git diff --check` passed with pinned actionlint 1.7.12 available on `PATH`.
