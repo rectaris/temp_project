@@ -71,6 +71,7 @@ def main() -> int:
 
     browser_run = services["browser_run"]
     require(browser_run["state"] == "disabled", "browser_run must be disabled by default")
+    require(browser_run["connection"] == "", "browser_run fresh default must not contain connection data")
     require(browser_run["authentication"] == "none", "browser_run authentication default mismatch")
     require(browser_run["credential_reference"] == "", "browser_run must not contain credentials")
     require(
@@ -85,6 +86,17 @@ def main() -> int:
     require(
         (root / ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md").is_file(),
         "generated browser backend policy missing",
+    )
+    browser_policy = (
+        root / ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
+    ).read_text(encoding="utf-8")
+    require(
+        "Cloudflare Browser Run as one service" in browser_policy,
+        "generated browser policy does not keep Browser Run engine authority together",
+    )
+    require(
+        "distinct project-owned external-service record" in browser_policy,
+        "generated browser policy permits Browser Run authority to leak to another Chromium provider",
     )
 
     expected_profile = (

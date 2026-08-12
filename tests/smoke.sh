@@ -60,6 +60,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/AGENTS.md.jinja \
     template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
     template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+    template/.project-agent-workflow/ownership.yaml \
     template/.project-agent-workflow/skills/browser-ops/SKILL.md \
     template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
@@ -82,6 +83,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/AGENTS.md.jinja \
     template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
     template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+    template/.project-agent-workflow/ownership.yaml \
     template/.project-agent-workflow/skills/browser-ops/SKILL.md \
     template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
     template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \

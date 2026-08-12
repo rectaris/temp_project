@@ -94,6 +94,7 @@ for candidate_path in \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
   template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+  template/.project-agent-workflow/ownership.yaml \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
@@ -113,6 +114,7 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
   template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+  template/.project-agent-workflow/ownership.yaml \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
@@ -134,7 +136,13 @@ if grep -q '^  browser_run:$' "$browser_legacy_out/docs/agent/external-services.
   echo "older Browser Run fixture unexpectedly contains browser_run" >&2
   exit 1
 fi
+browser_legacy_policy_before="$tmp/browser-run-legacy-policy-before.yaml"
+cp "$browser_legacy_out/docs/agent/external-services.yaml" "$browser_legacy_policy_before"
 run_copier update -q --trust --defaults --vcs-ref "$target_ref" "$browser_legacy_out" >/dev/null
+if ! cmp -s "$browser_legacy_policy_before" "$browser_legacy_out/docs/agent/external-services.yaml"; then
+  echo "Copier update changed project-owned older external-service policy bytes" >&2
+  exit 1
+fi
 if grep -q '^  browser_run:$' "$browser_legacy_out/docs/agent/external-services.yaml"; then
   echo "Copier update rewrote project-owned older external-service policy" >&2
   exit 1

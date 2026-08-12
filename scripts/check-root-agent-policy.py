@@ -252,6 +252,37 @@ def check_browser_routing() -> None:
     ):
         if marker not in skill:
             fail(f"root browser skill missing: {marker}")
+    root_skill = skill.replace(
+        "template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+        ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
+    ).replace(
+        "template/docs/agent/external-services.yaml.jinja",
+        "docs/agent/external-services.yaml",
+    )
+    generated_skill = read("template/.project-agent-workflow/skills/browser-ops/SKILL.md")
+    if root_skill != generated_skill:
+        fail("root/template browser SKILL.md drift")
+
+    root_reference = read(".codex/skills/browser-ops/references/browser-run-policy.md").replace(
+        "template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+        ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
+    ).replace(
+        "template/docs/agent/external-services.yaml.jinja",
+        "docs/agent/external-services.yaml",
+    )
+    generated_reference = read(
+        "template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
+    )
+    if root_reference != generated_reference:
+        fail("root/template browser backend-reference drift")
+    if read(".codex/skills/browser-ops/agents/openai.yaml") != read(
+        "template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml"
+    ):
+        fail("root/template browser agents/openai.yaml drift")
+
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .agents/skills/browser-ops/SKILL.md" not in ownership:
+        fail("browser discovery bridge is not reserved by Copier ownership")
 
 
 def check_user_communication_contract() -> None:

@@ -1,6 +1,6 @@
 # Browser Backend Selection
 
-Read the project external-service policy before accessing a provider. A missing `browser_run` record is disabled: do not infer authorization from a configured tool, and use the configured fallback.
+Read `template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja` and `template/docs/agent/external-services.yaml.jinja` before accessing a provider. `browser_run` authorizes Cloudflare Browser Run as one service: Kitesurf and Chromium are engine choices behind its configured connection. A missing `browser_run` record is disabled: do not infer authorization from a configured tool, and use the configured fallback. A Chromium provider outside Cloudflare Browser Run needs a distinct project-owned external-service record and authorization.
 
 First classify the operation. Reads inspect, extract, or produce a local browser artifact without changing a remote service. Writes include form submission, publication, purchase, upload, account mutation, or any other remote change. Before any write, require `configured_write_capable`, an allowlisted operation, an exact `write_authorization_rule` match, and current user authorization for that exact effect. Then choose a backend; write classification does not by itself make Kitesurf incompatible.
 

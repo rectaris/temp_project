@@ -1326,8 +1326,13 @@ def require_browser_automation_contract() -> None:
             "WebGL",
             "real TLS fingerprints",
             "ordinary HTTP retrieval",
+            "Cloudflare Browser Run as one service",
+            "distinct project-owned external-service record",
         ),
     )
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .agents/skills/browser-ops/SKILL.md" not in ownership:
+        fail("browser discovery bridge is not reserved by Copier ownership")
     fixture = json.loads(read("tests/fixtures/browser-ops/scenarios.json"))
     requirements = fixture.get("requirements", [])
     scenarios = fixture.get("scenarios", [])
@@ -1339,6 +1344,47 @@ def require_browser_automation_contract() -> None:
     expected = {"authorized Kitesurf", "Chromium fallback", "ordinary HTTP retrieval", "documented unavailable fallback", "deny browser write"}
     if not expected.issubset({item.get("expected") for item in scenarios}):
         fail("browser scenarios do not cover backend, plain HTTP, fallback, and write denial")
+    expected_conditions = {
+        "kitesurf-pdf": {
+            "needs_rendered_browser": True,
+            "access": "read",
+            "browser_run_authorized": True,
+            "provider_available": True,
+            "requires_chromium": False,
+        },
+        "chromium-webgl": {
+            "needs_rendered_browser": True,
+            "access": "read",
+            "browser_run_authorized": True,
+            "provider_available": True,
+            "requires_chromium": True,
+        },
+        "plain-http": {"needs_rendered_browser": False},
+        "provider-unavailable": {
+            "needs_rendered_browser": True,
+            "access": "read",
+            "browser_run_authorized": True,
+            "provider_available": False,
+            "requires_chromium": False,
+        },
+        "unauthorized-submit": {
+            "needs_rendered_browser": True,
+            "access": "write",
+            "browser_run_authorized": True,
+            "provider_available": True,
+            "operation_allowlisted": True,
+            "exact_write_authorization_rule": True,
+            "current_user_authorization": False,
+            "requires_chromium": False,
+        },
+    }
+    actual_conditions = {item.get("id"): item.get("conditions") for item in scenarios}
+    if actual_conditions != expected_conditions:
+        fail("browser scenarios have incorrect condition-to-route mappings")
+    for scenario_id in ("kitesurf-pdf", "chromium-webgl"):
+        request = next(item["request"] for item in scenarios if item.get("id") == scenario_id)
+        if "configured Browser Run record" not in request:
+            fail(f"{scenario_id} request lacks configured Browser Run authorization premise")
 
 
 def main() -> int:

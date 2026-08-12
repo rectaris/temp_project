@@ -95,7 +95,8 @@ external_service_gate means the common pre-call validation procedure in mcp-ops 
 
 ## Browser Run Policy
 
-- `browser_run` is disabled by default. Its project-owned record may contain connection metadata, but never account identifiers or credentials.
+- `browser_run` authorizes Cloudflare Browser Run as one service. Kitesurf and Chromium are engine choices behind the same configured Browser Run connection; a Chromium provider outside Browser Run requires a distinct project-owned external-service record and authorization.
+- `browser_run` is disabled by default. Fresh defaults contain no connection data, account identifiers, or credentials. A configured project-owned record may contain non-secret connection metadata, account identifiers, and credential references, but never raw credentials.
 - Use browser automation only for rendered-page state, browser-produced artifacts, DOM inspection, or browser interaction. Use ordinary HTTP retrieval for a plain URL lookup.
 - Read `.agents/skills/browser-ops/SKILL.md` and its managed target before provider access. The skill applies the common external-service gate and selects an authorized compatible backend or its documented fallback.
 - Classify an operation as read or write before backend selection. Browser writes require `configured_write_capable`, an exact `write_authorization_rule` match, and current user authorization for the exact remote effect.
