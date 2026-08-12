@@ -1,6 +1,6 @@
 # Make the documented Copier update path fail closed
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
   - security
@@ -74,13 +74,21 @@ Copier 9.15.1 executes ordinary `_tasks` while rendering temporary old/new copie
 
 ## Tasks
 
-- [ ] Implement and focus-test the post-update validator, including parity and initial non-Git behavior.
-- [ ] Implement and focus-test the recurring wrapper before wiring the migration.
-- [ ] Wire the v1.2.2 `after` migration and add the split explicit-tag integration lanes.
-- [ ] Enforce fixture mutation guards, source immutability, deletion classification, ignored rejection, locale, and symlink coverage.
-- [ ] Align generated update documentation and static template checks with the supported commands.
-- [ ] Run the required validation commands.
+- [x] Implement and focus-test the post-update validator, including parity and initial non-Git behavior.
+- [x] Implement and focus-test the recurring wrapper before wiring the migration.
+- [x] Wire the v1.2.2 `after` migration and add the split explicit-tag integration lanes.
+- [x] Enforce fixture mutation guards, source immutability, deletion classification, ignored rejection, locale, and symlink coverage.
+- [x] Align generated update documentation and static template checks with the supported commands.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending. Prior candidate history remains available in Git history; this active plan contains only the current accepted implementation contract.
+- Accepted sandbox candidate `4b6c6464ad65c074b4636c64d56aa4a5948ee25c1d99044424affce14531dd28` after independent review-clone validation.
+- `REQUIRE_COPIER=1 tests/copier-update.sh`: passed in the review clone and source repository.
+- `env -u SANDBOXED_PLAN_WORKER_SCRATCH_DIR REQUIRE_COPIER=1 tests/copier-update.sh`: passed in the review clone and source repository.
+- `scripts/lint-project-workflow.sh`: passed.
+- `tests/smoke.sh`: passed with the fallback backend; `actionlint` was unavailable and skipped by the existing smoke behavior.
+- `python3 scripts/validate-changes.py --all`: passed.
+- `git diff --check`: passed.
+- Source/generated validator byte parity and the static template check passed.
+- No unresolved risks or deferred work remain for this plan.

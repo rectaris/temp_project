@@ -2,14 +2,16 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/project-agent-workflow-smoke.XXXXXX")
+scratch_base=${SANDBOXED_PLAN_WORKER_SCRATCH_DIR:-${TMPDIR:-/tmp}}
+tmp=$(mktemp -d "$scratch_base/project-agent-workflow-smoke.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 . "$root/tests/lib-copier.sh"
-source_ref=${COPIER_SMOKE_REF:-HEAD}
+source_ref=${COPIER_SMOKE_REF:-}
+render_source=$root
 
 run_root_python() {
   if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
-    (cd "$root" && UV_CACHE_DIR="$root/.uv-cache" uv run python "$@")
+    (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" uv run python "$@")
   else
     python3 "$@"
   fi
@@ -27,17 +29,64 @@ if ! copier_available; then
   exit 0
 fi
 
+if ! command -v copier >/dev/null 2>&1; then
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/copier" <<'EOF_COPIER_SHIM'
+#!/bin/sh
+exec env UV_CACHE_DIR="$COPIER_TEST_CACHE" uv run --project "$COPIER_TEST_ROOT" copier "$@"
+EOF_COPIER_SHIM
+  chmod +x "$tmp/bin/copier"
+  COPIER_TEST_CACHE="$tmp/uv-cache"
+  COPIER_TEST_ROOT="$root"
+  export COPIER_TEST_CACHE COPIER_TEST_ROOT
+  PATH="$tmp/bin:$PATH"
+  export PATH
+fi
+
+if [ -z "$source_ref" ]; then
+  render_source="$tmp/render-source"
+  git clone -q "$root" "$render_source"
+  for candidate_path in \
+    copier.yml \
+    scripts/validate-copier-update.py \
+    template/README.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/scripts/update-from-copier.sh \
+    template/.project-agent-workflow/scripts/validate-copier-update.py
+  do
+    cp "$root/$candidate_path" "$render_source/$candidate_path"
+  done
+  git -C "$render_source" add \
+    copier.yml \
+    scripts/validate-copier-update.py \
+    template/README.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/scripts/update-from-copier.sh \
+    template/.project-agent-workflow/scripts/validate-copier-update.py
+  git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
+    commit -qm "Create isolated smoke candidate"
+  git -C "$render_source" tag v1.2.2
+  source_ref=v1.2.2
+fi
+
 render_fixture() {
   fixture=$1
   out=$2
-  set -- copy -q -f --trust --vcs-ref "$source_ref" --data-file "$fixture"
-  set -- "$@" "$root" "$out"
+  set -- copy -q -f --trust --data-file "$fixture"
+  if [ -n "$source_ref" ]; then
+    set -- "$@" --vcs-ref "$source_ref"
+  fi
+  set -- "$@" "$render_source" "$out"
   run_copier "$@" >/dev/null
 }
 
 render_defaults() {
   out=$1
-  run_copier copy -q -f --trust --defaults --vcs-ref "$source_ref" "$root" "$out" >/dev/null
+  set -- copy -q -f --trust --defaults
+  if [ -n "$source_ref" ]; then
+    set -- "$@" --vcs-ref "$source_ref"
+  fi
+  run_copier "$@" "$render_source" "$out" >/dev/null
 }
 
 assert_generated_inventory() {
@@ -776,6 +825,9 @@ grep -q 'copier_adoption:' "$tmp/typescript/.project-agent-workflow/docs/agent/s
 grep -q 'Copier Adoption' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
 grep -q 'Conflict Handling' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
 grep -q 'Copier may represent a conflict with inline conflict markers' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
+grep -q '.project-agent-workflow/scripts/update-from-copier.sh' "$tmp/typescript/README.md"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/update-from-copier.sh"
+cmp "$root/scripts/validate-copier-update.py" "$tmp/typescript/.project-agent-workflow/scripts/validate-copier-update.py"
 test -f "$tmp/typescript/docs/agent/external-services.yaml"
 grep -q 'external_services:' "$tmp/typescript/docs/agent/external-services.yaml"
 grep -q 'state: documented' "$tmp/typescript/docs/agent/external-services.yaml"

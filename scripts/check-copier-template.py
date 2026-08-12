@@ -54,6 +54,7 @@ SOURCE_REQUIRED = [
     "scripts/referent-contract.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
+    "scripts/validate-copier-update.py",
     "template/AGENTS.md.jinja",
     "template/README.md.jinja",
     "template/.project-agent-workflow/AGENTS.md.jinja",
@@ -168,6 +169,8 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/scripts/format-plan-docs.py",
     "template/.project-agent-workflow/scripts/search-plan-archive.py",
     "template/.project-agent-workflow/scripts/validate-changes.py",
+    "template/.project-agent-workflow/scripts/validate-copier-update.py",
+    "template/.project-agent-workflow/scripts/update-from-copier.sh",
     "template/.project-agent-workflow/scripts/security_rules.py",
     "template/.project-agent-workflow/scripts/security-static-check.py",
     "template/.project-agent-workflow/scripts/skillspector-scan.sh",
@@ -319,6 +322,8 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/scripts/security_rules.py",
     ".project-agent-workflow/scripts/structure-map.py",
     ".project-agent-workflow/scripts/validate-changes.py",
+    ".project-agent-workflow/scripts/validate-copier-update.py",
+    ".project-agent-workflow/scripts/update-from-copier.sh",
     ".project-agent-workflow/scripts/security-static-check.py",
     ".project-agent-workflow/scripts/sync-plan-to-linear.sh",
 ]
@@ -858,6 +863,8 @@ def require_update_boundaries(copier_yml: str) -> None:
         "scripts/migrate-to-namespaced-layout.py",
         "version: v1.1.1",
         "scripts/update_hook_wiring.py",
+        "version: v1.2.2",
+        "scripts/validate-copier-update.py",
         'when: "[[ _stage == \'before\' ]]"',
         'when: "[[ _stage == \'after\' ]]"',
     )
@@ -947,7 +954,7 @@ def require_copier_documentation_contract() -> None:
         "template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md": (
             "## Non-Destructive Update Contract",
             "copier copy --trust",
-            "copier update --trust",
+            ".project-agent-workflow/scripts/update-from-copier.sh",
             "The `model` and `model_reasoning_effort` fields are the only exceptions.",
             "`--trust` authorizes the bundled task; it does not prove that the resulting diff is safe to commit.",
         ),
@@ -966,6 +973,22 @@ def require_copier_documentation_contract() -> None:
 
     if "requires `--trust` only" in read("references/template-development.md"):
         fail("template development documentation still limits --trust to migrations")
+
+    source_validator = ROOT / "scripts/validate-copier-update.py"
+    generated_validator = ROOT / "template/.project-agent-workflow/scripts/validate-copier-update.py"
+    if source_validator.read_bytes() != generated_validator.read_bytes():
+        fail("source and generated Copier update validators must be byte-identical")
+
+    wrapper = read("template/.project-agent-workflow/scripts/update-from-copier.sh")
+    for marker in (
+        '"$script_dir/../.."',
+        "copier update --trust",
+        "validate-copier-update.py --destination .",
+        "--force|--force=*",
+        "-*f*",
+    ):
+        if marker not in wrapper:
+            fail(f"generated Copier update wrapper missing marker: {marker}")
 
 
 def require_ci_autofix_root_boundaries() -> None:
