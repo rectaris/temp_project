@@ -20,6 +20,7 @@ write_scope:
   - template/.project-agent-workflow/AGENTS.md.jinja
   - template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja
   - template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja
+  - template/.project-agent-workflow/ownership.yaml
   - template/.project-agent-workflow/skills/browser-ops/
   - template/README.md.jinja
   - template/docs/agent/external-services.yaml.jinja
@@ -54,11 +55,11 @@ validation:
 acceptance:
   - Root and generated-project routing select browser policy only for requests that require JavaScript-rendered page state, browser-produced artifacts, DOM inspection, or browser interaction; a plain URL lookup remains outside this route.
   - A concise reusable browser-ops skill applies the project external-service gate before provider access and keeps detailed backend-selection guidance in one direct reference.
-  - The skill prefers configured and authorized Kitesurf only for short-lived, state-independent work within its documented compatibility boundary, and selects an authorized Chromium-capable fallback for persistent state, video, WebGL, real-browser TLS challenge behavior, pixel fidelity, or compatibility failure.
+  - The skill prefers configured and authorized Kitesurf only for short-lived, state-independent work within its documented compatibility boundary, and selects Cloudflare Browser Run's Chromium engine under the same service authorization for persistent state, video, WebGL, real-browser TLS challenge behavior, pixel fidelity, or compatibility failure; any Chromium provider outside Browser Run requires a separate policy record.
   - Browser reads and browser side effects are separate operations; form submission, publication, purchase, upload, account mutation, or another remote change requires write-capable policy plus current user authorization for the exact effect.
-  - Fresh generated projects contain a disabled browser_run external-service record without account identifiers or credentials, while Copier updates preserve project-owned external-service configuration and remain valid when older projects have no browser_run record.
+  - Fresh generated projects contain a disabled browser_run external-service record without connection data, account identifiers, or credentials; configured project-owned records may contain non-secret account identifiers and credential references but no raw credential, while Copier updates preserve project-owned external-service configuration byte-for-byte and remain valid when older projects have no browser_run record.
   - Fixed median, edge, and hold-out scenarios contain at least one critical requirement and cover Kitesurf selection, Chromium fallback, plain HTTP retrieval, unavailable-provider fallback, and denial of unauthorized side effects.
-  - Static inventories, root/template skill parity, generated discovery bridges, fresh-copy semantics, and supported Copier update behavior are checked deterministically.
+  - Static inventories, normalized root/template skill and backend-reference parity, generated discovery bridges, ownership reservations, structured scenario mappings, fresh-copy semantics, and supported Copier update behavior are checked deterministically.
 checked_summary_ja: 描画済みページを必要とする依頼だけを認可済みブラウザへ送り、条件が合う場合にKitesurfを優先するルーティングを追加する。
 
 ## Context
@@ -71,7 +72,8 @@ Kitesurf is an optional Cloudflare Browser Run backend with lower CPU and memory
 
 - Route by the required browser behavior rather than by the Kitesurf product name or the presence of a URL.
 - Name the task route `browser_automation`, the reusable skill `browser-ops`, and the generated-project external-service record `browser_run`.
-- Keep Browser Run disabled by default and keep connection metadata, account identifiers, and credential references in project-owned external-service configuration.
+- Define `browser_run` as the authorization record for the Cloudflare Browser Run service, whose configured connection can select either its Kitesurf engine or its default Chromium engine; a Chromium service outside Cloudflare Browser Run requires its own external-service record and authorization.
+- Keep Browser Run disabled by default; fresh records contain no connection or account data, while configured project-owned records may keep non-secret connection metadata, account identifiers, and credential references but never raw credentials.
 - Treat Kitesurf as a conditional first choice, not as the universal browser backend.
 - Keep older generated projects valid when Copier updates add the managed route and skill but their preserved project-owned policy has no browser_run record; the skill must fail closed and use the documented fallback.
 - Keep external side effects outside read authorization and require exact current user authorization in addition to write-capable policy.
@@ -112,3 +114,14 @@ The replacement candidate must:
 - avoid relying on a smoke run from an uncommitted clone as acceptance evidence, because the main session will rerun smoke after committing an accepted candidate if the test harness requires a committed source snapshot.
 
 Final validation remains pending implementation acceptance.
+
+Independent review of candidate `6def3c06ec4f1fb6a7da4c3cfb0c525961f2dae24c5c6f9baa67680f24fc9ab8` accepted the route and skill referents but rejected the external-service boundary and identified four validation gaps. The correction candidate must:
+
+- state that `browser_run` authorizes Cloudflare Browser Run as one service and that Kitesurf and Chromium are engine choices behind the same configured Browser Run connection;
+- require a distinct project-owned external-service record before using any Chromium backend outside Cloudflare Browser Run, so Browser Run authority cannot bleed into another provider;
+- distinguish empty fresh defaults from configured project-owned identity: allow non-secret account identifiers and credential references in configured policy, but never raw credentials;
+- reserve `.agents/skills/browser-ops/SKILL.md` in `template/.project-agent-workflow/ownership.yaml` and check the reservation deterministically;
+- normalize and compare root/template `SKILL.md`, `agents/openai.yaml`, and `references/browser-run-policy.md` semantics so backend-selection guidance cannot drift;
+- compare the complete older project-owned `external-services.yaml` byte-for-byte before and after the non-force Copier update;
+- express backend-selection scenarios as structured conditions and deterministically verify each condition-to-route mapping rather than checking only an inventory of expected words; and
+- make the Kitesurf and Chromium scenario requests explicitly assume a configured Browser Run record that authorizes the requested read or session, while retaining the disabled-provider and unauthorized-write cases.
