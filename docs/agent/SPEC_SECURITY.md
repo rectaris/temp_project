@@ -12,6 +12,7 @@ This repository keeps template security controls explicit and fail-closed at wri
 
 - Default generated automation to read-only or artifact-only behavior.
 - Require explicit project configuration before generated automation writes to branches, issues, services, or durable external memory.
+- An explicitly selected task-scoped external-access profile may authorize ordinary writes required by the current user request, but it does not override credential denials or exact-confirmation requirements for consequential effects.
 - Validate generated patches against protected paths and required checks before any automated write.
 
 ## Dependencies And External Code

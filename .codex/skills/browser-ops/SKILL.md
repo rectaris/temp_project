@@ -7,4 +7,4 @@ description: Route JavaScript-rendered page inspection, browser-produced artifac
 
 Before provider access, read `references/browser-run-policy.md`, `template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja`, and `template/docs/agent/external-services.yaml.jinja`.
 
-Classify the request as a browser read or write, apply the external-service gate, then select the compatible authorized backend. Do not use this skill for ordinary HTTP retrieval. For a write, require the exact configured authorization rule and current user authorization for the exact remote effect.
+Classify the request as a browser read or write, apply the version 1 or version 2 external-service gate, then select the compatible authorized backend. Do not use this skill for ordinary HTTP retrieval. For a write, require the applicable versioned write check and current user authorization for the exact remote target and effect.

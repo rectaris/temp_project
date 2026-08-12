@@ -54,6 +54,10 @@ if [ -z "$source_ref" ]; then
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+    template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
+    template/.project-agent-workflow/scripts/validate-changes.py \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py \
     template/.agents/skills/browser-ops/SKILL.md \
@@ -63,8 +67,11 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/ownership.yaml \
     template/.project-agent-workflow/skills/browser-ops/SKILL.md \
     template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-  template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-  template/docs/agent/external-services.yaml.jinja
+    template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/.project-agent-workflow/skills/graph-memory/SKILL.md \
+    template/.project-agent-workflow/skills/linear-ops/SKILL.md \
+    template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/docs/agent/external-services.yaml.jinja
   do
     mkdir -p "$(dirname "$render_source/$candidate_path")"
     cp "$root/$candidate_path" "$render_source/$candidate_path"
@@ -77,6 +84,10 @@ if [ -z "$source_ref" ]; then
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+    template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
+    template/.project-agent-workflow/scripts/validate-changes.py \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py \
     template/.agents/skills/browser-ops/SKILL.md \
@@ -87,6 +98,9 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/browser-ops/SKILL.md \
     template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
     template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/.project-agent-workflow/skills/graph-memory/SKILL.md \
+    template/.project-agent-workflow/skills/linear-ops/SKILL.md \
+    template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
     template/docs/agent/external-services.yaml.jinja
   git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
     commit --allow-empty -qm "Create isolated smoke candidate"
@@ -632,6 +646,10 @@ PY
 run_external_policy_smoke() {
   out=$1
   policy="$out/.agent-artifacts/external-services-configured.yaml"
+  broad_policy="$out/.agent-artifacts/external-services-task-scoped.yaml"
+  unsupported_policy="$out/.agent-artifacts/external-services-unsupported.yaml"
+  ordinary_confirmation_policy="$out/.agent-artifacts/external-services-ordinary-confirmation.yaml"
+  ordinary_denied_policy="$out/.agent-artifacts/external-services-ordinary-denied.yaml"
   mkdir -p "$out/.agent-artifacts"
   cat >"$policy" <<'EOF_EXTERNAL_POLICY'
 version: 1
@@ -663,6 +681,83 @@ EOF_EXTERNAL_POLICY
     echo "external-service validator accepted credential material as a platform identifier" >&2
     exit 1
   fi
+  cat >"$broad_policy" <<'EOF_BROAD_EXTERNAL_POLICY'
+version: 2
+access_profile: task_scoped_default_allow
+provider_requirement: runtime_configured
+task_scope_rule: current_user_request
+confirmation_required_effects:
+  - remote_delete
+  - public_communication
+  - financial_commitment
+  - production_change
+  - access_control_change
+denied_effects:
+  - credential_material_transfer
+  - secret_persistence
+  - write_credentials_to_untrusted_code
+unclassified_write_effect: require_confirmation
+unavailable_fallback: "Keep work local."
+external_services:
+  example:
+    unavailable_fallback: "Keep the example local."
+EOF_BROAD_EXTERNAL_POLICY
+  broad_check="python3 .project-agent-workflow/scripts/check-external-service-policy.py --policy $broad_policy"
+  (cd "$out" && $broad_check check)
+  (cd "$out" && $broad_check authorize example read issue.read --provider-configured --task-authorized --target issue-123 --effect ordinary)
+  (cd "$out" && $broad_check authorize example write issue.update --provider-configured --task-authorized --target issue-123 --effect ordinary)
+  if (cd "$out" && $broad_check authorize example write issue.delete --provider-configured --task-authorized --target issue-123 --effect remote_delete >/dev/null 2>&1); then
+    echo "version 2 validator accepted deletion without exact confirmation" >&2
+    exit 1
+  fi
+  (cd "$out" && $broad_check authorize example write issue.delete --provider-configured --task-authorized --target issue-123 --effect remote_delete --confirmed-target issue-123 --confirmed-effect remote_delete)
+  if (cd "$out" && $broad_check authorize example write issue.delete --provider-configured --task-authorized --target issue-123 --effect remote_delete --confirmed-target issue-456 --confirmed-effect remote_delete >/dev/null 2>&1); then
+    echo "version 2 validator accepted mismatched confirmation" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example write secret.send --provider-configured --task-authorized --target provider --effect credential_material_transfer --confirmed-target provider --confirmed-effect credential_material_transfer >/dev/null 2>&1); then
+    echo "version 2 validator accepted a denied credential effect" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example read secret.query --provider-configured --task-authorized --target provider --effect credential_material_transfer >/dev/null 2>&1); then
+    echo "version 2 validator accepted credential transfer during a read" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example read secret.query --provider-configured --task-authorized --target provider --effect ordinary --effect credential_material_transfer >/dev/null 2>&1); then
+    echo "version 2 validator let ordinary override credential transfer during a read" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example write custom.write --provider-configured --task-authorized --target object-1 --effect custom_effect >/dev/null 2>&1); then
+    echo "version 2 validator accepted an unclassified write without confirmation" >&2
+    exit 1
+  fi
+  (cd "$out" && $broad_check authorize example write custom.write --provider-configured --task-authorized --target object-1 --effect custom_effect --confirmed-target object-1 --confirmed-effect custom_effect)
+  if (cd "$out" && $broad_check authorize example read issue.read --task-authorized --target issue-123 --effect ordinary >/dev/null 2>&1); then
+    echo "version 2 validator accepted a read without a configured provider" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example read issue.read --provider-configured --task-authorized >/dev/null 2>&1); then
+    echo "version 2 validator accepted a read without exact target and effect facts" >&2
+    exit 1
+  fi
+  cp "$broad_policy" "$ordinary_confirmation_policy"
+  sed -i '/^confirmation_required_effects:$/a\  - ordinary' "$ordinary_confirmation_policy"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py --policy "$ordinary_confirmation_policy" check >/dev/null 2>&1); then
+    echo "version 2 validator accepted ordinary as a confirmation-required effect" >&2
+    exit 1
+  fi
+  cp "$broad_policy" "$ordinary_denied_policy"
+  sed -i '/^denied_effects:$/a\  - ordinary' "$ordinary_denied_policy"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py --policy "$ordinary_denied_policy" check >/dev/null 2>&1); then
+    echo "version 2 validator accepted ordinary as a denied effect" >&2
+    exit 1
+  fi
+  cp "$broad_policy" "$unsupported_policy"
+  sed -i 's/^version: 2$/version: 3/' "$unsupported_policy"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py --policy "$unsupported_policy" check >/dev/null 2>&1); then
+    echo "external-service validator accepted an unsupported policy version" >&2
+    exit 1
+  fi
 }
 
 for fixture in "$root"/tests/fixtures/*.answers.yml; do
@@ -686,7 +781,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
 done
 
 tab=$(printf '\t')
-while IFS="$tab" read -r case_name primary_language human_report_mode codex_hooks_mode skillspector_mode mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
+while IFS="$tab" read -r case_name primary_language human_report_mode codex_hooks_mode skillspector_mode external_access_profile mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
   [ "$case_name" != "case" ] || continue
   [ -n "$case_name" ] || continue
   fixture="$tmp/$case_name.answers.yml"
@@ -699,6 +794,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode codex_hook
     printf 'human_report_mode: %s\n' "$human_report_mode"
     printf 'codex_hooks_mode: %s\n' "$codex_hooks_mode"
     printf 'skillspector_mode: %s\n' "$skillspector_mode"
+    printf 'external_access_profile: %s\n' "$external_access_profile"
     printf 'mcp_policy_mode: %s\n' "$mcp_policy_mode"
     printf 'linear_sync_mode: %s\n' "$linear_sync_mode"
     printf 'graph_memory_mode: %s\n' "$graph_memory_mode"
@@ -729,6 +825,7 @@ expected = {
     "human_report_mode": "agent_select_local",
     "codex_hooks_mode": "install_templates",
     "skillspector_mode": "disabled",
+    "external_access_profile": "restricted",
     "mcp_policy_mode": "disabled",
     "linear_sync_mode": "disabled",
     "graph_memory_mode": "disabled",
@@ -980,9 +1077,9 @@ grep -q 'gpt-5.6-sol.*high reasoning.*change_reviewer' "$tmp/typescript/.project
 grep -q 'Do not redefine it here as a custom candidate' "$tmp/typescript/docs/plan/sub-agents/custom-agents.md"
 grep -q 'Name tmux sessions descriptively' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'docs/agent/external-services.yaml' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'MCP: `documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Linear sync: `documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Graph memory: `documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'MCP=`documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear=`documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'graph memory=`documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'configured_write_capable' "$tmp/python/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'Agent Logging' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md"
 grep -q 'agent_log_event.py' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md"
@@ -1074,6 +1171,12 @@ test -f "$tmp/typescript/.project-agent-workflow/scripts/sync-plan-to-linear.sh"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-commands "python3 .project-agent-workflow/scripts/validate-changes.py --print-only --json")
 sample_archive_path=$(cat "$tmp/typescript/.sample-archive-path")
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/sync-plan-to-linear.sh "$sample_archive_path" --dry-run | grep -q 'Desired status: Done')
+(cd "$tmp/broad" && .project-agent-workflow/scripts/create-plan.sh active broad-linear --summary "Exercise the Linear version 2 gate." --summary-ja "Linear version 2 ゲートを検証する。" >/dev/null)
+if (cd "$tmp/broad" && .project-agent-workflow/scripts/sync-plan-to-linear.sh docs/plan/active/001-broad-linear.md --ensure-issue 2>"$tmp/broad-linear.err"); then
+  echo "generic Linear adapter treated the version 2 profile as operation authorization" >&2
+  exit 1
+fi
+grep -q 'check-external-service-policy.py with provider, current-task, target, effect, and confirmation facts' "$tmp/broad-linear.err"
 grep -q 'Plan Validation Commands' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_VALIDATION.md"
 grep -q 'Linear sync dry-run' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
 grep -q 'Machine-readable workflow status' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"

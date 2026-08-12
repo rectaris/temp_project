@@ -386,7 +386,7 @@ class ValidateChangesTest(unittest.TestCase):
             )
 
             policy.write_text(
-                "authentication: environment\ncredential_reference: CURRENT_TOKEN\n",
+                "version: 1\nauthentication: environment\ncredential_reference: CURRENT_TOKEN\n",
                 encoding="utf-8",
             )
             self.assertIn(command, module.select_commands(["docs/agent/external-services.yaml"], "all"))
@@ -397,6 +397,14 @@ class ValidateChangesTest(unittest.TestCase):
                 ),
             )
             self.assertIn(command, module.select_commands([managed_script], "all"))
+
+            policy.write_text(
+                "version: 2\n"
+                "access_profile: task_scoped_default_allow\n"
+                "provider_requirement: runtime_configured\n",
+                encoding="utf-8",
+            )
+            self.assertIn(command, module.select_commands(["docs/agent/external-services.yaml"], "all"))
 
     def test_all_mode_runs_both_whitespace_checks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

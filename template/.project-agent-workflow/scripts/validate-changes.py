@@ -78,11 +78,15 @@ def uses_managed_external_service_format() -> bool:
         text = (ROOT / "docs/agent/external-services.yaml").read_text(encoding="utf-8")
     except OSError:
         return False
-    return (
-        "authentication:" in text
-        and "credential_reference:" in text
-        and "credential_env:" not in text
+    if "credential_env:" in text:
+        return False
+    version_1 = "version: 1" in text and "authentication:" in text and "credential_reference:" in text
+    version_2 = (
+        "version: 2" in text
+        and "access_profile: task_scoped_default_allow" in text
+        and "provider_requirement: runtime_configured" in text
     )
+    return version_1 or version_2
 
 
 def add_command(commands: list[list[str]], command: list[str]) -> None:

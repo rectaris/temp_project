@@ -28,7 +28,12 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Agent logging policy and local helper scripts: installed by default
 - Automatic hook event capture: enabled only when Codex hooks mode is `enable_local_logging`
 - Context compression helper: optional, Headroom-aware when available
+- External access profile: `[[ external_access_profile ]]`
+[% if external_access_profile == "task_scoped_default_allow" %]
+- External service policy schema: version 2
+[% else %]
 - External service policy states: MCP=`[[ mcp_state ]]`, Linear=`[[ linear_state ]]`, graph memory=`[[ graph_state ]]`
+[% endif %]
 - Delegate repository-wide work proactively, without waiting for per-task user instruction, when independent helper work is available and materially useful, and split cleanly into non-overlapping helper scopes.
 - Keep final ownership of interpretation, integration, validation acceptance, planning updates, commits, and completion reporting in the main session.
 - Do not delegate short deterministic commands, direct user clarification, final policy judgment, authorization decisions, commit/release decisions, secret handling, external writes, destructive changes, or final reporting unless a separate explicit policy grants that authority.

@@ -90,6 +90,10 @@ for candidate_path in \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
   template/.project-agent-workflow/scripts/validate-copier-update.py \
+  template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+  template/.project-agent-workflow/scripts/check-external-service-policy.py \
+  template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
+  template/.project-agent-workflow/scripts/validate-changes.py \
   template/.agents/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
@@ -98,6 +102,9 @@ for candidate_path in \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/.project-agent-workflow/skills/graph-memory/SKILL.md \
+  template/.project-agent-workflow/skills/linear-ops/SKILL.md \
+  template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
   template/docs/agent/external-services.yaml.jinja
 do
   mkdir -p "$(dirname "$update_source/$candidate_path")"
@@ -110,6 +117,10 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
   template/.project-agent-workflow/scripts/validate-copier-update.py \
+  template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+  template/.project-agent-workflow/scripts/check-external-service-policy.py \
+  template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
+  template/.project-agent-workflow/scripts/validate-changes.py \
   template/.agents/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
@@ -118,11 +129,21 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/.project-agent-workflow/skills/graph-memory/SKILL.md \
+  template/.project-agent-workflow/skills/linear-ops/SKILL.md \
+  template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
   template/docs/agent/external-services.yaml.jinja
 fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
   commit -qm "Make Copier updates fail closed"
 fixture_git "$update_source" tag v1.2.2
 target_ref=v1.2.2
+
+broad_out="$tmp/task-scoped-default-policy"
+run_copier copy -q -f --trust --defaults --vcs-ref "$target_ref" \
+  --data-file "$root/tests/fixtures/broad.answers.yml" "$update_source" "$broad_out" >/dev/null
+grep -q '^version: 2$' "$broad_out/docs/agent/external-services.yaml"
+grep -q '^access_profile: task_scoped_default_allow$' "$broad_out/docs/agent/external-services.yaml"
+(cd "$broad_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
 
 browser_legacy_out="$tmp/browser-run-legacy-policy"
 run_copier copy -q -f --trust --defaults --vcs-ref v1.2.1 \
@@ -160,6 +181,24 @@ run_copier copy -q -f --trust --defaults --vcs-ref v1.2.2 \
 python3 "$validator" --destination "$initial_copy" >/dev/null
 test -x "$initial_copy/.project-agent-workflow/scripts/update-from-copier.sh"
 cmp "$validator" "$initial_copy/.project-agent-workflow/scripts/validate-copier-update.py"
+sed -i 's/^external_access_profile: restricted$/external_access_profile: task_scoped_default_allow/' \
+  "$initial_copy/.copier-answers.yml"
+if python3 "$validator" --destination "$initial_copy" >/dev/null 2>&1; then
+  echo "Copier validator accepted a task-scoped answer with a preserved version 1 policy" >&2
+  exit 1
+fi
+initial_policy="$initial_copy/docs/agent/external-services.yaml"
+initial_policy_backup="$tmp/non-git-initial-policy.yaml"
+cp "$initial_policy" "$initial_policy_backup"
+printf '%s\n' 'version: 2' 'access_profile: task_scoped_default_allow' >"$initial_policy"
+if python3 "$validator" --destination "$initial_copy" >/dev/null 2>&1; then
+  echo "Copier validator accepted an incomplete version 2 external-service policy" >&2
+  exit 1
+fi
+cp "$initial_policy_backup" "$initial_policy"
+sed -i 's/^external_access_profile: task_scoped_default_allow$/external_access_profile: restricted/' \
+  "$initial_copy/.copier-answers.yml"
+python3 "$validator" --destination "$initial_copy" >/dev/null
 if "$initial_copy/.project-agent-workflow/scripts/update-from-copier.sh" -f >/dev/null 2>&1; then
   echo "Copier update wrapper accepted -f" >&2
   exit 1
@@ -514,9 +553,9 @@ earliest_out=$(prepare_lane earliest-supported "$earliest_ref" "$legacy_answers"
 validate_common_lane "$earliest_out"
 grep -q 'Codex hooks mode: `install_templates`' "$earliest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `disabled`' "$earliest_out/.project-agent-workflow/AGENTS.md"
-grep -q 'MCP: `documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Linear sync: `documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Graph memory: `documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'MCP=`documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear=`documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'graph memory=`documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test ! -f "$earliest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
 
 oldest_out=$(prepare_lane oldest-supported "$oldest_ref" "$legacy_answers")
@@ -524,9 +563,9 @@ oldest_out=$(prepare_lane oldest-supported "$oldest_ref" "$legacy_answers")
 validate_common_lane "$oldest_out"
 grep -q 'Codex hooks mode: `install_templates`' "$oldest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `document_optional`' "$oldest_out/.project-agent-workflow/AGENTS.md"
-grep -q 'MCP: `documented`' "$oldest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Linear sync: `documented`' "$oldest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Graph memory: `documented`' "$oldest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'MCP=`documented`' "$oldest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear=`documented`' "$oldest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'graph memory=`documented`' "$oldest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test -f "$oldest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
 test -f "$oldest_out/scripts/skillspector-scan.sh"
 grep -q '.project-agent-workflow/scripts/skillspector-scan.sh' "$oldest_out/scripts/skillspector-scan.sh"
@@ -548,7 +587,7 @@ test -f "$latest_out/docs/agent/SPEC_COPIER_ADOPTION.md"
 test -f "$latest_out/.codex/skills/decision-audit/SKILL.md"
 grep -q 'Codex hooks mode: `install_templates`' "$latest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `disabled`' "$latest_out/.project-agent-workflow/AGENTS.md"
-grep -q 'MCP: `disabled`' "$latest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'MCP=`disabled`' "$latest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test ! -f "$latest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
 
 pre_v1_plan_out="$tmp/v050-managed-index-plans"
@@ -725,9 +764,9 @@ legacy_disabled_out=$(prepare_lane oldest-disabled "$oldest_ref" "$legacy_disabl
 validate_common_lane "$legacy_disabled_out"
 grep -q 'Codex hooks mode: `disabled`' "$legacy_disabled_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `disabled`' "$legacy_disabled_out/.project-agent-workflow/AGENTS.md"
-grep -q 'MCP: `disabled`' "$legacy_disabled_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Linear sync: `disabled`' "$legacy_disabled_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Graph memory: `disabled`' "$legacy_disabled_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'MCP=`disabled`' "$legacy_disabled_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear=`disabled`' "$legacy_disabled_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'graph memory=`disabled`' "$legacy_disabled_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test ! -f "$legacy_disabled_out/.project-agent-workflow/scripts/skillspector-scan.sh"
 
 legacy_override_out=$(prepare_lane oldest-explicit-disabled "$oldest_ref" "$legacy_answers" \
@@ -740,9 +779,9 @@ legacy_override_out=$(prepare_lane oldest-explicit-disabled "$oldest_ref" "$lega
 (cd "$legacy_override_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
 validate_common_lane "$legacy_override_out"
 grep -q 'External service policy states: MCP=`disabled`, Linear=`disabled`, graph memory=`disabled`' "$legacy_override_out/.project-agent-workflow/AGENTS.md"
-grep -q 'MCP: `disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Linear sync: `disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Graph memory: `disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'MCP=`disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear=`disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'graph memory=`disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 if grep -q 'state: documented' "$legacy_override_out/docs/agent/external-services.yaml"; then
   echo "legacy activation booleans overrode explicit disabled modes" >&2
   exit 1

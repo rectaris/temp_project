@@ -349,6 +349,7 @@ QUESTIONS = {
     "human_report_mode",
     "codex_hooks_mode",
     "skillspector_mode",
+    "external_access_profile",
     "mcp_policy_mode",
     "linear_sync_mode",
     "graph_memory_mode",
@@ -360,6 +361,7 @@ EXPECTED_CHOICE_VALUES = {
     "human_report_mode": {"disabled", "agent_select_local"},
     "codex_hooks_mode": {"disabled", "install_templates", "enable_local_logging"},
     "skillspector_mode": {"disabled", "document_optional"},
+    "external_access_profile": {"restricted", "task_scoped_default_allow"},
     "mcp_policy_mode": {"disabled", "document_optional"},
     "linear_sync_mode": {"disabled", "document_optional"},
     "graph_memory_mode": {"disabled", "document_optional"},
@@ -368,6 +370,7 @@ EXPECTED_CHOICE_VALUES = {
 
 EXPECTED_DEFAULT_VALUES = {
     "human_report_mode": "agent_select_local",
+    "external_access_profile": "restricted",
     "ci_autofix_mode": "disabled",
 }
 

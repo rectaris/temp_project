@@ -16,8 +16,8 @@ Usage:
 Generic Linear lifecycle gate.
 
 --dry-run renders a local draft without Linear reads or writes.
-Read/write-capable modes require docs/agent/external-services.yaml and a
-project-specific Linear adapter before they can perform external side effects.
+Read/write-capable modes require authorization from docs/agent/external-services.yaml
+and a project-specific Linear adapter before they can perform external side effects.
 EOF
 }
 
@@ -62,20 +62,30 @@ raw_mode = sys.argv[3]
 policy_path = Path("docs/agent/external-services.yaml")
 
 
-def read_linear_state() -> str:
+def read_linear_policy_selection() -> str:
     if not policy_path.is_file():
         return "disabled"
+    version = None
+    access_profile = None
     in_linear = False
     for line in policy_path.read_text(encoding="utf-8").splitlines():
+        version_match = re.match(r"^version:\s*([0-9]+)\s*$", line)
+        if version_match:
+            version = int(version_match.group(1))
+        profile_match = re.match(r"^access_profile:\s*([A-Za-z0-9_-]+)\s*$", line)
+        if profile_match:
+            access_profile = profile_match.group(1)
         if re.match(r"^  linear_sync:\s*$", line):
             in_linear = True
             continue
         if in_linear and re.match(r"^  [a-zA-Z0-9_]+:\s*$", line):
-            return "disabled"
+            break
         if in_linear:
             match = re.match(r"^    state:\s*([A-Za-z0-9_-]+)\s*$", line)
             if match:
                 return match.group(1)
+    if version == 2 and access_profile == "task_scoped_default_allow":
+        return access_profile
     return "disabled"
 
 
@@ -105,7 +115,7 @@ def summary_for(path: Path) -> str:
     return title_for(path)
 
 
-state = read_linear_state()
+state = read_linear_policy_selection()
 source_state = plan_state(plan_path)
 payload = {
     "source_plan_path": str(plan_path),
@@ -133,11 +143,21 @@ if mode == "local_apply":
     raise SystemExit("--apply --from-payload needs a project-specific adapter before it can change local linkage metadata")
 
 if mode == "read_preview":
+    if state == "task_scoped_default_allow":
+        raise SystemExit(
+            "Linear version 2 reads require a project-specific adapter to run "
+            "check-external-service-policy.py with provider, current-task, target, and effect facts"
+        )
     if state not in {"configured_read_only", "configured_write_capable"}:
         raise SystemExit(f"Linear read is not authorized by policy state: {state}")
     raise SystemExit("Linear read adapter is not configured in this generic template")
 
 if mode == "write":
+    if state == "task_scoped_default_allow":
+        raise SystemExit(
+            "Linear version 2 writes require a project-specific adapter to run "
+            "check-external-service-policy.py with provider, current-task, target, effect, and confirmation facts"
+        )
     if state != "configured_write_capable":
         raise SystemExit(f"Linear write is not authorized by policy state: {state}")
     raise SystemExit("Linear write adapter is not configured in this generic template")

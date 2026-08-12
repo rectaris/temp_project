@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -166,12 +167,64 @@ def inspect_filesystem(repository: Path) -> None:
         raise UpdateValidationError("Copier update left " + "; ".join(findings))
 
 
+def inspect_external_access_profile(repository: Path) -> None:
+    answers_path = repository / ".copier-answers.yml"
+    policy_path = repository / "docs/agent/external-services.yaml"
+    try:
+        answers = answers_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise UpdateValidationError(f"could not read {answers_path}: {exc}") from exc
+    match = re.search(r"^external_access_profile:\s*([^\s#]+)", answers, re.MULTILINE)
+    if match is None or match.group(1).strip("\"'") != "task_scoped_default_allow":
+        return
+    try:
+        policy = policy_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise UpdateValidationError(
+            "task_scoped_default_allow requires a project-owned version 2 "
+            f"external-service policy: {exc}"
+        ) from exc
+    if not re.search(r"^version:\s*2\s*$", policy, re.MULTILINE) or not re.search(
+        r"^access_profile:\s*task_scoped_default_allow\s*$", policy, re.MULTILINE
+    ):
+        raise UpdateValidationError(
+            "task_scoped_default_allow was selected, but the project-owned "
+            "docs/agent/external-services.yaml is not the matching version 2 policy; "
+            "migrate and review that file explicitly before retrying the Copier update"
+        )
+    checker_path = (
+        repository
+        / ".project-agent-workflow/scripts/check-external-service-policy.py"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(checker_path), "--policy", str(policy_path), "check"],
+            cwd=repository,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as exc:
+        raise UpdateValidationError(
+            f"could not run the version 2 external-service policy checker: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise UpdateValidationError(
+            "task_scoped_default_allow selected an invalid version 2 external-service "
+            f"policy: {detail or 'policy check failed'}"
+        )
+
+
 def validate(destination: Path) -> None:
     repository = destination.resolve()
     if not repository.is_dir():
         raise UpdateValidationError(f"destination is not a directory: {repository}")
     inspect_git(repository)
     inspect_filesystem(repository)
+    inspect_external_access_profile(repository)
 
 
 def main() -> int:
