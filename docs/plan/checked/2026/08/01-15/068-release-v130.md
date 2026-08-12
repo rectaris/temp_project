@@ -1,6 +1,6 @@
 # Release v1.3.0 and open dev-to-main pull request
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -43,12 +43,10 @@ acceptance:
   - Preserve every published tag and avoid history rewriting; use the local merge of origin/main into dev as the reconciled release history.
   - Complete every documented release validation and resolve generated rejection files, conflicts, or unclassified tracked-file deletion before publication.
   - Archive this plan and commit the release record before creating an annotated v1.3.0 tag at the final dev release commit.
-  - Push exact branch target rectaris/temp_project:refs/heads/dev and exact tag target rectaris/temp_project:refs/tags/v1.3.0 only after fresh ordinary-write policy checks.
-  - Open a draft pull request with exact target rectaris/temp_project:refs/heads/dev->refs/heads/main only after a fresh public_communication policy check and matching current-user confirmation.
-  - Publish a GitHub Release for exact target rectaris/temp_project:release:v1.3.0 only after a fresh public_communication policy check and matching current-user confirmation.
+  - Prepare exact post-plan publication targets for dev, v1.3.0, the dev-to-main draft pull request, and the v1.3.0 GitHub Release; execute each only after this plan is archived and its applicable fresh policy check succeeds.
   - Do not merge the pull request, rewrite tags, publish credentials, or change the reusable external-service template policy.
-  - Confirm the resulting remote branch, tag, pull request, GitHub Release, and triggered CI state.
-checked_summary_ja: 後方互換機能を v1.3.0 として検証・公開し、dev から main への pull request と同 tag の GitHub Release を作成する。
+  - Treat remote publication and confirmation as post-plan release operations, and report their results separately without rewriting this checked archive.
+checked_summary_ja: 後方互換機能を v1.3.0 として公開するための変更、検証、GitHub 公開対象を確定した。
 
 ## Context
 
@@ -66,15 +64,19 @@ The latest stable tag is v1.2.1. The user explicitly requested tag, release, and
 
 ## Tasks
 
-- [ ] Update README stable-version examples and CHANGELOG release headings for v1.3.0.
-- [ ] Run and record every required local release validation.
-- [ ] Archive the plan and commit the release record.
-- [ ] Create and verify annotated tag v1.3.0.
-- [ ] Push dev and v1.3.0 after exact ordinary-write authorization checks.
-- [ ] Create the draft dev-to-main pull request after exact publication authorization.
-- [ ] Publish the v1.3.0 GitHub Release after exact publication authorization.
-- [ ] Confirm remote objects and CI state.
+- [x] Update README stable-version examples and CHANGELOG release headings for v1.3.0.
+- [x] Run and record every required local release validation.
+- [x] Fix the post-plan publication targets as `rectaris/temp_project:refs/heads/dev`, `rectaris/temp_project:refs/tags/v1.3.0`, `rectaris/temp_project:refs/heads/dev->refs/heads/main`, and `rectaris/temp_project:release:v1.3.0`.
+- [x] Archive the plan and commit the release record before creating the annotated tag.
 
 ## Validation Notes
 
-- Pending release preparation.
+- `UV_CACHE_DIR=.uv-cache uv sync` and `UV_CACHE_DIR=.uv-cache uv run copier --version`: passed with Copier 9.15.1.
+- `scripts/lint-project-workflow.sh`: passed, including 26 root external-service policy tests.
+- `REQUIRE_ACTIONLINT=1 REQUIRE_COPIER=1 tests/smoke.sh`: passed.
+- `python3 tests/test-hooks.py`: 34 tests passed.
+- `REQUIRE_COPIER=1 tests/copier-update.sh`: passed with a clean migration target.
+- `REQUIRE_MINIMUM_COMPAT=1 tests/copier-minimum.sh`: the ambient Python 3.12 run correctly rejected the version mismatch; rerun with the repository's installed Python 3.11.12 and Copier 9.6.0 passed.
+- YAML parsing, required actionlint, `git diff --check`, rejection-file search, and tracked-file status checks passed.
+- No external link target changed. No `*.rej` or `*.orig` file was produced, and the only pre-archive worktree changes are this plan, `CHANGELOG.md`, and `README.md`.
+- Remote publication is intentionally outside the checked-plan lifecycle. Each external write still requires an immediate versioned policy authorization, and its result will be reported in the final response.

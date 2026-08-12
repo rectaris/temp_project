@@ -68,3 +68,4 @@ id	path
 065	docs/plan/checked/2026/08/01-15/065-task-scoped-external-access.md
 066	docs/plan/checked/2026/08/01-15/066-sequential-worker-model-fallback.md
 067	docs/plan/checked/2026/08/01-15/067-root-external-write-policy.md
+068	docs/plan/checked/2026/08/01-15/068-release-v130.md
