@@ -132,3 +132,9 @@ Correction candidate `f1b9297e0457fdba938953d7259daffb930cee8f3327a8008717935830
 - make the generated backend reference read `.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md` and `docs/agent/external-services.yaml`;
 - compare the two references after normalizing those root/generated path pairs, rather than requiring byte equality; and
 - state the configured Browser Run authorization premise in each of the `kitesurf-pdf` and `chromium-webgl` `request` strings as well as in their structured conditions.
+
+Correction candidate `eca754173cac9fd33e1ed136ef716e95cc881427522a9e7f82d876b8103b2d49` was rejected during main-session review because its parity check omitted `SKILL.md`, and two structured cases confounded their intended decision variable. The next candidate must:
+
+- normalize and compare the root/generated `SKILL.md` path pairs in addition to the backend reference and `agents/openai.yaml`;
+- model `provider-unavailable` as an authorized Browser Run service with `provider_available: false`, keeping authorization separate from availability; and
+- model `unauthorized-submit` with an allowlisted operation and matching exact write rule but `current_user_authorization: false`, so current user authorization is the only failed write gate in that hold-out case.
