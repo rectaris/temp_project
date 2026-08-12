@@ -46,11 +46,13 @@ acceptance:
   - Add a root-owned schema version 2 policy at docs/agent/external-services.yaml with access_profile task_scoped_default_allow, a GitHub fallback, no credential material, and the protected and denied effects accepted by plan 065.
   - Add a root normative specification at docs/agent/SPEC_EXTERNAL_SERVICES.md that defines the active root policy, keeps provider configuration separate from authorization, and requires a fresh check for each exact provider operation, target, effect set, and payload.
   - Add scripts/check-external-service-policy.py as a small root entrypoint that invokes the maintained template checker implementation with the root policy explicitly selected; do not duplicate the checker logic or treat a Jinja template as runtime policy.
+  - Make the root entrypoint reject blank or whitespace-only operation and target values, and enforce the root GitHub operation-to-effect mapping for git.push, pull_request.publish, and release.publish before delegating to the maintained version 2 checker.
   - Make the paths already required by the root mcp-ops Skill executable without weakening its fail-closed behavior when policy, provider configuration, task relevance, target, effect classification, or confirmation is missing.
   - Authorize a task-required ordinary read or write only when the active environment confirms that the exact provider is configured and authenticated and the current user request requires the exact operation, target, and ordinary effect.
   - Require matching current-user confirmation for remote_delete, public_communication, financial_commitment, production_change, access_control_change, and every unclassified write; reject missing, mismatched, or incomplete target and effect confirmation.
   - Reject credential_material_transfer, secret_persistence, and write_credentials_to_untrusted_code even when task relevance and confirmation are present, and reject ordinary when combined with another effect.
   - Cover GitHub branch and tag pushes as ordinary writes and GitHub pull-request and Release publication as public_communication, without performing an external write in deterministic tests.
+  - Reject pull_request.publish and release.publish when the caller declares ordinary alone, reject git.push when it declares public_communication, and reject malformed branch, tag, pull-request, or Release targets rather than trusting caller-supplied effect classification.
   - Treat the current release request as task authorization for rectaris/temp_project only after the implementation resolves each exact ref, tag, Release, and dev-to-main pull-request target and runs the matching policy check immediately before the provider call.
   - Route root external-service work through docs/agent/spec-index.yaml and add deterministic root checks that fail if the policy, specification, entrypoint, required effect boundaries, or maintained checker delegation disappears.
   - Keep copier.yml defaulting generated projects to restricted, keep existing project-owned policies update-safe, and leave the reusable template authorization behavior unchanged.
@@ -70,6 +72,7 @@ The root `mcp-ops` Skill now requires those exact root paths, so every root exte
 - Keep project-specific policy values under `docs/agent/` and keep the reusable generated-project template default set to `restricted`.
 - Reuse the maintained checker implementation through a root entrypoint that always selects the root policy.
 - Apply the effect taxonomy and confirmation boundaries accepted by plan 065 without adding a GitHub-specific bypass.
+- Enforce the GitHub operations required by the current release workflow in the root entrypoint because the maintained generic checker intentionally cannot infer provider-specific effects from operation names.
 - Classify branch and tag pushes as ordinary writes, and classify pull-request and GitHub Release publication as `public_communication`.
 - Use the active user request as task authorization only for exact provider operations, targets, and effects resolved during that request.
 - Keep actual external writes outside deterministic validation and resume the requested release workflow only after the root gate passes locally.
@@ -78,6 +81,7 @@ The root `mcp-ops` Skill now requires those exact root paths, so every root exte
 
 - [ ] Add the root version 2 policy and normative external-service specification.
 - [ ] Add the root checker entrypoint and deterministic root policy checks.
+- [ ] Enforce nonblank exact targets and the root GitHub release-operation effect map before generic checker delegation.
 - [ ] Add authorization tests for ordinary GitHub writes, confirmed publication, mismatched confirmation, denied effects, and missing runtime facts.
 - [ ] Update root routing and the changelog without changing the reusable template default.
 - [ ] Run every required validation command and record the results.
