@@ -89,8 +89,17 @@ for candidate_path in \
   template/README.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
-  template/.project-agent-workflow/scripts/validate-copier-update.py
+  template/.project-agent-workflow/scripts/validate-copier-update.py \
+  template/.agents/skills/browser-ops/SKILL.md \
+  template/.project-agent-workflow/AGENTS.md.jinja \
+  template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+  template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+  template/.project-agent-workflow/skills/browser-ops/SKILL.md \
+  template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
+  template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/docs/agent/external-services.yaml.jinja
 do
+  mkdir -p "$(dirname "$update_source/$candidate_path")"
   cp "$root/$candidate_path" "$update_source/$candidate_path"
 done
 fixture_git "$update_source" add \
@@ -99,11 +108,41 @@ fixture_git "$update_source" add \
   template/README.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
-  template/.project-agent-workflow/scripts/validate-copier-update.py
+  template/.project-agent-workflow/scripts/validate-copier-update.py \
+  template/.agents/skills/browser-ops/SKILL.md \
+  template/.project-agent-workflow/AGENTS.md.jinja \
+  template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+  template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+  template/.project-agent-workflow/skills/browser-ops/SKILL.md \
+  template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
+  template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/docs/agent/external-services.yaml.jinja
 fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
   commit -qm "Make Copier updates fail closed"
 fixture_git "$update_source" tag v1.2.2
 target_ref=v1.2.2
+
+browser_legacy_out="$tmp/browser-run-legacy-policy"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.2.1 \
+  --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$browser_legacy_out" >/dev/null
+fixture_git "$browser_legacy_out" init -b main >/dev/null
+fixture_git "$browser_legacy_out" config user.email "ci@example.invalid"
+fixture_git "$browser_legacy_out" config user.name "CI"
+fixture_git "$browser_legacy_out" add -A
+fixture_git "$browser_legacy_out" commit -m "Initial older generated workflow" >/dev/null
+if grep -q '^  browser_run:$' "$browser_legacy_out/docs/agent/external-services.yaml"; then
+  echo "older Browser Run fixture unexpectedly contains browser_run" >&2
+  exit 1
+fi
+run_copier update -q --trust --defaults --vcs-ref "$target_ref" "$browser_legacy_out" >/dev/null
+if grep -q '^  browser_run:$' "$browser_legacy_out/docs/agent/external-services.yaml"; then
+  echo "Copier update rewrote project-owned older external-service policy" >&2
+  exit 1
+fi
+(cd "$browser_legacy_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
+test -f "$browser_legacy_out/.agents/skills/browser-ops/SKILL.md"
+test -f "$browser_legacy_out/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
+fixture_git "$browser_legacy_out" diff --check
 
 validator="$root/scripts/validate-copier-update.py"
 

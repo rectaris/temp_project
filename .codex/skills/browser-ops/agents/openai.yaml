@@ -1,0 +1,4 @@
+interface:
+  display_name: "Browser Operations"
+  short_description: "Route rendered-browser work safely"
+  default_prompt: "Use $browser-ops to select and authorize a browser backend for this rendered-page task."

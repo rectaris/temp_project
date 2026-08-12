@@ -91,6 +91,7 @@ SOURCE_REQUIRED = [
     "template/.agents/skills/plan-archive/SKILL.md",
     "template/.agents/skills/sequential-plan-orchestrator/SKILL.md",
     "template/.agents/skills/write-for-reader/SKILL.md",
+    "template/.agents/skills/browser-ops/SKILL.md",
     "template/.project-agent-workflow/skills/define-referents-first/SKILL.md",
     "template/.project-agent-workflow/skills/define-referents-first/agents/openai.yaml",
     "template/.project-agent-workflow/skills/define-referents-first/references/workflow.md",
@@ -110,6 +111,9 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml",
     "template/.project-agent-workflow/skills/write-for-reader/SKILL.md",
     "template/.project-agent-workflow/skills/write-for-reader/agents/openai.yaml",
+    "template/.project-agent-workflow/skills/browser-ops/SKILL.md",
+    "template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml",
+    "template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md",
     "template/[[ _copier_conf.answers_file ]].jinja",
     "template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja",
     "template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md",
@@ -199,6 +203,7 @@ SOURCE_REQUIRED = [
     "tests/fixtures/referent-contract/scenarios.json",
     "tests/fixtures/referent-contract/evaluation-protocol.md",
     "tests/fixtures/write-for-reader/scenarios.json",
+    "tests/fixtures/browser-ops/scenarios.json",
     "scripts/init-project-workflow.sh",
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",
@@ -238,6 +243,7 @@ GENERATED_REQUIRED = [
     ".agents/skills/plan-archive/SKILL.md",
     ".agents/skills/sequential-plan-orchestrator/SKILL.md",
     ".agents/skills/write-for-reader/SKILL.md",
+    ".agents/skills/browser-ops/SKILL.md",
     ".project-agent-workflow/skills/define-referents-first/SKILL.md",
     ".project-agent-workflow/skills/define-referents-first/agents/openai.yaml",
     ".project-agent-workflow/skills/define-referents-first/references/workflow.md",
@@ -257,6 +263,9 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml",
     ".project-agent-workflow/skills/write-for-reader/SKILL.md",
     ".project-agent-workflow/skills/write-for-reader/agents/openai.yaml",
+    ".project-agent-workflow/skills/browser-ops/SKILL.md",
+    ".project-agent-workflow/skills/browser-ops/agents/openai.yaml",
+    ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md",
     "AGENTS.md",
     "README.md",
     ".github/workflows/project-agent-workflow.yml",
@@ -1277,6 +1286,61 @@ def require_current_plan_manifest_reference(planning: str) -> None:
             fail(f"references/planning.md missing legacy archive note for: {field}")
 
 
+def require_browser_automation_contract() -> None:
+    index = read("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja")
+    required_route = (
+        "  browser_automation:",
+        ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
+        ".project-agent-workflow/docs/agent/SPEC_SECURITY.md",
+        ".agents/skills/browser-ops/SKILL.md",
+        ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md",
+    )
+    require_markers("template spec index", "browser route", index, required_route)
+
+    bridge = read("template/.agents/skills/browser-ops/SKILL.md")
+    if ".project-agent-workflow/skills/browser-ops/SKILL.md" not in bridge:
+        fail("browser discovery bridge does not point at managed skill")
+    skill = read("template/.project-agent-workflow/skills/browser-ops/SKILL.md")
+    require_markers(
+        "managed browser skill",
+        "policy reads",
+        skill,
+        (
+            "references/browser-run-policy.md",
+            ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
+            "docs/agent/external-services.yaml",
+        ),
+    )
+    policy = read("template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md")
+    require_markers(
+        "browser backend policy",
+        "compatibility boundary",
+        policy,
+        (
+            "https://blog.cloudflare.com/kitesurf/",
+            "beta",
+            "lower CPU and memory consumption",
+            "configured_write_capable",
+            "exact `write_authorization_rule` match",
+            "current user authorization",
+            "WebGL",
+            "real TLS fingerprints",
+            "ordinary HTTP retrieval",
+        ),
+    )
+    fixture = json.loads(read("tests/fixtures/browser-ops/scenarios.json"))
+    requirements = fixture.get("requirements", [])
+    scenarios = fixture.get("scenarios", [])
+    if not any(item.get("critical") is True for item in requirements):
+        fail("browser scenarios need a critical requirement")
+    classes = {item.get("class") for item in scenarios}
+    if not {"median", "edge", "holdout"}.issubset(classes):
+        fail("browser scenarios need median, edge, and holdout cases")
+    expected = {"authorized Kitesurf", "Chromium fallback", "ordinary HTTP retrieval", "documented unavailable fallback", "deny browser write"}
+    if not expected.issubset({item.get("expected") for item in scenarios}):
+        fail("browser scenarios do not cover backend, plain HTTP, fallback, and write denial")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -1315,6 +1379,7 @@ def main() -> int:
     require_ci_autofix_root_boundaries()
     require_generated_whitespace_range()
     require_namespaced_reference_paths()
+    require_browser_automation_contract()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")

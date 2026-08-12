@@ -92,6 +92,17 @@ task_types:
       - path: .project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md
         when: Codex CI autofix, GitHub Actions tokens, patch application, or branch writes are in scope.
 
+  browser_automation:
+    summary: JavaScript-rendered page state, browser-produced artifacts, DOM inspection, or browser interaction; not a plain URL lookup.
+    required:
+      - .project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - .project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md
+      - .project-agent-workflow/docs/agent/SPEC_SECURITY.md
+      - .agents/skills/browser-ops/SKILL.md
+      - .project-agent-workflow/skills/browser-ops/SKILL.md
+      - .project-agent-workflow/skills/browser-ops/references/browser-run-policy.md
+    conditional: []
+
   orchestration_meta:
     summary: Agent workflow, helper roles, helper prompt templates, handoff policy, hooks, or process documentation.
     required:
@@ -198,7 +209,7 @@ usually_unneeded:
   - path: .project-agent-workflow/docs/agent/SPEC_UI_DESIGN.md
     unless: visible UI, copy, accessibility, or interaction behavior is in scope.
   - path: .project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md
-    unless: MCP, Linear, graph memory, external issue sync, or external write behavior is in scope.
+    unless: MCP, Linear, graph memory, browser automation, external issue sync, or external write behavior is in scope.
   - path: .project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md
     unless: Japanese prose, UI copy, documentation, prompts, plans, issues, or review text is in scope.
   - path: .project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md

@@ -48,6 +48,9 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/sequential-plan-orchestrator/agents/openai.yaml",
     ".codex/skills/write-for-reader/SKILL.md",
     ".codex/skills/write-for-reader/agents/openai.yaml",
+    ".codex/skills/browser-ops/SKILL.md",
+    ".codex/skills/browser-ops/agents/openai.yaml",
+    ".codex/skills/browser-ops/references/browser-run-policy.md",
     ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
@@ -229,6 +232,26 @@ def check_reusable_skill_parity() -> None:
             )
             if root_path.read_text(encoding="utf-8") != template_text:
                 fail(f"root/template reusable skill drift: {skill}/{relative}")
+
+
+def check_browser_routing() -> None:
+    index = read("docs/agent/spec-index.yaml")
+    for marker in (
+        "  browser_automation:",
+        ".codex/skills/browser-ops/SKILL.md",
+        ".codex/skills/browser-ops/references/browser-run-policy.md",
+        "docs/agent/SPEC_SECURITY.md",
+    ):
+        if marker not in index:
+            fail(f"root browser route missing: {marker}")
+    skill = read(".codex/skills/browser-ops/SKILL.md")
+    for marker in (
+        "references/browser-run-policy.md",
+        "template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+        "template/docs/agent/external-services.yaml.jinja",
+    ):
+        if marker not in skill:
+            fail(f"root browser skill missing: {marker}")
 
 
 def check_user_communication_contract() -> None:
@@ -456,6 +479,7 @@ def main() -> int:
     check_agents_rules()
     check_agent_model_profiles()
     check_reusable_skill_parity()
+    check_browser_routing()
     check_user_communication_contract()
     check_namespaced_documentation_targets()
     check_orchestration_policy()

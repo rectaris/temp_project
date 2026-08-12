@@ -55,8 +55,17 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
-    template/.project-agent-workflow/scripts/validate-copier-update.py
+    template/.project-agent-workflow/scripts/validate-copier-update.py \
+    template/.agents/skills/browser-ops/SKILL.md \
+    template/.project-agent-workflow/AGENTS.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+    template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+    template/.project-agent-workflow/skills/browser-ops/SKILL.md \
+    template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
+  template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/docs/agent/external-services.yaml.jinja
   do
+    mkdir -p "$(dirname "$render_source/$candidate_path")"
     cp "$root/$candidate_path" "$render_source/$candidate_path"
   done
   git -C "$render_source" add \
@@ -68,7 +77,15 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
-    template/.project-agent-workflow/scripts/validate-copier-update.py
+    template/.project-agent-workflow/scripts/validate-copier-update.py \
+    template/.agents/skills/browser-ops/SKILL.md \
+    template/.project-agent-workflow/AGENTS.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+    template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+    template/.project-agent-workflow/skills/browser-ops/SKILL.md \
+    template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
+    template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/docs/agent/external-services.yaml.jinja
   git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
     commit --allow-empty -qm "Create isolated smoke candidate"
   git -C "$render_source" tag v1.2.2

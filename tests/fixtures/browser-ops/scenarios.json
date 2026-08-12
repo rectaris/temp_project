@@ -1,0 +1,14 @@
+{
+  "requirements": [
+    {"id": "route-rendered-only", "critical": true},
+    {"id": "classify-write-before-backend", "critical": true},
+    {"id": "preserve-older-policy", "critical": true}
+  ],
+  "scenarios": [
+    {"id": "kitesurf-pdf", "class": "median", "used_for_tuning": true, "request": "Create one PDF from a state-independent rendered page.", "expected": "authorized Kitesurf"},
+    {"id": "chromium-webgl", "class": "edge", "used_for_tuning": true, "request": "Inspect a WebGL page in a persistent authenticated session.", "expected": "Chromium fallback"},
+    {"id": "plain-http", "class": "median", "used_for_tuning": true, "request": "Retrieve a plain URL without rendered state.", "expected": "ordinary HTTP retrieval"},
+    {"id": "provider-unavailable", "class": "edge", "used_for_tuning": true, "request": "Inspect DOM state when the authorized browser provider is unavailable.", "expected": "documented unavailable fallback"},
+    {"id": "unauthorized-submit", "class": "holdout", "used_for_tuning": false, "request": "Submit a form without exact current user authorization.", "expected": "deny browser write"}
+  ]
+}

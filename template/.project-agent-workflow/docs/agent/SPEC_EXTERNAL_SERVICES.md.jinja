@@ -14,6 +14,7 @@ Generated states:
 - MCP: `[[ mcp_state ]]`
 - Linear sync: `[[ linear_state ]]`
 - Graph memory: `[[ graph_state ]]`
+- Browser Run: `disabled`
 
 ## Baseline
 
@@ -91,6 +92,14 @@ external_service_gate means the common pre-call validation procedure in mcp-ops 
 - Do not write graph memory unless the user explicitly requests a graph-memory write or an approved project workflow authorizes it.
 - Do not store secrets, credentials, private configuration, raw personal data, generated dependency artifacts, build artifacts, or temporary task logs in graph memory.
 - Record important implementation decisions in repository files even when graph memory is also updated.
+
+## Browser Run Policy
+
+- `browser_run` is disabled by default. Its project-owned record may contain connection metadata, but never account identifiers or credentials.
+- Use browser automation only for rendered-page state, browser-produced artifacts, DOM inspection, or browser interaction. Use ordinary HTTP retrieval for a plain URL lookup.
+- Read `.agents/skills/browser-ops/SKILL.md` and its managed target before provider access. The skill applies the common external-service gate and selects an authorized compatible backend or its documented fallback.
+- Classify an operation as read or write before backend selection. Browser writes require `configured_write_capable`, an exact `write_authorization_rule` match, and current user authorization for the exact remote effect.
+- Older projects without a `browser_run` record remain valid. Treat the missing record as disabled and use the documented fallback; do not add it during a Copier update.
 
 ## Integration Checklist
 

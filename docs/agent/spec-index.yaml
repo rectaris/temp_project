@@ -43,6 +43,14 @@ task_types:
       - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
         when: compressed logs or derived evidence are in scope.
 
+  browser_automation:
+    summary: JavaScript-rendered page state, browser-produced artifacts, DOM inspection, or browser interaction; not a plain URL lookup.
+    required:
+      - .codex/skills/browser-ops/SKILL.md
+      - .codex/skills/browser-ops/references/browser-run-policy.md
+      - docs/agent/SPEC_SECURITY.md
+    conditional: []
+
   skill_authoring:
     summary: Root or template Codex skills, SKILL.md files, skill references, skill scripts, or skill UI metadata.
     required:

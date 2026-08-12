@@ -69,6 +69,24 @@ def main() -> int:
         require(service["authentication"] == "none", f"{service_name} authentication default mismatch")
         require(service["credential_reference"] == "", f"{service_name} credential reference default mismatch")
 
+    browser_run = services["browser_run"]
+    require(browser_run["state"] == "disabled", "browser_run must be disabled by default")
+    require(browser_run["authentication"] == "none", "browser_run authentication default mismatch")
+    require(browser_run["credential_reference"] == "", "browser_run must not contain credentials")
+    require(
+        not browser_run["allowed_reads"] and not browser_run["allowed_writes"],
+        "browser_run must not authorize operations by default",
+    )
+
+    browser_route = (root / ".project-agent-workflow/docs/agent/spec-index.yaml").read_text(encoding="utf-8")
+    require("browser_automation:" in browser_route, "generated spec index lacks browser route")
+    require(".agents/skills/browser-ops/SKILL.md" in browser_route, "generated browser route lacks discovery bridge")
+    require((root / ".agents/skills/browser-ops/SKILL.md").is_file(), "generated browser bridge missing")
+    require(
+        (root / ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md").is_file(),
+        "generated browser backend policy missing",
+    )
+
     expected_profile = (
         f"MCP=`{services['mcp']['state']}`",
         f"Linear=`{services['linear_sync']['state']}`",

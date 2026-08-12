@@ -26,6 +26,7 @@ Use a route table so agents do not load every project document for every task.
 - `japanese_prose`: Japanese README text, documentation, plans, specs, prompts, issue text, review comments, or UI copy.
 - `environment_data_flow`: build/runtime paths, generated data, deployment assumptions.
 - `orchestration_meta`: helper agents, handoff policy, hooks, execution workflow.
+- `browser_automation`: JavaScript-rendered state, browser-produced artifacts, DOM inspection, or browser interaction. Do not select it for a plain URL lookup.
 
 ## Japanese Prose
 
