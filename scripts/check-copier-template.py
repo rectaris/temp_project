@@ -1215,6 +1215,8 @@ def require_namespaced_reference_paths() -> None:
         if marker in planning:
             fail(f"references/planning.md still contains stale managed path marker: {marker}")
 
+    require_current_plan_manifest_reference(planning)
+
     validation = read("references/validation.md")
     validation_required = (
         "`.project-agent-workflow/scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
@@ -1237,6 +1239,42 @@ def require_namespaced_reference_paths() -> None:
     for marker in validation_forbidden:
         if marker in validation:
             fail(f"references/validation.md still contains stale managed path marker: {marker}")
+
+
+def require_current_plan_manifest_reference(planning: str) -> None:
+    required_fields = (
+        "status",
+        "task_types",
+        "review_class",
+        "human_design_required",
+        "human_approval_status",
+        "write_scope",
+        "context_files",
+        "required_specs",
+        "validation",
+        "acceptance",
+        "checked_summary_ja",
+    )
+    optional_fields = ("target_json", "acceptance_focus", "completion_deferred_reason")
+    legacy_fields = ("task_type", "target_files", "expected_output")
+    try:
+        manifest_reference, _ = planning.split("## Lifecycle Scripts", 1)
+        required_section, optional_section = manifest_reference.split(
+            "Optional fields for new active and backlog plans:", 1
+        )
+    except ValueError:
+        fail("references/planning.md missing current active-plan manifest sections")
+    for field in required_fields:
+        if f"- `{field}`" not in required_section:
+            fail(f"references/planning.md missing required active-plan field: {field}")
+    for field in optional_fields:
+        if f"- `{field}`" not in optional_section:
+            fail(f"references/planning.md missing optional active-plan field: {field}")
+    for field in legacy_fields:
+        if f"- `{field}`" in manifest_reference:
+            fail(f"references/planning.md recommends removed active-plan field: {field}")
+        if f"`{field}`" not in optional_section:
+            fail(f"references/planning.md missing legacy archive note for: {field}")
 
 
 def main() -> int:

@@ -1,6 +1,6 @@
 # Align planning guidance with the current manifest contract
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
 review_class: A
@@ -43,10 +43,12 @@ The planning reference recommends legacy fields that the current generated linte
 
 ## Tasks
 
-- [ ] Replace the recommended field list with the current required and optional fields.
-- [ ] Add static checks that reject the removed open-plan fields in the recommendation section.
-- [ ] Run the required validation commands.
+- [x] Replace the recommended field list with the current required and optional fields.
+- [x] Add static checks that reject the removed open-plan fields in the recommendation section.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- Accepted sandbox candidate `174153becdc4b76a8fae94ae14e940424946bbf7fa3d9319a561f18735768750` after scope and patch review.
+- `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `scripts/lint-project-workflow.sh`, `python3 scripts/validate-changes.py --all`, and `git diff --check` passed in the independent review clone and source repository.
+- A review-clone mutation that restored `task_type` as a recommended list item was rejected by both deterministic checks with exit code 1.

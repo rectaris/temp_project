@@ -24,22 +24,29 @@ Use lightweight planning files to make agent work resumable without turning ever
 
 ## Active Plan Fields
 
-Recommended fields:
+Required fields for new active and backlog plans:
 
 - `status`
-- `task_type`
+- `task_types`
 - `review_class`
 - `human_design_required`
 - `human_approval_status`
-- `target_files`
-- `target_json`
+- `write_scope`
+- `context_files`
 - `required_specs`
 - `validation`
 - `acceptance`
-- `acceptance_focus`
-- `expected_output`
 - `checked_summary_ja`
-- `completion_deferred_reason`
+
+Optional fields for new active and backlog plans:
+
+- `target_json`
+- `acceptance_focus`
+- `completion_deferred_reason` (required when `status` is `deferred`)
+
+Checked archives created with the previous manifest may contain `task_type`,
+`target_files`, and `expected_output`. Preserve those fields as legacy archive
+history only; do not use them in new active or backlog plans.
 
 Review classes:
 
