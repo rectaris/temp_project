@@ -30,6 +30,7 @@ acceptance:
   - Change selection exits nonzero with an actionable message when a required Git query fails.
   - Changed-file security scanning exits nonzero when it cannot obtain the Git-visible path set.
   - A legitimate repository with no changes still reports the existing no-change success state.
+  - The no-change regression fixture remains Git-clean when it invokes the validator, independent of the parent process bytecode environment.
   - Root and generated validators retain aligned fail-closed behavior.
 checked_summary_ja: Git query 失敗を変更なしとして扱わず、変更選択と security scan を明示的な非ゼロ終了にする。
 
@@ -39,14 +40,18 @@ Change and security validators must fail when required Git queries fail.
 
 The validators currently convert every nonzero Git result into an empty path list, which allows broken repository state to pass as no changes or a successful security scan.
 
+The first candidate created Python bytecode inside its temporary Git repository before change selection. The sandbox disabled bytecode globally and hid that fixture defect, while the same required test failed in the parent review environment.
+
 ## Decisions
 
 - Distinguish Git failure from an empty successful result.
 - Preserve machine-readable JSON failure output where the root validator supports JSON mode.
+- Invoke copied validators with Python's `-B` option in the no-change regression fixture and assert that the fixture is Git-clean before validation.
 
 ## Tasks
 
 - [ ] Add regression tests that inject a failing Git environment.
+- [ ] Keep the no-change regression fixture free of bytecode and other Git-visible side effects.
 - [ ] Raise or return explicit Git query failures in root and generated validators.
 - [ ] Preserve the successful empty-change behavior.
 - [ ] Run the required validation commands.
