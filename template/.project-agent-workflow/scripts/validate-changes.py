@@ -18,6 +18,10 @@ OUTPUT_LIMIT = 4000
 EXCLUDED_CHANGE_PREFIXES = (".project-agent-workflow-migration/",)
 
 
+class GitQueryError(RuntimeError):
+    """A Git command needed to determine changed files failed."""
+
+
 def git(args: list[str]) -> list[str]:
     result = subprocess.run(
         ["git", *args],
@@ -28,7 +32,7 @@ def git(args: list[str]) -> list[str]:
         check=False,
     )
     if result.returncode != 0:
-        return []
+        raise GitQueryError(f"Git query failed ({result.returncode}): {shlex.join(['git', *args])}")
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -160,7 +164,14 @@ def main(argv: list[str]) -> int:
         parser.error("--all and --staged are mutually exclusive")
 
     mode = "staged" if args.staged else "all" if args.all else "auto"
-    paths, diff_mode = changed_files(mode)
+    try:
+        paths, diff_mode = changed_files(mode)
+    except GitQueryError as error:
+        if args.json:
+            print_json({"changed_files": [], "commands": [], "error": str(error), "status": "git_query_failed"})
+        else:
+            print(f"validate-changes: {error}", file=sys.stderr)
+        return 1
     if not paths:
         if args.json:
             print_json({"changed_files": [], "commands": [], "diff_mode": diff_mode, "status": "no_changes"})

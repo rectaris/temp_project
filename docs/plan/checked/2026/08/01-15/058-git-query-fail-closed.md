@@ -1,6 +1,6 @@
 # Fail validation when required Git queries fail
 
-status: in_progress
+status: checked
 task_types:
   - security
   - template_workflow
@@ -50,12 +50,15 @@ The first candidate created Python bytecode inside its temporary Git repository 
 
 ## Tasks
 
-- [ ] Add regression tests that inject a failing Git environment.
-- [ ] Keep the no-change regression fixture free of bytecode and other Git-visible side effects.
-- [ ] Raise or return explicit Git query failures in root and generated validators.
-- [ ] Preserve the successful empty-change behavior.
-- [ ] Run the required validation commands.
+- [x] Add regression tests that inject a failing Git environment.
+- [x] Keep the no-change regression fixture free of bytecode and other Git-visible side effects.
+- [x] Raise or return explicit Git query failures in root and generated validators.
+- [x] Preserve the successful empty-change behavior.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- Accepted sandbox candidate `b146c8a7a496f113d664f6b799adb21050f71ee57053673b8e0a86529caa4369` after scope and patch review.
+- `env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX python3 tests/test-validation-tools.py` passed with 20 tests in the independent review clone and source repository.
+- Manual broken-`GIT_DIR` checks returned exit code 1 with actionable Git commands for root JSON, root text, and generated changed-file security scan modes.
+- `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `python3 scripts/validate-changes.py --all`, and `git diff --check` passed in the independent review clone and source repository. Smoke used the existing fallback because `actionlint` was unavailable.

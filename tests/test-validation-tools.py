@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -305,6 +306,34 @@ class ValidateChangesTest(unittest.TestCase):
                 self.assertEqual(paths, ["docs/current.md", "src/current.py"])
                 self.assertEqual(mode, "all")
 
+    def test_git_query_failure_is_reported_in_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            scripts = repo / "scripts"
+            scripts.mkdir()
+            for source in (ROOT / "scripts").glob("*.py"):
+                shutil.copy2(source, scripts)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+
+            for validate_path in (
+                scripts / "validate-changes.py",
+                ROOT / "template/.project-agent-workflow/scripts/validate-changes.py",
+            ):
+                result = subprocess.run(
+                    [sys.executable, "-B", str(validate_path), "--all", "--json"],
+                    cwd=repo,
+                    env={**os.environ, "GIT_DIR": str(repo / "missing-git-dir")},
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                with self.subTest(validator=validate_path):
+                    self.assertEqual(result.returncode, 1)
+                    payload = json.loads(result.stdout)
+                    self.assertEqual(payload["status"], "git_query_failed")
+                    self.assertIn("git diff --cached --name-only", payload["error"])
+
     def test_managed_plan_validation_requires_managed_index(self) -> None:
         for index, (plan_path, validate_path) in enumerate(
             zip(PLAN_COMMAND_MODULES, VALIDATE_CHANGE_MODULES, strict=True)
@@ -421,6 +450,49 @@ class ValidateChangesTest(unittest.TestCase):
             self.assertEqual(second_result["results"][0]["returncode"], 0)
             self.assertEqual(second_result["results"][1]["returncode"], 2)
 
+    def test_no_change_fixture_remains_git_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            scripts = repo / "scripts"
+            scripts.mkdir()
+            shutil.copy2(ROOT / "scripts/validate-changes.py", scripts)
+            shutil.copy2(ROOT / "scripts/plan_validation_commands.py", scripts)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Validation Test",
+                    "-c",
+                    "user.email=validation@example.invalid",
+                    "commit",
+                    "-qm",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-B", "scripts/validate-changes.py", "--all", "--json"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(json.loads(result.stdout)["status"], "no_changes")
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                check=True,
+            )
+            self.assertEqual(status.stdout, "")
+
     @staticmethod
     def run_validate_all(repo: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -530,6 +602,21 @@ class GeneratedCiTest(unittest.TestCase):
 
 
 class SecurityStaticCheckTest(unittest.TestCase):
+    def test_changed_scope_fails_when_git_query_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = subprocess.run(
+                [sys.executable, "-B", str(SECURITY_CHECK_MODULE), "--changed"],
+                cwd=repo,
+                env={**os.environ, "GIT_DIR": str(repo / "missing-git-dir")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("static security check failed: Git query failed", result.stderr)
+
     def test_changed_and_managed_scopes_exclude_unchanged_project_fixtures(self) -> None:
         rules = load_module(SECURITY_RULE_MODULE, "security_rules")
         sys.modules["security_rules"] = rules
