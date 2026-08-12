@@ -86,4 +86,14 @@ Kitesurf is an optional Cloudflare Browser Run backend with lower CPU and memory
 
 ## Validation Notes
 
-Pending implementation and validation.
+Candidate `a5bb46c259de97c9f24be083ab5c1e46d8f4716205df5be38d9afe9128b4bfa3` was rejected during main-session review.
+
+The replacement candidate must:
+
+- keep `SKILL.md` concise and move backend-selection details into a direct `references/` file in both the root and generated reusable skill;
+- link the Cloudflare Kitesurf announcement as the compatibility source and describe Kitesurf as beta;
+- allow compatible one-shot screenshots, PDFs, extraction, and automation on Kitesurf, while routing pixel-perfect output, video, WebGL, real TLS bot challenges, long authenticated sessions, persistent state, and observed compatibility failures to Chromium;
+- add a Copier update assertion proving that a project-owned older `external-services.yaml` without `browser_run` remains preserved and valid; and
+- avoid relying on a smoke run from an uncommitted clone as acceptance evidence, because the main session will rerun smoke after committing an accepted candidate if the test harness requires a committed source snapshot.
+
+Final validation remains pending implementation acceptance.
