@@ -9,13 +9,8 @@ import sys
 from pathlib import Path
 
 
-for script_dir in (
-    Path(__file__).resolve().parents[1] / "scripts",
-    Path(__file__).resolve().parents[2] / "scripts",
-):
-    if script_dir.is_dir():
-        sys.path.insert(0, str(script_dir))
-        break
+SCRIPT_DIR = Path(__file__).resolve().parents[2] / "template/.project-agent-workflow/scripts"
+sys.path.insert(0, str(SCRIPT_DIR))
 import security_rules
 
 RULES = (
@@ -42,8 +37,10 @@ def candidate_commands(payload: dict) -> list[str]:
         value = payload.get(key)
         if isinstance(value, str):
             out.append(value)
-    args = payload.get("arguments")
-    if isinstance(args, dict):
+    for container_key in ("arguments", "tool_input"):
+        args = payload.get(container_key)
+        if not isinstance(args, dict):
+            continue
         for key in ("command", "cmd", "shell_command"):
             value = args.get(key)
             if isinstance(value, str):

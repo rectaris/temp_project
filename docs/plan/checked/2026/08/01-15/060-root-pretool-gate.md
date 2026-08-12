@@ -1,6 +1,6 @@
 # Restore the root PreToolUse hardening gate
 
-status: in_progress
+status: checked
 task_types:
   - security
 review_class: B
@@ -47,12 +47,15 @@ The root Hook configuration currently logs PreToolUse but does not invoke the ha
 
 ## Tasks
 
-- [ ] Add a runtime regression that executes the root gate path.
-- [ ] Repair the root gate's implementation dependency.
-- [ ] Add the gate to root `PreToolUse` wiring without removing logging.
-- [ ] Add deterministic wiring checks.
-- [ ] Run the required validation commands.
+- [x] Add a runtime regression that executes the root gate path.
+- [x] Repair the root gate's implementation dependency.
+- [x] Add the gate to root `PreToolUse` wiring without removing logging.
+- [x] Add deterministic wiring checks.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- Accepted sandbox candidate `f7d1153f3fc2174feaa52c1f17994ed3cd62033bb4fdee0284f81e4aedd85812` after scope and patch review.
+- `python3 tests/test-hooks.py` passed 34 tests in the independent review clone and source repository.
+- Manual root-gate execution blocked nested `tool_input.cmd` containing `git reset --hard` and allowed `git status --short`.
+- `python3 scripts/check-copier-template.py`, `scripts/lint-project-workflow.sh`, `python3 scripts/validate-changes.py --all`, and `git diff --check` passed in both environments.

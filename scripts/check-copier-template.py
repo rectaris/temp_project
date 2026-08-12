@@ -710,6 +710,18 @@ def require_hook_logging_parity() -> None:
         fail("root/template hook payload structure diverged")
 
 
+def require_root_pre_tool_hardening() -> None:
+    hooks = json.loads(read(".codex/hooks.json"))
+    entries = hooks.get("hooks", {}).get("PreToolUse", [{}])[0].get("hooks", [])
+    commands = [entry.get("command", "") for entry in entries]
+    if len(commands) != 2:
+        fail("root PreToolUse must contain the event logger and hardening gate")
+    if "agent_log_event.py" not in commands[0]:
+        fail("root PreToolUse must run event logging before the hardening gate")
+    if ".project-agent-workflow/hooks/pre_tool_hardening_gate.py" not in commands[1]:
+        fail("root PreToolUse must run the hardening gate")
+
+
 def parse_fixture(path: Path) -> dict[str, str]:
     data: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -1287,6 +1299,7 @@ def main() -> int:
     require_user_communication_alignment()
     require_sandboxed_plan_worker_alignment()
     require_hook_logging_parity()
+    require_root_pre_tool_hardening()
     require_orchestration_policy_markers()
     require_template_manifest_complete()
 

@@ -23,6 +23,7 @@ ROOT_IMPORTER = ROOT / "scripts/import-codex-transcript.py"
 ROOT_MANIFEST_CHECKER = ROOT / "scripts/check-agent-log-manifest.py"
 ROOT_CONTEXT_COMPRESS = ROOT / "scripts/context-compress.sh"
 PRE_TOOL = ROOT / "template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py"
+ROOT_PRE_TOOL = ROOT / ".project-agent-workflow/hooks/pre_tool_hardening_gate.py"
 STOP_REVIEW = ROOT / "template/.project-agent-workflow/hooks/stop_review_gate.py"
 LEGACY_STOP_BRIDGE = ROOT / "template/.codex/hooks/stop_review_gate.py"
 SEMANTIC_GUARD = ROOT / "template/.project-agent-workflow/hooks/semantic_guard_advisory.py"
@@ -103,6 +104,14 @@ def write_sample_codex_transcript(path: Path) -> None:
 
 
 class PreToolHardeningGateTest(unittest.TestCase):
+    def test_root_gate_blocks_nested_tool_input(self) -> None:
+        output = run_hook(
+            ROOT_PRE_TOOL,
+            {"tool_name": "exec_command", "tool_input": {"cmd": "git reset --hard HEAD~1"}},
+        )
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("hard reset", output["reason"])
+
     def test_blocks_destructive_git_reset(self) -> None:
         output = run_hook(PRE_TOOL, {"cmd": "git reset --hard HEAD~1"})
         self.assertEqual(output["decision"], "block")
@@ -133,6 +142,14 @@ class PreToolHardeningGateTest(unittest.TestCase):
 
 
 class AgentLogEventTest(unittest.TestCase):
+    def test_root_pre_tool_use_wires_logging_before_hardening_gate(self) -> None:
+        hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+        entries = hooks["hooks"]["PreToolUse"][0]["hooks"]
+        commands = [entry["command"] for entry in entries]
+        self.assertEqual(len(commands), 2)
+        self.assertIn("agent_log_event.py", commands[0])
+        self.assertIn("pre_tool_hardening_gate.py", commands[1])
+
     def test_root_hook_wired_from_session_start_config(self) -> None:
         hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
         for event, matchers in hooks["hooks"].items():

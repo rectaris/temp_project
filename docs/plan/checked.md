@@ -62,3 +62,4 @@ id	path
 063	docs/plan/checked/2026/08/01-15/063-smoke-render-source.md
 058	docs/plan/checked/2026/08/01-15/058-git-query-fail-closed.md
 059	docs/plan/checked/2026/08/01-15/059-generated-whitespace-range.md
+060	docs/plan/checked/2026/08/01-15/060-root-pretool-gate.md
