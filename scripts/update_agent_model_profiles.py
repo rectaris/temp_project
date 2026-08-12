@@ -22,18 +22,85 @@ PROFILES = {
     "sequential_plan_worker": ("gpt-5.3-codex-spark", "medium"),
 }
 
+PROFILE_FIELDS = ("model", "model_reasoning_effort", "name", "description")
 FIELD_PATTERNS = {
-    "model": re.compile(r"^(?P<indent>[ \t]*)model\s*=.*$"),
-    "model_reasoning_effort": re.compile(r"^(?P<indent>[ \t]*)model_reasoning_effort\s*=.*$"),
-}
-ANCHOR_PATTERNS = {
-    "name": re.compile(r"^(?P<indent>[ \t]*)name\s*=.*$"),
-    "description": re.compile(r"^(?P<indent>[ \t]*)description\s*=.*$"),
+    field: re.compile(
+        rf"^(?P<indent>[ \t]*)(?:{field}|\"{field}\"|'{field}')[ \t]*=.*$"
+    )
+    for field in PROFILE_FIELDS
 }
 
 
 class ProfileError(RuntimeError):
     """Raised when an agent profile cannot be normalized safely."""
+
+
+def is_escaped(text: str, index: int) -> bool:
+    """Return whether the character at index is preceded by an odd backslash run."""
+    backslashes = 0
+    index -= 1
+    while index >= 0 and text[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 1
+
+
+def scan_multiline_string(line: str, index: int, delimiter: str) -> int | None:
+    """Return the position after a multiline string terminator, if present."""
+    while (end := line.find(delimiter, index)) >= 0:
+        if delimiter == "'''" or not is_escaped(line, end):
+            return end + len(delimiter)
+        index = end + 1
+    return None
+
+
+def multiline_delimiter(line: str) -> str | None:
+    """Return an unclosed TOML multiline-string delimiter on one line, if any."""
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if character == "#":
+            break
+        if line.startswith('\"\"\"', index) or line.startswith("'''", index):
+            delimiter = line[index : index + 3]
+            end = scan_multiline_string(line, index + 3, delimiter)
+            if end is None:
+                return delimiter
+            index = end
+            continue
+        if character in {'\"', "'"}:
+            quote = character
+            index += 1
+            while index < len(line):
+                if line[index] == quote and (quote == "'" or not is_escaped(line, index)):
+                    index += 1
+                    break
+                index += 1
+            continue
+        index += 1
+    return None
+
+
+def root_assignments(lines: list[str]) -> dict[str, list[tuple[int, str]]]:
+    """Find root TOML assignments without interpreting strings as fields."""
+    assignments = {field: [] for field in PROFILE_FIELDS}
+    multiline: str | None = None
+    in_root = True
+    for index, line in enumerate(lines):
+        if multiline is not None:
+            if (end := scan_multiline_string(line, 0, multiline)) is not None:
+                multiline = multiline_delimiter(line[end:])
+            continue
+
+        if line.lstrip().startswith("["):
+            in_root = False
+        if in_root:
+            for field, pattern in FIELD_PATTERNS.items():
+                if (match := pattern.fullmatch(line)) is not None:
+                    assignments[field].append((index, match.group("indent")))
+                    break
+        multiline = multiline_delimiter(line)
+    return assignments
 
 
 def render_profile(text: str, model: str, effort: str) -> str:
@@ -46,15 +113,12 @@ def render_profile(text: str, model: str, effort: str) -> str:
         raise ProfileError("agent TOML is missing a string name")
 
     lines = text.splitlines()
+    assignments = root_assignments(lines)
     expected = {"model": model, "model_reasoning_effort": effort}
     missing: list[tuple[str, str]] = []
     insertion_indent = ""
     for field, value in expected.items():
-        matches = [
-            (index, match.group("indent"))
-            for index, line in enumerate(lines)
-            if (match := FIELD_PATTERNS[field].fullmatch(line))
-        ]
+        matches = assignments[field]
         if len(matches) > 1:
             raise ProfileError(f"agent TOML defines {field} more than once")
         if matches:
@@ -66,22 +130,14 @@ def render_profile(text: str, model: str, effort: str) -> str:
             missing.append((field, value))
 
     if missing:
-        description_anchor = next(
-            (index for index, line in enumerate(lines) if ANCHOR_PATTERNS["description"].fullmatch(line)),
-            None,
-        )
-        name_anchor = next(
-            (index for index, line in enumerate(lines) if ANCHOR_PATTERNS["name"].fullmatch(line)),
-            None,
-        )
+        description_anchor = next((index for index, _ in assignments["description"]), None)
+        name_anchor = next((index for index, _ in assignments["name"]), None)
         insert_after = description_anchor if description_anchor is not None else name_anchor
         if insert_after is None:
             raise ProfileError("agent TOML is missing name or description anchor")
 
-        if (match := ANCHOR_PATTERNS["description"].fullmatch(lines[insert_after])):
-            insertion_indent = match.group("indent")
-        elif (match := ANCHOR_PATTERNS["name"].fullmatch(lines[insert_after])):
-            insertion_indent = match.group("indent")
+        anchor = "description" if description_anchor is not None else "name"
+        insertion_indent = assignments[anchor][0][1]
 
         for field, value in reversed(missing):
             lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"')

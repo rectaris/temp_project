@@ -1,6 +1,6 @@
 # Preserve TOML strings while normalizing agent model fields
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
 review_class: B
@@ -43,11 +43,17 @@ The current line-based matcher counts field-looking text inside a valid multilin
 
 ## Tasks
 
-- [ ] Add failing coverage for basic and literal multiline strings plus nested tables.
-- [ ] Restrict replacement and duplicate detection to root-level TOML assignments.
-- [ ] Retain the existing atomic write and fixed-value checks.
-- [ ] Run the required validation commands.
+- [x] Add failing coverage for basic and literal multiline strings plus nested tables.
+- [x] Restrict replacement and duplicate detection to root-level TOML assignments.
+- [x] Retain the existing atomic write and fixed-value checks.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- Accepted sandbox candidate `0a5a7fb937368d579e8cf9c12498467b9273f040fc9cf88df5b85520bdaf1aa5` after independent review-clone validation.
+- `python3 tests/test-agent-model-profiles.py`: passed (12 tests).
+- `scripts/lint-project-workflow.sh`: passed.
+- `tests/smoke.sh`: passed with the fallback backend.
+- `python3 scripts/validate-changes.py --all`: passed.
+- `git diff --check`: passed.
+- No unresolved risks or deferred work remain for this plan.
