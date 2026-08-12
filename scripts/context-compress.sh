@@ -109,7 +109,7 @@ if [ ! -f "$run_dir/redaction-report.md" ]; then
   } >"$run_dir/redaction-report.md"
 fi
 
-python3 template/scripts/agent_log_manifest.py record-compression \
+python3 template/.project-agent-workflow/scripts/agent_log_manifest.py record-compression \
   --run-dir "$run_dir" \
   --run-id "$run_id" \
   --source "$input" \

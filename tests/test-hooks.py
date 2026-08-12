@@ -19,6 +19,9 @@ IMPORTER = ROOT / "template/.project-agent-workflow/scripts/import-codex-transcr
 MANIFEST_HELPER = ROOT / "template/.project-agent-workflow/scripts/agent_log_manifest.py"
 MANIFEST_CHECKER = ROOT / "template/.project-agent-workflow/scripts/check-agent-log-manifest.py"
 CONTEXT_COMPRESS = ROOT / "template/.project-agent-workflow/scripts/context-compress.sh"
+ROOT_IMPORTER = ROOT / "scripts/import-codex-transcript.py"
+ROOT_MANIFEST_CHECKER = ROOT / "scripts/check-agent-log-manifest.py"
+ROOT_CONTEXT_COMPRESS = ROOT / "scripts/context-compress.sh"
 PRE_TOOL = ROOT / "template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py"
 STOP_REVIEW = ROOT / "template/.project-agent-workflow/hooks/stop_review_gate.py"
 LEGACY_STOP_BRIDGE = ROOT / "template/.codex/hooks/stop_review_gate.py"
@@ -406,6 +409,62 @@ class CodexTranscriptImportTest(unittest.TestCase):
             manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["coverage"]["external_transcript"]["redaction_status"], "pending_review")
             self.assertEqual(manifest["missing_sources"], ["codex_hooks"])
+
+
+class RootLoggingCliDelegationTest(unittest.TestCase):
+    def test_root_importer_and_manifest_checker_self_tests(self) -> None:
+        for command in (
+            ["python3", str(ROOT_IMPORTER), "--self-test"],
+            ["python3", str(ROOT_MANIFEST_CHECKER), "--self-test"],
+        ):
+            with self.subTest(command=command[1]):
+                result = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_root_context_compression_records_a_valid_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            scripts = repo / "scripts"
+            scripts.mkdir()
+            shutil.copyfile(ROOT_CONTEXT_COMPRESS, scripts / "context-compress.sh")
+            shutil.copyfile(ROOT_MANIFEST_CHECKER, scripts / "check-agent-log-manifest.py")
+            template_scripts = repo / "template/.project-agent-workflow/scripts"
+            template_scripts.mkdir(parents=True)
+            shutil.copyfile(MANIFEST_HELPER, template_scripts / "agent_log_manifest.py")
+            shutil.copyfile(MANIFEST_CHECKER, template_scripts / "check-agent-log-manifest.py")
+            source = repo / "source.log"
+            source.write_text("root context compression\n", encoding="utf-8")
+            env = os.environ.copy()
+            env["HEADROOM_DISABLED"] = "1"
+            compress = subprocess.run(
+                ["sh", "scripts/context-compress.sh", "source.log", "root-context-run"],
+                cwd=repo,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(compress.returncode, 0, compress.stderr)
+            manifest = repo / ".agent-logs/root-context-run/manifest.json"
+            self.assertTrue(manifest.is_file())
+            check = subprocess.run(
+                ["python3", "scripts/check-agent-log-manifest.py", str(manifest)],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(check.returncode, 0, check.stderr)
 
 
 class ContextCompressionBoundaryTest(unittest.TestCase):

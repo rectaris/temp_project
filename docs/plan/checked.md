@@ -58,3 +58,4 @@ id	path
 055	docs/plan/checked/2026/08/01-15/055-agent-profile-toml-aware.md
 054	docs/plan/checked/2026/08/01-15/054-copier-update-fail-closed.md
 056	docs/plan/checked/2026/08/01-15/056-ci-autofix-required-validation.md
+057	docs/plan/checked/2026/08/01-15/057-root-log-cli-paths.md

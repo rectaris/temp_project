@@ -67,7 +67,7 @@ Set `HEADROOM_DISABLED=1` to force the deterministic fallback path during tests 
 
 The wrapper refuses normative instruction files and policy paths that should be read directly.
 
-The wrapper updates the run manifest through the template-owned `template/scripts/agent_log_manifest.py` implementation.
+The wrapper updates the run manifest through the template-owned `template/.project-agent-workflow/scripts/agent_log_manifest.py` implementation.
 
 Run ids must contain only letters, numbers, underscores, and hyphens.
 

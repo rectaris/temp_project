@@ -64,7 +64,7 @@ Use `scripts/import-codex-transcript.py` to normalize an external Codex session 
 .agent-logs/<run-id>/raw/transcript.jsonl
 ```
 
-The importer updates `manifest.json`, `coverage.external_transcript`, and `redaction-report.md` through the template-owned shared manifest implementation.
+The importer updates `manifest.json`, `coverage.external_transcript`, and `redaction-report.md` through the template-owned `template/.project-agent-workflow/scripts/agent_log_manifest.py` shared manifest implementation.
 It writes normalized transcript records, excludes reasoning content items, and defaults automatic redaction to `pending_review`.
 Use `redacted` only after review or a deterministic project-specific check establishes that the stored data class is safe.
 

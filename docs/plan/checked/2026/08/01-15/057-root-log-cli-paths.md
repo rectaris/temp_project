@@ -1,6 +1,6 @@
 # Repair root logging CLI delegation paths
 
-status: in_progress
+status: checked
 task_types:
   - security
 review_class: B
@@ -53,11 +53,18 @@ Three root CLIs still reference the removed `template/scripts/` layout and fail 
 
 ## Tasks
 
-- [ ] Add failing root CLI runtime tests.
-- [ ] Update all three delegation paths and stale documentation paths.
-- [ ] Add root CLI self-tests to package lint.
-- [ ] Run the required validation commands.
+- [x] Add failing root CLI runtime tests.
+- [x] Update all three delegation paths and stale documentation paths.
+- [x] Add root CLI self-tests to package lint.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- Accepted sandbox candidate `722840a4478002644a6ad516a4db620b3dcdce2a4f6c10ea81cc8d1309063fe3` after independent review-clone validation.
+- Root transcript importer and manifest checker self-tests passed.
+- `python3 tests/test-hooks.py`: passed (32 tests), including root compression manifest recording.
+- `scripts/lint-project-workflow.sh`: passed with both root CLI self-tests enforced.
+- `python3 scripts/validate-changes.py --all`: passed.
+- `git diff --check`: passed.
+- No stale `template/scripts/` logging-helper path remains in the changed root docs, scripts, or test.
+- No unresolved risks or deferred work remain for this plan.
