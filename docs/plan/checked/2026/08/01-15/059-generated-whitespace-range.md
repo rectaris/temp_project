@@ -1,6 +1,6 @@
 # Check committed whitespace ranges in generated CI
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
 review_class: B
@@ -44,11 +44,15 @@ The generated workflow runs `git diff --check` on a clean checkout, so committed
 
 ## Tasks
 
-- [ ] Add deterministic source and generated-workflow assertions for event-aware range selection.
-- [ ] Replace the clean-worktree check with pull-request, push, and empty-tree branches.
-- [ ] Add a committed whitespace regression fixture.
-- [ ] Run the required validation commands.
+- [x] Add deterministic source and generated-workflow assertions for event-aware range selection.
+- [x] Replace the clean-worktree check with pull-request, push, and empty-tree branches.
+- [x] Add a committed whitespace regression fixture.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- Accepted sandbox candidate `16395482c856e9da93eef4983d40036c3c94424dcee45bc910647d9782a2310c` after scope and patch review.
+- `scripts/lint-project-workflow.sh` and `tests/smoke.sh` passed in the independent review clone and source repository. The smoke fixture committed trailing whitespace and confirmed the selected push range failed.
+- `python3 scripts/check-yaml.py .` parsed 29 YAML files in both environments.
+- `REQUIRE_ACTIONLINT=1 scripts/lint-github-actions.sh .` passed with local actionlint 1.7.12 in both environments.
+- `python3 scripts/validate-changes.py --all` and `git diff --check` passed in both environments.

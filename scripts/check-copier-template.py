@@ -1125,6 +1125,31 @@ def require_ci_autofix_root_boundaries() -> None:
     )
 
 
+def require_generated_whitespace_range() -> None:
+    path = "template/.github/workflows/project-agent-workflow.yml"
+    text = read(path)
+    required = (
+        "BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+        "BEFORE_SHA: ${{ github.event.before }}",
+        "EVENT_NAME: ${{ github.event_name }}",
+        "HEAD_SHA: ${{ github.sha }}",
+        "PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+        "REF_TYPE: ${{ github.ref_type }}",
+        "if [ \"$EVENT_NAME\" = pull_request ]; then",
+        'git diff --check "$BASE_SHA...$PR_HEAD_SHA"',
+        '[ "$REF_TYPE" = tag ]',
+        'git diff --check "$HEAD_SHA^..$HEAD_SHA"',
+        '[ "$BEFORE_SHA" != 0000000000000000000000000000000000000000 ]',
+        'git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null',
+        'git diff --check "$BEFORE_SHA..$HEAD_SHA"',
+        "EMPTY_TREE=$(git hash-object -t tree /dev/null)",
+        'git diff --check "$EMPTY_TREE" "$HEAD_SHA"',
+    )
+    require_markers(path, "whitespace range selection", text, required)
+    if "run: git diff --check" in text:
+        fail(f"{path} must not check only the clean worktree")
+
+
 def require_namespaced_reference_paths() -> None:
     agents = read("AGENTS.md")
     japanese = read("docs/agent/SPEC_JAPANESE_TECH_WRITING.md")
@@ -1238,6 +1263,7 @@ def main() -> int:
     require_agent_profile_task()
     require_copier_documentation_contract()
     require_ci_autofix_root_boundaries()
+    require_generated_whitespace_range()
     require_namespaced_reference_paths()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):

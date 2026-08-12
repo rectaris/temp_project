@@ -50,6 +50,7 @@ if [ -z "$source_ref" ]; then
     copier.yml \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
+    template/.github/workflows/project-agent-workflow.yml \
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
@@ -62,6 +63,7 @@ if [ -z "$source_ref" ]; then
     copier.yml \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
+    template/.github/workflows/project-agent-workflow.yml \
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
@@ -172,6 +174,34 @@ patch_only = job("patch-only-notice")
 if "validate-patch" in patch_only or "contents: write" in patch_only:
     raise SystemExit("generated patch-only path depends on validation or branch writes")
 PY
+}
+
+assert_generated_whitespace_range() {
+  out=$1
+  workflow="$out/.github/workflows/project-agent-workflow.yml"
+
+  grep -Fq 'BASE_SHA: ${{ github.event.pull_request.base.sha }}' "$workflow"
+  grep -Fq 'BEFORE_SHA: ${{ github.event.before }}' "$workflow"
+  grep -Fq 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' "$workflow"
+  grep -Fq 'REF_TYPE: ${{ github.ref_type }}' "$workflow"
+  grep -Fq 'git diff --check "$BASE_SHA...$PR_HEAD_SHA"' "$workflow"
+  grep -Fq 'git diff --check "$HEAD_SHA^..$HEAD_SHA"' "$workflow"
+  grep -Fq 'git diff --check "$BEFORE_SHA..$HEAD_SHA"' "$workflow"
+  grep -Fq 'EMPTY_TREE=$(git hash-object -t tree /dev/null)' "$workflow"
+  grep -Fq 'git diff --check "$EMPTY_TREE" "$HEAD_SHA"' "$workflow"
+
+  git -C "$out" init -b whitespace-range-main >/dev/null
+  git -C "$out" add .
+  git -C "$out" -c user.name=CI -c user.email=ci@example.invalid commit -qm 'Baseline generated project'
+  before_sha=$(git -C "$out" rev-parse HEAD)
+  printf 'committed trailing whitespace \n' >"$out/committed-whitespace.txt"
+  git -C "$out" add committed-whitespace.txt
+  git -C "$out" -c user.name=CI -c user.email=ci@example.invalid commit -qm 'Add whitespace regression fixture'
+  head_sha=$(git -C "$out" rev-parse HEAD)
+  if git -C "$out" diff --check "$before_sha..$head_sha" >/dev/null 2>&1; then
+    echo "generated workflow push range missed committed trailing whitespace" >&2
+    exit 1
+  fi
 }
 
 run_plan_lifecycle_smoke() {
@@ -622,6 +652,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
   assert_managed_orchestration_reports "$out"
+  assert_generated_whitespace_range "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
   run_root_python "$root/scripts/check-yaml.py" "$out" >/dev/null
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
