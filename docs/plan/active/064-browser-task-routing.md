@@ -88,11 +88,17 @@ Kitesurf is an optional Cloudflare Browser Run backend with lower CPU and memory
 
 Candidate `a5bb46c259de97c9f24be083ab5c1e46d8f4716205df5be38d9afe9128b4bfa3` was rejected during main-session review.
 
+Candidate `e9d925d5c7eeb66a4e2f5839726f43c90d8ce5f8f54507789adeb1e5d2809906` was also rejected during main-session review because it moved the existing `security` conditional routes under `browser_automation` and used a nonexistent root reference path.
+
 The replacement candidate must:
 
 - keep `SKILL.md` concise and move backend-selection details into a direct `references/` file in both the root and generated reusable skill;
+- preserve the existing `security` task route and every existing conditional route exactly under its original task type;
+- use `references/browser-run-policy.md` from each `SKILL.md`, or another path that resolves from both installed skill locations;
 - link the Cloudflare Kitesurf announcement as the compatibility source and describe Kitesurf as beta;
-- allow compatible one-shot screenshots, PDFs, extraction, and automation on Kitesurf, while routing pixel-perfect output, video, WebGL, real TLS bot challenges, long authenticated sessions, persistent state, and observed compatibility failures to Chromium;
+- describe Kitesurf using supported properties such as lower CPU and memory consumption instead of an unsupported lower-latency claim;
+- allow authorized, compatible, one-shot screenshots, PDFs, extraction, and automation on Kitesurf, while routing pixel-perfect output, video, WebGL, bot-challenge handshakes requiring real TLS fingerprints, long authenticated sessions, persistent state, and observed compatibility failures to Chromium;
+- apply backend selection after classifying the operation as read or write, and require an exact `write_authorization_rule` match plus current-user authorization before any browser write;
 - add a Copier update assertion proving that a project-owned older `external-services.yaml` without `browser_run` remains preserved and valid; and
 - avoid relying on a smoke run from an uncommitted clone as acceptance evidence, because the main session will rerun smoke after committing an accepted candidate if the test harness requires a committed source snapshot.
 
