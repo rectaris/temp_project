@@ -1,6 +1,6 @@
 # Route rendered-page tasks to an authorized browser backend
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -80,11 +80,11 @@ Kitesurf is an optional Cloudflare Browser Run backend with lower CPU and memory
 
 ## Tasks
 
-- [ ] Add root and generated routing for rendered-page and browser-interaction tasks.
-- [ ] Create the reusable browser-ops skill, generated discovery bridge, and backend-selection reference.
-- [ ] Add the disabled Browser Run policy record and managed setup/fallback guidance without storing credentials.
-- [ ] Add fixed evaluation scenarios and deterministic inventory, parity, generation, and Copier update checks.
-- [ ] Run all required validation and record accepted evidence.
+- [x] Add root and generated routing for rendered-page and browser-interaction tasks.
+- [x] Create the reusable browser-ops skill, generated discovery bridge, and backend-selection reference.
+- [x] Add the disabled Browser Run policy record and managed setup/fallback guidance without storing credentials.
+- [x] Add fixed evaluation scenarios and deterministic inventory, parity, generation, and Copier update checks.
+- [x] Run all required validation and record accepted evidence.
 
 ## Validation Notes
 
@@ -138,3 +138,19 @@ Correction candidate `eca754173cac9fd33e1ed136ef716e95cc881427522a9e7f82d876b810
 - normalize and compare the root/generated `SKILL.md` path pairs in addition to the backend reference and `agents/openai.yaml`;
 - model `provider-unavailable` as an authorized Browser Run service with `provider_available: false`, keeping authorization separate from availability; and
 - model `unauthorized-submit` with an allowlisted operation and matching exact write rule but `current_user_authorization: false`, so current user authorization is the only failed write gate in that hold-out case.
+
+Candidate `fce0a650716a819557a643b223ece1eee2260b20edca387c00f37013f17073b7` was accepted after main-session diff review and applied through `scripts/run-sandboxed-plan-worker.py`.
+
+Final validation passed:
+
+- `python3 scripts/check-root-agent-policy.py`
+- `python3 scripts/check-copier-template.py`
+- `scripts/lint-project-workflow.sh`
+- `tests/smoke.sh`
+- `REQUIRE_COPIER=1 tests/copier-update.sh`
+- `python3 scripts/validate-changes.py --all`
+- `git diff --check`
+- skill-creator `quick_validate.py` for both root and generated `browser-ops` skills
+- required referent contract check with independent semantic review
+
+Independent scenario evaluation classified all five fixed cases as expected and found no unresolved ambiguity. Independent change review found no remaining High or Medium issue and passed all three controlled referents. The accepted Low residual is that deterministic checks validate policy markers and scenario mappings rather than executing the natural-language policy as code; independent evaluation supplies the semantic check for the current artifact. `actionlint` was unavailable and the existing smoke harness reported its optional GitHub Actions lint step as skipped. Live Browser Run access was not configured or exercised; generated projects remain disabled by default and fail closed.
