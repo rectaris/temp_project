@@ -10,13 +10,9 @@ human_design_required: yes
 human_approval_status: approved
 write_scope:
   - CHANGELOG.md
-  - docs/agent/SPEC_EXTERNAL_SERVICES.md
-  - docs/agent/external-services.yaml
-  - docs/agent/spec-index.yaml
+  - docs/agent/
   - docs/plan/
-  - scripts/check-external-service-policy.py
-  - scripts/check-root-agent-policy.py
-  - scripts/lint-project-workflow.sh
+  - scripts/
   - tests/test-validation-tools.py
 context_files:
   - AGENTS.md
@@ -46,6 +42,7 @@ validation:
   - tests/smoke.sh
   - git diff --check
 acceptance:
+  - Use directory-prefix sandbox mounts only because the root policy and checker entrypoint are new files; reject a candidate patch that changes docs/agent or scripts paths other than docs/agent/SPEC_EXTERNAL_SERVICES.md, docs/agent/external-services.yaml, docs/agent/spec-index.yaml, scripts/check-external-service-policy.py, scripts/check-root-agent-policy.py, and scripts/lint-project-workflow.sh.
   - Add a root-owned schema version 2 policy at docs/agent/external-services.yaml with access_profile task_scoped_default_allow, a GitHub fallback, no credential material, and the protected and denied effects accepted by plan 065.
   - Add a root normative specification at docs/agent/SPEC_EXTERNAL_SERVICES.md that defines the active root policy, keeps provider configuration separate from authorization, and requires a fresh check for each exact provider operation, target, effect set, and payload.
   - Add scripts/check-external-service-policy.py as a small root entrypoint that invokes the maintained template checker implementation with the root policy explicitly selected; do not duplicate the checker logic or treat a Jinja template as runtime policy.
@@ -68,6 +65,7 @@ The root `mcp-ops` Skill now requires those exact root paths, so every root exte
 
 ## Decisions
 
+- Use directory-prefix sandbox mounts for `docs/agent/` and `scripts/` because the runner cannot create a new exact-file target, then enforce the narrower intended file list during parent candidate review.
 - Install a root-owned schema version 2 policy instead of reading Jinja template sources as runtime configuration.
 - Keep project-specific policy values under `docs/agent/` and keep the reusable generated-project template default set to `restricted`.
 - Reuse the maintained checker implementation through a root entrypoint that always selects the root policy.
