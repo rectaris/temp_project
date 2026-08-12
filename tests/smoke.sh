@@ -50,6 +50,8 @@ if [ -z "$source_ref" ]; then
     copier.yml \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
+    template/.github/workflows/codex-ci-autofix.yml.jinja \
+    template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py
@@ -60,6 +62,8 @@ if [ -z "$source_ref" ]; then
     copier.yml \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
+    template/.github/workflows/codex-ci-autofix.yml.jinja \
+    template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py
@@ -112,6 +116,62 @@ assert_managed_orchestration_reports() {
   grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
   grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
   grep -qi 'advisory' "$managed_orchestration"
+}
+
+assert_ci_autofix_validation_graph() {
+  workflow=$1
+  grep -q '^  validate-patch:$' "$workflow"
+  grep -Fq 'patch_sha256: ${{ steps.digest.outputs.patch_sha256 }}' "$workflow"
+  grep -Fq 'persist-credentials: false' "$workflow"
+  grep -Fq 'python3 .project-agent-workflow/scripts/validate-changes.py --staged' "$workflow"
+  grep -Fq 'EXPECTED_PATCH_SHA256: ${{ needs.validate-patch.outputs.patch_sha256 }}' "$workflow"
+  grep -Fq 'sha256sum --check --strict' "$workflow"
+  grep -Fq 'git -c core.hooksPath=/dev/null commit -m "fix: codex ci autofix"' "$workflow"
+  grep -Fq 'git diff --quiet "origin/${BASE_BRANCH}...HEAD" -- .github/codex/prompts/ci-autofix.md' "$workflow"
+  grep -Fq 'git show "origin/${BASE_BRANCH}:.github/codex/prompts/ci-autofix.md" > "$RUNNER_TEMP/codex-ci-autofix-prompt.md"' "$workflow"
+  python3 - "$workflow" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+
+def job(name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(name)}:\n.*?(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        raise SystemExit(f"generated CI autofix workflow missing job: {name}")
+    return match.group(0)
+
+
+validate = job("validate-patch")
+if "permissions:\n      actions: read\n      contents: read" not in validate:
+    raise SystemExit("generated validate-patch permissions are not read-only")
+if "contents: write" in validate or "pull-requests: write" in validate:
+    raise SystemExit("generated validate-patch has write permission")
+
+apply = job("apply-patch")
+if "needs:\n      - prepare\n      - generate-fix\n      - validate-patch" not in apply:
+    raise SystemExit("generated apply-patch does not require validate-patch")
+expected_steps = [
+    "Check out pull request branch",
+    "Download Codex patch",
+    "Verify validated patch digest",
+    "Apply patch and commit",
+    "Comment on pull request",
+]
+steps = re.findall(r"^      - name: (.+)$", apply, re.MULTILINE)
+if steps != expected_steps:
+    raise SystemExit(f"generated apply-patch has unexpected steps: {steps}")
+
+patch_only = job("patch-only-notice")
+if "validate-patch" in patch_only or "contents: write" in patch_only:
+    raise SystemExit("generated patch-only path depends on validation or branch writes")
+PY
 }
 
 run_plan_lifecycle_smoke() {
@@ -852,6 +912,8 @@ test ! -f "$tmp/docs/.github/workflows/codex-ci-autofix.yml"
 grep -q 'mode = "direct-push";' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 grep -q 'mode = "patch-only";' "$tmp/python/.github/workflows/codex-ci-autofix.yml"
 grep -Fq 'ref: ${{ needs.prepare.outputs.head_sha }}' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
+assert_ci_autofix_validation_graph "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
+assert_ci_autofix_validation_graph "$tmp/python/.github/workflows/codex-ci-autofix.yml"
 grep -q 'Use tmux for long-running, shared, or interactive commands' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Command Sessions' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Proactive bounded delegation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"

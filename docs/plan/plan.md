@@ -1,7 +1,6 @@
 # Active Plan
 
 id	path	status
-056	docs/plan/active/056-ci-autofix-required-validation.md	in_progress
 057	docs/plan/active/057-root-log-cli-paths.md	in_progress
 058	docs/plan/active/058-git-query-fail-closed.md	in_progress
 059	docs/plan/active/059-generated-whitespace-range.md	in_progress

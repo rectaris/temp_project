@@ -1,6 +1,6 @@
 # Enforce required validation before CI autofix pushes
 
-status: in_progress
+status: checked
 task_types:
   - security
   - template_workflow
@@ -68,14 +68,22 @@ Required validation must not execute PR-controlled dependencies or repository sc
 
 ## Tasks
 
-- [ ] Add deterministic assertions for the exact job graph, job permissions, immutable HEAD checkout, digest handoff, and hook-disabled commit.
-- [ ] Implement root and generated `validate-patch` jobs with their required validation commands.
-- [ ] Restrict root and generated `apply-patch` jobs to digest verification and trusted Git operations.
-- [ ] Keep patch-only behavior and attempt limits unchanged.
-- [ ] Use or verify trusted prompt content before Codex execution.
-- [ ] Align root and generated documentation with the enforced checks.
-- [ ] Run the required validation commands.
+- [x] Add deterministic assertions for the exact job graph, job permissions, immutable HEAD checkout, digest handoff, and hook-disabled commit.
+- [x] Implement root and generated `validate-patch` jobs with their required validation commands.
+- [x] Restrict root and generated `apply-patch` jobs to digest verification and trusted Git operations.
+- [x] Keep patch-only behavior and attempt limits unchanged.
+- [x] Use or verify trusted prompt content before Codex execution.
+- [x] Align root and generated documentation with the enforced checks.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending. Prior candidate history remains available in Git history; this active plan contains only the current accepted implementation contract.
+- Accepted sandbox candidate `e7027b9bc935f1b67a94e348d79024576b4cc230aa2a7e1924cdcf5b91700bcb` after independent review-clone validation.
+- `scripts/lint-project-workflow.sh`: passed.
+- `tests/smoke.sh`: passed with the fallback backend.
+- `python3 scripts/check-yaml.py .`: passed for 29 YAML files.
+- `REQUIRE_ACTIONLINT=1 scripts/lint-github-actions.sh .`: passed with actionlint 1.7.12 installed outside the repository.
+- `python3 scripts/validate-changes.py --all`: passed.
+- `git diff --check`: passed.
+- Root and generated job-graph, permission, digest, prompt-source, and write-job command-boundary checks passed.
+- A live GitHub Actions execution remains operational verification, not an implementation blocker.

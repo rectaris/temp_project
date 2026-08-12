@@ -233,11 +233,22 @@ jobs:
             yarn install --frozen-lockfile
           fi
 
+      - name: Reject pull request prompt changes
+        if: steps.guard.outputs.skipped != 'true'
+        run: |
+          set -eu
+          if ! git diff --quiet "origin/${BASE_BRANCH}...HEAD" -- .github/codex/prompts/ci-autofix.md; then
+            echo "Pull request changes to the CI autofix prompt are not trusted for Codex execution." >&2
+            exit 1
+          fi
+        env:
+          BASE_BRANCH: ${{ needs.prepare.outputs.base_branch }}
+
       - name: Render Codex prompt
         if: steps.guard.outputs.skipped != 'true'
         run: |
           set -eu
-          cp .github/codex/prompts/ci-autofix.md "$RUNNER_TEMP/codex-ci-autofix-prompt.md"
+          git show "origin/${BASE_BRANCH}:.github/codex/prompts/ci-autofix.md" > "$RUNNER_TEMP/codex-ci-autofix-prompt.md"
           {
             echo
             echo "Runtime context:"
@@ -330,12 +341,52 @@ jobs:
           path: ${{ runner.temp }}/codex-ci-autofix-output.md
           if-no-files-found: ignore
 
+  validate-patch:
+    name: Validate patch without write permission
+    needs:
+      - prepare
+      - generate-fix
+    if: needs.prepare.outputs.mode == 'direct-push' && needs.generate-fix.outputs.has_patch == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      patch_sha256: ${{ steps.digest.outputs.patch_sha256 }}
+    steps:
+      - name: Check out exact pull request HEAD
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download Codex patch
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-ci-autofix-patch-${{ needs.prepare.outputs.pr_number }}
+          path: ${{ runner.temp }}
+
+      - name: Record patch digest
+        id: digest
+        run: |
+          set -eu
+          patch_sha256=$(sha256sum "$RUNNER_TEMP/codex-ci-autofix.patch" | awk '{print $1}')
+          echo "patch_sha256=$patch_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Apply patch to validation checkout
+        run: git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"
+
+      - name: Run required repository validation
+        run: python3 .project-agent-workflow/scripts/validate-changes.py --staged
+
   apply-patch:
     name: Apply patch to PR branch
     needs:
       - prepare
       - generate-fix
-    if: needs.prepare.outputs.mode == 'direct-push' && needs.generate-fix.outputs.has_patch == 'true'
+      - validate-patch
+    if: needs.prepare.outputs.mode == 'direct-push' && needs.generate-fix.outputs.has_patch == 'true' && needs.validate-patch.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -352,18 +403,24 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: codex-ci-autofix-patch-${{ needs.prepare.outputs.pr_number }}
+          path: ${{ runner.temp }}
+
+      - name: Verify validated patch digest
+        run: echo "${EXPECTED_PATCH_SHA256}  ${RUNNER_TEMP}/codex-ci-autofix.patch" | sha256sum --check --strict
+        env:
+          EXPECTED_PATCH_SHA256: ${{ needs.validate-patch.outputs.patch_sha256 }}
 
       - name: Apply patch and commit
         run: |
           set -eu
-          git apply --index codex-ci-autofix.patch
+          git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"
           if git diff --cached --quiet; then
             echo "Codex produced no staged changes."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix: codex ci autofix"
+          git -c core.hooksPath=/dev/null commit -m "fix: codex ci autofix"
           git push origin "HEAD:${HEAD_BRANCH}"
         env:
           HEAD_BRANCH: ${{ needs.prepare.outputs.head_branch }}
@@ -386,3 +443,30 @@ jobs:
         env:
           PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
           FAILED_RUN_ID: ${{ needs.prepare.outputs.failed_run_id }}
+
+  patch-only-notice:
+    name: Patch-only notice
+    needs:
+      - prepare
+      - generate-fix
+    if: needs.prepare.outputs.mode == 'patch-only' && needs.generate-fix.outputs.has_patch == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment with artifact notice
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: [
+                "Codex generated a CI autofix patch artifact but did not push it because `mode` is `patch-only`.",
+                "",
+                "Download the `codex-ci-autofix-patch-*` artifact from this workflow run, inspect it, and apply it manually if appropriate."
+              ].join("\n"),
+            });
+        env:
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}

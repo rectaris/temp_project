@@ -991,25 +991,138 @@ def require_copier_documentation_contract() -> None:
             fail(f"generated Copier update wrapper missing marker: {marker}")
 
 
-def require_ci_autofix_root_boundaries() -> None:
-    text = read(".github/workflows/codex-ci-autofix.yml")
+def workflow_job(text: str, job_name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        fail(f"CI autofix workflow missing job: {job_name}")
+    return match.group(0)
+
+
+def require_markers(path: str, subject: str, text: str, markers: tuple[str, ...]) -> None:
+    for marker in markers:
+        if marker not in text:
+            fail(f"{path} {subject} missing marker: {marker}")
+
+
+def require_ci_autofix_boundaries(
+    path: str,
+    boundary_validation_command: str,
+    required_validation_command: str,
+) -> None:
+    text = read(path)
     required = (
         "ref: ${{ needs.prepare.outputs.head_sha }}",
-        'cp .github/codex/prompts/ci-autofix.md "$RUNNER_TEMP/codex-ci-autofix-prompt.md"',
+        'git show "origin/${BASE_BRANCH}:.github/codex/prompts/ci-autofix.md" > "$RUNNER_TEMP/codex-ci-autofix-prompt.md"',
         'prompt-file: ${{ runner.temp }}/codex-ci-autofix-prompt.md',
         'output-file: ${{ runner.temp }}/codex-ci-autofix-output.md',
         'git diff --binary HEAD > "$RUNNER_TEMP/codex-ci-autofix.patch"',
         "git diff --check HEAD",
-        "python3 template/.project-agent-workflow/scripts/security-static-check.py --changed",
+        boundary_validation_command,
         'path: ${{ runner.temp }}/codex-ci-autofix.patch',
         'path: ${{ runner.temp }}/codex-ci-autofix-output.md',
         'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
         'protected=$(git diff --name-only HEAD | grep -E \'^(\\.github/workflows/|\\.github/codex/|\\.env($|\\.)|.*production.*|.*deploy.*)\' || true)',
         'deleted_tests=$(git diff --diff-filter=D --name-only HEAD -- tests || true)',
     )
-    for marker in required:
-        if marker not in text:
-            fail(f"root CI autofix workflow must include boundary guard marker: {marker}")
+    require_markers(path, "workflow", text, required)
+
+    prompt_guard = 'git diff --quiet "origin/${BASE_BRANCH}...HEAD" -- .github/codex/prompts/ci-autofix.md'
+    require_markers(path, "workflow", text, (prompt_guard,))
+    if text.index(prompt_guard) > text.index("- name: Run Codex"):
+        fail(f"{path} must reject pull request prompt changes before Codex execution")
+
+    generate = workflow_job(text, "generate-fix")
+    require_markers(
+        path,
+        "generate-fix job",
+        generate,
+        (
+            "permissions:\n      actions: read\n      contents: read\n      pull-requests: read",
+            prompt_guard,
+        ),
+    )
+    if "contents: write" in generate:
+        fail(f"{path} generate-fix job must not have branch write permission")
+
+    validate = workflow_job(text, "validate-patch")
+    require_markers(
+        path,
+        "validate-patch job",
+        validate,
+        (
+            "needs:\n      - prepare\n      - generate-fix",
+            "if: needs.prepare.outputs.mode == 'direct-push' && needs.generate-fix.outputs.has_patch == 'true'",
+            "permissions:\n      actions: read\n      contents: read",
+            "patch_sha256: ${{ steps.digest.outputs.patch_sha256 }}",
+            "ref: ${{ needs.prepare.outputs.head_sha }}",
+            "persist-credentials: false",
+            'path: ${{ runner.temp }}',
+            'patch_sha256=$(sha256sum "$RUNNER_TEMP/codex-ci-autofix.patch" | awk \'{print $1}\')',
+            'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
+            required_validation_command,
+        ),
+    )
+    if "contents: write" in validate or "pull-requests: write" in validate:
+        fail(f"{path} validate-patch job must remain read-only")
+
+    apply = workflow_job(text, "apply-patch")
+    require_markers(
+        path,
+        "apply-patch job",
+        apply,
+        (
+            "needs:\n      - prepare\n      - generate-fix\n      - validate-patch",
+            "needs.validate-patch.result == 'success'",
+            "EXPECTED_PATCH_SHA256: ${{ needs.validate-patch.outputs.patch_sha256 }}",
+            'sha256sum --check --strict',
+            'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
+            'git -c core.hooksPath=/dev/null commit -m "fix: codex ci autofix"',
+            'git push origin "HEAD:${HEAD_BRANCH}"',
+        ),
+    )
+    step_names = re.findall(r"^      - name: (.+)$", apply, re.MULTILINE)
+    expected_step_names = [
+        "Check out pull request branch",
+        "Download Codex patch",
+        "Verify validated patch digest",
+        "Apply patch and commit",
+        "Comment on pull request",
+    ]
+    if step_names != expected_step_names:
+        fail(f"{path} apply-patch job has unexpected steps: {step_names}")
+    for forbidden in ("actions/setup-", " pip install", "npm ", "uv ", "python3 ", "scripts/", "tests/"):
+        if forbidden in apply:
+            fail(f"{path} apply-patch job contains forbidden executable marker: {forbidden}")
+
+    patch_only = workflow_job(text, "patch-only-notice")
+    require_markers(
+        path,
+        "patch-only-notice job",
+        patch_only,
+        (
+            "needs:\n      - prepare\n      - generate-fix",
+            "if: needs.prepare.outputs.mode == 'patch-only' && needs.generate-fix.outputs.has_patch == 'true'",
+        ),
+    )
+    if "validate-patch" in patch_only or "contents: write" in patch_only:
+        fail(f"{path} patch-only notice must remain independent of validation and branch writes")
+
+
+def require_ci_autofix_root_boundaries() -> None:
+    require_ci_autofix_boundaries(
+        ".github/workflows/codex-ci-autofix.yml",
+        "python3 template/.project-agent-workflow/scripts/security-static-check.py --changed",
+        "scripts/lint-project-workflow.sh\n          tests/smoke.sh",
+    )
+    require_ci_autofix_boundaries(
+        "template/.github/workflows/codex-ci-autofix.yml.jinja",
+        "python3 .project-agent-workflow/scripts/security-static-check.py --changed",
+        "python3 .project-agent-workflow/scripts/validate-changes.py --staged",
+    )
 
 
 def require_namespaced_reference_paths() -> None:

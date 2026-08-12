@@ -57,3 +57,4 @@ id	path
 062	docs/plan/checked/2026/08/01-15/062-filtered-write-scope-sandbox.md
 055	docs/plan/checked/2026/08/01-15/055-agent-profile-toml-aware.md
 054	docs/plan/checked/2026/08/01-15/054-copier-update-fail-closed.md
+056	docs/plan/checked/2026/08/01-15/056-ci-autofix-required-validation.md

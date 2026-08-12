@@ -30,11 +30,25 @@ Codex は `.github/codex/prompts/ci-autofix.md` の指示を受け取り、`gh r
 
 Codex はファイルを編集できますが、commit、push、merge はしません。
 
-workflow の後段 job が差分を patch artifact にします。
+`generate-fix` job は差分を patch artifact にします。
+
+PR が `.github/codex/prompts/ci-autofix.md` を変更している場合、`generate-fix` job は Codex の実行前に停止します。
+
+Codex に渡す prompt は、PR の作業ツリーではなく、取得済み base branch から読み出します。
 
 `patch-only` mode では、workflow は patch artifact だけを残します。
 
-`direct-push` mode では、後段 job が `fix: codex ci autofix` として PR ブランチへ push します。
+`direct-push` mode では、read-only の `validate-patch` job が同じ PR HEAD を clean checkout し、patch を staged 状態で適用します。
+
+`validate-patch` job は `.project-agent-workflow/scripts/validate-changes.py --staged` を実行し、変更内容に対応する managed validation command を選択します。
+
+設定された validation command を実行できない場合、`validate-patch` job は失敗します。
+
+検証が成功すると、`validate-patch` job は patch の SHA-256 digest を `apply-patch` job へ渡します。
+
+write 権限を持つ `apply-patch` job は artifact の digest を照合し、同じ PR HEAD に patch を適用して `fix: codex ci autofix` として PR ブランチへ push します。
+
+`apply-patch` job は dependency installer や repository validation script を実行せず、commit hook も無効にします。
 
 Copier の既定値は `disabled` です。
 
@@ -50,7 +64,9 @@ Codex GitHub Action はこの secret を使って Codex CLI を実行します�
 
 `GITHUB_TOKEN` は GitHub Actions が発行する標準 token を使います。
 
-workflow の write 権限は patch を適用して PR ブランチへ commit する job に限定しています。
+workflow の write 権限は、検証済み patch を適用して PR ブランチへ commit する `apply-patch` job に限定しています。
+
+patch を生成する `generate-fix` job と検証する `validate-patch` job の repository 権限は read-only です。
 
 ## Enable Or Disable
 
