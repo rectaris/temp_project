@@ -1,6 +1,6 @@
 # Keep smoke render source committable without template drift
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
 review_class: B
@@ -36,10 +36,14 @@ Plan 054 made the smoke test create an isolated render-source clone and commit s
 
 ## Tasks
 
-- [ ] Add the minimal empty-commit behavior to the temporary render-source commit.
-- [ ] Verify smoke behavior from a clean source tree.
-- [ ] Run the required validation commands.
+- [x] Add the minimal empty-commit behavior to the temporary render-source commit.
+- [x] Verify smoke behavior from a clean source tree.
+- [x] Run the required validation commands.
 
 ## Validation Notes
 
-- Pending.
+- Accepted sandbox candidate `095acafa6fd3711b4820318e649b9416bd1b6688eca5ebe4e7db7955fcf4d2c4` after scope and patch review.
+- `tests/smoke.sh` passed in an independent clean review clone and after applying the candidate to the source repository. The existing fallback backend reported that `actionlint` was unavailable.
+- `scripts/lint-project-workflow.sh` passed in both environments.
+- `python3 scripts/validate-changes.py --all` passed in both environments.
+- `git diff --check` passed in both environments.

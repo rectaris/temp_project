@@ -68,7 +68,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py
   git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
-    commit -qm "Create isolated smoke candidate"
+    commit --allow-empty -qm "Create isolated smoke candidate"
   git -C "$render_source" tag v1.2.2
   source_ref=v1.2.2
 fi
