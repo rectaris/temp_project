@@ -56,7 +56,6 @@ acceptance:
   - Keep copier.yml defaulting generated projects to restricted, keep existing project-owned policies update-safe, and leave the reusable template authorization behavior unchanged.
   - Record the corrected root authorization behavior in CHANGELOG.md and complete all required validation before any release, push, or public GitHub write resumes.
 checked_summary_ja: temp_project ルートに task-scoped version 2 方針と検査入口を配線し、現在の依頼に必要な外部操作を効果別の境界付きで認可する。
-
 ## Context
 
 Plan 065 implemented a selectable schema version 2 policy for Copier-generated projects but did not install an active policy, normative specification, or checker entrypoint for this template source repository.
@@ -65,6 +64,7 @@ The root `mcp-ops` Skill now requires those exact root paths, so every root exte
 
 ## Decisions
 
+- Plan 066 is checked, and this plan resumes through the sandboxed runner with its bounded model fallback available.
 - Use directory-prefix sandbox mounts for `docs/agent/` and `scripts/` because the runner cannot create a new exact-file target, then enforce the narrower intended file list during parent candidate review.
 - Install a root-owned schema version 2 policy instead of reading Jinja template sources as runtime configuration.
 - Keep project-specific policy values under `docs/agent/` and keep the reusable generated-project template default set to `restricted`.

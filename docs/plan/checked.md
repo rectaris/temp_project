@@ -66,3 +66,4 @@ id	path
 061	docs/plan/checked/2026/08/01-15/061-current-plan-manifest-reference.md
 064	docs/plan/checked/2026/08/01-15/064-browser-task-routing.md
 065	docs/plan/checked/2026/08/01-15/065-task-scoped-external-access.md
+066	docs/plan/checked/2026/08/01-15/066-sequential-worker-model-fallback.md

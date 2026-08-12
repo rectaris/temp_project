@@ -641,9 +641,9 @@ def require_user_communication_alignment() -> None:
 
 
 def require_sandboxed_plan_worker_alignment() -> None:
-    if read("scripts/run-sandboxed-plan-worker.py") != read(
-        "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    ):
+    root_runner = read("scripts/run-sandboxed-plan-worker.py")
+    template_runner = read("template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py")
+    if root_runner != template_runner:
         fail("sandboxed plan worker root/template scripts differ")
     root_mode = os.stat(ROOT / "scripts/run-sandboxed-plan-worker.py").st_mode & 0o777
     template_mode = os.stat(ROOT / "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py").st_mode & 0o777
@@ -651,6 +651,22 @@ def require_sandboxed_plan_worker_alignment() -> None:
         fail("sandboxed plan worker root/template script modes differ")
     if root_mode & 0o111 == 0:
         fail("sandboxed plan worker scripts must be executable")
+    for marker in (
+        'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
+        'DEFAULT_CODEX_REASONING = "medium"',
+        'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"',
+        'DEFAULT_FALLBACK_CODEX_REASONING = "max"',
+        "def classify_codex_unavailability",
+        'label="fallback"',
+        '"attempts"',
+        '"selected_attempt"',
+        '"fallback_reason"',
+        '"--fallback-codex-model"',
+        '"--fallback-codex-reasoning-effort"',
+        '"--no-model-fallback"',
+    ):
+        if marker not in template_runner:
+            fail(f"sandboxed plan worker missing model fallback marker: {marker}")
     pairs = (
         (
             ".codex/skills/sequential-plan-orchestrator/SKILL.md",
@@ -661,6 +677,15 @@ def require_sandboxed_plan_worker_alignment() -> None:
         template_text = normalized_template_core(template_path)
         if read(root_path) != template_text:
             fail(f"sandboxed plan worker orchestration text differs: {root_path} != {template_path}")
+    for relative in (
+        "template/.project-agent-workflow/AGENTS.md.jinja",
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+        "template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        text = read(relative).lower()
+        for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
+            if marker not in text:
+                fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
 
 
 def run_hook_payload(script_path: str, run_id: str, payload: dict[str, Any], cwd: Path) -> dict[str, Any]:

@@ -54,8 +54,10 @@ if [ -z "$source_ref" ]; then
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
@@ -71,6 +73,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
     template/docs/agent/external-services.yaml.jinja
   do
     mkdir -p "$(dirname "$render_source/$candidate_path")"
@@ -84,8 +87,10 @@ if [ -z "$source_ref" ]; then
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
@@ -101,6 +106,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
     template/docs/agent/external-services.yaml.jinja
   git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
     commit --allow-empty -qm "Create isolated smoke candidate"
@@ -978,6 +984,11 @@ grep -q "Do not edit the assigned plan's status" "$tmp/typescript/.codex/agents/
 grep -q 'Do not commit changes' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run <plan>' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 python3 "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py" --help >/dev/null
+grep -q 'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'DEFAULT_FALLBACK_CODEX_REASONING = "max"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q -- '--fallback-codex-model' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q -- '--no-model-fallback' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 test -f "$tmp/typescript/.codex/hooks/pre_tool_hardening_gate.py"
 test -f "$tmp/typescript/.codex/hooks/agent_log_event.py"
 test -f "$tmp/typescript/.codex/hooks/semantic_guard_advisory.py"
@@ -1070,6 +1081,9 @@ grep -q 'Do not delegate short deterministic commands' "$tmp/typescript/.project
 grep -q 'external writes' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'sequential_plan_worker.*exactly one assigned active plan' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'gpt-5.3-codex-spark.*medium reasoning' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'gpt-5.6-luna.*max reasoning' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'usage limit, rate limit, unavailable model, or denied model access' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'fast_scoped_worker.*predetermined validation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'evidence_synthesizer.*multiple evidence sources' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Use xhigh through `evidence_synthesizer`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
@@ -1131,6 +1145,7 @@ grep -q 'name: write-for-reader' "$tmp/typescript/.project-agent-workflow/skills
 grep -q 'SPEC_USER_COMMUNICATION.md' "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/SKILL.md"
 grep -q 'sequential_plan_worker' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -q 'gpt-5.6-luna.*max fallback' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'one bounded worker at a time' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/.project-agent-workflow/AGENTS.md"

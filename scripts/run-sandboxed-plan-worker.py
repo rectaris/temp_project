@@ -22,8 +22,48 @@ from typing import Any, Sequence
 SCHEMA_VERSION = 1
 DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
 DEFAULT_CODEX_REASONING = "medium"
+DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"
+DEFAULT_FALLBACK_CODEX_REASONING = "max"
 PLAN_PATTERN = re.compile(r"^docs/plan/active/\d{3}-[^/]+\.md$")
 STATUS_PATTERN = re.compile(r"^(?:\?\?|[ MARCUDT][ MD]) (.+)$")
+CODEX_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL)(?::|\b)", re.IGNORECASE)
+CODEX_UNAVAILABLE_PATTERNS = (
+    (
+        "usage_limit",
+        re.compile(
+            r"^(?:ERROR|FATAL):\s*(?:(?:you(?:'ve| have)?) hit your usage limit"
+            r"|usage limit (?:has been )?exceeded)(?: for (?:model )?[^\n]+?)?[.!]?$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "rate_limit",
+        re.compile(
+            r"^(?:ERROR|FATAL):\s*(?:rate limit exceeded|too many requests)"
+            r"(?: for (?:model )?[^\n]+?)?[.!]?$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "model_unavailable",
+        re.compile(
+            r"^(?:ERROR|FATAL):\s*(?:the )?model\b.*\b"
+            r"(?:not available|unavailable|not found|unsupported|does not exist)\b[^\n]*$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "model_access_denied",
+        re.compile(
+            r"^(?:ERROR|FATAL):\s*(?:"
+            r"(?:the )?model\b.*\b(?:do not|don't|does not|doesn't) have access\b"
+            r"|access to (?:the )?model\b.*\b(?:is )?denied\b"
+            r"|(?:you )?(?:do not|don't) have access to (?:the |this )?model\b"
+            r")[^\n]*$",
+            re.IGNORECASE,
+        ),
+    ),
+)
 SHA256_BUFFER = 1024 * 1024
 ENV_PREFIX = "SANDBOXED_PLAN_WORKER_"
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -31,6 +71,12 @@ ARTIFACT_NAMES = (
     "worker.stdout",
     "worker.stderr",
     "worker-last-message.txt",
+    "worker-primary.stdout",
+    "worker-primary.stderr",
+    "worker-primary-last-message.txt",
+    "worker-fallback.stdout",
+    "worker-fallback.stderr",
+    "worker-fallback-last-message.txt",
     "candidate.patch",
     "manifest.json",
 )
@@ -379,6 +425,30 @@ def default_worker_command(
     ]
 
 
+def classify_codex_unavailability(stdout: bytes, stderr: bytes) -> str | None:
+    """Return a bounded reason only for a Codex CLI availability error line."""
+    del stdout
+    error_lines: list[str] = []
+    text = stderr.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        candidate = line.strip()
+        if CODEX_ERROR_LINE.match(candidate):
+            error_lines.append(candidate)
+    if not error_lines:
+        return None
+    reasons: set[str] = set()
+    for candidate in error_lines:
+        matched_reason: str | None = None
+        for reason, pattern in CODEX_UNAVAILABLE_PATTERNS:
+            if pattern.fullmatch(candidate):
+                matched_reason = reason
+                break
+        if matched_reason is None:
+            return None
+        reasons.add(matched_reason)
+    return reasons.pop() if len(reasons) == 1 else None
+
+
 def build_bwrap_command(
     *,
     bwrap_bin: str,
@@ -388,6 +458,7 @@ def build_bwrap_command(
     env_vars: dict[str, str],
     writable_shadows: Sequence[tuple[Path, Path]] = (),
     writable_clone: bool = False,
+    hidden_directories: Sequence[Path] = (),
 ) -> list[str]:
     argv = [
         bwrap_bin,
@@ -403,6 +474,11 @@ def build_bwrap_command(
         "--ro-bind",
         "/",
         "/",
+    ]
+    for hidden in hidden_directories:
+        argv.extend(("--tmpfs", str(hidden)))
+    argv.extend(
+        [
         "--ro-bind" if not writable_clone else "--bind",
         str(clone_dir),
         str(clone_dir),
@@ -415,7 +491,8 @@ def build_bwrap_command(
         "/dev",
         "--chdir",
         str(clone_dir),
-    ]
+        ]
+    )
     for shadow_path, clone_target in writable_shadows:
         argv.extend(("--bind", str(shadow_path), str(clone_target)))
     for key, value in env_vars.items():
@@ -423,6 +500,22 @@ def build_bwrap_command(
     argv.append("--")
     argv.extend(command)
     return argv
+
+
+def normalize_hidden_directories(
+    candidates: Sequence[Path], *, visible_paths: Sequence[Path]
+) -> list[Path]:
+    hidden: list[Path] = []
+    visible = [path.resolve() for path in visible_paths]
+    for candidate in sorted({path.resolve() for path in candidates}, key=lambda path: len(path.parts)):
+        if not candidate.is_dir() or candidate.is_symlink():
+            raise RunnerError(f"hidden sandbox path must be an existing regular directory: {candidate}")
+        if any(path_is_within(candidate, path) or path_is_within(path, candidate) for path in visible):
+            raise RunnerError(f"hidden sandbox path overlaps required attempt state: {candidate}")
+        if any(path_is_within(parent, candidate) for parent in hidden):
+            continue
+        hidden.append(candidate)
+    return hidden
 
 
 def prepare_writable_shadows(
@@ -505,7 +598,7 @@ def clone_at_head(repo_root: Path, git_bin: str, head: str, destination: Path) -
 
 
 def stage_codex_home(scratch_dir: Path) -> Path:
-    host_codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    host_codex_home = host_codex_home_path()
     host_auth = host_codex_home / "auth.json"
     if not host_auth.is_file():
         raise RunnerError(f"default Codex worker requires an auth file: {host_auth}")
@@ -516,6 +609,10 @@ def stage_codex_home(scratch_dir: Path) -> Path:
     shutil.copyfile(host_auth, scratch_auth)
     scratch_auth.chmod(0o600)
     return scratch_codex_home
+
+
+def host_codex_home_path() -> Path:
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
 
 
 def prepare_worker_environment(
@@ -657,6 +754,142 @@ def collect_candidate_patch_in_sandbox(
     return patch_path.read_bytes(), head_path.read_text(encoding="utf-8").strip(), refs_path.read_bytes()
 
 
+def execute_isolated_attempt(
+    *,
+    workspace: Path,
+    label: str,
+    repo_root: Path,
+    head: str,
+    plan_rel: str,
+    plan_digest: str,
+    normalized_scope: Sequence[str],
+    bwrap_bin: str,
+    git_bin: str,
+    reserved_artifacts: dict[str, Path],
+    extra_env: Sequence[str],
+    hidden_directories: Sequence[Path],
+    codex_bin: str | None = None,
+    model: str | None = None,
+    reasoning: str | None = None,
+    custom_command: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    attempt_root = workspace / label
+    clone_dir = attempt_root / "clone"
+    scratch_dir = attempt_root / "scratch"
+    scratch_dir.mkdir(parents=True, exist_ok=False)
+    clone_at_head(repo_root, git_bin, head, clone_dir)
+    initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
+    shadows = prepare_writable_shadows(
+        clone_dir=clone_dir,
+        scratch_dir=scratch_dir,
+        scope_entries=normalized_scope,
+    )
+
+    include_codex_home = custom_command is None
+    stdin: bytes | None = None
+    last_message_path = scratch_dir / "worker-last-message.txt"
+    if custom_command is None:
+        if codex_bin is None or model is None or reasoning is None:
+            raise RunnerError("Codex attempt requires an executable, model, and reasoning effort")
+        command = default_worker_command(
+            codex_bin=codex_bin,
+            clone_dir=clone_dir,
+            scratch_dir=scratch_dir,
+            last_message_path=last_message_path,
+            model=model,
+            reasoning=reasoning,
+        )
+        stdin = build_worker_prompt(plan_rel, plan_digest).encode("utf-8")
+    else:
+        command = list(custom_command)
+
+    env_vars = prepare_worker_environment(
+        source_repo=repo_root,
+        clone_dir=clone_dir,
+        scratch_dir=scratch_dir,
+        plan_rel=plan_rel,
+        extra_env=extra_env,
+        include_codex_home=include_codex_home,
+    )
+    result = run_subprocess(
+        build_bwrap_command(
+            bwrap_bin=bwrap_bin,
+            clone_dir=clone_dir,
+            scratch_dir=scratch_dir,
+            command=command,
+            env_vars=env_vars,
+            writable_shadows=[(shadow, target) for shadow, target, _is_prefix in shadows],
+            hidden_directories=normalize_hidden_directories(
+                hidden_directories,
+                visible_paths=(clone_dir, scratch_dir),
+            ),
+        ),
+        cwd=repo_root,
+        env=sanitize_process_env(),
+        stdin=stdin,
+        check=False,
+    )
+
+    artifact_prefix = "worker" if label == "custom" else f"worker-{label}"
+    stdout_path = reserved_artifacts[f"{artifact_prefix}.stdout"]
+    stderr_path = reserved_artifacts[f"{artifact_prefix}.stderr"]
+    stdout_digest = write_bytes(stdout_path, result.stdout)
+    stderr_digest = write_bytes(stderr_path, result.stderr)
+    record: dict[str, Any] = {
+        "label": label,
+        "model": model,
+        "reasoning_effort": reasoning,
+        "returncode": result.returncode,
+        "stdout_path": str(stdout_path),
+        "stdout_digest": stdout_digest,
+        "stderr_path": str(stderr_path),
+        "stderr_digest": stderr_digest,
+        "selected": False,
+    }
+    attempt_last_message: Path | None = None
+    if result.returncode == 0 and last_message_path.is_file():
+        attempt_last_message = reserved_artifacts[f"{artifact_prefix}-last-message.txt"]
+        attempt_last_message.write_bytes(last_message_path.read_bytes())
+        record["last_message_path"] = str(attempt_last_message)
+        record["last_message_digest"] = hash_file(attempt_last_message)
+    return {
+        "clone_dir": clone_dir,
+        "attempt_root": attempt_root,
+        "scratch_dir": scratch_dir,
+        "initial_refs": initial_refs,
+        "shadows": shadows,
+        "env_vars": env_vars,
+        "command": command,
+        "result": result,
+        "record": record,
+        "last_message_path": attempt_last_message,
+    }
+
+
+def select_attempt_artifacts(
+    attempt: dict[str, Any], reserved_artifacts: dict[str, Path]
+) -> dict[str, Any]:
+    result: subprocess.CompletedProcess[bytes] = attempt["result"]
+    stdout_path = reserved_artifacts["worker.stdout"]
+    stderr_path = reserved_artifacts["worker.stderr"]
+    worker_result: dict[str, Any] = {
+        "command": attempt["command"],
+        "returncode": result.returncode,
+        "stdout_path": str(stdout_path),
+        "stdout_digest": write_bytes(stdout_path, result.stdout),
+        "stderr_path": str(stderr_path),
+        "stderr_digest": write_bytes(stderr_path, result.stderr),
+    }
+    attempt["record"]["selected"] = True
+    last_message_path = attempt["last_message_path"]
+    if last_message_path is not None:
+        copied_last_message = reserved_artifacts["worker-last-message.txt"]
+        copied_last_message.write_bytes(last_message_path.read_bytes())
+        worker_result["last_message_path"] = str(copied_last_message)
+        worker_result["last_message_digest"] = hash_file(copied_last_message)
+    return worker_result
+
+
 def run_worker(args: argparse.Namespace) -> int:
     git_bin = require_executable("git", args.git_bin)
     bwrap_bin = require_executable("bwrap", args.bwrap_bin)
@@ -673,83 +906,111 @@ def run_worker(args: argparse.Namespace) -> int:
 
     with tempfile.TemporaryDirectory(prefix="sandboxed-plan-worker-workspace-") as workspace_tmp:
         workspace = Path(workspace_tmp)
-        clone_dir = workspace / "clone"
-        scratch_dir = workspace / "scratch"
-        scratch_dir.mkdir(parents=True, exist_ok=True)
-        clone_at_head(repo_root, git_bin, head, clone_dir)
-        initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
-        shadows = prepare_writable_shadows(
-            clone_dir=clone_dir,
-            scratch_dir=scratch_dir,
-            scope_entries=normalized_scope,
-        )
-
-        stdout_path = reserved_artifacts["worker.stdout"]
-        stderr_path = reserved_artifacts["worker.stderr"]
-        last_message_path = scratch_dir / "worker-last-message.txt"
-        worker_kind = "custom"
-        stdin: bytes | None = None
-        include_codex_home = False
-
+        attempts: list[dict[str, Any]] = []
+        fallback_reason: str | None = None
         if args.worker_binary is None:
             codex_bin = require_executable("codex", args.codex_bin)
-            command = default_worker_command(
+            if not args.codex_model or not args.codex_reasoning_effort:
+                raise RunnerError("preferred Codex model and reasoning effort must be non-empty")
+            if not args.no_model_fallback and (
+                not args.fallback_codex_model or not args.fallback_codex_reasoning_effort
+            ):
+                raise RunnerError("fallback Codex model and reasoning effort must be non-empty")
+            primary = execute_isolated_attempt(
+                workspace=workspace,
+                label="primary",
+                repo_root=repo_root,
+                head=head,
+                plan_rel=plan_rel,
+                plan_digest=plan_digest,
+                normalized_scope=normalized_scope,
+                bwrap_bin=bwrap_bin,
+                git_bin=git_bin,
+                reserved_artifacts=reserved_artifacts,
+                extra_env=args.worker_env,
+                hidden_directories=(output_dir, host_codex_home_path()),
                 codex_bin=codex_bin,
-                clone_dir=clone_dir,
-                scratch_dir=scratch_dir,
-                last_message_path=last_message_path,
                 model=args.codex_model,
                 reasoning=args.codex_reasoning_effort,
             )
+            attempts.append(primary["record"])
             worker_kind = "codex"
-            include_codex_home = True
-            stdin = build_worker_prompt(plan_rel, plan_digest).encode("utf-8")
+            if primary["result"].returncode == 0:
+                selected = primary
+            else:
+                fallback_reason = classify_codex_unavailability(
+                    primary["result"].stdout, primary["result"].stderr
+                )
+                if args.no_model_fallback or fallback_reason is None:
+                    raise RunnerError(
+                        f"worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                    )
+                fallback = execute_isolated_attempt(
+                    workspace=workspace,
+                    label="fallback",
+                    repo_root=repo_root,
+                    head=head,
+                    plan_rel=plan_rel,
+                    plan_digest=plan_digest,
+                    normalized_scope=normalized_scope,
+                    bwrap_bin=bwrap_bin,
+                    git_bin=git_bin,
+                    reserved_artifacts=reserved_artifacts,
+                    extra_env=args.worker_env,
+                    hidden_directories=(output_dir, host_codex_home_path(), primary["attempt_root"]),
+                    codex_bin=codex_bin,
+                    model=args.fallback_codex_model,
+                    reasoning=args.fallback_codex_reasoning_effort,
+                )
+                attempts.append(fallback["record"])
+                if fallback["result"].returncode != 0:
+                    raise RunnerError(
+                        f"fallback worker exited with {fallback['result'].returncode}; stdout/stderr saved under {output_dir}"
+                    )
+                selected = fallback
         else:
             worker_binary = require_executable("worker", args.worker_binary)
-            command = [worker_binary, *args.worker_arg]
-
-        env_vars = prepare_worker_environment(
-            source_repo=repo_root,
-            clone_dir=clone_dir,
-            scratch_dir=scratch_dir,
-            plan_rel=plan_rel,
-            extra_env=args.worker_env,
-            include_codex_home=include_codex_home,
-        )
-        bwrap_command = build_bwrap_command(
-            bwrap_bin=bwrap_bin,
-            clone_dir=clone_dir,
-            scratch_dir=scratch_dir,
-            command=command,
-            env_vars=env_vars,
-            writable_shadows=[(shadow, target) for shadow, target, _is_prefix in shadows],
-        )
-        result = run_subprocess(
-            bwrap_command,
-            cwd=repo_root,
-            env=sanitize_process_env(),
-            stdin=stdin,
-            check=False,
-        )
-        stdout_digest = write_bytes(stdout_path, result.stdout)
-        stderr_digest = write_bytes(stderr_path, result.stderr)
-        if result.returncode != 0:
-            raise RunnerError(
-                f"worker exited with {result.returncode}; stdout/stderr saved under {output_dir}"
+            selected = execute_isolated_attempt(
+                workspace=workspace,
+                label="custom",
+                repo_root=repo_root,
+                head=head,
+                plan_rel=plan_rel,
+                plan_digest=plan_digest,
+                normalized_scope=normalized_scope,
+                bwrap_bin=bwrap_bin,
+                git_bin=git_bin,
+                reserved_artifacts=reserved_artifacts,
+                extra_env=args.worker_env,
+                hidden_directories=(output_dir,),
+                custom_command=[worker_binary, *args.worker_arg],
             )
+            worker_kind = "custom"
+            if selected["result"].returncode != 0:
+                raise RunnerError(
+                    f"worker exited with {selected['result'].returncode}; stdout/stderr saved under {output_dir}"
+                )
 
-        materialize_writable_shadows(shadows)
+        worker_result = select_attempt_artifacts(selected, reserved_artifacts)
+        worker_result["kind"] = worker_kind
+        if attempts:
+            worker_result["attempts"] = attempts
+            worker_result["selected_attempt"] = selected["record"]["label"]
+        if fallback_reason is not None:
+            worker_result["fallback_reason"] = fallback_reason
+
+        materialize_writable_shadows(selected["shadows"])
 
         patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
             bwrap_bin=bwrap_bin,
             git_bin=git_bin,
-            clone_dir=clone_dir,
-            scratch_dir=scratch_dir,
-            env_vars=env_vars,
+            clone_dir=selected["clone_dir"],
+            scratch_dir=selected["scratch_dir"],
+            env_vars=selected["env_vars"],
         )
         if clone_head_after_worker != head:
             raise RunnerError("worker changed the clone HEAD and candidate changes were rejected")
-        if refs_after_worker != initial_refs:
+        if refs_after_worker != selected["initial_refs"]:
             raise RunnerError("worker changed clone refs and candidate changes were rejected")
         if not patch_bytes:
             raise RunnerError("worker produced no candidate changes")
@@ -765,21 +1026,6 @@ def run_worker(args: argparse.Namespace) -> int:
         disallowed = [path for path in changed_paths if not scope_allows_path(normalized_scope, path)]
         if disallowed:
             raise RunnerError(f"worker changed paths outside write_scope: {', '.join(disallowed)}")
-
-        worker_result: dict[str, Any] = {
-            "kind": worker_kind,
-            "command": command,
-            "returncode": result.returncode,
-            "stdout_path": str(stdout_path),
-            "stdout_digest": stdout_digest,
-            "stderr_path": str(stderr_path),
-            "stderr_digest": stderr_digest,
-        }
-        if last_message_path.is_file():
-            copied_last_message = reserved_artifacts["worker-last-message.txt"]
-            copied_last_message.write_bytes(last_message_path.read_bytes())
-            worker_result["last_message_path"] = str(copied_last_message)
-            worker_result["last_message_digest"] = hash_file(copied_last_message)
 
         manifest = {
             "schema_version": SCHEMA_VERSION,
@@ -984,6 +1230,9 @@ def run_self_test(args: argparse.Namespace) -> int:
                     codex_bin=args.codex_bin,
                     codex_model=DEFAULT_CODEX_MODEL,
                     codex_reasoning_effort=DEFAULT_CODEX_REASONING,
+                    fallback_codex_model=DEFAULT_FALLBACK_CODEX_MODEL,
+                    fallback_codex_reasoning_effort=DEFAULT_FALLBACK_CODEX_REASONING,
+                    no_model_fallback=False,
                     output_dir=str(output_dir),
                     plan=plan_rel,
                     worker_binary=str(require_executable("python3", sys.executable)),
@@ -1031,11 +1280,28 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--git-bin", default="git", help="git executable to use")
     run_parser.add_argument("--bwrap-bin", default="bwrap", help="Bubblewrap executable to use")
     run_parser.add_argument("--codex-bin", default="codex", help="Codex executable to use for the default worker")
-    run_parser.add_argument("--codex-model", default=DEFAULT_CODEX_MODEL, help="Codex model for the default worker")
+    run_parser.add_argument(
+        "--codex-model", default=DEFAULT_CODEX_MODEL, help="preferred Codex model for the default worker"
+    )
     run_parser.add_argument(
         "--codex-reasoning-effort",
         default=DEFAULT_CODEX_REASONING,
-        help="Codex reasoning effort for the default worker",
+        help="preferred Codex reasoning effort for the default worker",
+    )
+    run_parser.add_argument(
+        "--fallback-codex-model",
+        default=DEFAULT_FALLBACK_CODEX_MODEL,
+        help="Codex model used once when the preferred model is unavailable",
+    )
+    run_parser.add_argument(
+        "--fallback-codex-reasoning-effort",
+        default=DEFAULT_FALLBACK_CODEX_REASONING,
+        help="reasoning effort for the fallback Codex model",
+    )
+    run_parser.add_argument(
+        "--no-model-fallback",
+        action="store_true",
+        help="disable automatic fallback when the preferred Codex model is unavailable",
     )
     run_parser.add_argument("--worker-binary", help="override the default Codex worker with a custom executable")
     run_parser.add_argument("--worker-arg", action="append", default=[], help="append one argument for --worker-binary")

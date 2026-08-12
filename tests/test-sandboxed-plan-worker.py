@@ -81,6 +81,86 @@ def write_worker(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def write_fake_codex(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            f"""\
+            #!{sys.executable}
+            from __future__ import annotations
+
+            import os
+            import sys
+            from pathlib import Path
+
+
+            args = sys.argv[1:]
+            model = args[args.index("--model") + 1]
+            config = args[args.index("--config") + 1]
+            reasoning = config.split('=', 1)[1].strip('"')
+            scenario = os.environ["FAKE_CODEX_SCENARIO"]
+            primary_model = os.environ.get("FAKE_PRIMARY_MODEL", "gpt-5.3-codex-spark")
+            fallback_model = os.environ.get("FAKE_FALLBACK_MODEL", "gpt-5.6-luna")
+            primary_reasoning = os.environ.get("FAKE_PRIMARY_REASONING", "medium")
+            fallback_reasoning = os.environ.get("FAKE_FALLBACK_REASONING", "max")
+            worker_repo = Path(os.environ["{ENV_PREFIX}WORKER_REPO"])
+            scratch_dir = Path(os.environ["{ENV_PREFIX}SCRATCH_DIR"])
+            target = worker_repo / "allowed.txt"
+            last_message = None
+            if "--output-last-message" in args:
+                last_message = Path(args[args.index("--output-last-message") + 1])
+
+            if model == primary_model:
+                if reasoning != primary_reasoning:
+                    raise SystemExit(f"unexpected primary reasoning: {{reasoning}}")
+                if scenario == "primary_success":
+                    target.write_text("preferred\\n", encoding="utf-8")
+                elif scenario in {{"unavailable_then_success", "unavailable_then_failure"}}:
+                    target.write_text("discarded-primary\\n", encoding="utf-8")
+                    if last_message is not None:
+                        last_message.write_text("failed preferred output\\n", encoding="utf-8")
+                    print("ERROR: You've hit your usage limit for the preferred model.", file=sys.stderr)
+                    raise SystemExit(1)
+                elif scenario == "nonavailability_failure":
+                    target.write_text("discarded-error\\n", encoding="utf-8")
+                    print("ERROR: worker validation failed", file=sys.stderr)
+                    raise SystemExit(1)
+                else:
+                    raise SystemExit(f"unexpected scenario: {{scenario}}")
+            elif model == fallback_model:
+                if reasoning != fallback_reasoning:
+                    raise SystemExit(f"unexpected fallback reasoning: {{reasoning}}")
+                if target.read_text(encoding="utf-8") != "original\\n":
+                    raise SystemExit("fallback inherited preferred-attempt changes")
+                host_codex_home = Path(os.environ["FAKE_HOST_CODEX_HOME"])
+                output_dir = Path(os.environ["FAKE_OUTPUT_DIR"])
+                primary_root = scratch_dir.parents[1] / "primary"
+                for forbidden in (
+                    host_codex_home / "auth.json",
+                    output_dir / "worker-primary.stderr",
+                    primary_root / "clone" / "allowed.txt",
+                ):
+                    if forbidden.exists():
+                        raise SystemExit(f"fallback can read hidden attempt state: {{forbidden}}")
+                if scenario == "unavailable_then_success":
+                    target.write_text("fallback\\n", encoding="utf-8")
+                elif scenario == "unavailable_then_failure":
+                    print("ERROR: fallback implementation failed", file=sys.stderr)
+                    raise SystemExit(2)
+                else:
+                    raise SystemExit("fallback ran unexpectedly")
+            else:
+                raise SystemExit(f"unexpected model: {{model}}")
+
+            if last_message is not None:
+                last_message.write_text(f"completed with {{model}}\\n", encoding="utf-8")
+            print(f"completed with {{model}}")
+            """
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
 class SandboxedPlanWorkerTests(unittest.TestCase):
     maxDiff = None
 
@@ -170,6 +250,40 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             args.extend(["--worker-env", f"{key}={value}"])
         return run_cli(repo, *args, env=parent_env), actual_output, worker_path
 
+    def run_with_fake_codex(
+        self,
+        repo: Path,
+        plan_path: str,
+        scenario: str,
+        *,
+        output_dir: Path,
+        extra_args: tuple[str, ...] = (),
+        fake_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        fake_codex = output_dir.parent / f"fake-codex-{scenario}.py"
+        write_fake_codex(fake_codex)
+        codex_home = output_dir.parent / f"codex-home-{scenario}"
+        codex_home.mkdir()
+        (codex_home / "auth.json").write_text('{"token":"fixture"}\n', encoding="utf-8")
+        args = [
+            "run",
+            plan_path,
+            "--output-dir",
+            str(output_dir),
+            "--codex-bin",
+            str(fake_codex),
+            *extra_args,
+        ]
+        worker_env = {
+            "FAKE_CODEX_SCENARIO": scenario,
+            "FAKE_HOST_CODEX_HOME": str(codex_home),
+            "FAKE_OUTPUT_DIR": str(output_dir),
+            **(fake_env or {}),
+        }
+        for key, value in worker_env.items():
+            args.extend(["--worker-env", f"{key}={value}"])
+        return run_cli(repo, *args, env={"CODEX_HOME": str(codex_home)})
+
     def assert_no_workspace_directories(self, tmpdir_root: Path) -> None:
         leftovers = sorted(path.name for path in tmpdir_root.glob("sandboxed-plan-worker-workspace-*"))
         self.assertEqual(leftovers, [])
@@ -189,6 +303,27 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertNotIn("--sandbox", command)
         self.assertNotIn("--ask-for-approval", command)
         self.assertNotIn("--dangerously-bypass-hook-trust", command)
+
+    def test_codex_unavailability_classifier_is_bounded_to_cli_error_lines(self) -> None:
+        cases = (
+            (b"", b"ERROR: You've hit your usage limit for GPT-5.3-Codex-Spark.", "usage_limit"),
+            (b"", b"ERROR: Usage limit exceeded for model GPT-5.3-Codex-Spark.", "usage_limit"),
+            (b"", b"FATAL: rate limit exceeded", "rate_limit"),
+            (b"", b"ERROR: model preferred is unavailable", "model_unavailable"),
+            (b"", b"ERROR: The model gpt-x does not exist or you do not have access to it.", "model_unavailable"),
+            (b"", b"ERROR: you don't have access to this model", "model_access_denied"),
+            (b"", b"ERROR: Access to model gpt-x is denied.", "model_access_denied"),
+            (b"ERROR: worker validation failed", b"", None),
+            (b"ERROR: rate limit exceeded", b"", None),
+            (b"report says rate limit exceeded", b"", None),
+            (b"", b"ERROR: dependency API rate limit exceeded", None),
+            (b"", b"ERROR: rate limit exceeded\nERROR: authentication failed", None),
+            (b"", b"authentication failed", None),
+            (b"", b"network unavailable", None),
+        )
+        for stdout, stderr, expected in cases:
+            with self.subTest(stderr=stderr):
+                self.assertEqual(RUNNER.classify_codex_unavailability(stdout, stderr), expected)
 
     def test_default_worker_stages_minimal_private_codex_home_under_scratch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -359,6 +494,9 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         manifest_path = Path(result.stdout.strip())
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest["changed_paths"], ["allowed.txt", "dir/nested.txt"])
+        self.assertEqual(manifest["worker_result"]["kind"], "custom")
+        self.assertNotIn("attempts", manifest["worker_result"])
+        self.assertNotIn("fallback_reason", manifest["worker_result"])
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
         self.assertFalse((repo / "dir" / "nested.txt").exists())
         apply = run_cli(repo, "apply", str(manifest_path))
@@ -370,6 +508,112 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             git(repo, "status", "--porcelain=1", "--untracked-files=all").stdout.splitlines(),
             [" M allowed.txt", "?? dir/nested.txt"],
         )
+
+    def test_preferred_codex_success_does_not_start_fallback(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output_dir = Path(temporary.name) / "preferred-output"
+        result = self.run_with_fake_codex(
+            repo, plan_path, "primary_success", output_dir=output_dir
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+        worker_result = manifest["worker_result"]
+        self.assertEqual(worker_result["selected_attempt"], "primary")
+        self.assertNotIn("fallback_reason", worker_result)
+        self.assertEqual(
+            [(attempt["model"], attempt["reasoning_effort"], attempt["selected"]) for attempt in worker_result["attempts"]],
+            [("gpt-5.3-codex-spark", "medium", True)],
+        )
+        self.assertFalse((output_dir / "worker-fallback.stdout").exists())
+
+    def test_unavailable_preferred_codex_uses_fresh_fallback_clone_and_records_provenance(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output_dir = Path(temporary.name) / "fallback-output"
+        result = self.run_with_fake_codex(
+            repo, plan_path, "unavailable_then_success", output_dir=output_dir
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest_path = Path(result.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        worker_result = manifest["worker_result"]
+        self.assertEqual(worker_result["selected_attempt"], "fallback")
+        self.assertEqual(worker_result["fallback_reason"], "usage_limit")
+        self.assertEqual(
+            [
+                (attempt["label"], attempt["model"], attempt["reasoning_effort"], attempt["returncode"], attempt["selected"])
+                for attempt in worker_result["attempts"]
+            ],
+            [
+                ("primary", "gpt-5.3-codex-spark", "medium", 1, False),
+                ("fallback", "gpt-5.6-luna", "max", 0, True),
+            ],
+        )
+        for attempt in worker_result["attempts"]:
+            self.assertEqual(len(attempt["stdout_digest"]), 64)
+            self.assertEqual(len(attempt["stderr_digest"]), 64)
+            self.assertNotIn("usage limit", json.dumps(attempt).lower())
+        self.assertFalse((output_dir / "worker-primary-last-message.txt").exists())
+        self.assertEqual(manifest["changed_paths"], ["allowed.txt"])
+        apply = run_cli(repo, "apply", str(manifest_path))
+        self.assertEqual(apply.returncode, 0, apply.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "fallback\n")
+
+    def test_nonavailability_failure_and_disabled_fallback_do_not_retry(self) -> None:
+        for scenario, extra_args in (
+            ("nonavailability_failure", ()),
+            ("unavailable_then_success", ("--no-model-fallback",)),
+        ):
+            with self.subTest(scenario=scenario, extra_args=extra_args):
+                temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+                self.addCleanup(temporary.cleanup)
+                output_dir = Path(temporary.name) / f"no-fallback-{scenario}"
+                result = self.run_with_fake_codex(
+                    repo,
+                    plan_path,
+                    scenario,
+                    output_dir=output_dir,
+                    extra_args=extra_args,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("worker exited", result.stderr)
+                self.assertFalse((output_dir / "worker-fallback.stdout").exists())
+                self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_fallback_failure_stops_without_candidate_and_cli_overrides_are_honored(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output_dir = Path(temporary.name) / "failed-fallback-output"
+        result = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "unavailable_then_failure",
+            output_dir=output_dir,
+            extra_args=(
+                "--codex-model",
+                "preferred-override",
+                "--codex-reasoning-effort",
+                "high",
+                "--fallback-codex-model",
+                "fallback-override",
+                "--fallback-codex-reasoning-effort",
+                "xhigh",
+            ),
+            fake_env={
+                "FAKE_PRIMARY_MODEL": "preferred-override",
+                "FAKE_PRIMARY_REASONING": "high",
+                "FAKE_FALLBACK_MODEL": "fallback-override",
+                "FAKE_FALLBACK_REASONING": "xhigh",
+            },
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("fallback worker exited with 2", result.stderr)
+        self.assertTrue((output_dir / "worker-primary.stderr").is_file())
+        self.assertTrue((output_dir / "worker-fallback.stderr").is_file())
+        self.assertFalse((output_dir / "candidate.patch").exists())
+        self.assertFalse((output_dir / "manifest.json").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_run_rejects_empty_candidate_patch(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])

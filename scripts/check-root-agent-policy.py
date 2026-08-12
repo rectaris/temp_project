@@ -67,6 +67,7 @@ REQUIRED_ROOT_FILES = [
     "scripts/context-compress.sh",
     "scripts/plan_validation_commands.py",
     "scripts/referent-contract.py",
+    "scripts/run-sandboxed-plan-worker.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
     "scripts/update_agent_model_profiles.py",
@@ -216,6 +217,37 @@ def check_agent_model_profiles() -> None:
         for marker in markers:
             if marker not in text:
                 fail(f"{relative} missing fixed agent contract: {marker}")
+
+
+def check_sandboxed_worker_fallback() -> None:
+    runner = read("scripts/run-sandboxed-plan-worker.py")
+    runner_markers = (
+        'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
+        'DEFAULT_CODEX_REASONING = "medium"',
+        'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"',
+        'DEFAULT_FALLBACK_CODEX_REASONING = "max"',
+        "def classify_codex_unavailability",
+        'label="fallback"',
+        '"attempts"',
+        '"selected_attempt"',
+        '"fallback_reason"',
+        '"--fallback-codex-model"',
+        '"--fallback-codex-reasoning-effort"',
+        '"--no-model-fallback"',
+    )
+    for marker in runner_markers:
+        if marker not in runner:
+            fail(f"sandboxed plan worker missing model fallback marker: {marker}")
+
+    for relative in (
+        "AGENTS.md",
+        "references/orchestration.md",
+        ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        text = read(relative).lower()
+        for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
+            if marker not in text:
+                fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
 
 
 def check_reusable_skill_parity() -> None:
@@ -509,6 +541,7 @@ def main() -> int:
     check_gitignore()
     check_agents_rules()
     check_agent_model_profiles()
+    check_sandboxed_worker_fallback()
     check_reusable_skill_parity()
     check_browser_routing()
     check_user_communication_contract()

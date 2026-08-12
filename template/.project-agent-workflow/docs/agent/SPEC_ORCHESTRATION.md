@@ -41,6 +41,9 @@ The main agent owns task interpretation, integration, validation acceptance, pla
 - Delegate only bounded, independently useful tasks.
 - Derive delegated write scope from the active plan's `write_scope`, keep it non-overlapping, and treat `context_files` as read-only.
 - For writable sequential active-plan implementation, use `.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run` and `.project-agent-workflow/scripts/run-sandboxed-plan-worker.py apply`; the worker sees a read-only clone with writable shadow mounts only for normalized `write_scope` entries. Do not grant direct repository write access to the built-in `sequential_plan_worker` profile.
+- The sandboxed sequential runner prefers `gpt-5.3-codex-spark` with medium reasoning. Only a bounded Codex CLI error line for a usage limit, rate limit, unavailable model, or denied model access may trigger one fallback to `gpt-5.6-luna` with max reasoning.
+- A fallback attempt must use the same committed source HEAD in a new isolated clone, scratch directory, writable-shadow set, staged authentication copy, and ephemeral Codex session. Do not reuse worker changes, Git configuration, caches, or output files from the preferred attempt.
+- Authentication, network, refusal, implementation, validation, sandbox, custom-worker, and unclassified failures stop without model fallback. Keep every attempt's raw output local and record only bounded provenance and digests in the successful manifest.
 - Use `evidence_synthesizer` only for bounded comparison of multiple evidence sources, alternatives, or hypotheses whose result the parent can verify.
 - Use `fast_scoped_worker` only when the expected edit and validation are known before delegation.
 - Stop a fast worker when it encounters architecture, policy, security, authorization, destructive-operation, external-write, or scope-expansion decisions.
@@ -86,6 +89,7 @@ Consider delegation or a separate review when:
 - Use `gpt-5.6-luna` with medium reasoning for `docs_researcher`.
 - Use `gpt-5.6-luna` with xhigh reasoning for `evidence_synthesizer`.
 - Use `gpt-5.3-codex-spark` with medium reasoning for `fast_scoped_worker` and `sequential_plan_worker`.
+- For `sequential_plan_worker` only, use `gpt-5.6-luna` with max reasoning as the single isolated availability fallback defined above; it is not the default helper profile.
 - Use `gpt-5.6-terra` with medium reasoning for `scoped_worker`.
 - Use `gpt-5.6-sol` with high reasoning for `change_reviewer`.
 - Use a higher one-off effort only when the delegated task remains bounded and the prompt states why the default is insufficient.
@@ -98,7 +102,7 @@ Consider delegation or a separate review when:
 - Use high as a one-off override when bounded read-only work must reconcile conflicting evidence or analyze a long context and the prompt states the expected quality gain.
 - Use xhigh through `evidence_synthesizer` when the task compares multiple repositories, logs, specifications, implementation alternatives, or cause hypotheses and must report agreements, contradictions, impact boundaries, and unresolved questions.
 - Do not use Luna for deterministic pass-or-fail commands, code edits, or final security, ownership, migration, release, or policy judgment.
-- Do not define Luna max as a default helper profile. Move the hardest final judgment to Terra or Sol unless a representative evaluation demonstrates a measurable Luna max benefit.
+- Do not define Luna max as a default helper profile. Its bounded sequential-worker availability fallback does not authorize final judgment; otherwise move the hardest final judgment to Terra or Sol unless a representative evaluation demonstrates a measurable Luna max benefit.
 
 ## Stop Review Gate
 

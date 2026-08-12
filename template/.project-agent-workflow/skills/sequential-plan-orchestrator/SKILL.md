@@ -16,10 +16,11 @@ Process active plans as a parent-owned sequence. Keep implementation in the work
    Stop if the sandboxed runner is unavailable.
 4. Run `.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run <plan>` to create a candidate patch and manifest from an isolated clone. The runner mounts the clone read-only and over-mounts writable shadows only for normalized `write_scope` entries; temporary artifacts belong under the worker scratch directory.
    Pass the selected plan path and keep the plan's `context_files` read-only.
+   The runner prefers `gpt-5.3-codex-spark` with medium reasoning. If the Codex CLI's own error line classifies the attempt as a usage limit, rate limit, unavailable model, or denied model access, the runner may start exactly one `gpt-5.6-luna` max fallback from the same source HEAD in a new clone and scratch boundary. No other failure is fallback-eligible.
 5. Inspect the candidate patch, manifest, and worker result.
    Treat them as advisory until the parent validates the repository.
 6. Reject and stop on a blocker, missing input, an out-of-scope path, an unrelated change, or failed required validation.
-   Do not retry automatically, fall back to direct writable delegation, or continue to the next plan.
+   Do not retry an unclassified or nonavailability failure, fall back to direct writable delegation, or continue to the next plan.
 7. On acceptance, apply the candidate with `.project-agent-workflow/scripts/run-sandboxed-plan-worker.py apply <manifest>`, then update only the assigned plan's concise validation notes and affected later plans' decisions, targets, dependencies, or validation conditions.
    Keep detailed logs and large evidence under `.agent-logs/` or `.agent-artifacts/`.
 8. Repeat for the next numeric plan only after acceptance.
@@ -32,3 +33,4 @@ Process active plans as a parent-owned sequence. Keep implementation in the work
 - The parent must not implement product or code changes directly.
 - Do not process the next plan, spawn descendants, perform external-service writes, weaken tests, commit unrelated changes, or bypass `.project-agent-workflow/scripts/run-sandboxed-plan-worker.py`.
 - Do not copy full decision audits, raw logs, or large artifacts into `docs/plan/active`.
+- Inspect every model attempt recorded in the manifest. Failed-attempt stdout and stderr remain local artifacts and must not be copied into plans or commits.
