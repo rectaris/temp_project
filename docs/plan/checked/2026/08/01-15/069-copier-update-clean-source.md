@@ -1,6 +1,6 @@
 # Allow the Copier update fixture to run from a clean source
 
-status: in_progress
+status: checked
 task_types:
   - testing
 review_class: B
@@ -41,10 +41,16 @@ Pull request 2 failed before exercising Copier update assertions because the fix
 
 ## Tasks
 
-- [ ] Make the isolated boundary commit deterministic for both clean and dirty source states.
-- [ ] Run focused and repository validation.
-- [ ] Archive and commit the correction before pushing dev again.
+- [x] Make the isolated boundary commit deterministic for both clean and dirty source states.
+- [x] Run focused and repository validation.
+- [x] Archive and commit the correction before pushing dev again.
 
 ## Validation Notes
 
 - GitHub Actions run 31611352762 failed at `git commit` with `nothing to commit, working tree clean`; later Copier assertions did not run.
+- The accepted candidate came from `/tmp/sandboxed-plan-worker-output-pVFOSj/manifest.json` at source HEAD `81210e3197f48ccc2298a57993f5d9c8442580f1`; GPT-5.3-Codex-Spark medium returned bounded `usage_limit`, and a fresh GPT-5.6-Luna max attempt succeeded.
+- Parent review accepted the single-line `tests/copier-update.sh` change. It adds `--allow-empty` only to the isolated candidate-boundary commit and leaves all safety assertions unchanged.
+- `REQUIRE_COPIER=1 tests/copier-update.sh`: passed from the clean committed source and reached `copier update test passed`.
+- `scripts/lint-project-workflow.sh`: passed, including 26 external-service authorization tests.
+- `REQUIRE_ACTIONLINT=1 REQUIRE_COPIER=1 tests/smoke.sh`: passed with the pinned actionlint available on `PATH`.
+- `git diff --check`: passed.

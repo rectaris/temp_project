@@ -134,7 +134,7 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
   template/docs/agent/external-services.yaml.jinja
 fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
-  commit -qm "Make Copier updates fail closed"
+  commit --allow-empty -qm "Make Copier updates fail closed"
 fixture_git "$update_source" tag v1.2.2
 target_ref=v1.2.2
 
