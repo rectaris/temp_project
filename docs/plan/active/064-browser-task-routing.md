@@ -90,15 +90,20 @@ Candidate `a5bb46c259de97c9f24be083ab5c1e46d8f4716205df5be38d9afe9128b4bfa3` was
 
 Candidate `e9d925d5c7eeb66a4e2f5839726f43c90d8ce5f8f54507789adeb1e5d2809906` was also rejected during main-session review because it moved the existing `security` conditional routes under `browser_automation` and used a nonexistent root reference path.
 
+Candidate `d5c2aee9ff247fa8289e401773786da68385e3941b9ba213b6743fbc393b71af` was rejected because multiple root/generated skill paths did not resolve, Kitesurf was incorrectly restricted to read-only work, and unrelated existing external-service descriptions were rewritten.
+
 The replacement candidate must:
 
 - keep `SKILL.md` concise and move backend-selection details into a direct `references/` file in both the root and generated reusable skill;
 - preserve the existing `security` task route and every existing conditional route exactly under its original task type;
-- use `references/browser-run-policy.md` from each `SKILL.md`, or another path that resolves from both installed skill locations;
+- the root `.codex/skills/browser-ops/SKILL.md` must read `references/browser-run-policy.md`, `template/.project-agent-workflow/skills/browser-ops/SKILL.md` must also read `references/browser-run-policy.md`, and `template/.agents/skills/browser-ops/SKILL.md` must read `.project-agent-workflow/skills/browser-ops/SKILL.md`;
+- the root skill must read `template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md` and `template/docs/agent/external-services.yaml`; the generated skill must read `.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md` and `docs/agent/external-services.yaml`;
 - link `https://blog.cloudflare.com/kitesurf/` as the Cloudflare Kitesurf compatibility source and describe Kitesurf as beta; do not browse for another Kitesurf source;
 - describe Kitesurf using supported properties such as lower CPU and memory consumption instead of an unsupported lower-latency claim;
 - allow authorized, compatible, one-shot screenshots, PDFs, extraction, and automation on Kitesurf, while routing pixel-perfect output, video, WebGL, bot-challenge handshakes requiring real TLS fingerprints, long authenticated sessions, persistent state, and observed compatibility failures to Chromium;
 - apply backend selection after classifying the operation as read or write, and require an exact `write_authorization_rule` match plus current-user authorization before any browser write;
+- allow Kitesurf for compatible authorized reads or writes; write classification changes authorization requirements, not backend compatibility by itself;
+- leave every pre-existing line in the `states`, `mcp`, `linear_sync`, and `graph_memory` blocks of `template/docs/agent/external-services.yaml.jinja` unchanged, and avoid unrelated README or policy rewrites;
 - add a Copier update assertion proving that a project-owned older `external-services.yaml` without `browser_run` remains preserved and valid; and
 - avoid relying on a smoke run from an uncommitted clone as acceptance evidence, because the main session will rerun smoke after committing an accepted candidate if the test harness requires a committed source snapshot.
 
