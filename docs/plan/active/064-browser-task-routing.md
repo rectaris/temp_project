@@ -95,7 +95,7 @@ The replacement candidate must:
 - keep `SKILL.md` concise and move backend-selection details into a direct `references/` file in both the root and generated reusable skill;
 - preserve the existing `security` task route and every existing conditional route exactly under its original task type;
 - use `references/browser-run-policy.md` from each `SKILL.md`, or another path that resolves from both installed skill locations;
-- link the Cloudflare Kitesurf announcement as the compatibility source and describe Kitesurf as beta;
+- link `https://blog.cloudflare.com/kitesurf/` as the Cloudflare Kitesurf compatibility source and describe Kitesurf as beta; do not browse for another Kitesurf source;
 - describe Kitesurf using supported properties such as lower CPU and memory consumption instead of an unsupported lower-latency claim;
 - allow authorized, compatible, one-shot screenshots, PDFs, extraction, and automation on Kitesurf, while routing pixel-perfect output, video, WebGL, bot-challenge handshakes requiring real TLS fingerprints, long authenticated sessions, persistent state, and observed compatibility failures to Chromium;
 - apply backend selection after classifying the operation as read or write, and require an exact `write_authorization_rule` match plus current-user authorization before any browser write;
