@@ -53,6 +53,10 @@ acceptance:
   - Reject credential_material_transfer, secret_persistence, and write_credentials_to_untrusted_code even when task relevance and confirmation are present, and reject ordinary when combined with another effect.
   - Cover GitHub branch and tag pushes as ordinary writes and GitHub pull-request and Release publication as public_communication, without performing an external write in deterministic tests.
   - Reject pull_request.publish and release.publish when the caller declares ordinary alone, reject git.push when it declares public_communication, and reject malformed branch, tag, pull-request, or Release targets rather than trusting caller-supplied effect classification.
+  - For the three known GitHub writes, accept only one exact target form per call: owner/repository:refs/heads/<branch> or owner/repository:refs/tags/<tag> for git.push, owner/repository:refs/heads/<head>->refs/heads/<base> for pull_request.publish, and owner/repository:release:<tag> for release.publish; do not accept an arbitrary nonblank resource as a Release or pull-request target.
+  - Once the root entrypoint recognizes an authorize command, make any root parsing error fail closed instead of delegating an unvalidated request; add explicit negative tests for empty and whitespace-only operation and target values.
+  - Prevent every argparse abbreviation or alternate spelling that could override the root entrypoint's fixed --policy argument, disable option abbreviation in root parsing, and make authorize help or unknown options return nonzero rather than look like successful authorization.
+  - Use the single documented colon delimiter after owner/repository and validate branch and tag components with local git check-ref-format semantics; cover a valid plus sign and invalid trailing-dot ref component deterministically instead of maintaining a divergent handwritten ref grammar.
   - Treat the current release request as task authorization for rectaris/temp_project only after the implementation resolves each exact ref, tag, Release, and dev-to-main pull-request target and runs the matching policy check immediately before the provider call.
   - Route root external-service work through docs/agent/spec-index.yaml and add deterministic root checks that fail if the policy, specification, entrypoint, required effect boundaries, or maintained checker delegation disappears.
   - Keep copier.yml defaulting generated projects to restricted, keep existing project-owned policies update-safe, and leave the reusable template authorization behavior unchanged.
@@ -73,6 +77,8 @@ The root `mcp-ops` Skill now requires those exact root paths, so every root exte
 - Reuse the maintained checker implementation through a root entrypoint that always selects the root policy.
 - Apply the effect taxonomy and confirmation boundaries accepted by plan 065 without adding a GitHub-specific bypass.
 - Enforce the GitHub operations required by the current release workflow in the root entrypoint because the maintained generic checker intentionally cannot infer provider-specific effects from operation names.
+- Use one canonical exact target form for each current release operation so the confirmation string and provider target cannot refer to different resources.
+- Treat the fixed root policy path and successful root parsing as prerequisites to generic checker delegation; a usage/help response is not an authorization decision.
 - Classify branch and tag pushes as ordinary writes, and classify pull-request and GitHub Release publication as `public_communication`.
 - Use the active user request as task authorization only for exact provider operations, targets, and effects resolved during that request.
 - Keep actual external writes outside deterministic validation and resume the requested release workflow only after the root gate passes locally.
