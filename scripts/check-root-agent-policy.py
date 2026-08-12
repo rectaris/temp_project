@@ -53,6 +53,8 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/browser-ops/references/browser-run-policy.md",
     ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
+    "docs/agent/SPEC_EXTERNAL_SERVICES.md",
+    "docs/agent/external-services.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
     "docs/agent/SPEC_CONTEXT_COMPRESSION.md",
     "docs/agent/SPEC_DECISION_AUDIT.md",
@@ -62,6 +64,7 @@ REQUIRED_ROOT_FILES = [
     "docs/agent/SPEC_USER_COMMUNICATION.md",
     "scripts/agent-log-event.py",
     "scripts/check-agent-log-manifest.py",
+    "scripts/check-external-service-policy.py",
     "scripts/check-codex-toml.py",
     "scripts/complete-plan.sh",
     "scripts/context-compress.sh",
@@ -317,6 +320,77 @@ def check_browser_routing() -> None:
         fail("browser discovery bridge is not reserved by Copier ownership")
 
 
+def check_external_service_policy() -> None:
+    index = read("docs/agent/spec-index.yaml")
+    for marker in (
+        "  external_services:",
+        "docs/agent/SPEC_EXTERNAL_SERVICES.md",
+        "docs/agent/SPEC_SECURITY.md",
+    ):
+        if marker not in index:
+            fail(f"root external-service route missing: {marker}")
+
+    policy = read("docs/agent/external-services.yaml")
+    policy_markers = (
+        "version: 2",
+        "access_profile: task_scoped_default_allow",
+        "provider_requirement: runtime_configured",
+        "task_scope_rule: current_user_request",
+        "  - remote_delete",
+        "  - public_communication",
+        "  - financial_commitment",
+        "  - production_change",
+        "  - access_control_change",
+        "  - credential_material_transfer",
+        "  - secret_persistence",
+        "  - write_credentials_to_untrusted_code",
+        "unclassified_write_effect: require_confirmation",
+        "external_services:",
+        "  github:",
+        "unavailable_fallback:",
+    )
+    for marker in policy_markers:
+        if marker not in policy:
+            fail(f"root external-service policy missing marker: {marker}")
+    for forbidden in ("credential_reference:", "access_token:", "private_key:"):
+        if forbidden in policy:
+            fail(f"root external-service policy contains credential material field: {forbidden}")
+
+    specification = read("docs/agent/SPEC_EXTERNAL_SERVICES.md")
+    specification_markers = (
+        "docs/agent/external-services.yaml",
+        "Provider configuration and authorization are separate facts.",
+        "exact provider, operation, target, complete effect set, payload",
+        "immediately before the call",
+        "git.push",
+        "pull_request.publish",
+        "release.publish",
+        "rectaris/temp_project",
+        "git check-ref-format --branch",
+    )
+    for marker in specification_markers:
+        if marker not in specification:
+            fail(f"root external-service specification missing marker: {marker}")
+
+    entrypoint = read("scripts/check-external-service-policy.py")
+    entrypoint_markers = (
+        "template/.project-agent-workflow/scripts/check-external-service-policy.py",
+        '"--policy"',
+        "allow_abbrev=False",
+        "git.push",
+        "pull_request.publish",
+        "release.publish",
+        "rectaris/temp_project",
+        "check-ref-format",
+        "subprocess.run",
+    )
+    for marker in entrypoint_markers:
+        if marker not in entrypoint:
+            fail(f"root external-service entrypoint missing marker: {marker}")
+    if "str(POLICY)" not in entrypoint or "str(MAINTAINED_CHECKER)" not in entrypoint:
+        fail("root external-service entrypoint must delegate with the fixed root policy")
+
+
 def check_user_communication_contract() -> None:
     root_spec = read("docs/agent/SPEC_USER_COMMUNICATION.md")
     template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md")
@@ -544,6 +618,7 @@ def main() -> int:
     check_sandboxed_worker_fallback()
     check_reusable_skill_parity()
     check_browser_routing()
+    check_external_service_policy()
     check_user_communication_contract()
     check_namespaced_documentation_targets()
     check_orchestration_policy()

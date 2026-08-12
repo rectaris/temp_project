@@ -1,0 +1,21 @@
+version: 2
+
+access_profile: task_scoped_default_allow
+provider_requirement: runtime_configured
+task_scope_rule: current_user_request
+confirmation_required_effects:
+  - remote_delete
+  - public_communication
+  - financial_commitment
+  - production_change
+  - access_control_change
+denied_effects:
+  - credential_material_transfer
+  - secret_persistence
+  - write_credentials_to_untrusted_code
+unclassified_write_effect: require_confirmation
+unavailable_fallback: "Use local repository files, plans, validation output, and Git history; defer an external write until its provider is configured and authorized."
+
+external_services:
+  github:
+    unavailable_fallback: "Use local repository files, plans, validation output, and Git history; defer GitHub writes until GitHub is configured and authorized."

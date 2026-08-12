@@ -43,6 +43,15 @@ task_types:
       - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
         when: compressed logs or derived evidence are in scope.
 
+  external_services:
+    summary: MCP, Linear, graph memory, GitHub, external issue sync, or external write policy.
+    required:
+      - docs/agent/SPEC_EXTERNAL_SERVICES.md
+      - docs/agent/SPEC_SECURITY.md
+    conditional:
+      - path: docs/agent/SPEC_PLAN_WORKFLOW.md
+        when: external service state is linked to plan lifecycle files.
+
   browser_automation:
     summary: JavaScript-rendered page state, browser-produced artifacts, DOM inspection, or browser interaction; not a plain URL lookup.
     required:

@@ -1,6 +1,6 @@
 # Activate task-scoped external writes in the root repository
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -91,14 +91,18 @@ The root `mcp-ops` Skill now requires those exact root paths, so every root exte
 
 ## Tasks
 
-- [ ] Add the root version 2 policy and normative external-service specification.
-- [ ] Add the root checker entrypoint and deterministic root policy checks.
-- [ ] Enforce nonblank exact targets and the root GitHub release-operation effect map before generic checker delegation.
-- [ ] Add authorization tests for ordinary GitHub writes, confirmed publication, mismatched confirmation, denied effects, and missing runtime facts.
-- [ ] Update root routing and the changelog without changing the reusable template default.
-- [ ] Run every required validation command and record the results.
-- [ ] Archive the completed plan before resuming release, tag, push, and pull-request publication.
+- [x] Add the root version 2 policy and normative external-service specification.
+- [x] Add the root checker entrypoint and deterministic root policy checks.
+- [x] Enforce nonblank exact targets and the root GitHub release-operation effect map before generic checker delegation.
+- [x] Add authorization tests for ordinary GitHub writes, confirmed publication, mismatched confirmation, denied effects, and missing runtime facts.
+- [x] Update root routing and the changelog without changing the reusable template default.
+- [x] Run every required validation command and record the results.
+- [x] Archive the completed plan before resuming release, tag, push, and pull-request publication.
 
 ## Validation Notes
 
-- Pending implementation.
+- The accepted candidate came from manifest `/tmp/sandboxed-plan-worker-output-5wrsqzyn/manifest.json`, source HEAD `3f7a3154008a8a902737b08504497fe5da87e6aa`; GPT-5.3-Codex-Spark medium returned bounded `usage_limit`, and the fresh GPT-5.6-Luna max fallback succeeded.
+- Parent review accepted only the eight intended root paths. `copier.yml`, reusable template policy/checker behavior, and the generated-project restricted default were unchanged.
+- `python3 scripts/check-external-service-policy.py check`, root policy checks, 26 validation-tool tests, change-aware validation, workflow lint, generated-project smoke, and `git diff --check`: passed.
+- Read-only security review rejected four earlier candidate generations for effect, parser, policy-override, target, provider, repository, Git-ref-kind, and delegated-positional bypasses. Those cases became executable acceptance and deterministic negative fixtures; the final candidate received no actionable findings.
+- Deterministic validation performed no external provider write. Exact release targets still require a fresh root policy check immediately before each subsequent provider call.

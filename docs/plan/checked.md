@@ -67,3 +67,4 @@ id	path
 064	docs/plan/checked/2026/08/01-15/064-browser-task-routing.md
 065	docs/plan/checked/2026/08/01-15/065-task-scoped-external-access.md
 066	docs/plan/checked/2026/08/01-15/066-sequential-worker-model-fallback.md
+067	docs/plan/checked/2026/08/01-15/067-root-external-write-policy.md
