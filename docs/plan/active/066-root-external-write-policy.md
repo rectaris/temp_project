@@ -1,6 +1,6 @@
 # Activate task-scoped external writes in the root repository
 
-status: active
+status: in_progress
 task_types:
   - planning_docs
   - security
