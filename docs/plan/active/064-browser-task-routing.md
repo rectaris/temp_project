@@ -125,3 +125,10 @@ Independent review of candidate `6def3c06ec4f1fb6a7da4c3cfb0c525961f2dae24c5c6f9
 - compare the complete older project-owned `external-services.yaml` byte-for-byte before and after the non-force Copier update;
 - express backend-selection scenarios as structured conditions and deterministically verify each condition-to-route mapping rather than checking only an inventory of expected words; and
 - make the Kitesurf and Chromium scenario requests explicitly assume a configured Browser Run record that authorizes the requested read or session, while retaining the disabled-provider and unauthorized-write cases.
+
+Correction candidate `f1b9297e0457fdba938953d7259daffb930cee8f3327a800871793583086791e` was rejected during main-session review. It made the root backend reference read the generated-project path `docs/agent/external-services.yaml`, which does not exist at the repository root, and left the Kitesurf and Chromium request text ambiguous even though it added separate structured conditions. The next candidate must:
+
+- make the root backend reference read `template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja` and `template/docs/agent/external-services.yaml.jinja`;
+- make the generated backend reference read `.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md` and `docs/agent/external-services.yaml`;
+- compare the two references after normalizing those root/generated path pairs, rather than requiring byte equality; and
+- state the configured Browser Run authorization premise in each of the `kitesurf-pdf` and `chromium-webgl` `request` strings as well as in their structured conditions.
