@@ -10,6 +10,9 @@ Use lightweight planning files to make agent work resumable without turning ever
 - `docs/plan/checked.md`: machine-readable index of completed work.
 - `docs/plan/checked/YYYY/MM/01-15/*.md`: durable completion records completed in the first half of a month.
 - `docs/plan/checked/YYYY/MM/16-31/*.md`: durable completion records completed in the second half of a month.
+- `docs/plan/replanned.md`: machine-readable index of plans replaced without changing their requirement baseline.
+- `docs/plan/replanned/YYYY/MM/01-15/*.md` and `docs/plan/replanned/YYYY/MM/16-31/*.md`: historical replacement records; they are not completion evidence.
+- `docs/plan/replanned/contracts/*.json`: exact source-requirement and successor-plan mappings for restructured plans.
 - `docs/plan/handoffs/`: temporary queue for real cross-agent or cross-session transfers.
 - `docs/plan/README.md`, `backlog/README.md`, and `handoffs/README.md`: human-facing Japanese overviews.
 - `docs/plan/sub-agents/`: optional helper prompt and custom-agent notes for repeated workflows.
@@ -74,6 +77,8 @@ Generated repositories may include local-only plan lifecycle helpers:
 - `.project-agent-workflow/scripts/promote-plan.sh docs/plan/backlog/NNN-slug.md`
 - `.project-agent-workflow/scripts/complete-plan.sh docs/plan/active/NNN-slug.md`
 - `.project-agent-workflow/scripts/finalize-active-plan.sh docs/plan/active/NNN-slug.md`
+- `.project-agent-workflow/scripts/restructure-plan.py <specification.json>`
+- `.project-agent-workflow/scripts/restructure-plan.py --verify`
 - `.project-agent-workflow/scripts/check-agent-completion.sh`
 - `.project-agent-workflow/scripts/select-task-context.sh docs/plan/active/NNN-slug.md`
 - `.project-agent-workflow/scripts/clean-handoffs.sh --dry-run`

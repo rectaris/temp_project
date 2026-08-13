@@ -174,8 +174,9 @@ def dirty_product_paths() -> list[str]:
 
 def scope_covers(scope: list[str], path: str) -> bool:
     for entry in scope:
-        prefix = entry.rstrip("/")
-        if path == prefix or path.startswith(prefix + "/"):
+        if entry.endswith("/") and path.startswith(entry):
+            return True
+        if path == entry:
             return True
     return False
 
