@@ -11,7 +11,6 @@ implementation_risk: low
 implementation_ambiguity: low
 write_scope:
   - CHANGELOG.md
-  - docs/plan/
   - tests/copier-update.sh
 context_files:
   - AGENTS.md
@@ -62,3 +61,5 @@ The update harness must be committed before plan 072 changes generated orchestra
 
 - Plans were redesigned after two broad-candidate rejections and two routing-slice correction rejections. Rejected manifests remain local under `/tmp/orchestration-plan-071-*` and were never applied to the source repository.
 - Independent review required this harness to precede the generated routing changes so every committed slice preserves the non-destructive Copier invariant.
+- Rejected harness candidate `/tmp/orchestration-plan-071-copier-harness-VFsTnd/manifest.json`, source HEAD `cb481334e1474d0b8de0cbe6d0873da31bda0716`. One GPT-5.3-Codex-Spark medium attempt generated it without fallback, and all required validation passed in a review clone.
+- The harness implementation was acceptable, but the candidate was not applied because it marked parent-owned archive and commit work complete. Plan lifecycle metadata is removed from the writable implementation scope for the correction.
