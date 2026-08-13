@@ -83,3 +83,4 @@ id	path
 081	docs/plan/checked/2026/08/01-15/081-plan-restructuring-integration.md
 082	docs/plan/checked/2026/08/01-15/082-release-v140.md
 083	docs/plan/checked/2026/08/01-15/083-pr3-codex-review-remediation.md
+084	docs/plan/checked/2026/08/01-15/084-prepare-release-v141-pr.md
