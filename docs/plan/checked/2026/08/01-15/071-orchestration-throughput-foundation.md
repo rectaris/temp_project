@@ -1,6 +1,6 @@
 # Prepare Copier coverage for orchestration changes
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -55,9 +55,9 @@ The update harness must be committed before plan 072 changes generated orchestra
 
 ## Tasks
 
-- [ ] Add all four generated orchestration artifacts to simulated Copier source copy and stage lists.
-- [ ] Assert current generated orchestration semantics without weakening update negatives.
-- [ ] Run all required validation, archive, and commit before plan 072.
+- [x] Add all four generated orchestration artifacts to simulated Copier source copy and stage lists.
+- [x] Assert current generated orchestration semantics without weakening update negatives.
+- [x] Run all required validation, archive, and commit before plan 072.
 
 ## Validation Notes
 
@@ -66,3 +66,5 @@ The update harness must be committed before plan 072 changes generated orchestra
 - Rejected harness candidate `/tmp/orchestration-plan-071-copier-harness-VFsTnd/manifest.json`, source HEAD `cb481334e1474d0b8de0cbe6d0873da31bda0716`. One GPT-5.3-Codex-Spark medium attempt generated it without fallback, and all required validation passed in a review clone.
 - The harness implementation was acceptable, but the candidate was not applied because it marked parent-owned archive and commit work complete. Plan lifecycle metadata is removed from the writable implementation scope for the correction.
 - The fresh correction run at source HEAD `c7cb3b64b03e4637265e35eb574943795c978ea9` was stopped after more than 20 minutes without output or CPU progress while the Codex CLI remained pending. It emitted no manifest. This was not a classified availability error, so no fallback or retry was started and the source repository remained unchanged.
+- Parent-session implementation added the four generated orchestration artifacts to both the simulated update-source copy and Git stage lists, then asserted their current ownership, model fallback, parser, and Skill semantics without changing the existing negative update cases.
+- Parent-session acceptance validation passed: `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `REQUIRE_COPIER=1 tests/copier-update.sh`, `python3 scripts/validate-changes.py --all`, and `git diff --check`.

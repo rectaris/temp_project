@@ -98,11 +98,15 @@ for candidate_path in \
   template/.agents/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
   template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+  template/.project-agent-workflow/scripts/planlib.py \
   template/.project-agent-workflow/ownership.yaml \
+  template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
   template/.project-agent-workflow/skills/graph-memory/SKILL.md \
   template/.project-agent-workflow/skills/linear-ops/SKILL.md \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
@@ -126,11 +130,15 @@ fixture_git "$update_source" add \
   template/.agents/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
   template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+  template/.project-agent-workflow/scripts/planlib.py \
   template/.project-agent-workflow/ownership.yaml \
+  template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
   template/.project-agent-workflow/skills/graph-memory/SKILL.md \
   template/.project-agent-workflow/skills/linear-ops/SKILL.md \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
@@ -482,6 +490,15 @@ validate_common_lane() {
     grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
     grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
     grep -qi 'context files read-only' "$managed_orchestration" "$managed_agents"
+    test -f "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    test -f "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    test -f "$out/.project-agent-workflow/scripts/planlib.py"
+    grep -q 'run-sandboxed-plan-worker.py' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'sequential_plan_worker' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'The main agent owns task interpretation, integration, validation acceptance, planning updates, commits, and the final report.' "$managed_orchestration"
+    grep -q '^DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q '^DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def has_pre_v1_adoption_provenance()' "$out/.project-agent-workflow/scripts/planlib.py"
   }
 
   assert_managed_orchestration_reports
