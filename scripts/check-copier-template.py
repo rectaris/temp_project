@@ -528,6 +528,10 @@ def require_orchestration_policy_markers() -> None:
         "skipped known-unavailable starts",
         "finite and nonnegative",
         "prompts, raw output, environment values, or credentials",
+        "run-sandboxed-plan-worker.py correct",
+        "aggregate patch",
+        "at most two correction rounds",
+        "rejected patch never touches the source",
         "run-sandboxed-plan-worker.py run",
         "read-only",
     )
@@ -684,6 +688,11 @@ def require_sandboxed_plan_worker_alignment() -> None:
         '"--orchestration-run-id"',
         '"telemetry"',
         '"skipped_known_unavailable_starts"',
+        "def correct_worker",
+        "def verify_candidate_manifest",
+        '"correct"',
+        "MAX_CORRECTION_ROUNDS",
+        '"correction_lineage"',
     ):
         if marker not in template_runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")

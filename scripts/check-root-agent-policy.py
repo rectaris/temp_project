@@ -247,6 +247,11 @@ def check_sandboxed_worker_fallback() -> None:
         '"--orchestration-run-id"',
         '"telemetry"',
         '"skipped_known_unavailable_starts"',
+        "def correct_worker",
+        "def verify_candidate_manifest",
+        '"correct"',
+        "MAX_CORRECTION_ROUNDS",
+        '"correction_lineage"',
     )
     for marker in runner_markers:
         if marker not in runner:
@@ -542,6 +547,10 @@ def check_orchestration_policy() -> None:
         "skipped known-unavailable starts",
         "finite and nonnegative",
         "prompts, raw output, environment values, or credentials",
+        "run-sandboxed-plan-worker.py correct",
+        "aggregate patch",
+        "at most two correction rounds",
+        "rejected patch never touches the source",
     )
     for marker in shared_markers:
         if marker not in policy:

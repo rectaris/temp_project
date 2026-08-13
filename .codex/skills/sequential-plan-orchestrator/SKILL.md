@@ -21,8 +21,8 @@ Process active plans as a parent-owned sequence. Keep implementation in the work
    For a multi-plan orchestration run, pass a state path outside the repository with the same explicit nonblank run identifier. The bounded state stores only model/reason codes and prevents another preferred or fallback start of a model already known unavailable in that run. Treat its manifest telemetry as measurement only; it contains bounded counters and durations, not candidate judgment or validation results.
 5. Inspect the candidate patch, manifest, and worker result.
    Treat them as advisory until the parent validates the repository.
-6. Reject and stop on a blocker, missing input, an out-of-scope path, an unrelated change, or failed required validation.
-   Do not retry an unclassified or nonavailability failure, fall back to direct writable delegation, or continue to the next plan.
+6. Reject and stop on a blocker, missing input, an out-of-scope path, an unrelated change, or failed required validation. For a localized parent-review rejection only, write a bounded correction brief outside the repository and run `scripts/run-sandboxed-plan-worker.py correct <plan> <prior-manifest> <brief>`.
+   A correction verifies the prior candidate, applies its patch only inside a fresh clone, hides prior artifacts, mounts the brief read-only, and emits an aggregate patch against the original HEAD. Reuse the same availability state and run identifier. Permit at most two consecutive correction rounds; after that require strategy change. Do not retry an unclassified, semantic, or validation failure or continue to the next plan.
 7. On acceptance, apply the candidate with `scripts/run-sandboxed-plan-worker.py apply <manifest>`, then update only the assigned plan's concise validation notes and affected later plans' decisions, targets, dependencies, or validation conditions.
    Keep detailed logs and large evidence under `.agent-logs/` or `.agent-artifacts/`.
 8. Repeat for the next numeric plan only after acceptance.

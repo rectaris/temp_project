@@ -503,11 +503,14 @@ validate_common_lane() {
     grep -q 'def open_availability_state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q -- '--availability-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q 'skipped_known_unavailable_starts' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def correct_worker' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'correction_lineage' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q 'implementation_risk' "$out/.project-agent-workflow/scripts/planlib.py"
     grep -q 'implementation_ambiguity' "$out/.project-agent-workflow/scripts/planlib.py"
     grep -qi 'repository breadth alone is insufficient' "$managed_agents" "$managed_orchestration"
     grep -qi 'admissible implementation slice' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
     grep -qi 'state path outside the repository' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'run-sandboxed-plan-worker.py correct' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
     grep -q 'def has_pre_v1_adoption_provenance()' "$out/.project-agent-workflow/scripts/planlib.py"
   }
 

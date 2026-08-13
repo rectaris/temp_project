@@ -38,6 +38,8 @@ AVAILABILITY_STATE_MAX_MODEL_BYTES = 128
 ORCHESTRATION_RUN_ID_MAX_BYTES = 128
 TELEMETRY_SCHEMA_VERSION = 1
 TELEMETRY_MAX_DURATION_SECONDS = 31_536_000.0
+CORRECTION_BRIEF_MAX_BYTES = 8192
+MAX_CORRECTION_ROUNDS = 2
 PLAN_PATTERN = re.compile(r"^docs/plan/active/\d{3}-[^/]+\.md$")
 STATUS_PATTERN = re.compile(r"^(?:\?\?|[ MARCUDT][ MD]) (.+)$")
 CODEX_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL)(?::|\b)", re.IGNORECASE)
@@ -111,6 +113,7 @@ RESERVED_WORKER_ENV = frozenset(
         f"{ENV_PREFIX}WORKER_REPO",
         f"{ENV_PREFIX}SCRATCH_DIR",
         f"{ENV_PREFIX}PLAN_PATH",
+        f"{ENV_PREFIX}CORRECTION_BRIEF",
     }
 )
 
@@ -739,6 +742,26 @@ def build_worker_prompt(plan_rel: str, plan_digest: str) -> str:
     )
 
 
+def build_correction_prompt(plan_rel: str, plan_digest: str) -> str:
+    return textwrap.dedent(
+        f"""\
+        Correct the rejected candidate already applied in this fresh isolated clone for {plan_rel}.
+
+        Constraints:
+        - Read the parent-authored correction brief at $SANDBOXED_PLAN_WORKER_CORRECTION_BRIEF.
+        - The brief is a read-only input. Do not search for or inspect any prior attempt artifact.
+        - Preserve correct prior work and change only what the brief requires.
+        - Do not spawn agents, commit, edit plan status, or touch paths outside write_scope.
+        - Write transient diagnostics, caches, and temporary artifacts only under
+          $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
+        - Report changed paths and blockers. Do not run broad plan validation.
+
+        The parent will admit one aggregate patch against the original source HEAD.
+        Plan digest: {plan_digest}
+        """
+    )
+
+
 def default_worker_command(
     *,
     codex_bin: str,
@@ -803,6 +826,7 @@ def build_bwrap_command(
     writable_shadows: Sequence[tuple[Path, Path]] = (),
     writable_clone: bool = False,
     hidden_directories: Sequence[Path] = (),
+    read_only_inputs: Sequence[Path] = (),
 ) -> list[str]:
     argv = [
         bwrap_bin,
@@ -839,6 +863,8 @@ def build_bwrap_command(
     )
     for shadow_path, clone_target in writable_shadows:
         argv.extend(("--bind", str(shadow_path), str(clone_target)))
+    for read_only_input in read_only_inputs:
+        argv.extend(("--ro-bind", str(read_only_input), str(read_only_input)))
     for key, value in env_vars.items():
         argv.extend(["--setenv", key, value])
     argv.append("--")
@@ -1171,6 +1197,8 @@ def execute_isolated_attempt(
     model: str | None = None,
     reasoning: str | None = None,
     custom_command: Sequence[str] | None = None,
+    prior_patch: Path | None = None,
+    correction_brief: bytes | None = None,
 ) -> dict[str, Any]:
     attempt_root = workspace / label
     clone_dir = attempt_root / "clone"
@@ -1178,6 +1206,9 @@ def execute_isolated_attempt(
     scratch_dir.mkdir(parents=True, exist_ok=False)
     clone_at_head(repo_root, git_bin, head, clone_dir)
     initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
+    if prior_patch is not None:
+        run_subprocess((git_bin, "apply", "--check", "--binary", str(prior_patch)), cwd=clone_dir)
+        run_subprocess((git_bin, "apply", "--binary", str(prior_patch)), cwd=clone_dir)
     shadows = prepare_writable_shadows(
         clone_dir=clone_dir,
         scratch_dir=scratch_dir,
@@ -1187,6 +1218,13 @@ def execute_isolated_attempt(
     include_codex_home = custom_command is None
     stdin: bytes | None = None
     last_message_path = scratch_dir / "worker-last-message.txt"
+    read_only_inputs: list[Path] = []
+    correction_brief_path: Path | None = None
+    if correction_brief is not None:
+        correction_brief_path = scratch_dir / "correction-brief.txt"
+        correction_brief_path.write_bytes(correction_brief)
+        correction_brief_path.chmod(0o400)
+        read_only_inputs.append(correction_brief_path)
     if custom_command is None:
         if codex_bin is None or model is None or reasoning is None:
             raise RunnerError("Codex attempt requires an executable, model, and reasoning effort")
@@ -1198,7 +1236,11 @@ def execute_isolated_attempt(
             model=model,
             reasoning=reasoning,
         )
-        stdin = build_worker_prompt(plan_rel, plan_digest).encode("utf-8")
+        stdin = (
+            build_correction_prompt(plan_rel, plan_digest)
+            if correction_brief is not None
+            else build_worker_prompt(plan_rel, plan_digest)
+        ).encode("utf-8")
     else:
         command = list(custom_command)
 
@@ -1210,6 +1252,8 @@ def execute_isolated_attempt(
         extra_env=extra_env,
         include_codex_home=include_codex_home,
     )
+    if correction_brief_path is not None:
+        env_vars[f"{ENV_PREFIX}CORRECTION_BRIEF"] = str(correction_brief_path)
     attempt_started = time.monotonic()
     result = run_subprocess(
         build_bwrap_command(
@@ -1223,6 +1267,7 @@ def execute_isolated_attempt(
                 hidden_directories,
                 visible_paths=(clone_dir, scratch_dir),
             ),
+            read_only_inputs=read_only_inputs,
         ),
         cwd=repo_root,
         env=sanitize_process_env(),
@@ -1541,37 +1586,70 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def apply_worker_result(args: argparse.Namespace) -> int:
-    git_bin = require_executable("git", args.git_bin)
-    repo_root = detect_repo_root(git_bin)
-    os.chdir(repo_root)
-    planlib = load_planlib()
-    ensure_clean_worktree(repo_root, git_bin)
-    manifest_path = Path(args.manifest).expanduser().resolve()
-    manifest = load_manifest(manifest_path)
+def read_bounded_regular_file(path: Path, maximum_bytes: int, label: str) -> bytes:
+    if not path.is_absolute():
+        path = (Path.cwd() / path).absolute()
+    ensure_no_symlink_components(path)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise RunnerError(f"{label} must be a regular non-symlink file") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RunnerError(f"{label} must be a regular file")
+        if metadata.st_size > maximum_bytes:
+            raise RunnerError(f"{label} exceeds the byte bound")
+        return read_bounded_fd(descriptor, maximum_bytes)
+    finally:
+        os.close(descriptor)
+
+
+def verify_candidate_manifest(
+    *,
+    repo_root: Path,
+    git_bin: str,
+    planlib: ModuleType,
+    manifest_path: Path,
+    expected_plan: str | None = None,
+) -> dict[str, Any]:
+    manifest_bytes = read_bounded_regular_file(manifest_path, 1024 * 1024, "candidate manifest")
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunnerError("candidate manifest is not valid UTF-8 JSON") from exc
+    if not isinstance(manifest, dict):
+        raise RunnerError("candidate manifest must contain a JSON object")
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise RunnerError(f"unsupported manifest schema version: {manifest.get('schema_version')}")
     plan_rel = manifest.get("plan_path")
     if not isinstance(plan_rel, str):
         raise RunnerError("manifest plan_path must be a string")
-    plan_path, plan_rel, _values, normalized_scope = load_plan(planlib, repo_root, plan_rel)
+    if expected_plan is not None and plan_rel != expected_plan:
+        raise RunnerError("prior manifest plan path does not match the requested correction plan")
+    plan_path, plan_rel, values, normalized_scope = load_plan(planlib, repo_root, plan_rel)
     current_head = git_text(repo_root, git_bin, "rev-parse", "HEAD")
     if current_head != manifest.get("source_head"):
         raise RunnerError("source HEAD no longer matches the worker manifest")
     current_plan_digest = hash_file(plan_path)
     if current_plan_digest != manifest.get("plan_digest"):
         raise RunnerError("active plan digest no longer matches the worker manifest")
-
+    manifest_scope = manifest.get("allowed_write_scope")
+    if not isinstance(manifest_scope, list):
+        raise RunnerError("manifest allowed_write_scope must be a list")
+    normalized_manifest_scope = parse_write_scope(manifest_scope)
+    if normalized_manifest_scope != normalized_scope:
+        raise RunnerError("candidate manifest write scope differs from the current plan")
     patch_path_raw = manifest.get("patch_path")
     if not isinstance(patch_path_raw, str):
         raise RunnerError("manifest patch_path must be a string")
-    patch_path = Path(patch_path_raw).expanduser().resolve()
-    if not patch_path.is_file():
-        raise RunnerError(f"candidate patch is missing: {patch_path}")
-    patch_digest = hash_file(patch_path)
+    patch_path = Path(patch_path_raw).expanduser()
+    if not patch_path.is_absolute():
+        patch_path = (manifest_path.parent / patch_path).absolute()
+    patch_bytes = read_bounded_regular_file(patch_path, 128 * 1024 * 1024, "candidate patch")
+    patch_digest = hashlib.sha256(patch_bytes).hexdigest()
     if patch_digest != manifest.get("patch_digest"):
         raise RunnerError("candidate patch digest no longer matches the worker manifest")
-
     changed_paths = normalize_changed_paths(
         derive_changed_paths_from_patch(repo_root, git_bin, patch_path, current_head),
         repo_root,
@@ -1579,7 +1657,10 @@ def apply_worker_result(args: argparse.Namespace) -> int:
     manifest_changed = manifest.get("changed_paths", [])
     if not isinstance(manifest_changed, list):
         raise RunnerError("manifest changed_paths must be a list")
-    normalized_manifest_changed = [normalize_repo_relpath(item, label="manifest changed path")[0] for item in manifest_changed]
+    normalized_manifest_changed = [
+        normalize_repo_relpath(item, label="manifest changed path")[0]
+        for item in manifest_changed
+    ]
     if changed_paths != normalized_manifest_changed:
         raise RunnerError("candidate patch changed paths do not match the worker manifest")
     disallowed = [path for path in changed_paths if not scope_allows_path(normalized_scope, path)]
@@ -1587,13 +1668,323 @@ def apply_worker_result(args: argparse.Namespace) -> int:
         raise RunnerError(f"candidate patch changes paths outside the current write_scope: {', '.join(disallowed)}")
     for path in changed_paths:
         ensure_no_symlink_path_trick(repo_root, path)
-
     run_subprocess((git_bin, "apply", "--check", "--binary", str(patch_path)), cwd=repo_root)
     ensure_clean_worktree(repo_root, git_bin)
-    if git_text(repo_root, git_bin, "rev-parse", "HEAD") != manifest.get("source_head"):
+    if git_text(repo_root, git_bin, "rev-parse", "HEAD") != current_head:
+        raise RunnerError("source HEAD changed during candidate verification")
+    return {
+        "manifest": manifest,
+        "manifest_digest": hashlib.sha256(manifest_bytes).hexdigest(),
+        "plan_path": plan_path,
+        "plan_rel": plan_rel,
+        "values": values,
+        "normalized_scope": normalized_scope,
+        "head": current_head,
+        "plan_digest": current_plan_digest,
+        "patch_path": patch_path,
+        "patch_digest": patch_digest,
+        "changed_paths": changed_paths,
+    }
+
+
+def next_correction_lineage(
+    prior_manifest: dict[str, Any],
+    *,
+    prior_manifest_digest: str,
+    prior_patch_digest: str,
+    correction_brief_digest: str,
+) -> dict[str, Any]:
+    prior_lineage = prior_manifest.get("correction_lineage")
+    if prior_lineage is None:
+        prior_round = 0
+    else:
+        required = {
+            "prior_manifest_digest",
+            "prior_patch_digest",
+            "correction_round",
+            "correction_brief_digest",
+        }
+        if not isinstance(prior_lineage, dict) or set(prior_lineage) != required:
+            raise RunnerError("prior correction lineage has an invalid exact field shape")
+        prior_round = prior_lineage.get("correction_round")
+        if not isinstance(prior_round, int) or isinstance(prior_round, bool) or prior_round < 1:
+            raise RunnerError("prior correction lineage has an invalid correction round")
+        for key in required - {"correction_round"}:
+            value = prior_lineage.get(key)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise RunnerError(f"prior correction lineage has an invalid digest: {key}")
+    correction_round = prior_round + 1
+    if correction_round > MAX_CORRECTION_ROUNDS:
+        raise RunnerError("correction budget exhausted after two isolated corrections")
+    return {
+        "prior_manifest_digest": prior_manifest_digest,
+        "prior_patch_digest": prior_patch_digest,
+        "correction_round": correction_round,
+        "correction_brief_digest": correction_brief_digest,
+    }
+
+
+def correct_worker(args: argparse.Namespace) -> int:
+    runner_started = time.monotonic()
+    git_bin = require_executable("git", args.git_bin)
+    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+    ensure_bwrap_usable(bwrap_bin)
+    repo_root = detect_repo_root(git_bin)
+    os.chdir(repo_root)
+    planlib = load_planlib()
+    ensure_clean_worktree(repo_root, git_bin)
+    plan_rel = normalize_manifest_path(repo_root, args.plan)
+    prior_manifest_path = Path(args.prior_manifest).expanduser()
+    if not prior_manifest_path.is_absolute():
+        prior_manifest_path = (Path.cwd() / prior_manifest_path).absolute()
+    verified = verify_candidate_manifest(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        planlib=planlib,
+        manifest_path=prior_manifest_path,
+        expected_plan=plan_rel,
+    )
+    values = verified["values"]
+    implementation_risk = implementation_classification(values, "implementation_risk")
+    implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
+    selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
+    brief_path = Path(args.correction_brief).expanduser()
+    if not brief_path.is_absolute():
+        brief_path = (Path.cwd() / brief_path).absolute()
+    if path_is_within(repo_root, brief_path):
+        raise RunnerError("correction brief must be outside the source repository")
+    brief = read_bounded_regular_file(brief_path, CORRECTION_BRIEF_MAX_BYTES, "correction brief")
+    if not brief.strip():
+        raise RunnerError("correction brief must be nonblank")
+    brief_digest = hashlib.sha256(brief).hexdigest()
+    lineage = next_correction_lineage(
+        verified["manifest"],
+        prior_manifest_digest=verified["manifest_digest"],
+        prior_patch_digest=verified["patch_digest"],
+        correction_brief_digest=brief_digest,
+    )
+    output_dir = materialize_output_dir(repo_root, args.output_dir)
+    reserved_artifacts = reserve_output_artifacts(output_dir)
+    if (args.availability_state is None) != (args.orchestration_run_id is None):
+        raise RunnerError("availability state path and orchestration run identifier must be provided together")
+    state_context = (
+        open_availability_state(repo_root, args.availability_state, args.orchestration_run_id)
+        if args.availability_state is not None and args.orchestration_run_id is not None
+        else nullcontext(None)
+    )
+    hidden_prior = {
+        prior_manifest_path.parent.resolve(),
+        verified["patch_path"].parent.resolve(),
+        brief_path.parent.resolve(),
+    }
+    with state_context as availability_state, tempfile.TemporaryDirectory(
+        prefix="sandboxed-plan-worker-correction-workspace-"
+    ) as workspace_tmp:
+        workspace = Path(workspace_tmp)
+        attempts: list[dict[str, Any]] = []
+        fallback_reason: str | None = None
+        availability_failures = 0
+        skipped_known_unavailable_starts = 0
+        common = {
+            "workspace": workspace,
+            "repo_root": repo_root,
+            "head": verified["head"],
+            "plan_rel": verified["plan_rel"],
+            "plan_digest": verified["plan_digest"],
+            "normalized_scope": verified["normalized_scope"],
+            "bwrap_bin": bwrap_bin,
+            "git_bin": git_bin,
+            "reserved_artifacts": reserved_artifacts,
+            "extra_env": args.worker_env,
+            "prior_patch": verified["patch_path"],
+            "correction_brief": brief,
+        }
+        if args.worker_binary is not None:
+            worker_binary = require_executable("worker", args.worker_binary)
+            selected = execute_isolated_attempt(
+                **common,
+                label="custom",
+                hidden_directories=tuple({output_dir.resolve(), *hidden_prior}),
+                custom_command=[worker_binary, *args.worker_arg],
+            )
+            worker_kind = "custom"
+            if selected["result"].returncode != 0:
+                raise RunnerError(
+                    f"correction worker exited with {selected['result'].returncode}; stdout/stderr saved under {output_dir}"
+                )
+        else:
+            codex_bin = require_executable("codex", args.codex_bin)
+            primary_model = require_writable_model(
+                args.codex_model if args.codex_model is not None else selected_plan_model,
+                "preferred",
+            )
+            primary_reasoning = require_reasoning_effort(
+                args.codex_reasoning_effort
+                if args.codex_reasoning_effort is not None
+                else selected_plan_reasoning,
+                "preferred",
+            )
+            fallback_model = require_writable_model(args.fallback_codex_model, "fallback")
+            fallback_reasoning = require_reasoning_effort(
+                args.fallback_codex_reasoning_effort, "fallback"
+            )
+            worker_kind = "codex"
+            primary: dict[str, Any] | None = None
+            known_primary = availability_state.reason_for(primary_model) if availability_state else None
+            if known_primary is not None:
+                skipped_known_unavailable_starts += 1
+                fallback_reason = known_primary
+            else:
+                primary = execute_isolated_attempt(
+                    **common,
+                    label="primary",
+                    hidden_directories=tuple({output_dir.resolve(), host_codex_home_path(), *hidden_prior}),
+                    codex_bin=codex_bin,
+                    model=primary_model,
+                    reasoning=primary_reasoning,
+                )
+                attempts.append(primary["record"])
+                if primary["result"].returncode == 0:
+                    selected = primary
+                else:
+                    fallback_reason = classify_codex_unavailability(
+                        primary["result"].stdout, primary["result"].stderr
+                    )
+                    if fallback_reason is None:
+                        raise RunnerError(
+                            f"correction worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                        )
+                    availability_failures += 1
+                    if availability_state:
+                        availability_state.record(primary_model, fallback_reason)
+            if primary is None or primary["result"].returncode != 0:
+                if args.no_model_fallback:
+                    raise RunnerError("preferred correction model is unavailable and fallback is disabled")
+                if availability_state and availability_state.reason_for(fallback_model) is not None:
+                    skipped_known_unavailable_starts += 1
+                    raise RunnerError("fallback correction model is already recorded unavailable for this run")
+                fallback = execute_isolated_attempt(
+                    **common,
+                    label="fallback",
+                    hidden_directories=tuple(
+                        {
+                            output_dir.resolve(),
+                            host_codex_home_path(),
+                            *hidden_prior,
+                            *([primary["attempt_root"]] if primary is not None else []),
+                        }
+                    ),
+                    codex_bin=codex_bin,
+                    model=fallback_model,
+                    reasoning=fallback_reasoning,
+                )
+                attempts.append(fallback["record"])
+                if fallback["result"].returncode != 0:
+                    reason = classify_codex_unavailability(
+                        fallback["result"].stdout, fallback["result"].stderr
+                    )
+                    if reason is not None:
+                        availability_failures += 1
+                        if availability_state:
+                            availability_state.record(fallback_model, reason)
+                    raise RunnerError(
+                        f"fallback correction worker exited with {fallback['result'].returncode}; stdout/stderr saved under {output_dir}"
+                    )
+                selected = fallback
+        worker_result = select_attempt_artifacts(selected, reserved_artifacts)
+        worker_result["kind"] = worker_kind
+        if attempts:
+            worker_result["attempts"] = attempts
+            worker_result["selected_attempt"] = selected["record"]["label"]
+        if fallback_reason is not None:
+            worker_result["fallback_reason"] = fallback_reason
+        materialize_writable_shadows(selected["shadows"])
+        patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
+            bwrap_bin=bwrap_bin,
+            git_bin=git_bin,
+            clone_dir=selected["clone_dir"],
+            scratch_dir=selected["scratch_dir"],
+            env_vars=selected["env_vars"],
+        )
+        if clone_head_after_worker != verified["head"]:
+            raise RunnerError("correction worker changed clone HEAD")
+        if refs_after_worker != selected["initial_refs"]:
+            raise RunnerError("correction worker changed clone refs")
+        if not patch_bytes:
+            raise RunnerError("correction produced no aggregate candidate changes")
+        patch_path = reserved_artifacts["candidate.patch"]
+        patch_digest = write_bytes(patch_path, patch_bytes)
+        changed_paths = normalize_changed_paths(
+            derive_changed_paths_from_patch(repo_root, git_bin, patch_path, verified["head"]),
+            repo_root,
+        )
+        if not changed_paths:
+            raise RunnerError("correction produced no aggregate candidate changes")
+        disallowed = [
+            path
+            for path in changed_paths
+            if not scope_allows_path(verified["normalized_scope"], path)
+        ]
+        if disallowed:
+            raise RunnerError(f"correction changed paths outside write_scope: {', '.join(disallowed)}")
+        for path in changed_paths:
+            ensure_no_symlink_path_trick(repo_root, path)
+        run_subprocess((git_bin, "apply", "--check", "--binary", str(patch_path)), cwd=repo_root)
+        ensure_clean_worktree(repo_root, git_bin)
+        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            raise RunnerError("source HEAD changed during correction admission")
+        telemetry_attempts = attempts if worker_kind == "codex" else [selected["record"]]
+        manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "source_head": verified["head"],
+            "plan_path": verified["plan_rel"],
+            "plan_digest": verified["plan_digest"],
+            "allowed_write_scope": verified["normalized_scope"],
+            "changed_paths": changed_paths,
+            "patch_path": str(patch_path),
+            "patch_digest": patch_digest,
+            "correction_lineage": lineage,
+            "worker_result": worker_result,
+            "telemetry": {
+                "schema_version": TELEMETRY_SCHEMA_VERSION,
+                "attempt_durations_seconds": [
+                    bounded_duration(0.0, float(attempt["duration_seconds"]))
+                    for attempt in telemetry_attempts
+                ],
+                "runner_duration_seconds": bounded_duration(runner_started, time.monotonic()),
+                "model_starts": len(attempts) if worker_kind == "codex" else 0,
+                "availability_failures": availability_failures,
+                "skipped_known_unavailable_starts": skipped_known_unavailable_starts,
+                "candidate_generations": 1,
+                "full_validation_count": 0,
+                "implementation_risk": implementation_risk,
+                "implementation_ambiguity": implementation_ambiguity,
+            },
+        }
+        manifest_path = reserved_artifacts["manifest.json"]
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(str(manifest_path))
+    return 0
+
+
+def apply_worker_result(args: argparse.Namespace) -> int:
+    git_bin = require_executable("git", args.git_bin)
+    repo_root = detect_repo_root(git_bin)
+    os.chdir(repo_root)
+    planlib = load_planlib()
+    ensure_clean_worktree(repo_root, git_bin)
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    verified = verify_candidate_manifest(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        planlib=planlib,
+        manifest_path=manifest_path,
+    )
+    ensure_clean_worktree(repo_root, git_bin)
+    if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
         raise RunnerError("source HEAD changed after candidate preflight and before apply")
-    run_subprocess((git_bin, "apply", "--binary", str(patch_path)), cwd=repo_root)
-    print(str(patch_path))
+    run_subprocess((git_bin, "apply", "--binary", str(verified["patch_path"])), cwd=repo_root)
+    print(str(verified["patch_path"]))
     return 0
 
 
@@ -1756,6 +2147,7 @@ def build_parser() -> argparse.ArgumentParser:
             """\
             Commands:
               run      execute a writable worker inside Bubblewrap and emit a candidate patch manifest
+              correct  repair a verified candidate in a fresh isolated clone and emit an aggregate patch
               apply    re-check and apply a previously emitted candidate patch manifest
               self-test run a deterministic local end-to-end check without contacting Codex
             """
@@ -1809,6 +2201,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="set one extra KEY=VALUE environment pair inside the sandbox",
     )
     run_parser.set_defaults(handler=run_worker)
+
+    correction_parser = subparsers.add_parser(
+        "correct", help="correct a verified candidate in a fresh isolated clone"
+    )
+    correction_parser.add_argument("plan", help="repository-relative active plan path")
+    correction_parser.add_argument("prior_manifest", help="prior candidate manifest rejected by parent review")
+    correction_parser.add_argument("correction_brief", help="bounded parent-authored correction brief outside the repository")
+    correction_parser.add_argument("--output-dir", help="directory outside the source repository for patch artifacts")
+    correction_parser.add_argument("--git-bin", default="git", help="git executable to use")
+    correction_parser.add_argument("--bwrap-bin", default="bwrap", help="Bubblewrap executable to use")
+    correction_parser.add_argument("--codex-bin", default="codex", help="Codex executable for the default worker")
+    correction_parser.add_argument("--codex-model", default=None, help="preferred Codex model override")
+    correction_parser.add_argument("--codex-reasoning-effort", default=None, help="preferred reasoning override")
+    correction_parser.add_argument("--fallback-codex-model", default=DEFAULT_FALLBACK_CODEX_MODEL)
+    correction_parser.add_argument(
+        "--fallback-codex-reasoning-effort", default=DEFAULT_FALLBACK_CODEX_REASONING
+    )
+    correction_parser.add_argument("--no-model-fallback", action="store_true")
+    correction_parser.add_argument("--availability-state")
+    correction_parser.add_argument("--orchestration-run-id")
+    correction_parser.add_argument("--worker-binary")
+    correction_parser.add_argument("--worker-arg", action="append", default=[])
+    correction_parser.add_argument("--worker-env", action="append", default=[])
+    correction_parser.set_defaults(handler=correct_worker)
 
     apply_parser = subparsers.add_parser("apply", help="apply a previously emitted candidate patch manifest")
     apply_parser.add_argument("manifest", help="path to manifest.json emitted by the run command")

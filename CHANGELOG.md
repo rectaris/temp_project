@@ -7,6 +7,7 @@
 - orchestration 生成物の更新前チェックを Copier 更新ハーネスの simulation source と stage の対象へ追加し、更新時の現行 semantics 検証を固定しました。
 - 委譲を repository 規模ではなく独立した価値と実装 slice で判断し、逐次 worker を実装 risk・曖昧さに応じて Spark または Terra へ振り分け、high と書き込み用 Sol を拒否するようにしました。
 - 逐次 worker に run 単位の bounded availability state と親生成 telemetry を追加し、同一 run で利用不能と判定済みの model を再起動しないようにしました。
+- 親 review で却下した候補を source へ適用せず、新規隔離 clone 内で最大2回まで局所修正し、original HEAD に対する aggregate patch を再生成できるようにしました。
 
 ## 2026-08-13 v1.3.0
 

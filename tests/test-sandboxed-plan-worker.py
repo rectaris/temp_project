@@ -144,7 +144,8 @@ def write_fake_codex(path: Path) -> None:
             elif model == fallback_model:
                 if reasoning != fallback_reasoning:
                     raise SystemExit(f"unexpected fallback reasoning: {{reasoning}}")
-                if target.read_text(encoding="utf-8") != "original\\n":
+                expected_start = "initial candidate\\n" if "{ENV_PREFIX}CORRECTION_BRIEF" in os.environ else "original\\n"
+                if target.read_text(encoding="utf-8") != expected_start:
                     raise SystemExit("fallback inherited preferred-attempt changes")
                 host_codex_home = Path(os.environ["FAKE_HOST_CODEX_HOME"])
                 output_dir = Path(os.environ["FAKE_OUTPUT_DIR"])
@@ -307,6 +308,76 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             **(fake_env or {}),
         }
         for key, value in worker_env.items():
+            args.extend(["--worker-env", f"{key}={value}"])
+        return run_cli(repo, *args, env={"CODEX_HOME": str(codex_home)})
+
+    def run_correction_with_worker(
+        self,
+        repo: Path,
+        plan_path: str,
+        prior_manifest: Path,
+        correction_brief: Path,
+        worker_body: str,
+        *,
+        output_dir: Path,
+        extra_args: tuple[str, ...] = (),
+        worker_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        worker_root = Path(tempfile.mkdtemp(prefix="sandboxed-correction-worker-"))
+        self.addCleanup(shutil.rmtree, worker_root, True)
+        worker = worker_root / "worker.py"
+        write_worker(worker, worker_body)
+        args = [
+            "correct",
+            plan_path,
+            str(prior_manifest),
+            str(correction_brief),
+            "--output-dir",
+            str(output_dir),
+            "--worker-binary",
+            sys.executable,
+            "--worker-arg",
+            str(worker),
+            *extra_args,
+        ]
+        for key, value in (worker_env or {}).items():
+            args.extend(["--worker-env", f"{key}={value}"])
+        return run_cli(repo, *args)
+
+    def run_correction_with_fake_codex(
+        self,
+        repo: Path,
+        plan_path: str,
+        prior_manifest: Path,
+        correction_brief: Path,
+        scenario: str,
+        *,
+        output_dir: Path,
+        extra_args: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
+        tool_root = Path(tempfile.mkdtemp(prefix="sandboxed-correction-codex-"))
+        self.addCleanup(shutil.rmtree, tool_root, True)
+        fake_codex = tool_root / "fake-codex.py"
+        write_fake_codex(fake_codex)
+        codex_home = tool_root / "codex-home"
+        codex_home.mkdir()
+        (codex_home / "auth.json").write_text('{"token":"fixture"}\n', encoding="utf-8")
+        args = [
+            "correct",
+            plan_path,
+            str(prior_manifest),
+            str(correction_brief),
+            "--output-dir",
+            str(output_dir),
+            "--codex-bin",
+            str(fake_codex),
+            *extra_args,
+        ]
+        for key, value in {
+            "FAKE_CODEX_SCENARIO": scenario,
+            "FAKE_HOST_CODEX_HOME": str(codex_home),
+            "FAKE_OUTPUT_DIR": str(output_dir),
+        }.items():
             args.extend(["--worker-env", f"{key}={value}"])
         return run_cli(repo, *args, env={"CODEX_HOME": str(codex_home)})
 
@@ -1115,6 +1186,349 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("must be provided together", result.stderr)
                 self.assertFalse((output_root / f"pair-cli-{index}" / "candidate.patch").exists())
+
+    def test_correction_emits_verified_aggregate_patch_without_mutating_source_or_objects(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial_output = root / "initial-output"
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
+            output_dir=initial_output,
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        prior_manifest = Path(initial.stdout.strip())
+        prior_manifest_digest = RUNNER.hash_file(prior_manifest)
+        prior_patch_digest = RUNNER.hash_file(initial_output / "candidate.patch")
+        brief = root / "correction.txt"
+        brief.write_text("Replace the candidate marker with the corrected marker.\n", encoding="utf-8")
+        before_objects = object_database_snapshot(repo)
+        correction_output = root / "correction-output"
+        correction = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            prior_manifest,
+            brief,
+            textwrap.dedent(
+                """\
+                brief = Path(os.environ[prefix + "CORRECTION_BRIEF"])
+                if brief.read_text(encoding="utf-8") != "Replace the candidate marker with the corrected marker.\\n":
+                    raise SystemExit("correction brief mismatch")
+                try:
+                    brief.write_text("tamper\\n", encoding="utf-8")
+                except OSError:
+                    pass
+                else:
+                    raise SystemExit("correction brief was writable")
+                if (worker_repo / "allowed.txt").read_text(encoding="utf-8") != "initial candidate\\n":
+                    raise SystemExit("verified prior patch was not applied")
+                forbidden = Path(os.environ["FORBIDDEN_PRIOR"])
+                if forbidden.exists():
+                    raise SystemExit("prior attempt state is visible")
+                (worker_repo / "allowed.txt").write_text("corrected candidate\\n", encoding="utf-8")
+                """
+            ),
+            output_dir=correction_output,
+            worker_env={"FORBIDDEN_PRIOR": str(initial_output / "worker.stdout")},
+        )
+        self.assertEqual(correction.returncode, 0, correction.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+        self.assertEqual(object_database_snapshot(repo), before_objects)
+        manifest_path = Path(correction.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["changed_paths"], ["allowed.txt"])
+        self.assertEqual(
+            manifest["correction_lineage"],
+            {
+                "prior_manifest_digest": prior_manifest_digest,
+                "prior_patch_digest": prior_patch_digest,
+                "correction_round": 1,
+                "correction_brief_digest": RUNNER.hash_file(brief),
+            },
+        )
+        self.assertNotIn("Replace the candidate", json.dumps(manifest))
+        apply = run_cli(repo, "apply", str(manifest_path))
+        self.assertEqual(apply.returncode, 0, apply.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "corrected candidate\n")
+
+    def test_correction_lineage_allows_two_rounds_and_rejects_third(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("round zero\\n", encoding="utf-8")',
+            output_dir=root / "round-zero",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        prior = Path(initial.stdout.strip())
+        for round_number in (1, 2):
+            brief = root / f"brief-{round_number}.txt"
+            brief.write_text(f"Correction round {round_number}.\n", encoding="utf-8")
+            result = self.run_correction_with_worker(
+                repo,
+                plan_path,
+                prior,
+                brief,
+                f'(worker_repo / "allowed.txt").write_text("round {round_number}\\n", encoding="utf-8")',
+                output_dir=root / f"round-{round_number}",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            prior = Path(result.stdout.strip())
+            manifest = json.loads(prior.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["correction_lineage"]["correction_round"], round_number)
+        third_brief = root / "brief-3.txt"
+        third_brief.write_text("Third correction must be refused.\n", encoding="utf-8")
+        third = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            prior,
+            third_brief,
+            '(worker_repo / "allowed.txt").write_text("round 3\\n", encoding="utf-8")',
+            output_dir=root / "round-3",
+        )
+        self.assertEqual(third.returncode, 1)
+        self.assertIn("budget exhausted", third.stderr)
+        self.assertFalse((root / "round-3" / "worker.stdout").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_correction_rejects_tampered_prior_manifest_and_brief_boundaries(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "tamper-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        original_manifest = json.loads(Path(initial.stdout.strip()).read_text(encoding="utf-8"))
+        brief = root / "brief.txt"
+        brief.write_text("Correct it.\n", encoding="utf-8")
+        cases = {
+            "head": ("source_head", "0" * 40, "source HEAD"),
+            "plan": ("plan_digest", "0" * 64, "plan digest"),
+            "scope": ("allowed_write_scope", ["other.txt"], "write scope"),
+            "patch": ("patch_digest", "0" * 64, "patch digest"),
+            "paths": ("changed_paths", ["other.txt"], "changed paths"),
+            "schema": ("schema_version", 999, "schema version"),
+        }
+        for index, (label, (key, value, message)) in enumerate(cases.items()):
+            with self.subTest(case=label):
+                manifest = dict(original_manifest)
+                manifest[key] = value
+                path = root / f"tampered-{label}.json"
+                path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+                result = self.run_correction_with_worker(
+                    repo,
+                    plan_path,
+                    path,
+                    brief,
+                    '(worker_repo / "allowed.txt").write_text("must not run\\n", encoding="utf-8")',
+                    output_dir=root / f"tampered-output-{index}",
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        lineage_manifest = dict(original_manifest)
+        lineage_manifest["correction_lineage"] = {
+            "prior_manifest_digest": "0" * 64,
+            "prior_patch_digest": "0" * 64,
+            "correction_round": 0,
+            "correction_brief_digest": "0" * 64,
+        }
+        lineage_path = root / "bad-lineage.json"
+        lineage_path.write_text(json.dumps(lineage_manifest) + "\n", encoding="utf-8")
+        lineage = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            lineage_path,
+            brief,
+            "pass",
+            output_dir=root / "bad-lineage-output",
+        )
+        self.assertEqual(lineage.returncode, 1)
+        self.assertIn("invalid correction round", lineage.stderr)
+
+        oversized = root / "oversized-brief.txt"
+        oversized.write_bytes(b"x" * (RUNNER.CORRECTION_BRIEF_MAX_BYTES + 1))
+        too_large = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            oversized,
+            "pass",
+            output_dir=root / "oversized-brief-output",
+        )
+        self.assertEqual(too_large.returncode, 1)
+        self.assertIn("byte bound", too_large.stderr)
+        brief_link = root / "brief-link.txt"
+        brief_link.symlink_to(brief)
+        linked = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief_link,
+            "pass",
+            output_dir=root / "linked-brief-output",
+        )
+        self.assertEqual(linked.returncode, 1)
+        self.assertIn("symlink", linked.stderr)
+
+    def test_correction_failure_leaves_no_candidate_and_keeps_source_clean(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "failure-initial",
+        )
+        brief = root / "failure-brief.txt"
+        brief.write_text("Fail safely.\n", encoding="utf-8")
+        output = root / "failure-output"
+        failed = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief,
+            "raise SystemExit(7)",
+            output_dir=output,
+        )
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("correction worker exited with 7", failed.stderr)
+        self.assertFalse((output / "candidate.patch").exists())
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_correction_reuses_same_run_availability_and_only_falls_back_for_availability(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
+            output_dir=root / "availability-correction-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        prior = Path(initial.stdout.strip())
+        brief = root / "availability-correction-brief.txt"
+        brief.write_text("Correct the candidate.\n", encoding="utf-8")
+        state = root / "correction-state.json"
+        common = (
+            "--availability-state",
+            str(state),
+            "--orchestration-run-id",
+            "same-correction-run",
+        )
+        first = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            prior,
+            brief,
+            "unavailable_then_success",
+            output_dir=root / "correction-availability-first",
+            extra_args=common,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        first_manifest = json.loads(Path(first.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(first_manifest["telemetry"]["model_starts"], 2)
+        self.assertEqual(first_manifest["telemetry"]["availability_failures"], 1)
+
+        second = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            prior,
+            brief,
+            "unavailable_then_success",
+            output_dir=root / "correction-availability-second",
+            extra_args=common,
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        second_manifest = json.loads(Path(second.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(second_manifest["telemetry"]["model_starts"], 1)
+        self.assertEqual(second_manifest["telemetry"]["skipped_known_unavailable_starts"], 1)
+        self.assertEqual(
+            [attempt["label"] for attempt in second_manifest["worker_result"]["attempts"]],
+            ["fallback"],
+        )
+
+        mismatched = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            prior,
+            brief,
+            "primary_success",
+            output_dir=root / "correction-run-mismatch",
+            extra_args=(
+                "--availability-state",
+                str(state),
+                "--orchestration-run-id",
+                "different-run",
+            ),
+        )
+        self.assertEqual(mismatched.returncode, 1)
+        self.assertIn("different orchestration run", mismatched.stderr)
+
+        semantic = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            prior,
+            brief,
+            "nonavailability_failure",
+            output_dir=root / "correction-semantic-failure",
+        )
+        self.assertEqual(semantic.returncode, 1)
+        self.assertIn("correction worker exited", semantic.stderr)
+        self.assertFalse((root / "correction-semantic-failure" / "worker-fallback.stdout").exists())
+
+    def test_correction_sandbox_denies_source_out_of_scope_and_git_metadata_writes(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
+            output_dir=root / "denial-initial",
+        )
+        brief = root / "denial-brief.txt"
+        brief.write_text("Verify correction sandbox denials.\n", encoding="utf-8")
+        correction = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief,
+            textwrap.dedent(
+                """\
+                denied = []
+                for target, label in (
+                    (source_repo / "blocked.txt", "source"),
+                    (worker_repo / "outside-scope.txt", "scope"),
+                    (worker_repo / ".git" / "refs" / "heads" / "evil", "git"),
+                ):
+                    try:
+                        target.write_text("blocked\\n", encoding="utf-8")
+                    except OSError:
+                        denied.append(label)
+                    else:
+                        raise SystemExit(f"unexpected write success: {label}")
+                if denied != ["source", "scope", "git"]:
+                    raise SystemExit(f"unexpected denial set: {denied}")
+                (worker_repo / "allowed.txt").write_text("safe correction\\n", encoding="utf-8")
+                """
+            ),
+            output_dir=root / "denial-correction",
+        )
+        self.assertEqual(correction.returncode, 0, correction.stderr)
+        self.assertFalse((repo / "blocked.txt").exists())
+        self.assertFalse((repo / "outside-scope.txt").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_nonavailability_failure_and_disabled_fallback_do_not_retry(self) -> None:
         for scenario, extra_args in (

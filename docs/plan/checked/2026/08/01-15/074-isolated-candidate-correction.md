@@ -1,6 +1,6 @@
 # Correct a rejected candidate in a fresh isolated clone
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -81,12 +81,16 @@ When parent review rejects one part of a candidate, the only available implement
 
 ## Tasks
 
-- [ ] Add the isolated correction lifecycle and manifest lineage.
-- [ ] Add deterministic positive, tampering, isolation, cleanup, and budget coverage.
-- [ ] Add correction-specific run-local availability integration and fallback-eligibility coverage.
-- [ ] Align root/generated policy, Skill, runner, checks, and documentation.
-- [ ] Run all required validation, archive, and commit before plan 075.
+- [x] Add the isolated correction lifecycle and manifest lineage.
+- [x] Add deterministic positive, tampering, isolation, cleanup, and budget coverage.
+- [x] Add correction-specific run-local availability integration and fallback-eligibility coverage.
+- [x] Align root/generated policy, Skill, runner, checks, and documentation.
+- [x] Run all required validation, archive, and commit before plan 075.
 
 ## Validation Notes
 
-- Pending implementation.
+- Parent-session implementation added `correct`, which verifies the prior schema, HEAD, plan and patch digests, exact current scope, normalized paths, symlink ancestry, clean source, and apply preflight before starting. It reads a bounded nonblank parent brief outside the repository and records only its digest.
+- Each correction clones original HEAD with `--no-hardlinks`, applies the verified prior patch only in that clone, copies the brief into a read-only mount, hides prior manifest/patch/log directories and host authentication, and admits one aggregate patch through HEAD, ref, scope, symlink, object-isolation, and source apply-preflight checks.
+- Exact lineage permits rounds one and two only. Tests reject invalid or skipped lineage, a third round, tampered HEAD/plan/scope/patch/paths/schema, linked or oversized briefs, source/out-of-scope/Git metadata writes, and failed-worker candidates while preserving source worktree and object database state.
+- Correction reuses the same run-bound availability state, skips known preferred and fallback models, records new bounded availability failures, and never falls back for semantic or other nonavailability failure. Root/template runners are byte-identical.
+- Parent-session validation passed all declared commands: 53 runner tests, runner self-test, root policy check, Copier template check, workflow lint, smoke, required Copier update, change-aware validation, and diff checks.
