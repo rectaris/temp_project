@@ -77,3 +77,4 @@ id	path
 074	docs/plan/checked/2026/08/01-15/074-isolated-candidate-correction.md
 075	docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
 076	docs/plan/checked/2026/08/01-15/076-plan-restructuring-policy-schema.md
+077	docs/plan/checked/2026/08/01-15/077-atomic-plan-restructuring.md

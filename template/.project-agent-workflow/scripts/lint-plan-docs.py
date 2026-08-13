@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import plan_validation_commands
 ROOT = planlib.ROOT
 PLAN = planlib.PLAN
 CHECKED = planlib.CHECKED
+REPLANNED = planlib.REPLANNED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
 OPEN_STATUS_VALUES = {"in_progress", "deferred", "replan_required", "ready_to_archive", "backlog"}
@@ -122,6 +124,48 @@ def lint_checked_index() -> None:
                 fail(f"checked index points to missing file: {parts[1]}")
             if planlib.CHECKED_DIR not in (ROOT / parts[1]).parents:
                 fail(f"checked index path is outside checked archive: {parts[1]}")
+
+
+def lint_replanned_index() -> None:
+    if not REPLANNED.is_file():
+        fail("missing docs/plan/replanned.md")
+    text = REPLANNED.read_text(encoding="utf-8")
+    if not text.startswith("# Replanned Plan Index\n"):
+        fail("docs/plan/replanned.md must start with '# Replanned Plan Index'")
+    if "id\tpath\tcontract" not in text:
+        fail("replanned index must contain TSV header: id path contract")
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
+    seen_contracts: set[str] = set()
+    for line in text.splitlines():
+        if not re.match(r"^\d{3}\t", line):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            fail(f"bad replanned index row: {line}")
+        plan_id, path, contract = parts
+        if plan_id in seen_ids or path in seen_paths or contract in seen_contracts:
+            fail(f"duplicate replanned index identity: {line}")
+        seen_ids.add(plan_id)
+        seen_paths.add(path)
+        seen_contracts.add(contract)
+        archive = ROOT / path
+        contract_path = ROOT / contract
+        if not Path(path).name.startswith(plan_id + "-"):
+            fail(f"replanned index id does not match filename: {line}")
+        if planlib.REPLANNED_DIR not in archive.parents or not archive.is_file():
+            fail(f"replanned index points outside the replanned archive or to a missing file: {path}")
+        if contract_path.parent != planlib.REPLANNED_DIR / "contracts" or not contract_path.is_file():
+            fail(f"replanned index points outside the contract directory or to a missing file: {contract}")
+        if planlib.manifest_scalar(planlib.parse_manifest(archive), "status") != "replanned":
+            fail(f"replanned index archive status mismatch: {path}")
+    verifier = Path(__file__).with_name("restructure-plan.py")
+    completed = subprocess.run(
+        [sys.executable, str(verifier), "--verify"], cwd=ROOT, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if completed.returncode != 0:
+        fail(completed.stderr.strip() or "replanned contract verification failed")
 
 
 def lint_manifest(path: Path) -> None:
@@ -432,6 +476,7 @@ def main() -> int:
         return 0
     lint_plan_index()
     lint_checked_index()
+    lint_replanned_index()
     lint_manifests()
     print("plan docs lint passed")
     return 0

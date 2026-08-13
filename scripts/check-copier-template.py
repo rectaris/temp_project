@@ -51,6 +51,7 @@ SOURCE_REQUIRED = [
     "scripts/lint-github-actions.sh",
     "scripts/plan_validation_commands.py",
     "scripts/run-sandboxed-plan-worker.py",
+    "scripts/restructure-plan.py",
     "scripts/referent-contract.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
@@ -142,6 +143,7 @@ SOURCE_REQUIRED = [
     "template/docs/agent/PROJECT_UI_DESIGN.md",
     "template/docs/plan/README.md",
     "template/docs/plan/checked.md",
+    "template/docs/plan/replanned.md",
     "template/docs/plan/plan.md",
     "template/docs/plan/backlog/README.md",
     "template/docs/plan/handoffs/README.md",
@@ -167,6 +169,7 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/scripts/lint-plan-docs.py",
     "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py",
     "template/.project-agent-workflow/scripts/planlib.py",
+    "template/.project-agent-workflow/scripts/restructure-plan.py",
     "template/.project-agent-workflow/scripts/plan_validation_commands.py",
     "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     "template/.project-agent-workflow/scripts/referent-contract.py",
@@ -302,6 +305,7 @@ GENERATED_REQUIRED = [
     "docs/plan/README.md",
     "docs/plan/backlog/README.md",
     "docs/plan/checked.md",
+    "docs/plan/replanned.md",
     "docs/plan/handoffs/README.md",
     "docs/plan/sub-agents/custom-agents.md",
     "docs/plan/sub-agents/helper-prompts.md",
@@ -327,6 +331,7 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/scripts/migrate-legacy-template-files.py",
     ".project-agent-workflow/scripts/next-plan-id.sh",
     ".project-agent-workflow/scripts/planlib.py",
+    ".project-agent-workflow/scripts/restructure-plan.py",
     ".project-agent-workflow/scripts/plan_validation_commands.py",
     ".project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     ".project-agent-workflow/scripts/referent-contract.py",
@@ -718,6 +723,12 @@ def require_sandboxed_plan_worker_alignment() -> None:
         fail("sandboxed plan worker root/template script modes differ")
     if root_mode & 0o111 == 0:
         fail("sandboxed plan worker scripts must be executable")
+    root_restructure = ROOT / "scripts/restructure-plan.py"
+    template_restructure = ROOT / "template/.project-agent-workflow/scripts/restructure-plan.py"
+    if root_restructure.read_bytes() != template_restructure.read_bytes():
+        fail("plan restructuring root/template scripts differ")
+    if (root_restructure.stat().st_mode & 0o777) != (template_restructure.stat().st_mode & 0o777):
+        fail("plan restructuring root/template script modes differ")
     for marker in (
         'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
         'DEFAULT_CODEX_REASONING = "medium"',

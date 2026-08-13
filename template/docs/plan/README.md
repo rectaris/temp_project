@@ -11,6 +11,9 @@
 - `checked.md`: 完了済み記録を機械的に参照するための索引です。
 - `checked/YYYY/MM/01-15/*.md`: 月前半に完了した作業の詳細記録です。
 - `checked/YYYY/MM/16-31/*.md`: 月後半に完了した作業の詳細記録です。
+- `replanned.md`: 要件を保持して再構成した計画の索引です。
+- `replanned/YYYY/MM/01-15/*.md` と `replanned/YYYY/MM/16-31/*.md`: 完了とは区別された再構成履歴です。
+- `replanned/contracts/`: 元要件と後続計画の対応を保持する機械可読契約です。
 - `handoffs/`: 複数エージェントや別セッションへ渡す一時的な作業依頼を置きます。
 
 ## 運用の考え方
@@ -19,7 +22,9 @@
 - 先送りの候補や監視項目は `backlog/` に置きます。
 - 完了した作業は完了日に応じて `checked/YYYY/MM/01-15/` または `checked/YYYY/MM/16-31/` に移して、`checked.md` の索引へ記録します。
 - 完了済み記録は過去の作業履歴です。
+- 再構成済み記録は完了記録ではありません。元の受入れ条件は後続計画と統合計画へ引き継ぎます。
   現在の仕様確認では、最新の `docs/agent/` 仕様や実装ファイルを優先します。
+- `replan_required` の計画を再構成するときは、親が固定 JSON 契約を作成し、`.project-agent-workflow/scripts/restructure-plan.py <specification.json>` を実行します。
 
 ## AI エージェント向け情報
 

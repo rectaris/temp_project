@@ -1,6 +1,6 @@
 # Implement atomic plan restructuring
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -31,7 +31,7 @@ write_scope:
 context_files:
   - AGENTS.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
-  - docs/plan/active/076-plan-restructuring-policy-schema.md
+  - docs/plan/checked/2026/08/01-15/076-plan-restructuring-policy-schema.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
@@ -67,11 +67,19 @@ checked_summary_ja: 元要件をdigestで保持し、後続planと統合planへa
 
 ## Tasks
 
-- [ ] Add replan contract schema and atomic root transition.
-- [ ] Add generated transition and lifecycle-index behavior.
-- [ ] Add success, collision, tampering, concurrency, dirty-worktree, and failure-injection tests.
-- [ ] Run required validation, independent review, archive, and commit before plan 078.
+- [x] Add replan contract schema and atomic root transition.
+- [x] Add generated transition and lifecycle-index behavior.
+- [x] Add success, collision, tampering, concurrency, dirty-worktree, and failure-injection tests.
+- [x] Run required validation, independent review, archive, and commit before plan 078.
 
 ## Validation Notes
 
-- Pending plan 076.
+- `python3 tests/test-plan-restructure.py`: 10 tests passed.
+- `tests/root-plan-lifecycle.sh`: passed.
+- `python3 scripts/check-root-agent-policy.py`: passed.
+- `python3 scripts/check-copier-template.py`: passed.
+- `scripts/lint-project-workflow.sh`: passed.
+- `tests/smoke.sh`: passed with the documented actionlint-unavailable skip and fallback backend.
+- `python3 scripts/validate-changes.py --all`: passed.
+- `git diff --check`: passed.
+- Independent `change_reviewer` initially found three Medium issues in successor manifest admission, acceptance-text binding, and durable contract verification. All were fixed; final rereview reported zero unresolved High or Medium findings.

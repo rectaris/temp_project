@@ -3,6 +3,7 @@
 ## 未リリース
 
 - plan の実行境界が不適切と判明した場合に `replan_required` で停止し、元の要件と受入れ条件を保持したまま後続 plan へ再構成する lifecycle 契約を追加しました。
+- 停止した plan の HEAD、本文、受入れ条件、dirty path、後続割当てを検証し、再構成履歴・契約・後続 plan・索引を排他遷移する `restructure-plan.py` を追加しました。
 - CI autofix workflow を patch artifact のみを生成する fail-closed 動作へ変更し、保存済みの `direct_push` Copier 回答も外部書き込みなしで互換維持するようにしました。
 - sandboxed plan worker の候補 patch の path 導出で Git object database を一時領域へ隔離し、source object database へ候補 blob を書き込まないようにしました。
 - orchestration 生成物の更新前チェックを Copier 更新ハーネスの simulation source と stage の対象へ追加し、更新時の現行 semantics 検証を固定しました。

@@ -77,10 +77,12 @@ REQUIRED_ROOT_FILES = [
     "scripts/plan_validation_commands.py",
     "scripts/referent-contract.py",
     "scripts/run-sandboxed-plan-worker.py",
+    "scripts/restructure-plan.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
     "scripts/update_agent_model_profiles.py",
     "tests/root-plan-lifecycle.sh",
+    "tests/test-plan-restructure.py",
     "tests/test-agent-model-profiles.py",
     "tests/fixtures/write-for-reader/scenarios.json",
 ]
