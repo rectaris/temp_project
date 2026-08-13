@@ -85,3 +85,4 @@ id	path
 083	docs/plan/checked/2026/08/01-15/083-pr3-codex-review-remediation.md
 084	docs/plan/checked/2026/08/01-15/084-prepare-release-v141-pr.md
 085	docs/plan/checked/2026/08/01-15/085-ai-test-modularization.md
+086	docs/plan/checked/2026/08/01-15/086-copier-checker-inventory.md
