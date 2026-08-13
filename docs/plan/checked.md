@@ -70,3 +70,4 @@ id	path
 067	docs/plan/checked/2026/08/01-15/067-root-external-write-policy.md
 068	docs/plan/checked/2026/08/01-15/068-release-v130.md
 069	docs/plan/checked/2026/08/01-15/069-copier-update-clean-source.md
+070	docs/plan/checked/2026/08/01-15/070-pr2-review-remediation.md

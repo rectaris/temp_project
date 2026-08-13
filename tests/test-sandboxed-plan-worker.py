@@ -60,6 +60,20 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def object_directory(repo: Path) -> Path:
+    output = git(repo, "rev-parse", "--path-format=absolute", "--git-path", "objects").stdout.strip()
+    return Path(output).resolve()
+
+
+def object_database_snapshot(repo: Path) -> dict[str, bytes]:
+    objects = object_directory(repo)
+    return {
+        str(path.relative_to(objects)): path.read_bytes()
+        for path in objects.rglob("*")
+        if path.is_file()
+    }
+
+
 def write_worker(path: Path, body: str) -> None:
     header = textwrap.dedent(
         f"""\
@@ -173,9 +187,15 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             raise RuntimeError("bwrap is required for sandboxed plan worker tests")
         RUNNER.ensure_bwrap_usable(bwrap)
 
-    def make_repo(self, write_scope: list[str], files: dict[str, str] | None = None) -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
+    def make_repo(
+        self,
+        write_scope: list[str],
+        files: dict[str, str] | None = None,
+        *,
+        repo_name: str = "repo",
+    ) -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
         temporary = tempfile.TemporaryDirectory()
-        repo = Path(temporary.name) / "repo"
+        repo = Path(temporary.name) / repo_name
         repo.mkdir()
         git(repo, "init", "-q", "-b", "main")
         git(repo, "config", "user.email", "test@example.invalid")
@@ -508,6 +528,108 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             git(repo, "status", "--porcelain=1", "--untracked-files=all").stdout.splitlines(),
             [" M allowed.txt", "?? dir/nested.txt"],
         )
+
+    def test_changed_path_derivation_keeps_candidate_blobs_out_of_source_objects(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        candidate_content = b"unique path-derivation candidate\n"
+        (repo / "allowed.txt").write_bytes(candidate_content)
+        patch_path = Path(temporary.name) / "candidate.patch"
+        patch_path.write_bytes(git(repo, "diff", "--binary", "HEAD").stdout.encode("utf-8"))
+        before = object_database_snapshot(repo)
+        candidate_oid = subprocess.run(
+            ["git", "hash-object", "--stdin"],
+            cwd=repo,
+            input=candidate_content,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.decode("ascii").strip()
+
+        self.assertEqual(
+            RUNNER.derive_changed_paths_from_patch(repo, "git", patch_path, git(repo, "rev-parse", "HEAD").stdout.strip()),
+            ["allowed.txt"],
+        )
+        self.assertEqual(object_database_snapshot(repo), before)
+        self.assertNotIn(f"{candidate_oid[:2]}/{candidate_oid[2:]}", before)
+
+    def test_manifest_generation_isolated_for_colon_path_alternate_and_ambient_git_overrides(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            repo_name="repo:候補",
+        )
+        self.addCleanup(temporary.cleanup)
+        source_objects = object_directory(repo)
+        alternate = Path(temporary.name) / "alternate:既存"
+        alternate.mkdir()
+        (source_objects / "info").mkdir(exist_ok=True)
+        (source_objects / "info" / "alternates").write_text(f"{alternate}\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=repo,
+            env={**os.environ, "GIT_OBJECT_DIRECTORY": str(alternate)},
+            input=b"existing alternate object\n",
+            stdout=subprocess.PIPE,
+            check=True,
+        )
+        before = object_database_snapshot(repo)
+        output_dir = Path(temporary.name) / "artifacts"
+        ambient_objects = Path(temporary.name) / "ambient-objects"
+        ambient_git_dir = Path(temporary.name) / "ambient-git-dir"
+        result, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("unique colon candidate\\n", encoding="utf-8")',
+            output_dir=output_dir,
+            parent_env={
+                "GIT_OBJECT_DIRECTORY": str(ambient_objects),
+                "GIT_DIR": str(ambient_git_dir),
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(RUNNER.resolve_source_object_directory(repo, "git"), source_objects)
+        self.assertEqual(object_database_snapshot(repo), before)
+        self.assertFalse(ambient_objects.exists())
+        quoted = RUNNER.git_c_quote_path(source_objects)
+        self.assertTrue(quoted.startswith('"') and quoted.endswith('"'))
+        self.assertIn(":", quoted)
+
+    def test_manifest_generation_from_linked_worktree_keeps_common_objects_clean(self) -> None:
+        temporary, main_repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        linked_repo = Path(temporary.name) / "linked:worktree"
+        git(main_repo, "worktree", "add", "-q", "-b", "linked", str(linked_repo))
+        before = object_database_snapshot(main_repo)
+        output_dir = Path(temporary.name) / "linked-artifacts"
+        result, _output, _worker = self.run_with_worker(
+            linked_repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("unique linked candidate\\n", encoding="utf-8")',
+            output_dir=output_dir,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(object_directory(linked_repo), object_directory(main_repo))
+        self.assertEqual(object_database_snapshot(main_repo), before)
+
+    def test_rejected_apply_preflight_keeps_source_objects_clean(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output_dir = Path(temporary.name) / "preflight-artifacts"
+        result, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("unique rejected candidate\\n", encoding="utf-8")',
+            output_dir=output_dir,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest_path = Path(result.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["changed_paths"] = ["unexpected.txt"]
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        before = object_database_snapshot(repo)
+        apply = run_cli(repo, "apply", str(manifest_path))
+        self.assertEqual(apply.returncode, 1)
+        self.assertIn("changed paths do not match", apply.stderr)
+        self.assertEqual(object_database_snapshot(repo), before)
 
     def test_preferred_codex_success_does_not_start_fallback(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])

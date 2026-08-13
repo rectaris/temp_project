@@ -161,13 +161,25 @@ assert_managed_orchestration_reports() {
 
 assert_ci_autofix_validation_graph() {
   workflow=$1
-  grep -q '^  validate-patch:$' "$workflow"
-  grep -Fq 'patch_sha256: ${{ steps.digest.outputs.patch_sha256 }}' "$workflow"
-  grep -Fq 'persist-credentials: false' "$workflow"
-  grep -Fq 'python3 .project-agent-workflow/scripts/validate-changes.py --staged' "$workflow"
-  grep -Fq 'EXPECTED_PATCH_SHA256: ${{ needs.validate-patch.outputs.patch_sha256 }}' "$workflow"
-  grep -Fq 'sha256sum --check --strict' "$workflow"
-  grep -Fq 'git -c core.hooksPath=/dev/null commit -m "fix: codex ci autofix"' "$workflow"
+  grep -q '^  prepare:$' "$workflow"
+  grep -q '^  generate-fix:$' "$workflow"
+  if grep -q '^  validate-patch:\|^  apply-patch:\|^  patch-only-notice:' "$workflow"; then
+    echo "generated CI autofix workflow retained a removed write graph" >&2
+    exit 1
+  fi
+  if grep -q 'direct-push\|max_attempts\|git push\|createComment\|git commit' "$workflow"; then
+    echo "generated CI autofix workflow retained a removed direct-write marker" >&2
+    exit 1
+  fi
+  if grep -Eq '^\s*permissions:\s+(write|write-all)$|^\s+[A-Za-z0-9_-]+:\s+write(-all)?$' "$workflow"; then
+    echo "generated CI autofix workflow retained a write permission" >&2
+    exit 1
+  fi
+  grep -Fq 'let mode = "patch-only";' "$workflow"
+  grep -Fq 'set("mode", mode);' "$workflow"
+  grep -Fq 'git status --porcelain=v1 --untracked-files=all' "$workflow"
+  grep -Fq 'git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]' "$workflow"
+  grep -Fq 'dependency setup changed tracked, staged, or non-ignored untracked paths' "$workflow"
   grep -Fq 'git diff --quiet "origin/${BASE_BRANCH}...HEAD" -- .github/codex/prompts/ci-autofix.md' "$workflow"
   grep -Fq 'git show "origin/${BASE_BRANCH}:.github/codex/prompts/ci-autofix.md" > "$RUNNER_TEMP/codex-ci-autofix-prompt.md"' "$workflow"
   python3 - "$workflow" <<'PY'
@@ -189,31 +201,49 @@ def job(name: str) -> str:
     return match.group(0)
 
 
-validate = job("validate-patch")
-if "permissions:\n      actions: read\n      contents: read" not in validate:
-    raise SystemExit("generated validate-patch permissions are not read-only")
-if "contents: write" in validate or "pull-requests: write" in validate:
-    raise SystemExit("generated validate-patch has write permission")
-
-apply = job("apply-patch")
-if "needs:\n      - prepare\n      - generate-fix\n      - validate-patch" not in apply:
-    raise SystemExit("generated apply-patch does not require validate-patch")
-expected_steps = [
-    "Check out pull request branch",
-    "Download Codex patch",
-    "Verify validated patch digest",
-    "Apply patch and commit",
-    "Comment on pull request",
-]
-steps = re.findall(r"^      - name: (.+)$", apply, re.MULTILINE)
-if steps != expected_steps:
-    raise SystemExit(f"generated apply-patch has unexpected steps: {steps}")
-
-patch_only = job("patch-only-notice")
-if "validate-patch" in patch_only or "contents: write" in patch_only:
-    raise SystemExit("generated patch-only path depends on validation or branch writes")
+jobs_section = text.split("jobs:\n", 1)[1]
+jobs = re.findall(r"^  ([a-zA-Z0-9_-]+):\n", jobs_section, re.MULTILINE)
+if jobs != ["prepare", "generate-fix"]:
+    raise SystemExit(f"generated CI autofix workflow has unexpected jobs: {jobs}")
+for marker in ("permissions: write", "permissions: write-all", "contents: write", "pull-requests: write"):
+    if marker in text:
+        raise SystemExit(f"generated CI autofix workflow has write marker: {marker}")
 PY
 }
+
+assert_dependency_setup_rejection() {
+  fixture="$tmp/dependency-mutation-fixture"
+  mkdir -p "$fixture"
+  git -C "$fixture" init -q -b main
+  git -C "$fixture" config user.email ci@example.invalid
+  git -C "$fixture" config user.name CI
+  printf 'baseline\n' >"$fixture/tracked.txt"
+  printf 'staged baseline\n' >"$fixture/staged.txt"
+  git -C "$fixture" add tracked.txt staged.txt
+  git -C "$fixture" commit -qm baseline
+  cat >"$fixture/installer.sh" <<'EOF_INSTALLER'
+#!/bin/sh
+set -eu
+printf 'installer changed\n' > tracked.txt
+printf 'installer staged\n' > staged.txt
+git add staged.txt
+printf 'installer created\n' > generated.txt
+EOF_INSTALLER
+  chmod +x "$fixture/installer.sh"
+  (cd "$fixture" && ./installer.sh)
+  if (
+    cd "$fixture" &&
+    git diff --quiet &&
+    git diff --cached --quiet &&
+    [ -z "$(git ls-files --others --exclude-standard)" ]
+  ); then
+    echo "dependency mutation fixture was not rejected" >&2
+    exit 1
+  fi
+  test -n "$(git -C "$fixture" status --porcelain=v1 --untracked-files=all)"
+}
+
+assert_dependency_setup_rejection
 
 assert_generated_whitespace_range() {
   out=$1
@@ -1067,8 +1097,8 @@ grep -q 'CI autofix mode: `disabled`' "$tmp/docs/.project-agent-workflow/AGENTS.
 test -f "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 test -f "$tmp/python/.github/workflows/codex-ci-autofix.yml"
 test ! -f "$tmp/docs/.github/workflows/codex-ci-autofix.yml"
-grep -q 'mode = "direct-push";' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
-grep -q 'mode = "patch-only";' "$tmp/python/.github/workflows/codex-ci-autofix.yml"
+grep -q 'let mode = "patch-only";' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
+grep -q 'let mode = "patch-only";' "$tmp/python/.github/workflows/codex-ci-autofix.yml"
 grep -Fq 'ref: ${{ needs.prepare.outputs.head_sha }}' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 assert_ci_autofix_validation_graph "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 assert_ci_autofix_validation_graph "$tmp/python/.github/workflows/codex-ci-autofix.yml"

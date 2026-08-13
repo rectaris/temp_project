@@ -212,12 +212,23 @@ def ensure_bwrap_usable(bwrap_bin: str) -> None:
         raise RunnerError(f"bwrap is installed but unusable: {detail or f'exit {probe.returncode}'}")
 
 
-def git(repo_root: Path, git_bin: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
-    return run_subprocess((git_bin, *args), cwd=repo_root, check=check)
+def git(
+    repo_root: Path,
+    git_bin: str,
+    *args: str,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    return run_subprocess(
+        (git_bin, *args),
+        cwd=repo_root,
+        env=sanitize_process_env() if env is None else env,
+        check=check,
+    )
 
 
-def git_text(repo_root: Path, git_bin: str, *args: str) -> str:
-    return git(repo_root, git_bin, *args).stdout.decode("utf-8").strip()
+def git_text(repo_root: Path, git_bin: str, *args: str, env: dict[str, str] | None = None) -> str:
+    return git(repo_root, git_bin, *args, env=env).stdout.decode("utf-8").strip()
 
 
 def detect_repo_root(git_bin: str) -> Path:
@@ -561,11 +572,62 @@ def materialize_writable_shadows(shadows: Sequence[tuple[Path, Path, bool]]) -> 
                 raise RunnerError(f"exact write_scope target changed shape: {target}")
             shutil.copy2(shadow, target, follow_symlinks=False)
 
+def git_c_quote_path(path: Path) -> str:
+    """Quote one object path for Git's colon-separated alternate list."""
+    quoted = ['"']
+    for char in os.fsdecode(os.fsencode(str(path))):
+        if char == '"':
+            quoted.append('\\"')
+        elif char == "\\":
+            quoted.append('\\\\')
+        elif char == "\n":
+            quoted.append('\\n')
+        elif char == "\r":
+            quoted.append('\\r')
+        elif char == "\t":
+            quoted.append('\\t')
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            quoted.append(f"\\{ord(char):03o}")
+        else:
+            quoted.append(char)
+    quoted.append('"')
+    return "".join(quoted)
+
+
+def resolve_source_object_directory(repo_root: Path, git_bin: str) -> Path:
+    """Resolve the repository's primary object directory without ambient GIT_* state."""
+    env = sanitize_process_env()
+    output = run_subprocess(
+        (git_bin, "rev-parse", "--path-format=absolute", "--git-path", "objects"),
+        cwd=repo_root,
+        env=env,
+    ).stdout.decode("utf-8").strip()
+    if not output:
+        raise RunnerError("Git returned an empty source object directory")
+    object_dir = Path(output)
+    if not object_dir.is_absolute():
+        git_dir = run_subprocess(
+            (git_bin, "rev-parse", "--path-format=absolute", "--git-dir"),
+            cwd=repo_root,
+            env=env,
+        ).stdout.decode("utf-8").strip()
+        object_dir = Path(git_dir) / object_dir
+    object_dir = object_dir.resolve()
+    if not object_dir.is_dir():
+        raise RunnerError(f"source object directory is not a directory: {object_dir}")
+    return object_dir
+
+
 def derive_changed_paths_from_patch(repo_root: Path, git_bin: str, patch_path: Path, base_rev: str) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="sandboxed-plan-worker-apply-index-") as tmp:
         index_path = Path(tmp) / "index"
+        object_dir = Path(tmp) / "objects"
+        object_dir.mkdir()
+        source_object_dir = resolve_source_object_directory(repo_root, git_bin)
         env = sanitize_process_env()
         env["GIT_INDEX_FILE"] = str(index_path)
+        env["GIT_OBJECT_DIRECTORY"] = str(object_dir)
+        env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = git_c_quote_path(source_object_dir)
         run_subprocess((git_bin, "read-tree", base_rev), cwd=repo_root, env=env)
         run_subprocess((git_bin, "apply", "--cached", "--check", "--binary", str(patch_path)), cwd=repo_root, env=env)
         run_subprocess((git_bin, "apply", "--cached", "--binary", str(patch_path)), cwd=repo_root, env=env)
@@ -593,8 +655,12 @@ def normalize_changed_paths(paths: Sequence[str], repo_root: Path) -> list[str]:
 
 
 def clone_at_head(repo_root: Path, git_bin: str, head: str, destination: Path) -> None:
-    run_subprocess((git_bin, "clone", "--quiet", "--no-hardlinks", str(repo_root), str(destination)))
-    run_subprocess((git_bin, "-C", str(destination), "checkout", "--quiet", head))
+    env = sanitize_process_env()
+    run_subprocess(
+        (git_bin, "clone", "--quiet", "--no-hardlinks", str(repo_root), str(destination)),
+        env=env,
+    )
+    run_subprocess((git_bin, "-C", str(destination), "checkout", "--quiet", head), env=env)
 
 
 def stage_codex_home(scratch_dir: Path) -> Path:

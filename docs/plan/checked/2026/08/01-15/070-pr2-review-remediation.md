@@ -1,6 +1,6 @@
 # Address PR 2 validation and sandbox artifact findings
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -38,9 +38,9 @@ required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
 validation:
-  - python3 -m pytest tests/test-sandboxed-plan-worker.py
   - scripts/lint-project-workflow.sh
   - tests/smoke.sh
+  - tests/copier-update.sh
   - python3 scripts/validate-changes.py --all
   - git diff --check
 acceptance:
@@ -59,7 +59,7 @@ acceptance:
   - Prove that successful path derivation, manifest generation without apply, and rejected apply preflight do not add a unique candidate blob to the source object database, including repositories under a colon-containing path, linked worktrees using a common object directory, and a source object database with an existing alternate.
   - Preserve existing changed-path semantics, accepted patch application, source worktree cleanliness, exact write-scope enforcement, and root/template runner byte parity.
   - Record both review corrections under the unreleased changelog without moving or rewriting v1.3.0.
-checked_summary_ja: CI 自動修正の必須 build/test 検証と候補 patch の一時 object 隔離を追加し、PR #2 の未解決指摘を修正した。
+checked_summary_ja: CI 自動修正を artifact-only に縮退させ、候補 patch の object 書き込みを一時領域へ隔離して PR #2 の指摘を修正した。
 
 ## Context
 
@@ -79,15 +79,14 @@ The sandboxed runner directs only its index to a temporary path while `git apply
 
 ## Tasks
 
-- [ ] Disable generated direct-push and retain patch-only artifact output.
-- [ ] Isolate candidate object writes during changed-path derivation.
-- [ ] Add deterministic regression coverage for both findings.
-- [ ] Run every required validation command and record results.
-- [ ] Archive and commit the accepted correction before updating PR 2.
+- [x] Disable generated direct-push and retain patch-only artifact output.
+- [x] Isolate candidate object writes during changed-path derivation.
+- [x] Add deterministic regression coverage for both findings.
+- [x] Run every required validation command and record results.
+- [x] Archive and commit the accepted correction before updating PR 2.
 
 ## Validation Notes
 
-- Pending implementation.
 - Rejected candidate `/tmp/sandboxed-plan-worker-output-kiaFUi/manifest.json`, source HEAD `2b83d73f0e9489fc191b82af8ed4eb8b29c54db2`. GPT-5.3-Codex-Spark medium returned bounded `usage_limit`; GPT-5.6-Luna max generated the candidate in a fresh isolated attempt.
 - Parent review-clone validation passed 34 runner tests, runner self-test, template static checks, workflow lint, and smoke, but read-only security review found three acceptance failures: candidate-controlled validation definitions could still bypass build/test, the uv test interpreter did not use the synced environment, and an unquoted colon in an alternate object path broke legal repository paths. The patch was not applied.
 - Rejected candidate `/tmp/sandboxed-plan-worker-output-f137XK/manifest.json`, source HEAD `6f743e7a3c847b6bf9360b1daf8fab6491961b66`. GPT-5.3-Codex-Spark medium returned bounded `usage_limit`; GPT-5.6-Luna max generated the candidate in a fresh isolated attempt.
@@ -95,3 +94,7 @@ The sandboxed runner directs only its index to a temporary path while `git apply
 - Rejected candidate `/tmp/sandboxed-plan-worker-output-third-ohMrEE/manifest.json`, source HEAD `1cc3beda169596efa84f0b645f057be0b40b466b`. GPT-5.3-Codex-Spark medium returned bounded `usage_limit`; GPT-5.6-Luna max generated the candidate in a fresh isolated attempt.
 - Parent review-clone validation passed 34 runner tests, runner self-test, template static checks, workflow lint, smoke, full managed validation, and diff checks. Parent inspection found that the candidate removed writes only from the template while the root workflow retained direct-push; its partial root documentation update then contradicted the still-active root jobs. The patch was not applied.
 - Independent review of that rejected candidate also found that dependency setup could contaminate the patch artifact, the old commit-count attempt guard no longer represented artifact attempts, update compatibility lacked an executable prior-`direct_push` fixture, permission checks were not generic, and object-directory resolution did not sanitize ambient Git overrides. These findings are accepted into the final fail-closed scope.
+- Accepted candidate `/tmp/sandboxed-plan-worker-output-final-AVITsq/manifest.json`, source HEAD `ce8c7077956dd8029288a71c46587a23bba4d651`. GPT-5.3-Codex-Spark medium returned bounded `usage_limit`; GPT-5.6-Luna max generated the candidate in a fresh isolated attempt. Parent review and the read-only helper found no actionable issue in the final candidate.
+- Parent validation passed `python3 tests/test-sandboxed-plan-worker.py` with 35 tests, runner self-test, Copier static checks, `scripts/lint-project-workflow.sh` with the pinned local actionlint binary available to the top-level lint, `tests/smoke.sh`, `tests/copier-update.sh`, `python3 scripts/validate-changes.py --all`, root/template runner byte parity, and `git diff --check`.
+- The CI autofix remains enabled as artifact-only generation. `direct_push` is retained only as a stored Copier compatibility value; neither the root nor rendered workflow has a repository write, patch apply, commit, push, or PR comment job.
+- No link changed. No accepted work is deferred. The published v1.3.0 tag remains unchanged.

@@ -8,13 +8,11 @@ fork PR では write token と `OPENAI_API_KEY` を使いません。
 
 ## Why This Exists
 
-`@codex fix the CI failures` は単発の Codex タスクとして動くため、CI が再実行されてまだ失敗した場合に自動で次の修正試行へ進みません。
+`@codex fix the CI failures` は単発の Codex タスクとして動くため、CI が再実行されてまだ失敗した場合に自動で次の修正を試しません。
 
-このリポジトリの `codex-ci-autofix.yml` は、`CI` workflow の失敗を `workflow_run` で受け取り、上限回数まで修正コミットを試します。
+このリポジトリの `codex-ci-autofix.yml` は、`CI` workflow の失敗を `workflow_run` で受け取り、確認用の patch artifact だけを生成します。
 
-CI が通ればループは止まります。
-
-上限回数に達した場合も止まります。
+生成した artifact は workflow 自身では repository や pull request を変更しません。
 
 ## Workflow Interaction
 
@@ -36,17 +34,11 @@ PR が `.github/codex/prompts/ci-autofix.md` を変更している場合、`gene
 
 Codex に渡す prompt は、PR の作業ツリーではなく、取得済み base branch から読み出します。
 
-既定の `direct-push` mode では、read-only の `validate-patch` job が同じ PR HEAD を clean checkout し、patch を staged 状態で適用します。
+workflow は dependency installer の前後で checkout の状態を確認し、tracked、staged、または無視されていない untracked path が変わった場合は Codex の実行前に停止します。
 
-`validate-patch` job は `scripts/lint-project-workflow.sh` と `tests/smoke.sh` を実行します。
+workflow に branch、issue、pull request の write permission を持つ job はありません。
 
-検証が成功すると、`validate-patch` job は patch の SHA-256 digest を `apply-patch` job へ渡します。
-
-write 権限を持つ `apply-patch` job は artifact の digest を照合し、同じ PR HEAD に patch を適用して `fix: codex ci autofix` として PR ブランチへ push します。
-
-`apply-patch` job は dependency installer や repository validation script を実行せず、commit hook も無効にします。
-
-`patch-only` mode に切り替えると、workflow は patch artifact だけを残します。
+すべての実行は patch-only の artifact 出力です。
 
 ## Required Secrets
 
@@ -56,9 +48,7 @@ Codex GitHub Action はこの secret を使って Codex CLI を実行します�
 
 `GITHUB_TOKEN` は GitHub Actions が発行する標準 token を使います。
 
-workflow の write 権限は、検証済み patch を適用して PR ブランチへ commit する `apply-patch` job に限定しています。
-
-patch を生成する `generate-fix` job と検証する `validate-patch` job の repository 権限は read-only です。
+workflow の job は repository の読み取りに必要な permission だけを持ち、branch、issue、pull request への write permission を持ちません。
 
 ## Enable Or Disable
 
@@ -66,9 +56,7 @@ patch を生成する `generate-fix` job と検証する `validate-patch` job �
 
 無効化するには GitHub Actions の workflow 一覧で `Codex CI Autofix` を disable にするか、この YAML ファイルを削除します。
 
-一時的に自動 push を止める場合は、`workflow_dispatch` の `mode` で `patch-only` を選んで手動実行してください。
-
-自動実行も patch-only にしたい場合は、YAML 内の `mode = "direct-push"` を `mode = "patch-only"` に変更します。
+`workflow_dispatch` では `pr_number` と任意の `failed_run_id` だけを指定し、実行モードは選択しません。
 
 ## Fork PR Restriction
 
@@ -78,17 +66,7 @@ fork PR では、外部 contributor が変更したコードが workflow 上で�
 
 このため、workflow は `head_repository.full_name` または PR の `head.repo.full_name` が現在の repository と一致しない場合に停止します。
 
-## Attempt Guard
-
-既定の上限は 3 回です。
-
-workflow は base branch から PR HEAD までの commit subject を見て、`fix: codex ci autofix` の数を数えます。
-
-数が `max_attempts` 以上の場合、Codex を起動せずに終了します。
-
-manual dispatch では `max_attempts` を変更できます。
-
-## Manual Test
+## Manual Run
 
 GitHub Actions の `Codex CI Autofix` から `Run workflow` を選びます。
 
@@ -96,17 +74,13 @@ GitHub Actions の `Codex CI Autofix` から `Run workflow` を選びます。
 
 `failed_run_id` を省略した場合、workflow はその PR HEAD に紐づく最新の失敗した `CI` run を探します。
 
-`mode` に `patch-only` を指定すると、push せず artifact だけを生成します。
+workflow は patch artifact を生成し、branch や pull request を変更しません。
 
-## Review Generated Commits
+## Review Patch Artifact
 
-生成された commit は `fix: codex ci autofix` という subject になります。
-
-PR の Files changed と commit diff を確認してください。
+生成された patch artifact をダウンロードし、適用前に diff を確認してください。
 
 テストを弱める変更、失敗テストの削除、secret や deployment 設定の変更が入っている場合は採用しないでください。
-
-必要ならその commit を revert してください。
 
 ## Revert
 

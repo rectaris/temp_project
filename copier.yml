@@ -162,9 +162,9 @@ graph_memory_mode:
 
 ci_autofix_mode:
   type: str
-  help: Codex CI autofix workflow を生成するかと、生成する patch の扱いを選んでください。
+  help: Codex CI autofix workflow を生成するか選んでください。direct_push は互換性のために保存されますが、現在は外部書き込みを行わず patch artifact だけを生成します。
   choices:
     生成しない: disabled
     patch artifact だけを生成する: patch_only
-    同一リポジトリの PR branch へ直接 push する: direct_push
+    旧設定を保持して patch artifact だけを生成する: direct_push
   default: "disabled"

@@ -1060,7 +1060,6 @@ def require_markers(path: str, subject: str, text: str, markers: tuple[str, ...]
 def require_ci_autofix_boundaries(
     path: str,
     boundary_validation_command: str,
-    required_validation_command: str,
 ) -> None:
     text = read(path)
     required = (
@@ -1073,9 +1072,12 @@ def require_ci_autofix_boundaries(
         boundary_validation_command,
         'path: ${{ runner.temp }}/codex-ci-autofix.patch',
         'path: ${{ runner.temp }}/codex-ci-autofix-output.md',
-        'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
         'protected=$(git diff --name-only HEAD | grep -E \'^(\\.github/workflows/|\\.github/codex/|\\.env($|\\.)|.*production.*|.*deploy.*)\' || true)',
         'deleted_tests=$(git diff --diff-filter=D --name-only HEAD -- tests || true)',
+        'git status --porcelain=v1 --untracked-files=all',
+        'git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]',
+        'echo "dependency setup changed tracked, staged, or non-ignored untracked paths" >&2',
+        'let mode = "patch-only";',
     )
     require_markers(path, "workflow", text, required)
 
@@ -1083,6 +1085,17 @@ def require_ci_autofix_boundaries(
     require_markers(path, "workflow", text, (prompt_guard,))
     if text.index(prompt_guard) > text.index("- name: Run Codex"):
         fail(f"{path} must reject pull request prompt changes before Codex execution")
+
+    if re.search(r"(?m)(^\s*max_attempts:\b|^\s*maxAttempts\b|max_attempts)", text):
+        fail(f"{path} must not contain the obsolete commit-count max_attempts guard")
+    for marker in ("direct-push", "validate-patch", "apply-patch", "patch-only-notice", "git push", "createComment", "git commit"):
+        if marker in text:
+            fail(f"{path} contains removed CI autofix write-path marker: {marker}")
+
+    if re.search(r"(?m)^\s*permissions:\s+(?:write|write-all)\s*$", text):
+        fail(f"{path} workflow permissions must not grant write-all or write")
+    if re.search(r"(?m)^\s+[A-Za-z0-9_-]+:\s+write(?:-all)?\s*$", text):
+        fail(f"{path} contains a job-level write permission")
 
     generate = workflow_job(text, "generate-fix")
     require_markers(
@@ -1097,80 +1110,15 @@ def require_ci_autofix_boundaries(
     if "contents: write" in generate:
         fail(f"{path} generate-fix job must not have branch write permission")
 
-    validate = workflow_job(text, "validate-patch")
-    require_markers(
-        path,
-        "validate-patch job",
-        validate,
-        (
-            "needs:\n      - prepare\n      - generate-fix",
-            "if: needs.prepare.outputs.mode == 'direct-push' && needs.generate-fix.outputs.has_patch == 'true'",
-            "permissions:\n      actions: read\n      contents: read",
-            "patch_sha256: ${{ steps.digest.outputs.patch_sha256 }}",
-            "ref: ${{ needs.prepare.outputs.head_sha }}",
-            "persist-credentials: false",
-            'path: ${{ runner.temp }}',
-            'patch_sha256=$(sha256sum "$RUNNER_TEMP/codex-ci-autofix.patch" | awk \'{print $1}\')',
-            'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
-            required_validation_command,
-        ),
-    )
-    if "contents: write" in validate or "pull-requests: write" in validate:
-        fail(f"{path} validate-patch job must remain read-only")
-
-    apply = workflow_job(text, "apply-patch")
-    require_markers(
-        path,
-        "apply-patch job",
-        apply,
-        (
-            "needs:\n      - prepare\n      - generate-fix\n      - validate-patch",
-            "needs.validate-patch.result == 'success'",
-            "EXPECTED_PATCH_SHA256: ${{ needs.validate-patch.outputs.patch_sha256 }}",
-            'sha256sum --check --strict',
-            'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
-            'git -c core.hooksPath=/dev/null commit -m "fix: codex ci autofix"',
-            'git push origin "HEAD:${HEAD_BRANCH}"',
-        ),
-    )
-    step_names = re.findall(r"^      - name: (.+)$", apply, re.MULTILINE)
-    expected_step_names = [
-        "Check out pull request branch",
-        "Download Codex patch",
-        "Verify validated patch digest",
-        "Apply patch and commit",
-        "Comment on pull request",
-    ]
-    if step_names != expected_step_names:
-        fail(f"{path} apply-patch job has unexpected steps: {step_names}")
-    for forbidden in ("actions/setup-", " pip install", "npm ", "uv ", "python3 ", "scripts/", "tests/"):
-        if forbidden in apply:
-            fail(f"{path} apply-patch job contains forbidden executable marker: {forbidden}")
-
-    patch_only = workflow_job(text, "patch-only-notice")
-    require_markers(
-        path,
-        "patch-only-notice job",
-        patch_only,
-        (
-            "needs:\n      - prepare\n      - generate-fix",
-            "if: needs.prepare.outputs.mode == 'patch-only' && needs.generate-fix.outputs.has_patch == 'true'",
-        ),
-    )
-    if "validate-patch" in patch_only or "contents: write" in patch_only:
-        fail(f"{path} patch-only notice must remain independent of validation and branch writes")
-
 
 def require_ci_autofix_root_boundaries() -> None:
     require_ci_autofix_boundaries(
         ".github/workflows/codex-ci-autofix.yml",
         "python3 template/.project-agent-workflow/scripts/security-static-check.py --changed",
-        "scripts/lint-project-workflow.sh\n          tests/smoke.sh",
     )
     require_ci_autofix_boundaries(
         "template/.github/workflows/codex-ci-autofix.yml.jinja",
         "python3 .project-agent-workflow/scripts/security-static-check.py --changed",
-        "python3 .project-agent-workflow/scripts/validate-changes.py --staged",
     )
 
 

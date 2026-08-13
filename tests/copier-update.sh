@@ -87,6 +87,7 @@ for candidate_path in \
   copier.yml \
   scripts/validate-copier-update.py \
   template/README.md.jinja \
+  template/.github/workflows/codex-ci-autofix.yml.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
   template/.project-agent-workflow/scripts/validate-copier-update.py \
@@ -114,6 +115,7 @@ fixture_git "$update_source" add \
   copier.yml \
   scripts/validate-copier-update.py \
   template/README.md.jinja \
+  template/.github/workflows/codex-ci-autofix.yml.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
   template/.project-agent-workflow/scripts/validate-copier-update.py \
@@ -137,6 +139,40 @@ fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
   commit --allow-empty -qm "Make Copier updates fail closed"
 fixture_git "$update_source" tag v1.2.2
 target_ref=v1.2.2
+fixture_git "$update_source" tag v1.3.1
+
+direct_push_update_out="$tmp/direct-push-to-patch-only"
+run_copier copy -q -f --trust --vcs-ref v1.2.1 \
+  --data-file "$root/tests/fixtures/typescript.answers.yml" "$update_source" "$direct_push_update_out" >/dev/null
+fixture_git "$direct_push_update_out" init -b main >/dev/null
+fixture_git "$direct_push_update_out" config user.email "ci@example.invalid"
+fixture_git "$direct_push_update_out" config user.name "CI"
+printf 'project-owned direct-push update marker\n' >"$direct_push_update_out/project-owned.txt"
+fixture_git "$direct_push_update_out" add -A
+fixture_git "$direct_push_update_out" commit -qm "Create earlier direct-push project"
+run_copier update -q --trust --defaults --vcs-ref v1.3.1 "$direct_push_update_out" >/dev/null
+grep -q '^ci_autofix_mode: direct_push$' "$direct_push_update_out/.copier-answers.yml"
+grep -q 'let mode = "patch-only";' "$direct_push_update_out/.github/workflows/codex-ci-autofix.yml"
+if grep -q 'direct-push\|max_attempts\|validate-patch\|apply-patch\|git push\|createComment\|git commit' \
+  "$direct_push_update_out/.github/workflows/codex-ci-autofix.yml"; then
+  echo "Copier update retained the old direct-push CI autofix graph" >&2
+  exit 1
+fi
+grep -q 'project-owned direct-push update marker' "$direct_push_update_out/project-owned.txt"
+if find "$direct_push_update_out" -name '*.rej' -print -quit | grep -q .; then
+  echo "direct-push Copier update produced rejection files" >&2
+  exit 1
+fi
+if grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' "$direct_push_update_out" --exclude-dir=.git >/dev/null; then
+  echo "direct-push Copier update produced inline conflict markers" >&2
+  exit 1
+fi
+direct_push_deletions=$(fixture_git "$direct_push_update_out" diff --diff-filter=D --name-only)
+if [ -n "$direct_push_deletions" ]; then
+  echo "direct-push Copier update produced unrelated tracked deletions: $direct_push_deletions" >&2
+  exit 1
+fi
+fixture_git "$direct_push_update_out" diff --check
 
 broad_out="$tmp/task-scoped-default-policy"
 run_copier copy -q -f --trust --defaults --vcs-ref "$target_ref" \
