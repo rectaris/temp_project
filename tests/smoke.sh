@@ -55,8 +55,14 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/planlib.py \
+    template/.project-agent-workflow/scripts/restructure-plan.py \
+    template/.project-agent-workflow/scripts/plan-execution-state.py \
+    template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
@@ -88,8 +94,14 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/planlib.py \
+    template/.project-agent-workflow/scripts/restructure-plan.py \
+    template/.project-agent-workflow/scripts/plan-execution-state.py \
+    template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
@@ -157,6 +169,17 @@ assert_managed_orchestration_reports() {
   grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
   grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
   grep -qi 'advisory' "$managed_orchestration"
+  grep -qi 'repository breadth alone is insufficient' "$managed_agents" "$managed_orchestration"
+  grep -q 'implementation_risk' "$managed_agents" "$managed_orchestration"
+  grep -q 'implementation_ambiguity' "$managed_agents" "$managed_orchestration"
+  grep -qi 'admissible implementation slice' "$managed_orchestration"
+  grep -qi 'state path outside the repository' "$managed_orchestration"
+  grep -qi 'skipped known-unavailable starts' "$managed_orchestration"
+  grep -qi 'aggregate patch' "$managed_orchestration"
+  grep -qi 'at most two correction rounds' "$managed_orchestration"
+  grep -qi 'candidate generation and correction do not run plan validation' "$managed_orchestration"
+  grep -q 'focused_validation' "$managed_orchestration"
+  grep -qi 'bounded parent implementation' "$managed_orchestration"
 }
 
 assert_ci_autofix_validation_graph() {
@@ -599,6 +622,44 @@ run_plan_fail_closed_smoke() {
   grep -q "^$deferred_id[[:space:]]$deferred_plan[[:space:]]deferred$" "$out/docs/plan/plan.md"
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$deferred_id")
   rm "$out/$deferred_plan"
+
+  replan_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active replan-required --summary "Replan required." --summary-ja "再構成停止状態を確認する。")
+  replan_base=$(basename "$replan_plan")
+  replan_id=${replan_base%%-*}
+  sed -i 's/^status: in_progress$/status: replan_required/; /^checked_summary_ja:/a replan_reason_codes:\n  - multiple_independent_invariants' "$out/$replan_plan"
+  sed -i "s/^$replan_id\t\(.*\)\tin_progress$/$replan_id\t\1\treplan_required/" "$out/docs/plan/plan.md"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+  if (cd "$out" && .project-agent-workflow/scripts/complete-plan.sh "$replan_plan" >/dev/null 2>&1); then
+    echo "complete-plan archived replan-required work" >&2
+    exit 1
+  fi
+  sed -i 's/multiple_independent_invariants/unbounded_custom_reason/' "$out/$replan_plan"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted an unknown replan reason" >&2
+    exit 1
+  fi
+  sed -i 's/unbounded_custom_reason/multiple_independent_invariants/' "$out/$replan_plan"
+  replanned_path="docs/plan/replanned/2000/01/01-15/$replan_base"
+  mkdir -p "$out/docs/plan/replanned/2000/01/01-15"
+  sed \
+    -e 's/^status: replan_required$/status: replanned/' \
+    -e '/^replan_reason_codes:/i primary_invariant: preserve the source acceptance baseline\nreplan_source: docs/plan/active/001-source.md\nreplan_contract: docs/plan/replanned/contracts/001-source.json\nintegration_gates:\n  - combined source acceptance\nsuccessor_plans:\n  - docs/plan/active/002-successor.md\ninherited_acceptance_digests:\n  - sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    "$out/$replan_plan" >"$out/$replanned_path"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+  sed -i '/^replan_contract:/d' "$out/$replanned_path"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted a replanned record with incomplete lineage" >&2
+    exit 1
+  fi
+  sed -i '/^replan_source:/a replan_contract: docs/plan/replanned/contracts/001-source.json' "$out/$replanned_path"
+  sed -i '/^successor_plans:/d; /^  - docs\/plan\/active\/002-successor.md$/d' "$out/$replanned_path"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
+    echo "lint-plan-docs accepted replanned lineage without a successor" >&2
+    exit 1
+  fi
+  rm "$out/$replanned_path"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$replan_id")
+  rm "$out/$replan_plan"
 }
 
 run_referent_contract_smoke() {
@@ -1015,6 +1076,22 @@ grep -q 'Do not commit changes' "$tmp/typescript/.codex/agents/sequential_plan_w
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run <plan>' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 python3 "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py" --help >/dev/null
 grep -q 'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'TERRA_CODEX_MODEL = "gpt-5.6-terra"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def select_plan_writable_profile' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def open_availability_state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q -- '--availability-state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'skipped_known_unavailable_starts' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def correct_worker' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'correction_lineage' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def validate_candidate' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def open_lifecycle_state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q -- '--lifecycle-state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'VALIDATION_AUTHORITY_SCOPE' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'network_enabled=False' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'implementation_risk' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
+grep -q 'implementation_ambiguity' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
+grep -q 'focused_validation' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
+grep -q 'validation_authority_scope' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
 grep -q 'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'DEFAULT_FALLBACK_CODEX_REASONING = "max"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q -- '--fallback-codex-model' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
@@ -1176,6 +1253,11 @@ grep -q 'SPEC_USER_COMMUNICATION.md' "$tmp/typescript/.project-agent-workflow/sk
 grep -q 'sequential_plan_worker' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'gpt-5.6-luna.*max fallback' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -q 'gpt-5.6-terra' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -qi 'admissible implementation slice' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -qi 'state path outside the repository' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -q 'run-sandboxed-plan-worker.py correct' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -q 'run-sandboxed-plan-worker.py validate' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'one bounded worker at a time' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/.project-agent-workflow/AGENTS.md"

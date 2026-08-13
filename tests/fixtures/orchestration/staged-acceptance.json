@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "requirements": [
+    {"id": "S1", "critical": true, "text": "Admission and parent review precede focused validation."},
+    {"id": "S2", "critical": true, "text": "Authoritative validation runs exactly once before apply."},
+    {"id": "S3", "critical": true, "text": "One generation and two corrections bound implementation."},
+    {"id": "S4", "critical": true, "text": "A known-unavailable model starts at most once per run."},
+    {"id": "S5", "critical": true, "text": "Parent implementation remains bounded and independently reviewed."},
+    {"id": "S6", "critical": true, "text": "Accepted changes have no unresolved High or Medium findings."}
+  ],
+  "evidence_file": "staged-baseline-events.json",
+  "holdout_file": "staged-holdout-events.json",
+  "performance_claim_status": "measurement_pending",
+  "measured_evidence_file": "staged-paired-measured-example.json",
+  "thresholds": {
+    "minimum_median_reduction_fraction": 0.3,
+    "maximum_p95_regression_fraction": 0.1,
+    "maximum_implementation_generations": 3,
+    "maximum_known_unavailable_primary_starts": 1,
+    "authoritative_full_suite_runs_per_accepted_candidate": 1,
+    "maximum_unresolved_high_medium_findings": 0
+  }
+}

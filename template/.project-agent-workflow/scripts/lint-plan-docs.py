@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,12 +16,30 @@ import plan_validation_commands
 ROOT = planlib.ROOT
 PLAN = planlib.PLAN
 CHECKED = planlib.CHECKED
+REPLANNED = planlib.REPLANNED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
-OPEN_STATUS_VALUES = {"in_progress", "deferred", "ready_to_archive", "backlog"}
+OPEN_STATUS_VALUES = {"in_progress", "deferred", "replan_required", "ready_to_archive", "backlog"}
 # Copier updates must continue to read archives produced before checked became
 # the terminal manifest value. New finalization is tested to emit checked.
 CLOSED_STATUS_VALUES = {"checked", "completed", "ready_to_archive"}
+REPLANNED_STATUS_VALUES = {"replanned"}
+REPLAN_REASON_CODES = {
+    "scope_drift",
+    "spec_drift",
+    "security_boundary_drift",
+    "multiple_independent_invariants",
+    "post_authoritative_design_change",
+    "candidate_correction_budget_exhausted",
+    "parent_remediation_budget_exhausted",
+}
+SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
+SUCCESSOR_PLAN_RE = re.compile(r"docs/plan/active/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md")
+REPLAN_SOURCE_RE = re.compile(
+    r"docs/plan/(?:active/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md|"
+    r"replanned/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md)"
+)
+REPLAN_CONTRACT_RE = re.compile(r"docs/plan/replanned/contracts/[0-9]{3}-[a-z0-9][a-z0-9-]*\.json")
 MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[:：]")
 APPROACH_MARKERS = {"A", "B", "C"}
 RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
@@ -107,12 +126,55 @@ def lint_checked_index() -> None:
                 fail(f"checked index path is outside checked archive: {parts[1]}")
 
 
+def lint_replanned_index() -> None:
+    if not REPLANNED.is_file():
+        fail("missing docs/plan/replanned.md")
+    text = REPLANNED.read_text(encoding="utf-8")
+    if not text.startswith("# Replanned Plan Index\n"):
+        fail("docs/plan/replanned.md must start with '# Replanned Plan Index'")
+    if "id\tpath\tcontract" not in text:
+        fail("replanned index must contain TSV header: id path contract")
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
+    seen_contracts: set[str] = set()
+    for line in text.splitlines():
+        if not re.match(r"^\d{3}\t", line):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            fail(f"bad replanned index row: {line}")
+        plan_id, path, contract = parts
+        if plan_id in seen_ids or path in seen_paths or contract in seen_contracts:
+            fail(f"duplicate replanned index identity: {line}")
+        seen_ids.add(plan_id)
+        seen_paths.add(path)
+        seen_contracts.add(contract)
+        archive = ROOT / path
+        contract_path = ROOT / contract
+        if not Path(path).name.startswith(plan_id + "-"):
+            fail(f"replanned index id does not match filename: {line}")
+        if planlib.REPLANNED_DIR not in archive.parents or not archive.is_file():
+            fail(f"replanned index points outside the replanned archive or to a missing file: {path}")
+        if contract_path.parent != planlib.REPLANNED_DIR / "contracts" or not contract_path.is_file():
+            fail(f"replanned index points outside the contract directory or to a missing file: {contract}")
+        if planlib.manifest_scalar(planlib.parse_manifest(archive), "status") != "replanned":
+            fail(f"replanned index archive status mismatch: {path}")
+    verifier = Path(__file__).with_name("restructure-plan.py")
+    completed = subprocess.run(
+        [sys.executable, str(verifier), "--verify"], cwd=ROOT, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if completed.returncode != 0:
+        fail(completed.stderr.strip() or "replanned contract verification failed")
+
+
 def lint_manifest(path: Path) -> None:
     if not path.is_absolute():
         path = planlib.ROOT / path
     text = path.read_text(encoding="utf-8")
     parsed = planlib.parse_manifest(path)
     is_checked = planlib.CHECKED_DIR in path.parents
+    is_replanned = planlib.REPLANNED_DIR in path.parents
     is_legacy_checked = bool(
         is_checked
         and not parsed.get("task_types")
@@ -156,12 +218,13 @@ def lint_manifest(path: Path) -> None:
     legacy_route_specs = planlib.required_specs_for(task_types, planlib.LEGACY_SPEC_INDEX)
     is_pre_v1_open = bool(
         not is_checked
+        and not is_replanned
         and planlib.has_pre_v1_adoption_provenance()
         and not any(spec.startswith(".project-agent-workflow/docs/agent/") for spec in required_specs)
         and set(required_specs) & legacy_route_specs
     )
     spec_index = planlib.LEGACY_SPEC_INDEX if is_pre_v1_open else planlib.SPEC_INDEX
-    if not is_checked:
+    if not is_checked and not is_replanned:
         unknown_task_types = sorted(set(task_types) - planlib.task_type_values(spec_index))
         if unknown_task_types:
             fail(
@@ -172,12 +235,20 @@ def lint_manifest(path: Path) -> None:
     if approval_value not in HUMAN_APPROVAL_VALUES:
         fail(f"{path} human_approval_status must be not_required, pending, or approved")
     status_value = planlib.manifest_scalar(values, "status")
-    allowed_statuses = CLOSED_STATUS_VALUES if is_checked else OPEN_STATUS_VALUES
+    if is_replanned:
+        allowed_statuses = REPLANNED_STATUS_VALUES
+    else:
+        allowed_statuses = CLOSED_STATUS_VALUES if is_checked else OPEN_STATUS_VALUES
     if status_value not in allowed_statuses:
         allowed = ", ".join(sorted(allowed_statuses))
         fail(f"{path} status must be one of: {allowed}")
-    if path.parent == planlib.ACTIVE_DIR and status_value not in {"in_progress", "deferred", "ready_to_archive"}:
-        fail(f"{path} active plan status must be in_progress, deferred, or ready_to_archive")
+    if path.parent == planlib.ACTIVE_DIR and status_value not in {
+        "in_progress", "deferred", "replan_required", "ready_to_archive"
+    }:
+        fail(
+            f"{path} active plan status must be in_progress, deferred, "
+            "replan_required, or ready_to_archive"
+        )
     if path.parent == planlib.BACKLOG_DIR and status_value not in {"backlog", "deferred"}:
         fail(f"{path} backlog plan status must be backlog or deferred")
     if not is_legacy_checked and review_value == "C" and approval_value not in {"pending", "approved"}:
@@ -188,7 +259,8 @@ def lint_manifest(path: Path) -> None:
         fail(f"{path} human_design_required: yes requires review_class: C")
     if status_value == "deferred" and not planlib.manifest_scalar(values, "completion_deferred_reason").strip():
         fail(f"{path} status: deferred requires completion_deferred_reason")
-    if not is_checked:
+    lint_replan_fields(path, values, status_value)
+    if not is_checked and not is_replanned:
         try:
             if is_pre_v1_open:
                 plan_validation_commands.check_legacy_plan_for_lint(path, ROOT)
@@ -211,6 +283,73 @@ def lint_manifest(path: Path) -> None:
             fail(f"{path} write_scope and context_files overlap: {', '.join(overlap)}")
     if not planlib.manifest_scalar(values, "checked_summary_ja").strip():
         fail(f"{path} checked_summary_ja must be non-empty")
+
+
+def lint_replan_fields(
+    path: Path,
+    values: dict[str, str | list[str]],
+    status_value: str,
+) -> None:
+    primary_invariant = planlib.manifest_scalar(values, "primary_invariant").strip()
+    replan_source = planlib.manifest_scalar(values, "replan_source").strip()
+    replan_contract = planlib.manifest_scalar(values, "replan_contract").strip()
+    integration_gates = values["integration_gates"]
+    successor_plans = values["successor_plans"]
+    inherited_digests = values["inherited_acceptance_digests"]
+    reason_codes = values["replan_reason_codes"]
+    assert isinstance(integration_gates, list)
+    assert isinstance(successor_plans, list)
+    assert isinstance(inherited_digests, list)
+    assert isinstance(reason_codes, list)
+
+    list_fields = {
+        "integration_gates": integration_gates,
+        "successor_plans": successor_plans,
+        "inherited_acceptance_digests": inherited_digests,
+        "replan_reason_codes": reason_codes,
+    }
+    for field, items in list_fields.items():
+        if len(items) != len(set(items)):
+            fail(f"{path} {field} must not contain duplicates")
+        if any(not item.strip() for item in items):
+            fail(f"{path} {field} must not contain blank values")
+
+    unknown_reasons = sorted(set(reason_codes) - REPLAN_REASON_CODES)
+    if unknown_reasons:
+        fail(f"{path} has unknown replan_reason_codes: {', '.join(unknown_reasons)}")
+    if len(reason_codes) > len(REPLAN_REASON_CODES):
+        fail(f"{path} replan_reason_codes exceeds the bounded reason set")
+    if status_value == "replan_required" and not reason_codes:
+        fail(f"{path} status: replan_required requires replan_reason_codes")
+
+    lineage_present = bool(
+        primary_invariant
+        or replan_source
+        or replan_contract
+        or integration_gates
+        or successor_plans
+        or inherited_digests
+    )
+    if status_value == "replanned" and not lineage_present:
+        fail(f"{path} status: replanned requires complete replan lineage")
+    if not lineage_present:
+        return
+    if not primary_invariant or len(primary_invariant) > 200:
+        fail(f"{path} replan lineage requires primary_invariant of at most 200 characters")
+    if not REPLAN_SOURCE_RE.fullmatch(replan_source):
+        fail(f"{path} replan_source must identify a normalized active or replanned plan path")
+    if not REPLAN_CONTRACT_RE.fullmatch(replan_contract):
+        fail(f"{path} replan_contract must identify a normalized replanned contract path")
+    if not integration_gates:
+        fail(f"{path} replan lineage requires at least one integration_gates entry")
+    if not successor_plans:
+        fail(f"{path} replan lineage requires at least one successor_plans entry")
+    if any(not SUCCESSOR_PLAN_RE.fullmatch(item) for item in successor_plans):
+        fail(f"{path} successor_plans must contain normalized active-plan paths")
+    if any(not SHA256_RE.fullmatch(item) for item in inherited_digests):
+        fail(f"{path} inherited_acceptance_digests must contain sha256:<64 lowercase hex> values")
+    if not inherited_digests:
+        fail(f"{path} replan lineage requires inherited_acceptance_digests")
 
 
 def lint_active_plan_body(path: Path) -> None:
@@ -245,6 +384,9 @@ def lint_manifests() -> None:
                 lint_active_plan_body(path)
     if planlib.CHECKED_DIR.exists():
         for path in sorted(planlib.CHECKED_DIR.glob("**/[0-9][0-9][0-9]-*.md")):
+            lint_manifest(path)
+    if planlib.REPLANNED_DIR.exists():
+        for path in sorted(planlib.REPLANNED_DIR.glob("**/[0-9][0-9][0-9]-*.md")):
             lint_manifest(path)
 
 
@@ -334,6 +476,7 @@ def main() -> int:
         return 0
     lint_plan_index()
     lint_checked_index()
+    lint_replanned_index()
     lint_manifests()
     print("plan docs lint passed")
     return 0

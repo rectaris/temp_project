@@ -71,3 +71,13 @@ id	path
 068	docs/plan/checked/2026/08/01-15/068-release-v130.md
 069	docs/plan/checked/2026/08/01-15/069-copier-update-clean-source.md
 070	docs/plan/checked/2026/08/01-15/070-pr2-review-remediation.md
+071	docs/plan/checked/2026/08/01-15/071-orchestration-throughput-foundation.md
+072	docs/plan/checked/2026/08/01-15/072-routing-evaluation-copier-integration.md
+073	docs/plan/checked/2026/08/01-15/073-orchestration-execution-state.md
+074	docs/plan/checked/2026/08/01-15/074-isolated-candidate-correction.md
+075	docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
+076	docs/plan/checked/2026/08/01-15/076-plan-restructuring-policy-schema.md
+077	docs/plan/checked/2026/08/01-15/077-atomic-plan-restructuring.md
+078	docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
+080	docs/plan/checked/2026/08/01-15/080-successor-acceptance-authority.md
+081	docs/plan/checked/2026/08/01-15/081-plan-restructuring-integration.md

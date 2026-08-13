@@ -51,6 +51,8 @@ SOURCE_REQUIRED = [
     "scripts/lint-github-actions.sh",
     "scripts/plan_validation_commands.py",
     "scripts/run-sandboxed-plan-worker.py",
+    "scripts/restructure-plan.py",
+    "scripts/plan-execution-state.py",
     "scripts/referent-contract.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
@@ -142,6 +144,7 @@ SOURCE_REQUIRED = [
     "template/docs/agent/PROJECT_UI_DESIGN.md",
     "template/docs/plan/README.md",
     "template/docs/plan/checked.md",
+    "template/docs/plan/replanned.md",
     "template/docs/plan/plan.md",
     "template/docs/plan/backlog/README.md",
     "template/docs/plan/handoffs/README.md",
@@ -167,6 +170,8 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/scripts/lint-plan-docs.py",
     "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py",
     "template/.project-agent-workflow/scripts/planlib.py",
+    "template/.project-agent-workflow/scripts/restructure-plan.py",
+    "template/.project-agent-workflow/scripts/plan-execution-state.py",
     "template/.project-agent-workflow/scripts/plan_validation_commands.py",
     "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     "template/.project-agent-workflow/scripts/referent-contract.py",
@@ -204,6 +209,12 @@ SOURCE_REQUIRED = [
     "tests/fixtures/referent-contract/evaluation-protocol.md",
     "tests/fixtures/write-for-reader/scenarios.json",
     "tests/fixtures/browser-ops/scenarios.json",
+    "tests/fixtures/orchestration/staged-acceptance.json",
+    "tests/fixtures/orchestration/staged-baseline-events.json",
+    "tests/fixtures/orchestration/staged-holdout-events.json",
+    "tests/fixtures/orchestration/staged-paired-measured-example.json",
+    "tests/fixtures/orchestration/plan-restructuring-scenarios.json",
+    "tests/fixtures/orchestration/plan-restructuring-holdout.json",
     "scripts/init-project-workflow.sh",
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",
@@ -298,6 +309,7 @@ GENERATED_REQUIRED = [
     "docs/plan/README.md",
     "docs/plan/backlog/README.md",
     "docs/plan/checked.md",
+    "docs/plan/replanned.md",
     "docs/plan/handoffs/README.md",
     "docs/plan/sub-agents/custom-agents.md",
     "docs/plan/sub-agents/helper-prompts.md",
@@ -323,6 +335,8 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/scripts/migrate-legacy-template-files.py",
     ".project-agent-workflow/scripts/next-plan-id.sh",
     ".project-agent-workflow/scripts/planlib.py",
+    ".project-agent-workflow/scripts/restructure-plan.py",
+    ".project-agent-workflow/scripts/plan-execution-state.py",
     ".project-agent-workflow/scripts/plan_validation_commands.py",
     ".project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     ".project-agent-workflow/scripts/referent-contract.py",
@@ -497,10 +511,10 @@ def require_orchestration_policy_markers() -> None:
         "repository-wide",
         "independent helper work",
         "main agent owns",
-        "multiple independent",
-        "cross-specification",
-        "validation, security, or orchestration",
-        "large or dense",
+        "expected context reduction",
+        "parallelism",
+        "review value",
+        "repository breadth alone",
         "proactively",
         "non-overlapping",
         "short deterministic",
@@ -517,6 +531,38 @@ def require_orchestration_policy_markers() -> None:
         "final report",
         "role",
         "acceptance",
+        "admissible implementation slice",
+        "implementation_risk",
+        "implementation_ambiguity",
+        "spark medium",
+        "terra medium",
+        "state path outside the repository",
+        "orchestration run identifier",
+        "symlinked targets or ancestors",
+        "skipped known-unavailable starts",
+        "finite and nonnegative",
+        "prompts, raw output, environment values, or credentials",
+        "run-sandboxed-plan-worker.py correct",
+        "aggregate patch",
+        "at most two correction rounds",
+        "rejected patch never touches the source",
+        "candidate generation and correction do not run plan validation",
+        "parent diff review",
+        "critical-invariant review",
+        "focused_validation",
+        "validation_authority_scope",
+        "network-isolated review clone",
+        "authoritative",
+        "bounded parent implementation",
+        "independent change review",
+        "replan_required",
+        "requirement change needs separate explicit user authorization",
+        "elapsed time is telemetry",
+        "plan-execution-state.py",
+        "independent-review receipt",
+        "--plan-execution-state",
+        "at least 30 percent lower median",
+        "p95 time no more than 10 percent worse",
         "run-sandboxed-plan-worker.py run",
         "read-only",
     )
@@ -525,7 +571,6 @@ def require_orchestration_policy_markers() -> None:
             fail(f"template managed SPEC_ORCHESTRATION missing marker: {marker}")
     for marker in (
         "per-task user instruction",
-        "repository-wide",
         "do not delegate",
         "final ownership",
         "main session",
@@ -569,6 +614,93 @@ def require_orchestration_policy_markers() -> None:
     ):
         if marker not in root_orchestration:
             fail(f"root orchestration policy missing marker for template parity: {marker}")
+
+    try:
+        staged = json.loads(read("tests/fixtures/orchestration/staged-acceptance.json"))
+    except json.JSONDecodeError as exc:
+        fail(f"invalid staged orchestration fixture: {exc}")
+    if staged.get("schema_version") != 2:
+        fail("staged orchestration fixture is missing the event-evidence schema")
+    if staged.get("performance_claim_status") not in {"measurement_pending", "measured_pass"}:
+        fail("staged orchestration performance claim status is invalid")
+    if staged.get("measured_evidence_file") != "staged-paired-measured-example.json":
+        fail("staged orchestration must identify its paired runner evidence")
+    if staged.get("evidence_file") != "staged-baseline-events.json" or staged.get("holdout_file") != "staged-holdout-events.json":
+        fail("staged orchestration evidence and holdout must remain physically separated")
+    evidence = json.loads(read("tests/fixtures/orchestration/staged-baseline-events.json"))
+    holdout = json.loads(read("tests/fixtures/orchestration/staged-holdout-events.json"))
+    scenarios = [*evidence.get("scenarios", []), *holdout.get("scenarios", [])]
+    thresholds = staged.get("thresholds", {})
+    if evidence.get("schema_version") != 2 or holdout.get("schema_version") != 2:
+        fail("staged orchestration evidence must use commit-backed schema")
+    if evidence.get("version") != "2026-08-13-plans-062-064-070-v3":
+        fail("staged orchestration fixture is missing the versioned baseline")
+    if {item.get("class") for item in scenarios if isinstance(item, dict)} != {"median", "edge", "negative", "holdout"}:
+        fail("staged orchestration fixture must cover median, edge, negative, and holdout")
+    holdouts = [item for item in scenarios if isinstance(item, dict) and item.get("class") == "holdout"]
+    if len(holdouts) != 1 or holdouts[0].get("used_for_tuning") is not False:
+        fail("staged orchestration holdout must remain outside reusable tuning prompts")
+    if thresholds != {
+        "minimum_median_reduction_fraction": 0.3,
+        "maximum_p95_regression_fraction": 0.1,
+        "maximum_implementation_generations": 3,
+        "maximum_known_unavailable_primary_starts": 1,
+        "authoritative_full_suite_runs_per_accepted_candidate": 1,
+        "maximum_unresolved_high_medium_findings": 0,
+    }:
+        fail("staged orchestration thresholds differ from the accepted contract")
+
+    restructuring = json.loads(read("tests/fixtures/orchestration/plan-restructuring-scenarios.json"))
+    restructuring_holdout = json.loads(read("tests/fixtures/orchestration/plan-restructuring-holdout.json"))
+    if set(restructuring) != {"schema_version", "requirements", "holdout_file", "scenarios"}:
+        fail("plan restructuring fixture has an invalid exact shape")
+    if restructuring.get("schema_version") != 1 or restructuring.get("holdout_file") != "plan-restructuring-holdout.json":
+        fail("plan restructuring fixture has an unsupported schema or holdout")
+    requirements = restructuring.get("requirements")
+    if not isinstance(requirements, list) or {item.get("id") for item in requirements if isinstance(item, dict)} != {"P1", "P2", "P3", "P4"}:
+        fail("plan restructuring fixture lost a critical requirement")
+    if any(not isinstance(item, dict) or item.get("critical") is not True for item in requirements):
+        fail("plan restructuring requirements must remain critical")
+    expected_cases = {
+        "median-multiple-independent-invariants": ("median", ["P1", "P2", "P4"], "multiple_independent_invariants", "atomic_restructure", "replan_required"),
+        "edge-delegated-correction-budget-exhausted": ("edge", ["P1", "P2", "P4"], "candidate_correction_budget_exhausted", "atomic_restructure", "replan_required"),
+        "edge-parent-direct-review-budget-exhausted": ("edge", ["P1", "P2", "P4"], "parent_remediation_budget_exhausted", "atomic_restructure", "replan_required"),
+        "negative-scope-drift": ("negative", ["P1", "P2", "P4"], "scope_drift", "atomic_restructure", "replan_required"),
+        "negative-specification-drift": ("negative", ["P1", "P2", "P4"], "spec_drift", "atomic_restructure", "replan_required"),
+        "negative-security-boundary-drift": ("negative", ["P1", "P2", "P4"], "security_boundary_drift", "atomic_restructure", "replan_required"),
+        "negative-post-authoritative-design-change": ("negative", ["P1", "P2", "P4"], "post_authoritative_design_change", "atomic_restructure", "replan_required"),
+        "negative-unauthorized-requirement-replacement": ("negative", ["P3"], "requirement_change_not_authorized", "reject_transition", "pending_user_authorization"),
+    }
+    scenarios = restructuring.get("scenarios")
+    if not isinstance(scenarios, list) or len(scenarios) != len(expected_cases):
+        fail("plan restructuring scenario set is incomplete")
+    observed: set[str] = set()
+    for scenario in scenarios:
+        if not isinstance(scenario, dict) or set(scenario) != {"id", "class", "used_for_tuning", "requirements", "input", "expected"}:
+            fail("plan restructuring scenario has an invalid exact shape")
+        scenario_id = scenario["id"]
+        if scenario_id not in expected_cases or scenario_id in observed:
+            fail("plan restructuring scenario identifiers differ from the accepted contract")
+        scenario_class, covered, reason, action, state = expected_cases[scenario_id]
+        if scenario["class"] != scenario_class or scenario["used_for_tuning"] is not True:
+            fail(f"plan restructuring scenario class/tuning differs: {scenario_id}")
+        if scenario["requirements"] != covered or scenario["expected"] != {"state": state, "reason_code": reason, "next_action": action}:
+            fail(f"plan restructuring expected result differs: {scenario_id}")
+        observed.add(scenario_id)
+    if observed != set(expected_cases):
+        fail("plan restructuring scenario set differs from the accepted contract")
+    expected_holdout = [{
+        "id": "holdout-security-drift-with-dirty-product-path",
+        "class": "holdout",
+        "used_for_tuning": False,
+        "requirements": ["P1", "P2", "P4"],
+        "input": {"event": "security_boundary_drift", "dirty_product_path": "config/project-owned.yaml"},
+        "expected": {"state": "replan_required", "reason_code": "security_boundary_drift", "next_action": "atomic_restructure_preserving_dirty_path"},
+    }]
+    if set(restructuring_holdout) != {"schema_version", "scenarios"} or restructuring_holdout.get("schema_version") != 1:
+        fail("plan restructuring holdout has an invalid exact shape")
+    if restructuring_holdout.get("scenarios") != expected_holdout:
+        fail("plan restructuring holdout must remain fixed and outside tuning scenarios")
 
 
 def template_source_files() -> set[str]:
@@ -651,6 +783,18 @@ def require_sandboxed_plan_worker_alignment() -> None:
         fail("sandboxed plan worker root/template script modes differ")
     if root_mode & 0o111 == 0:
         fail("sandboxed plan worker scripts must be executable")
+    root_restructure = ROOT / "scripts/restructure-plan.py"
+    template_restructure = ROOT / "template/.project-agent-workflow/scripts/restructure-plan.py"
+    if root_restructure.read_bytes() != template_restructure.read_bytes():
+        fail("plan restructuring root/template scripts differ")
+    if (root_restructure.stat().st_mode & 0o777) != (template_restructure.stat().st_mode & 0o777):
+        fail("plan restructuring root/template script modes differ")
+    root_execution_state = ROOT / "scripts/plan-execution-state.py"
+    template_execution_state = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
+    if root_execution_state.read_bytes() != template_execution_state.read_bytes():
+        fail("plan execution state root/template scripts differ")
+    if (root_execution_state.stat().st_mode & 0o777) != (template_execution_state.stat().st_mode & 0o777):
+        fail("plan execution state root/template script modes differ")
     for marker in (
         'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
         'DEFAULT_CODEX_REASONING = "medium"',
@@ -664,6 +808,31 @@ def require_sandboxed_plan_worker_alignment() -> None:
         '"--fallback-codex-model"',
         '"--fallback-codex-reasoning-effort"',
         '"--no-model-fallback"',
+        "def select_plan_writable_profile",
+        "implementation_risk",
+        "implementation_ambiguity",
+        "WRITABLE_SOL_MODEL",
+        "AVAILABILITY_STATE_MAX_BYTES",
+        "def open_availability_state",
+        '"--availability-state"',
+        '"--orchestration-run-id"',
+        '"telemetry"',
+        '"skipped_known_unavailable_starts"',
+        "def correct_worker",
+        "def verify_candidate_manifest",
+        '"correct"',
+        "MAX_CORRECTION_ROUNDS",
+        '"correction_lineage"',
+        "def validate_candidate",
+        "def open_lifecycle_state",
+        '"--lifecycle-state"',
+        "VALIDATION_AUTHORITY_SCOPE",
+        '"authoritative_passed"',
+        '"apply requires exactly one successful authoritative validation"',
+        "load_plan_validation_commands",
+        '"focused_validation_count"',
+        '"authoritative_validation_count"',
+        "network_enabled=False",
     ):
         if marker not in template_runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")
@@ -1240,7 +1409,18 @@ def require_current_plan_manifest_reference(planning: str) -> None:
         "acceptance",
         "checked_summary_ja",
     )
-    optional_fields = ("target_json", "acceptance_focus", "completion_deferred_reason")
+    optional_fields = (
+        "target_json",
+        "acceptance_focus",
+        "completion_deferred_reason",
+        "primary_invariant",
+        "integration_gates",
+        "replan_source",
+        "replan_contract",
+        "successor_plans",
+        "inherited_acceptance_digests",
+        "replan_reason_codes",
+    )
     legacy_fields = ("task_type", "target_files", "expected_output")
     try:
         manifest_reference, _ = planning.split("## Lifecycle Scripts", 1)

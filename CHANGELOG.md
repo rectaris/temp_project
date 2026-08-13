@@ -2,8 +2,17 @@
 
 ## 未リリース
 
+- plan の実行境界が不適切と判明した場合に `replan_required` で停止し、元の要件と受入れ条件を保持したまま後続 plan へ再構成する lifecycle 契約を追加しました。
+- 停止した plan の HEAD、本文、受入れ条件、dirty path、後続割当てを検証し、再構成履歴・契約・後続 plan・索引を排他遷移する `restructure-plan.py` を追加しました。
+- 委譲と親直接実装の実行・レビュー予算を外部 ledger へ記録し、強制再構成条件の後は sandboxed runner の全操作を開始前に拒否するようにしました。
+- plan 再構成の停止条件と要件保持を固定 scenario と未調整 holdout で検証し、Copier 更新でもプロジェクト所有の再計画履歴を保持するようにしました。
 - CI autofix workflow を patch artifact のみを生成する fail-closed 動作へ変更し、保存済みの `direct_push` Copier 回答も外部書き込みなしで互換維持するようにしました。
 - sandboxed plan worker の候補 patch の path 導出で Git object database を一時領域へ隔離し、source object database へ候補 blob を書き込まないようにしました。
+- orchestration 生成物の更新前チェックを Copier 更新ハーネスの simulation source と stage の対象へ追加し、更新時の現行 semantics 検証を固定しました。
+- 委譲を repository 規模ではなく独立した価値と実装 slice で判断し、逐次 worker を実装 risk・曖昧さに応じて Spark または Terra へ振り分け、high と書き込み用 Sol を拒否するようにしました。
+- 逐次 worker に run 単位の bounded availability state と親生成 telemetry を追加し、同一 run で利用不能と判定済みの model を再起動しないようにしました。
+- 親 review で却下した候補を source へ適用せず、新規隔離 clone 内で最大2回まで局所修正し、original HEAD に対する aggregate patch を再生成できるようにしました。
+- 候補生成から全 plan 検証を外し、親の diff・critical invariant review 後に focused 検証、受入れ直前に authoritative 検証を各隔離 clone で実行する段階的受入れへ変更しました。
 
 ## 2026-08-13 v1.3.0
 

@@ -28,6 +28,7 @@ SECURITY_RULE_MODULE = ROOT / "template/.project-agent-workflow/scripts/security
 SECURITY_CHECK_MODULE = ROOT / "template/.project-agent-workflow/scripts/security-static-check.py"
 LEGACY_MIGRATOR = ROOT / "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py"
 ROOT_EXTERNAL_SERVICE_CHECK = ROOT / "scripts/check-external-service-policy.py"
+PLANLIB = ROOT / "template/.project-agent-workflow/scripts/planlib.py"
 
 
 def load_module(path: Path, name: str) -> ModuleType:
@@ -41,6 +42,60 @@ def load_module(path: Path, name: str) -> ModuleType:
 
 
 class PlanValidationCommandsTest(unittest.TestCase):
+    def test_planlib_parses_optional_focused_validation_without_requiring_it(self) -> None:
+        module = load_module(PLANLIB, "focused_validation_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+            plan.write_text(
+                "status: in_progress\nvalidation:\n  - git diff --check\n"
+                "focused_validation:\n  - python3 -m pytest tests/focused.py\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            values = module.parse_manifest(plan)
+            self.assertEqual(values["validation"], ["git diff --check"])
+            self.assertEqual(values["focused_validation"], ["python3 -m pytest tests/focused.py"])
+            plan.write_text(
+                "status: in_progress\nvalidation:\n  - git diff --check\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(module.parse_manifest(plan)["focused_validation"], [])
+
+    def test_planlib_parses_optional_validation_authority_scope(self) -> None:
+        module = load_module(PLANLIB, "validation_authority_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+            plan.write_text(
+                "validation_authority_scope:\n  - tools/\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(module.parse_manifest(plan)["validation_authority_scope"], ["tools/"])
+
+    def test_planlib_parses_optional_replan_lineage_without_requiring_it(self) -> None:
+        module = load_module(PLANLIB, "replan_lineage_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+            plan.write_text(
+                "primary_invariant: preserve one invariant\n"
+                "replan_source: docs/plan/active/001-source.md\n"
+                "replan_contract: docs/plan/replanned/contracts/001-source.json\n"
+                "integration_gates:\n  - combined acceptance\n"
+                "successor_plans:\n  - docs/plan/active/002-successor.md\n"
+                "inherited_acceptance_digests:\n  - sha256:" + "a" * 64 + "\n"
+                "replan_reason_codes:\n  - multiple_independent_invariants\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            values = module.parse_manifest(plan)
+            self.assertEqual(values["primary_invariant"], "preserve one invariant")
+            self.assertEqual(values["integration_gates"], ["combined acceptance"])
+            self.assertEqual(
+                values["inherited_acceptance_digests"], ["sha256:" + "a" * 64]
+            )
+            legacy = Path(tmp) / "legacy.md"
+            legacy.write_text("status: in_progress\n\n## Tasks\n", encoding="utf-8")
+            legacy_values = module.parse_manifest(legacy)
+            self.assertEqual(legacy_values["replan_reason_codes"], [])
+            self.assertEqual(module.manifest_scalar(legacy_values, "primary_invariant"), "")
+
     def test_title_does_not_hide_manifest_validation_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp) / "plan.md"
@@ -99,6 +154,36 @@ class PlanValidationCommandsTest(unittest.TestCase):
             root_module.parse_validation_command("python3 scripts/check-external-service-policy.py check")
         with self.assertRaises(template_module.ValidationCommandError):
             template_module.parse_validation_command("tests/smoke.sh")
+
+    def test_root_accepts_bounded_workflow_behavior_tests(self) -> None:
+        root_module = load_module(PLAN_COMMAND_MODULES[0], "root_behavior_tests")
+        for command in (
+            "python3 tests/test-plan-restructure.py",
+            "python3 tests/test-plan-execution-state.py",
+            "python3 tests/test-sandboxed-plan-worker.py",
+            "python3 tests/test-validation-tools.py",
+            "python3 scripts/run-sandboxed-plan-worker.py self-test",
+            "python3 scripts/check-copier-template.py",
+            "tests/copier-update.sh --require-copier",
+        ):
+            with self.subTest(command=command):
+                root_module.parse_validation_command(command)
+
+    def test_copier_update_required_mode_rejects_an_unavailable_cli(self) -> None:
+        environment = os.environ.copy()
+        environment["PATH"] = "/usr/bin:/bin"
+        environment.pop("REQUIRE_COPIER", None)
+        result = subprocess.run(
+            [str(ROOT / "tests/copier-update.sh"), "--require-copier"],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 127)
+        self.assertIn("copier CLI not found", result.stderr)
 
     def test_template_accepts_namespaced_hook_and_script_compilation(self) -> None:
         template_module = load_module(PLAN_COMMAND_MODULES[1], "template_namespaced_compile")

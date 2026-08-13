@@ -44,6 +44,10 @@ case "$status" in
     echo "cannot mark deferred plan ready; return it to in_progress after its deferral condition is resolved: $src" >&2
     exit 1
     ;;
+  replan_required)
+    echo "cannot complete a plan that requires restructuring: $src" >&2
+    exit 1
+    ;;
   ready_to_archive)
     python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-active-mapping "$id" "$src" ready_to_archive
     echo "plan is already ready_to_archive: $src" >&2

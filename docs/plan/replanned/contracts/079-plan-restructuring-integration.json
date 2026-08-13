@@ -1,0 +1,89 @@
+{
+  "archive_path": "docs/plan/replanned/2026/08/01-15/079-plan-restructuring-integration.md",
+  "contract_path": "docs/plan/replanned/contracts/079-plan-restructuring-integration.json",
+  "created_at": "2026-08-13T09:53:48.642905+00:00",
+  "dirty_product_paths": [
+    "CHANGELOG.md",
+    "scripts/check-copier-template.py",
+    "scripts/check-root-agent-policy.py",
+    "scripts/plan_validation_commands.py",
+    "scripts/restructure-plan.py",
+    "template/.project-agent-workflow/scripts/restructure-plan.py",
+    "tests/copier-update.sh",
+    "tests/fixtures/orchestration/plan-restructuring-holdout.json",
+    "tests/fixtures/orchestration/plan-restructuring-scenarios.json",
+    "tests/test-plan-execution-state.py",
+    "tests/test-plan-restructure.py",
+    "tests/test-validation-tools.py"
+  ],
+  "reason_codes": [
+    "scope_drift",
+    "multiple_independent_invariants"
+  ],
+  "schema_version": 1,
+  "source": {
+    "acceptance": [
+      {
+        "digest": "sha256:e5ee0e951c5eef281fc3f54c22d549dffd750f43f0e232f724b12d8e0ed2e637",
+        "text": "Add fixed median, edge, negative, and untuned holdout scenarios for requirement preservation, exhausted delegated corrections, repeated parent-direct review findings, multi-invariant findings, scope drift, and post-authoritative design changes."
+      },
+      {
+        "digest": "sha256:99fac9ef19ac18be11c578944c85b91c925efd945bf374f2bf6a5654e0b2e6b2",
+        "text": "Prove that every hard trigger blocks continued implementation and requires an atomic successor and integration-plan transition."
+      },
+      {
+        "digest": "sha256:f63ec861469ec27fe14daef2ba73dc1cdeadae80e5a35395c09f35abfe486c57",
+        "text": "Prove that requirement changes remain pending until explicit user authorization and cannot be disguised as clarification or successor mapping."
+      },
+      {
+        "digest": "sha256:675856f8d05166ebfc9efa5b4fffc5199d404792bf648a919f094bd3e9ea2c8e",
+        "text": "Keep root and generated policy, schemas, commands, Skills, tests, indexes, and lifecycle behavior aligned."
+      },
+      {
+        "digest": "sha256:30e8a6c3d65ec3e739284e02025847bf88f88901e855beec711bf8424f3866f7",
+        "text": "Preserve project-owned product code, policy, configuration, plan history, and validation behavior through supported Copier copy and update paths."
+      },
+      {
+        "digest": "sha256:6d763d5c86eacb20d1eb1cc7e29cb45707d57c2ec2c7fd9e74af6a4074ad7001",
+        "text": "Reject unresolved conflicts, rejection files, unclassified tracked-file deletion, destination collisions, index divergence, and partial transition artifacts."
+      },
+      {
+        "digest": "sha256:5cc609d78dd1464f9a71b7dde9005bb8ebe3db475048a24a2bd804dc86d8fef8",
+        "text": "Run one independent final High/Medium review before the authoritative suite and keep zero unresolved High or Medium findings."
+      }
+    ],
+    "content": "# Integrate plan restructuring across generated updates\n\nstatus: replan_required\ntask_types:\n  - planning_docs\n  - template_workflow\n  - security\nreview_class: C\nhuman_design_required: yes\nhuman_approval_status: approved\nimplementation_risk: high\nimplementation_ambiguity: ordinary\nwrite_scope:\n  - CHANGELOG.md\n  - docs/plan/\n  - scripts/check-copier-template.py\n  - scripts/check-root-agent-policy.py\n  - template/docs/plan/\n  - tests/copier-update.sh\n  - tests/fixtures/orchestration/\n  - tests/smoke.sh\n  - tests/test-plan-execution-state.py\n  - tests/test-plan-restructure.py\ncontext_files:\n  - AGENTS.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_SECURITY.md\n  - docs/plan/checked/2026/08/01-15/076-plan-restructuring-policy-schema.md\n  - docs/plan/checked/2026/08/01-15/077-atomic-plan-restructuring.md\n  - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md\n  - docs/plan/checked/2026/08/01-15/071-orchestration-throughput-foundation.md\n  - docs/plan/checked/2026/08/01-15/073-orchestration-execution-state.md\n  - docs/plan/checked/2026/08/01-15/074-isolated-candidate-correction.md\n  - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md\nrequired_specs:\n  - docs/agent/SPEC_DECISION_AUDIT.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_SECURITY.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 tests/test-plan-execution-state.py\n  - python3 tests/test-sandboxed-plan-worker.py\n  - python3 tests/test-validation-tools.py\n  - python3 scripts/run-sandboxed-plan-worker.py self-test\n  - python3 scripts/check-root-agent-policy.py\n  - python3 scripts/check-copier-template.py\n  - scripts/lint-project-workflow.sh\n  - tests/smoke.sh\n  - REQUIRE_COPIER=1 tests/copier-update.sh\n  - python3 scripts/validate-changes.py --all\n  - git diff --check\nacceptance:\n  - Add fixed median, edge, negative, and untuned holdout scenarios for requirement preservation, exhausted delegated corrections, repeated parent-direct review findings, multi-invariant findings, scope drift, and post-authoritative design changes.\n  - Prove that every hard trigger blocks continued implementation and requires an atomic successor and integration-plan transition.\n  - Prove that requirement changes remain pending until explicit user authorization and cannot be disguised as clarification or successor mapping.\n  - Keep root and generated policy, schemas, commands, Skills, tests, indexes, and lifecycle behavior aligned.\n  - Preserve project-owned product code, policy, configuration, plan history, and validation behavior through supported Copier copy and update paths.\n  - Reject unresolved conflicts, rejection files, unclassified tracked-file deletion, destination collisions, index divergence, and partial transition artifacts.\n  - Run one independent final High/Medium review before the authoritative suite and keep zero unresolved High or Medium findings.\nchecked_summary_ja: plan再構成を固定scenario、generated lifecycle、Copier更新へ統合し、要件保持と停止条件を検証した。\nreplan_reason_codes:\n  - scope_drift\n  - multiple_independent_invariants\n\n## Decisions\n\n- Plans 076 through 078 must be accepted before this integration plan starts.\n- This plan adds no new lifecycle state or execution transition.\n- Historical plans 071, 073, 074, and 075 provide negative and edge shapes, not synthetic performance claims.\n- Run the authoritative full suite only after final independent review reports zero High or Medium findings.\n\n## Tasks\n\n- [x] Add fixed restructuring and trigger evaluation scenarios.\n- [x] Add generated copy/update and non-destructive migration coverage.\n- [ ] Run final independent review and resolve every High or Medium finding.\n- [ ] Run the authoritative suite once, archive plans 076 through 079, and commit.\n\n## Validation Notes\n\n- Plans 076 through 078 were accepted and archived before integration work began.\n- Added fixed median, edge, and negative cases plus a physically separate untuned holdout.\n- Added focused boundary-trigger coverage and verified the new test, fixture syntax, shell syntax, Python syntax, and diff whitespace before independent review.\n- Copier update lanes now hash-check a project-owned replanned-plan history record created before the update.\n- Independent review found that successor acceptance authority and integration evidence are separate invariants and that the former falls outside this plan's write scope. Stop this plan and restructure it atomically before further implementation.\n",
+    "head": "bd226240d0d2b3abd558ca640f46adb11f8b6ef3",
+    "path": "docs/plan/active/079-plan-restructuring-integration.md",
+    "plan_digest": "sha256:bf01e656e59337ade6d06c602aa8b4344d8b536a057c3109eae88722455cc134"
+  },
+  "successors": [
+    {
+      "acceptance_digests": [
+        "sha256:f63ec861469ec27fe14daef2ba73dc1cdeadae80e5a35395c09f35abfe486c57",
+        "sha256:675856f8d05166ebfc9efa5b4fffc5199d404792bf648a919f094bd3e9ea2c8e"
+      ],
+      "content": "# Seal successor acceptance authority\n\nstatus: in_progress\nprimary_invariant: accept only the exact source texts mapped to a successor plan\nreplan_source: docs/plan/active/079-plan-restructuring-integration.md\nreplan_contract: docs/plan/replanned/contracts/079-plan-restructuring-integration.json\nintegration_gates:\n  - reject added, weakened, reordered, or clarification-labelled acceptance text without separate user authorization\n  - keep root and generated restructure commands byte-identical\nsuccessor_plans:\n  - docs/plan/active/080-successor-acceptance-authority.md\n  - docs/plan/active/081-plan-restructuring-integration.md\ninherited_acceptance_digests:\n  - sha256:f63ec861469ec27fe14daef2ba73dc1cdeadae80e5a35395c09f35abfe486c57\n  - sha256:675856f8d05166ebfc9efa5b4fffc5199d404792bf648a919f094bd3e9ea2c8e\ntask_types:\n  - planning_docs\n  - template_workflow\n  - security\nreview_class: C\nhuman_design_required: yes\nhuman_approval_status: approved\nimplementation_risk: high\nimplementation_ambiguity: low\nwrite_scope:\n  - scripts/plan_validation_commands.py\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - tests/test-plan-restructure.py\n  - tests/test-validation-tools.py\n  - docs/plan/\ncontext_files:\n  - docs/plan/replanned/2026/08/01-15/079-plan-restructuring-integration.md\n  - docs/plan/replanned/contracts/079-plan-restructuring-integration.json\n  - docs/plan/checked/2026/08/01-15/077-atomic-plan-restructuring.md\nrequired_specs:\n  - docs/agent/SPEC_DECISION_AUDIT.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_SECURITY.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 tests/test-validation-tools.py\n  - python3 -m py_compile scripts/restructure-plan.py template/.project-agent-workflow/scripts/restructure-plan.py\n  - git diff --check\nacceptance:\n  - Prove that requirement changes remain pending until explicit user authorization and cannot be disguised as clarification or successor mapping.\n  - Keep root and generated policy, schemas, commands, Skills, tests, indexes, and lifecycle behavior aligned.\nchecked_summary_ja: 後続planの受入れ条件を元planから割り当てた本文だけに制限した。\n\n## Decisions\n\n- Treat any additional successor acceptance item as a requirement change outside restructuring authority.\n- Preserve mapped source acceptance text exactly and in source order.\n\n## Tasks\n\n- [ ] Enforce exact successor acceptance equality for each mapped digest.\n- [ ] Add conflicting clarification, added requirement, and ordering rejection tests.\n- [ ] Run focused validation, independent review, archive, and commit before plan 081.\n\n## Validation Notes\n\n- Pending implementation.\n",
+      "content_digest": "sha256:3f90fe7109e71817a7131eb1f090906b69054133e2aa3e71cc15286c9715b73b",
+      "id": "080",
+      "integration": false,
+      "path": "docs/plan/active/080-successor-acceptance-authority.md"
+    },
+    {
+      "acceptance_digests": [
+        "sha256:e5ee0e951c5eef281fc3f54c22d549dffd750f43f0e232f724b12d8e0ed2e637",
+        "sha256:99fac9ef19ac18be11c578944c85b91c925efd945bf374f2bf6a5654e0b2e6b2",
+        "sha256:f63ec861469ec27fe14daef2ba73dc1cdeadae80e5a35395c09f35abfe486c57",
+        "sha256:675856f8d05166ebfc9efa5b4fffc5199d404792bf648a919f094bd3e9ea2c8e",
+        "sha256:30e8a6c3d65ec3e739284e02025847bf88f88901e855beec711bf8424f3866f7",
+        "sha256:6d763d5c86eacb20d1eb1cc7e29cb45707d57c2ec2c7fd9e74af6a4074ad7001",
+        "sha256:5cc609d78dd1464f9a71b7dde9005bb8ebe3db475048a24a2bd804dc86d8fef8"
+      ],
+      "content": "# Integrate restructured plan execution and update evidence\n\nstatus: in_progress\nprimary_invariant: prove the complete source acceptance baseline after the authority repair\nreplan_source: docs/plan/active/079-plan-restructuring-integration.md\nreplan_contract: docs/plan/replanned/contracts/079-plan-restructuring-integration.json\nintegration_gates:\n  - plan 080 is checked with exact successor acceptance authority\n  - fixed scenarios and the untuned holdout execute against the real lifecycle commands\n  - Copier preserves a real replanned archive, contract, and index triplet\nsuccessor_plans:\n  - docs/plan/active/080-successor-acceptance-authority.md\n  - docs/plan/active/081-plan-restructuring-integration.md\ninherited_acceptance_digests:\n  - sha256:e5ee0e951c5eef281fc3f54c22d549dffd750f43f0e232f724b12d8e0ed2e637\n  - sha256:99fac9ef19ac18be11c578944c85b91c925efd945bf374f2bf6a5654e0b2e6b2\n  - sha256:f63ec861469ec27fe14daef2ba73dc1cdeadae80e5a35395c09f35abfe486c57\n  - sha256:675856f8d05166ebfc9efa5b4fffc5199d404792bf648a919f094bd3e9ea2c8e\n  - sha256:30e8a6c3d65ec3e739284e02025847bf88f88901e855beec711bf8424f3866f7\n  - sha256:6d763d5c86eacb20d1eb1cc7e29cb45707d57c2ec2c7fd9e74af6a4074ad7001\n  - sha256:5cc609d78dd1464f9a71b7dde9005bb8ebe3db475048a24a2bd804dc86d8fef8\ntask_types:\n  - planning_docs\n  - template_workflow\n  - security\nreview_class: C\nhuman_design_required: yes\nhuman_approval_status: approved\nimplementation_risk: high\nimplementation_ambiguity: ordinary\nwrite_scope:\n  - CHANGELOG.md\n  - docs/plan/\n  - scripts/check-copier-template.py\n  - scripts/check-root-agent-policy.py\n  - scripts/plan_validation_commands.py\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - template/docs/plan/\n  - tests/copier-update.sh\n  - tests/fixtures/orchestration/\n  - tests/smoke.sh\n  - tests/test-plan-execution-state.py\n  - tests/test-plan-restructure.py\n  - tests/test-validation-tools.py\ncontext_files:\n  - docs/plan/replanned/2026/08/01-15/079-plan-restructuring-integration.md\n  - docs/plan/replanned/contracts/079-plan-restructuring-integration.json\n  - docs/plan/checked/2026/08/01-15/076-plan-restructuring-policy-schema.md\n  - docs/plan/checked/2026/08/01-15/077-atomic-plan-restructuring.md\n  - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md\nrequired_specs:\n  - docs/agent/SPEC_DECISION_AUDIT.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_SECURITY.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 tests/test-plan-execution-state.py\n  - python3 tests/test-sandboxed-plan-worker.py\n  - python3 tests/test-validation-tools.py\n  - python3 scripts/run-sandboxed-plan-worker.py self-test\n  - python3 scripts/check-root-agent-policy.py\n  - python3 scripts/check-copier-template.py\n  - scripts/lint-project-workflow.sh\n  - tests/smoke.sh\n  - tests/copier-update.sh\n  - python3 scripts/validate-changes.py --all\n  - git diff --check\nacceptance:\n  - Add fixed median, edge, negative, and untuned holdout scenarios for requirement preservation, exhausted delegated corrections, repeated parent-direct review findings, multi-invariant findings, scope drift, and post-authoritative design changes.\n  - Prove that every hard trigger blocks continued implementation and requires an atomic successor and integration-plan transition.\n  - Prove that requirement changes remain pending until explicit user authorization and cannot be disguised as clarification or successor mapping.\n  - Keep root and generated policy, schemas, commands, Skills, tests, indexes, and lifecycle behavior aligned.\n  - Preserve project-owned product code, policy, configuration, plan history, and validation behavior through supported Copier copy and update paths.\n  - Reject unresolved conflicts, rejection files, unclassified tracked-file deletion, destination collisions, index divergence, and partial transition artifacts.\n  - Run one independent final High/Medium review before the authoritative suite and keep zero unresolved High or Medium findings.\nchecked_summary_ja: 再構成したplan実行と更新証拠を統合し、元planの受入れ条件をすべて検証した。\n\n## Decisions\n\n- Plan 080 must be checked before authoritative integration validation begins.\n- Execute the untuned holdout against the real ledger and restructure command, not only the fixture checker.\n- Preserve a real archive, durable contract, and replanned index by exact hash across Copier update.\n\n## Tasks\n\n- [ ] Complete and accept plan 080.\n- [ ] Finish fixed scenario, holdout, and Copier history-triplet execution coverage.\n- [ ] Run final independent review and resolve every High or Medium finding.\n- [ ] Run the authoritative suite once, archive this plan, and commit.\n\n## Validation Notes\n\n- Plan 079 stopped after independent review exposed separate authority and integration invariants.\n",
+      "content_digest": "sha256:e3fd542cfbf1e25dc24fb4453986475fc1e1d2306b859e59d71ea03e6441eb97",
+      "id": "081",
+      "integration": true,
+      "path": "docs/plan/active/081-plan-restructuring-integration.md"
+    }
+  ]
+}

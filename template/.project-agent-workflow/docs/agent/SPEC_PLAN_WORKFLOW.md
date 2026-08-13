@@ -8,6 +8,8 @@
 - `docs/plan/checked.md`: completed-work index.
 - `docs/plan/checked/YYYY/MM/01-15/*.md`: durable completion records completed in the first half of a month.
 - `docs/plan/checked/YYYY/MM/16-31/*.md`: durable completion records completed in the second half of a month.
+- `docs/plan/replanned/YYYY/MM/01-15/*.md` and `16-31/*.md`: historical records of plans replaced by an accepted restructuring contract; these records are not completion evidence.
+- `docs/plan/replanned/contracts/*.json`: exact requirement-preservation and successor-mapping contracts for restructured plans.
 - `docs/plan/handoffs/`: temporary transfer queue.
 - `docs/plan/README.md`: human-facing plan overview.
 - `docs/plan/backlog/README.md`: human-facing backlog overview.
@@ -83,6 +85,13 @@ Optional active/backlog fields:
 - `target_json`
 - `acceptance_focus`
 - `completion_deferred_reason`
+- `primary_invariant`
+- `integration_gates`
+- `replan_source`
+- `replan_contract`
+- `successor_plans`
+- `inherited_acceptance_digests`
+- `replan_reason_codes`
 
 Rules:
 
@@ -107,14 +116,18 @@ Rules:
 - `checked_summary_ja` is the human-facing Japanese one-line completion summary.
 - Keep active-plan bodies parseable by agents. English is preferred for manifest values and operational detail; Japanese is fine for user-facing summaries, domain terms, and `checked_summary_ja`.
 - `completion_deferred_reason` is required when `status` is `deferred` and records the unresolved condition that keeps the plan open.
+- Restructured successor and integration plans use `primary_invariant`, `integration_gates`, `replan_source`, `replan_contract`, `successor_plans`, and `inherited_acceptance_digests` as an exact lineage contract. Legacy plans may omit them.
+- `replan_reason_codes` is a bounded list and is required when `status` is `replan_required`.
 - `human_design_required: yes` requires `review_class: C`.
 
 Lifecycle states:
 
 - Use `status: in_progress` for ongoing work and `status: deferred` for intentionally postponed work.
+- Use `status: replan_required` when the current plan must stop before further implementation, candidate generation or correction, validation, apply, completion, or archival.
 - A deferred plan remains open and cannot transition to `ready_to_archive`; return it to `in_progress` only after its deferred condition is resolved.
 - Use `status: ready_to_archive` only after acceptance and validation evidence are recorded.
-- `ready_to_archive` is the only active-plan state that blocks the completion gate.
+- `ready_to_archive` records that the completion gate passed and is the only active state eligible for checked finalization.
+- `replan_required` cannot transition to `ready_to_archive`; it must be replaced through the restructuring lifecycle or returned to execution only after the trigger is disproved and the reversal is recorded.
 - Set `ready_to_archive` with `.project-agent-workflow/scripts/complete-plan.sh`, then use `.project-agent-workflow/scripts/finalize-active-plan.sh` as the only archive transition.
 - `complete-plan.sh` fails while the manifest is invalid, task checkboxes remain unchecked, or `Validation Notes` are empty or pending.
 - `finalize-active-plan.sh` writes `status: checked` into the archived record.
@@ -123,8 +136,21 @@ Lifecycle states:
 - Checked archives using the manifest field names generated before `task_types`, `write_scope`, and `context_files` remain readable as legacy history; open plans must use the current manifest.
 - Full plan lint preserves checked archives as historical records without applying the current route keys, required-spec union, or validation-command allowlist retroactively.
 - Explicit `check-plan` remains strict, and `run-plan` accepts only a numbered file directly under `docs/plan/active/`; checked validation records are never execution targets.
+- `status: replanned` is a terminal historical replacement state, not successful completion evidence. Replanned records live under the date-partitioned `docs/plan/replanned/` archive and cannot be execution targets.
 - After a recorded pre-v1 Copier adoption, open plans may retain the preserved root routing contract and old generic CLI paths only while the migration manifest proves the pre-v1 source and every referenced CLI is an unmodified compatibility bridge to the managed helper.
 - A mixed root and managed routing contract, a modified legacy CLI, or an unverified legacy CLI requires manual plan integration.
+
+## Restructuring Contract
+
+Plan restructuring changes execution boundaries, ordering, implementation methods, or validation methods. It does not change the user requirement baseline. The baseline consists of the user requirements, accepted safety conditions, and every normalized `acceptance` item in the source plan.
+
+- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a design change after authoritative validation has started; exhaustion of the initial candidate plus two correction rounds; or two parent-direct remediation rounds that still leave a High or Medium independent-review finding.
+- Elapsed time is telemetry and a checkpoint signal only. It cannot prove semantic failure or authorize requirement changes.
+- Preserve the exact source plan path, source HEAD, source-plan digest, and digest of every normalized source acceptance item in a parent-owned replan contract.
+- Map every source acceptance digest to at least one successor plan or integration gate. The integration plan retains the source acceptance text exactly and proves the combined successors against it.
+- Successors may change plan boundaries, ordering, implementation methods, and validation methods. Replacing, weakening, deleting, or adding a user requirement or accepted safety condition requires explicit user authorization recorded separately from restructuring.
+- Preserve committed work. Do not reset, stash, delete, commit, or apply product changes during restructuring. Record dirty paths and cover each one with a successor write scope before implementation resumes.
+- Keep full option analysis outside active plans. Active successors contain only accepted decisions and executable instructions.
 
 ## Handoff Queue
 

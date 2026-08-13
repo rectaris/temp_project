@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
+import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -38,8 +41,83 @@ def run_cli(repo: Path, *args: str, env: dict[str, str] | None = None) -> subpro
     child_env = dict(os.environ)
     if env:
         child_env.update(env)
+    command_args = list(args)
+    operations = {"run", "correct", "validate", "apply", "finalize-apply"}
+    manifest_path = None
+    if command_args and command_args[0] in operations:
+        if command_args[0] == "correct" and len(command_args) >= 3:
+            manifest_path = Path(command_args[2])
+        elif command_args[0] in {"validate", "apply", "finalize-apply"} and len(command_args) >= 2:
+            manifest_path = Path(command_args[1])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path and manifest_path.is_file() else None
+        if "--lifecycle-state" not in command_args:
+            if manifest:
+                lifecycle_path = manifest["lifecycle_state_path"]
+                run_id = manifest["orchestration_run_id"]
+            else:
+                output_path = (
+                    Path(command_args[command_args.index("--output-dir") + 1]).absolute()
+                    if "--output-dir" in command_args
+                    else Path(tempfile.mkdtemp(prefix="test-lifecycle-")) / "output"
+                )
+                lifecycle_path = str(output_path.with_name(output_path.name + ".lifecycle.json"))
+                run_id = hashlib.sha256(lifecycle_path.encode()).hexdigest()[:24]
+            command_args.extend(["--lifecycle-state", lifecycle_path])
+            if "--orchestration-run-id" not in command_args:
+                command_args.extend(["--orchestration-run-id", run_id])
+        lifecycle_path = command_args[command_args.index("--lifecycle-state") + 1]
+        run_id = command_args[command_args.index("--orchestration-run-id") + 1]
+        if "--plan-execution-state" not in command_args:
+            execution_state = str(Path(lifecycle_path).with_name(Path(lifecycle_path).name + f".{run_id}.plan-execution.json"))
+            plan_rel = manifest["plan_path"] if manifest else command_args[1]
+            plan_file = repo / plan_rel
+            if not Path(execution_state).exists():
+                plan_text = plan_file.read_text(encoding="utf-8")
+                invariant_match = __import__("re").search(r"^primary_invariant: (.+)$", plan_text, flags=__import__("re").MULTILINE)
+                invariant = invariant_match.group(1) if invariant_match else "legacy candidate invariant"
+                initialized = subprocess.run(
+                    [
+                        sys.executable, str(ROOT / "scripts/plan-execution-state.py"), "init", execution_state,
+                        "--run-id", run_id, "--plan", plan_rel,
+                        "--plan-digest", "sha256:" + hashlib.sha256(plan_file.read_bytes()).hexdigest(),
+                        "--source-head", git(repo, "rev-parse", "HEAD").stdout.strip(),
+                        "--primary-invariant-digest", "sha256:" + hashlib.sha256(invariant.encode()).hexdigest(),
+                        "--lifecycle-state", lifecycle_path, "--implementation-mode", "candidate",
+                    ], cwd=repo, env=dict(os.environ), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                if initialized.returncode != 0:
+                    return initialized
+            command_args.extend(["--plan-execution-state", execution_state])
+        else:
+            execution_state = command_args[command_args.index("--plan-execution-state") + 1]
+        if command_args[0] == "apply" and manifest_path is not None and manifest_path.is_file():
+            try:
+                lifecycle = json.loads(Path(lifecycle_path).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                lifecycle = {}
+            validation_base = [
+                sys.executable, str(SCRIPT), "validate", str(manifest_path),
+                "--parent-diff-approved", "--critical-invariants-approved",
+                "--lifecycle-state", lifecycle_path, "--orchestration-run-id", run_id,
+                "--plan-execution-state", execution_state,
+            ]
+            if lifecycle.get("phase") == "admitted" and lifecycle.get("focused_required"):
+                focused = subprocess.run(
+                    [*validation_base, "--suite", "focused", "--output-dir", tempfile.mkdtemp(prefix="auto-focused-", dir=manifest_path.parent)],
+                    cwd=repo, env=child_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                if focused.returncode != 0:
+                    return focused
+                lifecycle = json.loads(Path(lifecycle_path).read_text(encoding="utf-8"))
+            if lifecycle.get("phase") in {"admitted", "focused_passed"}:
+                authoritative = subprocess.run(
+                    [*validation_base, "--suite", "authoritative", "--output-dir", tempfile.mkdtemp(prefix="auto-authoritative-", dir=manifest_path.parent)],
+                    cwd=repo, env=child_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                if authoritative.returncode != 0:
+                    return authoritative
     return subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
+        [sys.executable, str(SCRIPT), *command_args],
         cwd=repo,
         env=child_env,
         text=True,
@@ -128,7 +206,7 @@ def write_fake_codex(path: Path) -> None:
                     raise SystemExit(f"unexpected primary reasoning: {{reasoning}}")
                 if scenario == "primary_success":
                     target.write_text("preferred\\n", encoding="utf-8")
-                elif scenario in {{"unavailable_then_success", "unavailable_then_failure"}}:
+                elif scenario in {{"unavailable_then_success", "unavailable_then_failure", "both_unavailable"}}:
                     target.write_text("discarded-primary\\n", encoding="utf-8")
                     if last_message is not None:
                         last_message.write_text("failed preferred output\\n", encoding="utf-8")
@@ -143,7 +221,8 @@ def write_fake_codex(path: Path) -> None:
             elif model == fallback_model:
                 if reasoning != fallback_reasoning:
                     raise SystemExit(f"unexpected fallback reasoning: {{reasoning}}")
-                if target.read_text(encoding="utf-8") != "original\\n":
+                expected_starts = {{"initial candidate\\n", "fallback\\n"}} if "{ENV_PREFIX}CORRECTION_BRIEF" in os.environ else {{"original\\n"}}
+                if target.read_text(encoding="utf-8") not in expected_starts:
                     raise SystemExit("fallback inherited preferred-attempt changes")
                 host_codex_home = Path(os.environ["FAKE_HOST_CODEX_HOME"])
                 output_dir = Path(os.environ["FAKE_OUTPUT_DIR"])
@@ -160,6 +239,9 @@ def write_fake_codex(path: Path) -> None:
                 elif scenario == "unavailable_then_failure":
                     print("ERROR: fallback implementation failed", file=sys.stderr)
                     raise SystemExit(2)
+                elif scenario == "both_unavailable":
+                    print("FATAL: rate limit exceeded", file=sys.stderr)
+                    raise SystemExit(1)
                 else:
                     raise SystemExit("fallback ran unexpectedly")
             else:
@@ -193,6 +275,9 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         files: dict[str, str] | None = None,
         *,
         repo_name: str = "repo",
+        validation: list[str] | None = None,
+        focused_validation: list[str] | None = None,
+        validation_authority_scope: list[str] | None = None,
     ) -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
         temporary = tempfile.TemporaryDirectory()
         repo = Path(temporary.name) / repo_name
@@ -220,6 +305,8 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             "review_class: B",
             "human_design_required: no",
             "human_approval_status: not_required",
+            "implementation_risk: low",
+            "implementation_ambiguity: low",
             "write_scope:",
             *(f"  - {entry}" for entry in write_scope),
             "context_files:",
@@ -227,7 +314,17 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             "required_specs:",
             "  - docs/agent/SPEC_PLAN_WORKFLOW.md",
             "validation:",
-            "  - python3 tests/test-sandboxed-plan-worker.py",
+            *(f"  - {command}" for command in (validation or ["git diff --check"])),
+            *(
+                ["focused_validation:", *(f"  - {command}" for command in focused_validation)]
+                if focused_validation is not None
+                else []
+            ),
+            *(
+                ["validation_authority_scope:", *(f"  - {entry}" for entry in validation_authority_scope)]
+                if validation_authority_scope is not None
+                else []
+            ),
             "acceptance:",
             "  - Test fixture.",
             "checked_summary_ja: fixture",
@@ -251,6 +348,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         output_dir: Path | None = None,
         worker_env: dict[str, str] | None = None,
         parent_env: dict[str, str] | None = None,
+        extra_args: tuple[str, ...] = (),
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         temp_root = output_dir.parent if output_dir is not None else Path(tempfile.mkdtemp(prefix="sandboxed-worker-run-"))
         actual_output = output_dir if output_dir is not None else temp_root / "output"
@@ -265,6 +363,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             sys.executable,
             "--worker-arg",
             str(worker_path),
+            *extra_args,
         ]
         for key, value in (worker_env or {}).items():
             args.extend(["--worker-env", f"{key}={value}"])
@@ -282,7 +381,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
     ) -> subprocess.CompletedProcess[str]:
         fake_codex = output_dir.parent / f"fake-codex-{scenario}.py"
         write_fake_codex(fake_codex)
-        codex_home = output_dir.parent / f"codex-home-{scenario}"
+        codex_home = output_dir.parent / f"codex-home-{scenario}-{output_dir.name}"
         codex_home.mkdir()
         (codex_home / "auth.json").write_text('{"token":"fixture"}\n', encoding="utf-8")
         args = [
@@ -304,9 +403,94 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             args.extend(["--worker-env", f"{key}={value}"])
         return run_cli(repo, *args, env={"CODEX_HOME": str(codex_home)})
 
+    def run_correction_with_worker(
+        self,
+        repo: Path,
+        plan_path: str,
+        prior_manifest: Path,
+        correction_brief: Path,
+        worker_body: str,
+        *,
+        output_dir: Path,
+        extra_args: tuple[str, ...] = (),
+        worker_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        worker_root = Path(tempfile.mkdtemp(prefix="sandboxed-correction-worker-"))
+        self.addCleanup(shutil.rmtree, worker_root, True)
+        worker = worker_root / "worker.py"
+        write_worker(worker, worker_body)
+        args = [
+            "correct",
+            plan_path,
+            str(prior_manifest),
+            str(correction_brief),
+            "--output-dir",
+            str(output_dir),
+            "--worker-binary",
+            sys.executable,
+            "--worker-arg",
+            str(worker),
+            *extra_args,
+        ]
+        for key, value in (worker_env or {}).items():
+            args.extend(["--worker-env", f"{key}={value}"])
+        return run_cli(repo, *args)
+
+    def run_correction_with_fake_codex(
+        self,
+        repo: Path,
+        plan_path: str,
+        prior_manifest: Path,
+        correction_brief: Path,
+        scenario: str,
+        *,
+        output_dir: Path,
+        extra_args: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
+        tool_root = Path(tempfile.mkdtemp(prefix="sandboxed-correction-codex-"))
+        self.addCleanup(shutil.rmtree, tool_root, True)
+        fake_codex = tool_root / "fake-codex.py"
+        write_fake_codex(fake_codex)
+        codex_home = tool_root / "codex-home"
+        codex_home.mkdir()
+        (codex_home / "auth.json").write_text('{"token":"fixture"}\n', encoding="utf-8")
+        args = [
+            "correct",
+            plan_path,
+            str(prior_manifest),
+            str(correction_brief),
+            "--output-dir",
+            str(output_dir),
+            "--codex-bin",
+            str(fake_codex),
+            *extra_args,
+        ]
+        for key, value in {
+            "FAKE_CODEX_SCENARIO": scenario,
+            "FAKE_HOST_CODEX_HOME": str(codex_home),
+            "FAKE_OUTPUT_DIR": str(output_dir),
+        }.items():
+            args.extend(["--worker-env", f"{key}={value}"])
+        return run_cli(repo, *args, env={"CODEX_HOME": str(codex_home)})
+
     def assert_no_workspace_directories(self, tmpdir_root: Path) -> None:
         leftovers = sorted(path.name for path in tmpdir_root.glob("sandboxed-plan-worker-workspace-*"))
         self.assertEqual(leftovers, [])
+
+    def write_availability_state(
+        self,
+        path: Path,
+        run_id: str,
+        entries: list[dict[str, str]],
+        **extra: object,
+    ) -> None:
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "orchestration_run_id": run_id,
+            "unavailable_models": entries,
+            **extra,
+        }
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
     def test_default_worker_command_uses_supported_external_sandbox_flags(self) -> None:
         command = RUNNER.default_worker_command(
@@ -323,6 +507,9 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertNotIn("--sandbox", command)
         self.assertNotIn("--ask-for-approval", command)
         self.assertNotIn("--dangerously-bypass-hook-trust", command)
+        prompt = RUNNER.build_worker_prompt("docs/plan/active/001-test.md", "0" * 64)
+        self.assertIn("Do not run plan validation", prompt)
+        self.assertNotIn("Run every validation command", prompt)
 
     def test_codex_unavailability_classifier_is_bounded_to_cli_error_lines(self) -> None:
         cases = (
@@ -344,6 +531,45 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         for stdout, stderr, expected in cases:
             with self.subTest(stderr=stderr):
                 self.assertEqual(RUNNER.classify_codex_unavailability(stdout, stderr), expected)
+
+    def test_plan_writable_profile_selection_and_invalid_classifications(self) -> None:
+        self.assertEqual(
+            RUNNER.select_plan_writable_profile(
+                {"implementation_risk": "low", "implementation_ambiguity": "low"}
+            ),
+            ("gpt-5.3-codex-spark", "medium"),
+        )
+        self.assertEqual(
+            RUNNER.select_plan_writable_profile(
+                {"implementation_risk": "ordinary", "implementation_ambiguity": "low"}
+            ),
+            ("gpt-5.6-terra", "medium"),
+        )
+        self.assertEqual(RUNNER.select_plan_writable_profile({}), ("gpt-5.6-terra", "medium"))
+        invalid = (
+            {"implementation_risk": "high", "implementation_ambiguity": "low"},
+            {"implementation_risk": "low", "implementation_ambiguity": "high"},
+            {"implementation_risk": "", "implementation_ambiguity": "low"},
+            {"implementation_risk": "   ", "implementation_ambiguity": "low"},
+            {"implementation_risk": ["low"], "implementation_ambiguity": "low"},
+            {"implementation_risk": "unknown", "implementation_ambiguity": "low"},
+        )
+        for values in invalid:
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(RUNNER.RunnerError, "implementation"):
+                    RUNNER.select_plan_writable_profile(values)
+
+    def test_writable_model_and_reasoning_overrides_are_strict(self) -> None:
+        self.assertEqual(RUNNER.require_writable_model("custom-writable", "preferred"), "custom-writable")
+        self.assertEqual(RUNNER.require_reasoning_effort("high", "preferred"), "high")
+        for model in (None, "", "   ", "gpt-5.6-sol", "GPT-5.6-SOL"):
+            with self.subTest(model=model):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.require_writable_model(model, "preferred")
+        for reasoning in (None, "", "   "):
+            with self.subTest(reasoning=reasoning):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.require_reasoning_effort(reasoning, "preferred")
 
     def test_default_worker_stages_minimal_private_codex_home_under_scratch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -517,6 +743,32 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(manifest["worker_result"]["kind"], "custom")
         self.assertNotIn("attempts", manifest["worker_result"])
         self.assertNotIn("fallback_reason", manifest["worker_result"])
+        telemetry = manifest["telemetry"]
+        self.assertEqual(
+            {key: telemetry[key] for key in (
+                "schema_version",
+                "model_starts",
+                "availability_failures",
+                "skipped_known_unavailable_starts",
+                "candidate_generations",
+                "full_validation_count",
+                "implementation_risk",
+                "implementation_ambiguity",
+            )},
+            {
+                "schema_version": 1,
+                "model_starts": 0,
+                "availability_failures": 0,
+                "skipped_known_unavailable_starts": 0,
+                "candidate_generations": 1,
+                "full_validation_count": 0,
+                "implementation_risk": "low",
+                "implementation_ambiguity": "low",
+            },
+        )
+        self.assertEqual(len(telemetry["attempt_durations_seconds"]), 1)
+        self.assertGreaterEqual(telemetry["attempt_durations_seconds"][0], 0)
+        self.assertGreaterEqual(telemetry["runner_duration_seconds"], telemetry["attempt_durations_seconds"][0])
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
         self.assertFalse((repo / "dir" / "nested.txt").exists())
         apply = run_cli(repo, "apply", str(manifest_path))
@@ -546,7 +798,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         ).stdout.decode("ascii").strip()
 
         self.assertEqual(
-            RUNNER.derive_changed_paths_from_patch(repo, "git", patch_path, git(repo, "rev-parse", "HEAD").stdout.strip()),
+            RUNNER.derive_changed_paths_from_patch(repo, "git", patch_path.read_bytes(), git(repo, "rev-parse", "HEAD").stdout.strip()),
             ["allowed.txt"],
         )
         self.assertEqual(object_database_snapshot(repo), before)
@@ -649,6 +901,94 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         )
         self.assertFalse((output_dir / "worker-fallback.stdout").exists())
 
+    def test_ordinary_plan_selects_terra_and_explicit_override_is_honored(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        plan = repo / plan_path
+        plan.write_text(
+            plan.read_text(encoding="utf-8").replace("implementation_risk: low", "implementation_risk: ordinary"),
+            encoding="utf-8",
+        )
+        git(repo, "add", plan_path)
+        git(repo, "commit", "-qm", "ordinary classification")
+        terra_output = Path(temporary.name) / "terra-output"
+        terra = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "primary_success",
+            output_dir=terra_output,
+            fake_env={"FAKE_PRIMARY_MODEL": "gpt-5.6-terra"},
+        )
+        self.assertEqual(terra.returncode, 0, terra.stderr)
+        terra_manifest = json.loads(Path(terra.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(terra_manifest["worker_result"]["attempts"][0]["model"], "gpt-5.6-terra")
+
+        override_output = Path(temporary.name) / "override-output"
+        override = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "primary_success",
+            output_dir=override_output,
+            extra_args=(
+                "--codex-model",
+                "custom-writable",
+                "--codex-reasoning-effort",
+                "high",
+            ),
+            fake_env={"FAKE_PRIMARY_MODEL": "custom-writable", "FAKE_PRIMARY_REASONING": "high"},
+        )
+        self.assertEqual(override.returncode, 0, override.stderr)
+        override_manifest = json.loads(Path(override.stdout.strip()).read_text(encoding="utf-8"))
+        attempt = override_manifest["worker_result"]["attempts"][0]
+        self.assertEqual((attempt["model"], attempt["reasoning_effort"]), ("custom-writable", "high"))
+
+    def test_cli_refuses_high_classifications_blank_values_and_writable_sol(self) -> None:
+        classification_cases = (
+            ("implementation_risk: low", "implementation_risk: high"),
+            ("implementation_ambiguity: low", "implementation_ambiguity: high"),
+            ("implementation_risk: low", "implementation_risk:"),
+            ("implementation_risk: low", "implementation_risk:\n  - low"),
+            ("implementation_risk: low", "implementation_risk: unknown"),
+        )
+        for index, (before, after) in enumerate(classification_cases):
+            with self.subTest(classification=after):
+                temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+                self.addCleanup(temporary.cleanup)
+                plan = repo / plan_path
+                plan.write_text(plan.read_text(encoding="utf-8").replace(before, after), encoding="utf-8")
+                git(repo, "add", plan_path)
+                git(repo, "commit", "-qm", f"invalid classification {index}")
+                result, output_dir, _worker = self.run_with_worker(
+                    repo,
+                    plan_path,
+                    '(worker_repo / "allowed.txt").write_text("must not run\\n", encoding="utf-8")',
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("implementation_", result.stderr)
+                self.assertFalse((output_dir / "candidate.patch").exists())
+
+        override_cases = (
+            ("--codex-model", ""),
+            ("--codex-reasoning-effort", "  "),
+            ("--codex-model", "gpt-5.6-sol"),
+            ("--fallback-codex-model", "GPT-5.6-SOL"),
+        )
+        for index, override in enumerate(override_cases):
+            with self.subTest(override=override):
+                temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+                self.addCleanup(temporary.cleanup)
+                output_dir = Path(temporary.name) / f"rejected-override-{index}"
+                result = self.run_with_fake_codex(
+                    repo,
+                    plan_path,
+                    "primary_success",
+                    output_dir=output_dir,
+                    extra_args=override,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertRegex(result.stderr, "non-empty|reserved for independent review")
+                self.assertFalse((output_dir / "worker-primary.stdout").exists())
+
     def test_unavailable_preferred_codex_uses_fresh_fallback_clone_and_records_provenance(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
         self.addCleanup(temporary.cleanup)
@@ -681,6 +1021,767 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         apply = run_cli(repo, "apply", str(manifest_path))
         self.assertEqual(apply.returncode, 0, apply.stderr)
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "fallback\n")
+
+    def test_availability_state_records_and_skips_preferred_with_bounded_telemetry(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "availability.json"
+        common_args = (
+            "--availability-state",
+            str(state_path),
+            "--orchestration-run-id",
+            "run-routing-001",
+        )
+        first_output = Path(temporary.name) / "availability-first"
+        first = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "unavailable_then_success",
+            output_dir=first_output,
+            extra_args=common_args,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            state,
+            {
+                "schema_version": 1,
+                "orchestration_run_id": "run-routing-001",
+                "unavailable_models": [
+                    {"model": "gpt-5.3-codex-spark", "reason": "usage_limit"}
+                ],
+            },
+        )
+        self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn("prompt", json.dumps(state).lower())
+        self.assertNotIn("credential", json.dumps(state).lower())
+        first_manifest = json.loads(Path(first.stdout.strip()).read_text(encoding="utf-8"))
+        first_telemetry = first_manifest["telemetry"]
+        self.assertEqual(first_telemetry["model_starts"], 2)
+        self.assertEqual(first_telemetry["availability_failures"], 1)
+        self.assertEqual(first_telemetry["skipped_known_unavailable_starts"], 0)
+        self.assertEqual(first_telemetry["candidate_generations"], 1)
+        self.assertEqual(first_telemetry["full_validation_count"], 0)
+        self.assertEqual(len(first_telemetry["attempt_durations_seconds"]), 2)
+
+        second_output = Path(temporary.name) / "availability-second"
+        second = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "unavailable_then_success",
+            output_dir=second_output,
+            extra_args=common_args,
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        second_manifest = json.loads(Path(second.stdout.strip()).read_text(encoding="utf-8"))
+        attempts = second_manifest["worker_result"]["attempts"]
+        self.assertEqual([(item["label"], item["model"]) for item in attempts], [("fallback", "gpt-5.6-luna")])
+        second_telemetry = second_manifest["telemetry"]
+        self.assertEqual(second_telemetry["model_starts"], 1)
+        self.assertEqual(second_telemetry["availability_failures"], 0)
+        self.assertEqual(second_telemetry["skipped_known_unavailable_starts"], 1)
+        self.assertEqual(len(second_telemetry["attempt_durations_seconds"]), 1)
+        for value in [
+            second_telemetry["runner_duration_seconds"],
+            *second_telemetry["attempt_durations_seconds"],
+        ]:
+            self.assertIsInstance(value, (int, float))
+            self.assertTrue(math.isfinite(value))
+            self.assertGreaterEqual(value, 0)
+            self.assertLessEqual(value, RUNNER.TELEMETRY_MAX_DURATION_SECONDS)
+
+    def test_availability_state_records_fallback_failure_and_skips_both_models(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "both-unavailable.json"
+        args = (
+            "--availability-state",
+            str(state_path),
+            "--orchestration-run-id",
+            "run-both-unavailable",
+        )
+        first_output = Path(temporary.name) / "both-first"
+        first = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "both_unavailable",
+            output_dir=first_output,
+            extra_args=args,
+        )
+        self.assertEqual(first.returncode, 1)
+        self.assertIn("fallback worker exited", first.stderr)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            state["unavailable_models"],
+            [
+                {"model": "gpt-5.3-codex-spark", "reason": "usage_limit"},
+                {"model": "gpt-5.6-luna", "reason": "rate_limit"},
+            ],
+        )
+        second_output = Path(temporary.name) / "both-second"
+        second = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "both_unavailable",
+            output_dir=second_output,
+            extra_args=args,
+        )
+        self.assertEqual(second.returncode, 1)
+        self.assertIn("already recorded unavailable", second.stderr)
+        self.assertFalse((second_output / "worker-primary.stdout").exists())
+        self.assertFalse((second_output / "worker-fallback.stdout").exists())
+
+    def test_known_unavailable_fallback_is_skipped_after_one_preferred_start(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "fallback-known.json"
+        self.write_availability_state(
+            state_path,
+            "run-fallback-known",
+            [{"model": "gpt-5.6-luna", "reason": "rate_limit"}],
+        )
+        output_dir = Path(temporary.name) / "fallback-known-output"
+        result = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "unavailable_then_success",
+            output_dir=output_dir,
+            extra_args=(
+                "--availability-state",
+                str(state_path),
+                "--orchestration-run-id",
+                "run-fallback-known",
+            ),
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("already recorded unavailable", result.stderr)
+        self.assertTrue((output_dir / "worker-primary.stdout").is_file())
+        self.assertFalse((output_dir / "worker-fallback.stdout").exists())
+        entries = json.loads(state_path.read_text(encoding="utf-8"))["unavailable_models"]
+        self.assertEqual({entry["model"] for entry in entries}, {"gpt-5.3-codex-spark", "gpt-5.6-luna"})
+
+    def test_availability_state_schema_identity_and_size_bounds_fail_closed(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        cases: list[tuple[str, object, str]] = [
+            ("schema", {"schema_version": 2, "orchestration_run_id": "run", "unavailable_models": []}, "schema version"),
+            ("shape", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [], "extra": True}, "field shape"),
+            ("entries-type", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": {}}, "must be a list"),
+            ("duplicates", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": "m", "reason": "usage_limit"}, {"model": "m", "reason": "rate_limit"}]}, "duplicate model"),
+            ("entry-shape", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": "m", "reason": "usage_limit", "raw": "secret"}]}, "field shape"),
+            ("reason", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": "m", "reason": "validation"}]}, "availability code"),
+            ("model-bound", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": "m" * 129, "reason": "usage_limit"}]}, "byte bound"),
+            ("count-bound", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": f"m-{index}", "reason": "usage_limit"} for index in range(17)]}, "entry-count"),
+        ]
+        for label, payload, message in cases:
+            with self.subTest(case=label):
+                path = root / f"invalid-{label}.json"
+                path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(RUNNER.RunnerError, message):
+                    RUNNER.open_availability_state(repo, str(path), "run")
+
+        oversized = root / "oversized.json"
+        oversized.write_bytes(b"x" * (RUNNER.AVAILABILITY_STATE_MAX_BYTES + 1))
+        with self.assertRaisesRegex(RUNNER.RunnerError, "byte bound"):
+            RUNNER.open_availability_state(repo, str(oversized), "run")
+        valid = root / "different-run.json"
+        self.write_availability_state(valid, "run-a", [])
+        with self.assertRaisesRegex(RUNNER.RunnerError, "different orchestration run"):
+            RUNNER.open_availability_state(repo, str(valid), "run-b")
+        for run_id in ("", "   ", "r" * 129):
+            with self.subTest(run_id=run_id):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.open_availability_state(repo, str(root / "missing.json"), run_id)
+
+    def test_availability_state_rejects_symlinks_and_target_swap(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        real = root / "real.json"
+        self.write_availability_state(real, "run", [])
+        target_link = root / "target-link.json"
+        target_link.symlink_to(real)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "symlink"):
+            RUNNER.open_availability_state(repo, str(target_link), "run")
+        real_parent = root / "real-parent"
+        real_parent.mkdir()
+        ancestor_link = root / "ancestor-link"
+        ancestor_link.symlink_to(real_parent, target_is_directory=True)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "ancestor"):
+            RUNNER.open_availability_state(repo, str(ancestor_link / "state.json"), "run")
+        with self.assertRaisesRegex(RUNNER.RunnerError, "outside"):
+            RUNNER.open_availability_state(repo, str(repo / "state.json"), "run")
+
+        swapped = root / "swapped.json"
+        self.write_availability_state(swapped, "run", [])
+        with RUNNER.open_availability_state(repo, str(swapped), "run") as state:
+            swapped.unlink()
+            swapped.write_text("attacker\n", encoding="utf-8")
+            with self.assertRaisesRegex(RUNNER.RunnerError, "target changed"):
+                state.record("model-a", "usage_limit")
+        self.assertEqual(swapped.read_text(encoding="utf-8"), "attacker\n")
+
+    def test_availability_state_parent_fd_does_not_follow_parent_swap(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        parent = root / "state-parent"
+        parent.mkdir()
+        moved_parent = root / "state-parent-original"
+        attacker = root / "attacker"
+        attacker.mkdir()
+        with RUNNER.open_availability_state(repo, str(parent / "state.json"), "run-parent") as state:
+            parent.rename(moved_parent)
+            parent.symlink_to(attacker, target_is_directory=True)
+            state.record("model-a", "usage_limit")
+        self.assertTrue((moved_parent / "state.json").is_file())
+        self.assertFalse((attacker / "state.json").exists())
+
+    def test_telemetry_duration_bounds_are_finite_and_nonnegative(self) -> None:
+        self.assertEqual(RUNNER.bounded_duration(4.0, 4.0), 0.0)
+        self.assertEqual(RUNNER.bounded_duration(1.0, 2.5), 1.5)
+        for started, finished in (
+            (2.0, 1.0),
+            (0.0, math.inf),
+            (0.0, math.nan),
+            (0.0, RUNNER.TELEMETRY_MAX_DURATION_SECONDS + 1),
+        ):
+            with self.subTest(started=started, finished=finished):
+                with self.assertRaisesRegex(RUNNER.RunnerError, "finite nonnegative"):
+                    RUNNER.bounded_duration(started, finished)
+
+    def test_availability_state_path_and_run_identifier_must_be_paired(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output_root = Path(temporary.name)
+        cases = (("--availability-state", str(output_root / "state.json")),)
+        for index, extra_args in enumerate(cases):
+            with self.subTest(extra_args=extra_args):
+                worker = output_root / f"paired-worker-{index}.py"
+                write_worker(
+                    worker,
+                    '(worker_repo / "allowed.txt").write_text("must-not-run\\n", encoding="utf-8")',
+                )
+                command = [
+                    "run",
+                    plan_path,
+                    "--output-dir",
+                    str(output_root / f"pair-cli-{index}"),
+                    "--worker-binary",
+                    sys.executable,
+                    "--worker-arg",
+                    str(worker),
+                    *extra_args,
+                ]
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT),
+                        *command,
+                        "--lifecycle-state",
+                        str(output_root / "lifecycle.json"),
+                    ],
+                    cwd=repo,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("orchestration-run-id", result.stderr)
+                self.assertFalse((output_root / f"pair-cli-{index}" / "candidate.patch").exists())
+
+    def test_correction_emits_verified_aggregate_patch_without_mutating_source_or_objects(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial_output = root / "initial-output"
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
+            output_dir=initial_output,
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        prior_manifest = Path(initial.stdout.strip())
+        prior_manifest_digest = RUNNER.hash_file(prior_manifest)
+        prior_patch_digest = RUNNER.hash_file(initial_output / "candidate.patch")
+        brief = root / "correction.txt"
+        brief.write_text("Replace the candidate marker with the corrected marker.\n", encoding="utf-8")
+        before_objects = object_database_snapshot(repo)
+        correction_output = root / "correction-output"
+        correction = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            prior_manifest,
+            brief,
+            textwrap.dedent(
+                """\
+                brief = Path(os.environ[prefix + "CORRECTION_BRIEF"])
+                if brief.read_text(encoding="utf-8") != "Replace the candidate marker with the corrected marker.\\n":
+                    raise SystemExit("correction brief mismatch")
+                try:
+                    brief.write_text("tamper\\n", encoding="utf-8")
+                except OSError:
+                    pass
+                else:
+                    raise SystemExit("correction brief was writable")
+                if (worker_repo / "allowed.txt").read_text(encoding="utf-8") != "initial candidate\\n":
+                    raise SystemExit("verified prior patch was not applied")
+                forbidden = Path(os.environ["FORBIDDEN_PRIOR"])
+                if forbidden.exists():
+                    raise SystemExit("prior attempt state is visible")
+                (worker_repo / "allowed.txt").write_text("corrected candidate\\n", encoding="utf-8")
+                """
+            ),
+            output_dir=correction_output,
+            worker_env={"FORBIDDEN_PRIOR": str(initial_output / "worker.stdout")},
+        )
+        self.assertEqual(correction.returncode, 0, correction.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+        self.assertEqual(object_database_snapshot(repo), before_objects)
+        manifest_path = Path(correction.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["changed_paths"], ["allowed.txt"])
+        self.assertEqual(
+            manifest["correction_lineage"],
+            {
+                "prior_manifest_digest": prior_manifest_digest,
+                "prior_patch_digest": prior_patch_digest,
+                "correction_round": 1,
+                "correction_brief_digest": RUNNER.hash_file(brief),
+            },
+        )
+        self.assertNotIn("Replace the candidate", json.dumps(manifest))
+        apply = run_cli(repo, "apply", str(manifest_path))
+        self.assertEqual(apply.returncode, 0, apply.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "corrected candidate\n")
+
+    def test_correction_lineage_allows_two_rounds_and_rejects_third(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("round zero\\n", encoding="utf-8")',
+            output_dir=root / "round-zero",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        prior = Path(initial.stdout.strip())
+        for round_number in (1, 2):
+            brief = root / f"brief-{round_number}.txt"
+            brief.write_text(f"Correction round {round_number}.\n", encoding="utf-8")
+            result = self.run_correction_with_worker(
+                repo,
+                plan_path,
+                prior,
+                brief,
+                f'(worker_repo / "allowed.txt").write_text("round {round_number}\\n", encoding="utf-8")',
+                output_dir=root / f"round-{round_number}",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            prior = Path(result.stdout.strip())
+            manifest = json.loads(prior.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["correction_lineage"]["correction_round"], round_number)
+        third_brief = root / "brief-3.txt"
+        third_brief.write_text("Third correction must be refused.\n", encoding="utf-8")
+        third = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            prior,
+            third_brief,
+            '(worker_repo / "allowed.txt").write_text("round 3\\n", encoding="utf-8")',
+            output_dir=root / "round-3",
+        )
+        self.assertEqual(third.returncode, 1)
+        self.assertIn("budget exhausted", third.stderr)
+        self.assertFalse((root / "round-3" / "worker.stdout").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_correction_rejects_tampered_prior_manifest_and_brief_boundaries(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "tamper-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        original_manifest = json.loads(Path(initial.stdout.strip()).read_text(encoding="utf-8"))
+        brief = root / "brief.txt"
+        brief.write_text("Correct it.\n", encoding="utf-8")
+        cases = {
+            "head": ("source_head", "0" * 40, "source HEAD"),
+            "plan": ("plan_digest", "0" * 64, "plan digest"),
+            "scope": ("allowed_write_scope", ["other.txt"], "write scope"),
+            "patch": ("patch_digest", "0" * 64, "patch digest"),
+            "paths": ("changed_paths", ["other.txt"], "changed paths"),
+            "schema": ("schema_version", 999, "schema version"),
+        }
+        for index, (label, (key, value, message)) in enumerate(cases.items()):
+            with self.subTest(case=label):
+                manifest = dict(original_manifest)
+                manifest[key] = value
+                path = root / f"tampered-{label}.json"
+                path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+                result = self.run_correction_with_worker(
+                    repo,
+                    plan_path,
+                    path,
+                    brief,
+                    '(worker_repo / "allowed.txt").write_text("must not run\\n", encoding="utf-8")',
+                    output_dir=root / f"tampered-output-{index}",
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        lineage_manifest = dict(original_manifest)
+        lineage_manifest["correction_lineage"] = {
+            "prior_manifest_digest": "0" * 64,
+            "prior_patch_digest": "0" * 64,
+            "correction_round": 0,
+            "correction_brief_digest": "0" * 64,
+        }
+        lineage_path = root / "bad-lineage.json"
+        lineage_path.write_text(json.dumps(lineage_manifest) + "\n", encoding="utf-8")
+        lineage = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            lineage_path,
+            brief,
+            "pass",
+            output_dir=root / "bad-lineage-output",
+        )
+        self.assertEqual(lineage.returncode, 1)
+        self.assertIn("invalid correction round", lineage.stderr)
+
+        oversized = root / "oversized-brief.txt"
+        oversized.write_bytes(b"x" * (RUNNER.CORRECTION_BRIEF_MAX_BYTES + 1))
+        too_large = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            oversized,
+            "pass",
+            output_dir=root / "oversized-brief-output",
+        )
+        self.assertEqual(too_large.returncode, 1)
+        self.assertIn("byte bound", too_large.stderr)
+        brief_link = root / "brief-link.txt"
+        brief_link.symlink_to(brief)
+        linked = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief_link,
+            "pass",
+            output_dir=root / "linked-brief-output",
+        )
+        self.assertEqual(linked.returncode, 1)
+        self.assertIn("symlink", linked.stderr)
+
+    def test_correction_failure_leaves_no_candidate_and_keeps_source_clean(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "failure-initial",
+        )
+        brief = root / "failure-brief.txt"
+        brief.write_text("Fail safely.\n", encoding="utf-8")
+        output = root / "failure-output"
+        failed = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief,
+            "raise SystemExit(7)",
+            output_dir=output,
+        )
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("correction worker exited with 7", failed.stderr)
+        self.assertFalse((output / "candidate.patch").exists())
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_correction_reuses_same_run_availability_and_only_falls_back_for_availability(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
+            output_dir=root / "availability-correction-initial",
+            extra_args=("--orchestration-run-id", "same-correction-run"),
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        prior = Path(initial.stdout.strip())
+        brief = root / "availability-correction-brief.txt"
+        brief.write_text("Correct the candidate.\n", encoding="utf-8")
+        state = root / "correction-state.json"
+        common = (
+            "--availability-state",
+            str(state),
+            "--orchestration-run-id",
+            "same-correction-run",
+        )
+        first = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            prior,
+            brief,
+            "unavailable_then_success",
+            output_dir=root / "correction-availability-first",
+            extra_args=common,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        first_manifest = json.loads(Path(first.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(first_manifest["telemetry"]["model_starts"], 2)
+        self.assertEqual(first_manifest["telemetry"]["availability_failures"], 1)
+
+        second = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            Path(first.stdout.strip()),
+            brief,
+            "unavailable_then_success",
+            output_dir=root / "correction-availability-second",
+            extra_args=common,
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        second_manifest = json.loads(Path(second.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(second_manifest["telemetry"]["model_starts"], 1)
+        self.assertEqual(second_manifest["telemetry"]["skipped_known_unavailable_starts"], 1)
+        self.assertEqual(
+            [attempt["label"] for attempt in second_manifest["worker_result"]["attempts"]],
+            ["fallback"],
+        )
+
+        mismatched = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            prior,
+            brief,
+            "primary_success",
+            output_dir=root / "correction-run-mismatch",
+            extra_args=(
+                "--availability-state",
+                str(state),
+                "--orchestration-run-id",
+                "different-run",
+            ),
+        )
+        self.assertEqual(mismatched.returncode, 1)
+        self.assertIn("run identifier differs", mismatched.stderr)
+
+        semantic = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            prior,
+            brief,
+            "nonavailability_failure",
+            output_dir=root / "correction-semantic-failure",
+        )
+        self.assertEqual(semantic.returncode, 1)
+        self.assertIn("current lifecycle leaf", semantic.stderr)
+        self.assertFalse((root / "correction-semantic-failure" / "worker-fallback.stdout").exists())
+
+    def test_correction_sandbox_denies_source_out_of_scope_and_git_metadata_writes(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
+            output_dir=root / "denial-initial",
+        )
+        brief = root / "denial-brief.txt"
+        brief.write_text("Verify correction sandbox denials.\n", encoding="utf-8")
+        correction = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief,
+            textwrap.dedent(
+                """\
+                denied = []
+                for target, label in (
+                    (source_repo / "blocked.txt", "source"),
+                    (worker_repo / "outside-scope.txt", "scope"),
+                    (worker_repo / ".git" / "refs" / "heads" / "evil", "git"),
+                ):
+                    try:
+                        target.write_text("blocked\\n", encoding="utf-8")
+                    except OSError:
+                        denied.append(label)
+                    else:
+                        raise SystemExit(f"unexpected write success: {label}")
+                if denied != ["source", "scope", "git"]:
+                    raise SystemExit(f"unexpected denial set: {denied}")
+                (worker_repo / "allowed.txt").write_text("safe correction\\n", encoding="utf-8")
+                """
+            ),
+            output_dir=root / "denial-correction",
+        )
+        self.assertEqual(correction.returncode, 0, correction.stderr)
+        self.assertFalse((repo / "blocked.txt").exists())
+        self.assertFalse((repo / "outside-scope.txt").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_parent_authorized_focused_and_authoritative_validation_use_fresh_clone(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            validation=["git diff --check"],
+            focused_validation=["git diff --check"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate for validation\\n", encoding="utf-8")',
+            output_dir=root / "validation-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest = Path(initial.stdout.strip())
+        for suite, focused_count, authoritative_count in (
+            ("focused", 1, 0),
+            ("authoritative", 1, 1),
+        ):
+            with self.subTest(suite=suite):
+                output = root / f"validation-{suite}"
+                result = run_cli(
+                    repo,
+                    "validate",
+                    str(manifest),
+                    "--suite",
+                    suite,
+                    "--parent-diff-approved",
+                    "--critical-invariants-approved",
+                    "--output-dir",
+                    str(output),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+                self.assertTrue(report["passed"])
+                self.assertEqual(report["suite"], suite)
+                self.assertEqual(len(report["commands"]), 1)
+                self.assertEqual(report["commands"][0]["argv"], ["git", "diff", "--check"])
+                self.assertEqual(report["telemetry"]["focused_validation_count"], focused_count)
+                self.assertEqual(report["telemetry"]["authoritative_validation_count"], authoritative_count)
+                self.assertEqual(report["telemetry"]["full_validation_count"], authoritative_count)
+                self.assertNotIn("candidate for validation", json.dumps(report))
+                self.assertGreaterEqual(report["telemetry"]["duration_seconds"], 0)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_focused_validation_absence_is_compatible_and_requires_parent_approvals(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"], validation=["git diff --check"]
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "optional-focused-initial",
+        )
+        manifest = Path(initial.stdout.strip())
+        denied = run_cli(
+            repo,
+            "validate",
+            str(manifest),
+            "--suite",
+            "focused",
+            "--output-dir",
+            str(root / "approval-denied"),
+        )
+        self.assertEqual(denied.returncode, 1)
+        self.assertIn("explicit parent diff", denied.stderr)
+        approved = run_cli(
+            repo,
+            "validate",
+            str(manifest),
+            "--suite",
+            "focused",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "optional-focused-approved"),
+        )
+        self.assertEqual(approved.returncode, 1)
+        self.assertIn("no focused validation stage", approved.stderr)
+
+    def test_validation_rejects_candidate_modified_plan_and_records_bounded_failure(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt", "docs/plan/"],
+            validation=["git diff --check"],
+            focused_validation=["python3 -m pytest tests/missing-focused.py"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        modified_plan, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            textwrap.dedent(
+                """\
+                plan = worker_repo / plan_path
+                plan.write_text(plan.read_text(encoding="utf-8") + "\\nworker change\\n", encoding="utf-8")
+                """
+            ),
+            output_dir=root / "modified-plan-candidate",
+        )
+        self.assertEqual(modified_plan.returncode, 0, modified_plan.stderr)
+        rejected = run_cli(
+            repo,
+            "validate",
+            modified_plan.stdout.strip(),
+            "--suite",
+            "focused",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "modified-plan-validation"),
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("must not change the active plan", rejected.stderr)
+
+        failing, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("failing validation candidate\\n", encoding="utf-8")',
+            output_dir=root / "failing-validation-candidate",
+        )
+        failure_output = root / "failing-validation-report"
+        failed = run_cli(
+            repo,
+            "validate",
+            failing.stdout.strip(),
+            "--suite",
+            "focused",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(failure_output),
+        )
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("bounded report saved", failed.stderr)
+        report = json.loads((failure_output / "validation.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["passed"])
+        self.assertNotEqual(report["commands"][0]["returncode"], 0)
+        self.assertNotIn("stdout_body", report["commands"][0])
+        self.assertNotIn("stderr_body", report["commands"][0])
+        self.assertIn("stdout_digest", report["commands"][0])
+        self.assertIn("stderr_digest", report["commands"][0])
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_nonavailability_failure_and_disabled_fallback_do_not_retry(self) -> None:
         for scenario, extra_args in (
@@ -1111,6 +2212,318 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, expected_code, result.stderr)
                 self.assert_no_workspace_directories(cleanup_root)
+
+    def test_apply_requires_digest_bound_authoritative_lifecycle_receipt(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "lifecycle-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        execution_state = str(
+            Path(manifest["lifecycle_state_path"]).with_name(
+                Path(manifest["lifecycle_state_path"]).name
+                + f".{manifest['orchestration_run_id']}.plan-execution.json"
+            )
+        )
+        direct = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "apply",
+                str(manifest_path),
+                "--lifecycle-state",
+                manifest["lifecycle_state_path"],
+                "--orchestration-run-id",
+                manifest["orchestration_run_id"],
+                "--plan-execution-state",
+                execution_state,
+            ],
+            cwd=repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(direct.returncode, 1)
+        self.assertIn("authoritative validation", direct.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_validation_rejects_candidate_owned_authority_paths(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["tests/"], files={"tests/original.py": "pass\n"})
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "tests" / "original.py").write_text("raise SystemExit(0)\\n", encoding="utf-8")',
+            output_dir=root / "authority-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        rejected = run_cli(
+            repo,
+            "validate",
+            initial.stdout.strip(),
+            "--suite",
+            "authoritative",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "authority-validation"),
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("validation authority", rejected.stderr)
+
+    def test_validation_authority_classifier_covers_indirect_and_generated_paths(self) -> None:
+        for path in (
+            ".project-agent-workflow/scripts/validate-changes.py",
+            "template/app/tests/check.py",
+            "nested/conftest.py",
+            "src/widget.test.ts",
+            "pytest.ini",
+            "Cargo.toml",
+            "webpack.config.js",
+            "tsconfig.build.json",
+            "build.rs",
+            "packages/app/package.json",
+            "packages/app/pyproject.toml",
+            "packages/app/pnpm-lock.yaml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(RUNNER.is_validation_authority_path(path))
+        self.assertFalse(RUNNER.is_validation_authority_path("src/widget.ts"))
+
+    def test_validation_rejects_nested_workspace_manifest_bypass(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["packages/"],
+            files={
+                "package.json": '{"scripts":{"test":"npm --prefix packages/app test"}}\n',
+                "packages/app/package.json": '{"scripts":{"test":"exit 1"}}\n',
+            },
+            validation=["npm run test"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "packages" / "app" / "package.json").write_text(\'{"scripts":{"test":"exit 0"}}\\n\', encoding="utf-8")',
+            output_dir=root / "workspace-authority-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        rejected = run_cli(
+            repo, "validate", initial.stdout.strip(), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "workspace-authority-validation"),
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("validation authority", rejected.stderr)
+
+    def test_plan_declared_validation_authority_rejects_transitive_harness(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["tools/"],
+            files={
+                "package.json": '{"scripts":{"test":"node tools/harness.js"}}\n',
+                "tools/harness.js": "process.exit(1)\n",
+            },
+            validation=["npm run test"],
+            validation_authority_scope=["tools/"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "tools" / "harness.js").write_text("process.exit(0)\\n", encoding="utf-8")',
+            output_dir=root / "declared-authority-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        rejected = run_cli(
+            repo, "validate", initial.stdout.strip(), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "declared-authority-validation"),
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("validation authority", rejected.stderr)
+
+    def test_verified_patch_bytes_survive_path_swap_before_apply(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("safe\\n", encoding="utf-8")',
+            output_dir=root / "swap-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validated = run_cli(
+            repo,
+            "validate",
+            str(manifest_path),
+            "--suite",
+            "authoritative",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "swap-validation"),
+        )
+        self.assertEqual(validated.returncode, 0, validated.stderr)
+        original_verify = RUNNER.verify_candidate_manifest
+
+        def swap_after_verify(**kwargs):
+            verified = original_verify(**kwargs)
+            Path(manifest["patch_path"]).write_text(
+                "diff --git a/blocked.txt b/blocked.txt\nnew file mode 100644\nindex 0000000..e69de29\n",
+                encoding="utf-8",
+            )
+            return verified
+
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(repo)
+            with mock.patch.object(RUNNER, "verify_candidate_manifest", side_effect=swap_after_verify):
+                RUNNER.apply_worker_result(
+                    argparse.Namespace(
+                        manifest=str(manifest_path),
+                        git_bin="git",
+                        lifecycle_state=manifest["lifecycle_state_path"],
+                        orchestration_run_id=manifest["orchestration_run_id"],
+                    )
+                )
+        finally:
+            os.chdir(previous_cwd)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "safe\n")
+        self.assertFalse((repo / "blocked.txt").exists())
+
+    def test_validation_head_mutation_consumes_exactly_once_attempt(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            files={
+                "allowed.txt": "original\n",
+                "tests/smoke.sh": "#!/bin/sh\ngit -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm validation-mutation\n",
+            },
+            validation=["tests/smoke.sh"],
+        )
+        self.addCleanup(temporary.cleanup)
+        (repo / "tests/smoke.sh").chmod(0o755)
+        git(repo, "add", "tests/smoke.sh")
+        git(repo, "commit", "-qm", "make smoke executable")
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "head-mutation-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        args = (
+            "validate", initial.stdout.strip(), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "head-mutation-validation"),
+        )
+        first = run_cli(repo, *args)
+        self.assertEqual(first.returncode, 1)
+        self.assertIn("changed review-clone HEAD", first.stderr)
+        replay = run_cli(repo, *args[:-1], str(root / "head-mutation-replay"))
+        self.assertEqual(replay.returncode, 1)
+        self.assertIn("already been attempted", replay.stderr)
+
+    def test_validation_ignores_ambient_home_toolchain_path(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            files={"allowed.txt": "original\n", "scripts/check.py": "value = 1\n"},
+            validation=["python3 -m py_compile scripts/check.py"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        fake_bin = root / "home" / ".local" / "bin"
+        fake_bin.mkdir(parents=True)
+        sentinel = root / "ambient-python-used"
+        fake_python = fake_bin / "python3"
+        fake_python.write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 0\n", encoding="utf-8")
+        fake_python.chmod(0o755)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "trusted-path-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        result = run_cli(
+            repo, "validate", initial.stdout.strip(), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "trusted-path-validation"),
+            env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(sentinel.exists())
+
+    def test_apply_finalization_failure_leaves_recoverable_applying_state(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("applied\\n", encoding="utf-8")',
+            output_dir=root / "apply-recovery-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validated = run_cli(
+            repo, "validate", str(manifest_path), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "apply-recovery-validation"),
+        )
+        self.assertEqual(validated.returncode, 0, validated.stderr)
+        original_persist = RUNNER.LifecycleState.persist
+
+        def fail_finalization(state, data):
+            if data.get("phase") == "applied":
+                raise OSError("injected finalization failure")
+            return original_persist(state, data)
+
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(repo)
+            with mock.patch.object(RUNNER.LifecycleState, "persist", new=fail_finalization):
+                with self.assertRaisesRegex(RUNNER.RunnerError, "source patch was applied"):
+                    RUNNER.apply_worker_result(
+                        argparse.Namespace(
+                            manifest=str(manifest_path), git_bin="git",
+                            lifecycle_state=manifest["lifecycle_state_path"],
+                            orchestration_run_id=manifest["orchestration_run_id"],
+                        )
+                    )
+        finally:
+            os.chdir(previous_cwd)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "applied\n")
+        lifecycle = json.loads(Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle["phase"], "applying")
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(repo)
+            RUNNER.finalize_apply(
+                argparse.Namespace(
+                    manifest=str(manifest_path), git_bin="git",
+                    lifecycle_state=manifest["lifecycle_state_path"],
+                    orchestration_run_id=manifest["orchestration_run_id"],
+                )
+            )
+        finally:
+            os.chdir(previous_cwd)
+        lifecycle = json.loads(Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle["phase"], "applied")
 
 
 if __name__ == "__main__":

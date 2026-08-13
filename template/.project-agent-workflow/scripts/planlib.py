@@ -17,11 +17,13 @@ LEGACY_SPEC_INDEX = ROOT / "docs/agent/spec-index.yaml"
 ADOPTION_MANIFEST = ROOT / ".project-agent-workflow-migration/v1-pre-namespace/manifest.json"
 PLAN = ROOT / "docs/plan/plan.md"
 CHECKED = ROOT / "docs/plan/checked.md"
+REPLANNED = ROOT / "docs/plan/replanned.md"
 ACTIVE_DIR = ROOT / "docs/plan/active"
 BACKLOG_DIR = ROOT / "docs/plan/backlog"
 CHECKED_DIR = ROOT / "docs/plan/checked"
+REPLANNED_DIR = ROOT / "docs/plan/replanned"
 OPEN_PLAN_DIRS = [ACTIVE_DIR, BACKLOG_DIR]
-PLAN_DIRS = [*OPEN_PLAN_DIRS, CHECKED_DIR]
+PLAN_DIRS = [*OPEN_PLAN_DIRS, CHECKED_DIR, REPLANNED_DIR]
 
 REQUIRED_FIELDS = (
     "status",
@@ -45,6 +47,7 @@ LEGACY_REQUIRED_FIELDS = (
     "target_files",
     "required_specs",
     "validation",
+    "focused_validation",
     "acceptance",
     "expected_output",
     "checked_summary_ja",
@@ -55,10 +58,16 @@ SCALAR_KEYS = {
     "review_class",
     "human_design_required",
     "human_approval_status",
+    "implementation_risk",
+    "implementation_ambiguity",
     "expected_output",
     "checked_summary_ja",
     "completion_deferred_reason",
+    "primary_invariant",
+    "replan_source",
+    "replan_contract",
 }
+IMPLEMENTATION_CLASSIFICATION_KEYS = {"implementation_risk", "implementation_ambiguity"}
 LIST_KEYS = {
     "task_types",
     "target_files",
@@ -67,8 +76,14 @@ LIST_KEYS = {
     "target_json",
     "required_specs",
     "validation",
+    "focused_validation",
+    "validation_authority_scope",
     "acceptance",
     "acceptance_focus",
+    "integration_gates",
+    "successor_plans",
+    "inherited_acceptance_digests",
+    "replan_reason_codes",
 }
 CONTEXT_FIELDS = (
     "TASK_TYPES",
@@ -212,7 +227,11 @@ def parse_manifest(path: Path) -> dict[str, str | list[str]]:
             rest = rest.strip()
             current = None
             if key in SCALAR_KEYS:
-                values[key] = rest
+                if key in IMPLEMENTATION_CLASSIFICATION_KEYS and not rest:
+                    values[key] = []
+                    current = key
+                else:
+                    values[key] = rest
             elif key in LIST_KEYS:
                 current = key
                 if rest:
@@ -295,7 +314,7 @@ def plan_ids() -> set[int]:
             continue
         pattern = (
             "**/[0-9][0-9][0-9]-*.md"
-            if directory == CHECKED_DIR
+            if directory in {CHECKED_DIR, REPLANNED_DIR}
             else "[0-9][0-9][0-9]-*.md"
         )
         for path in directory.glob(pattern):
@@ -411,7 +430,11 @@ def _plan_paths_for_id(plan_id: str) -> list[Path]:
     for directory in PLAN_DIRS:
         if not directory.exists():
             continue
-        pattern = f"**/{plan_id}-*.md" if directory == CHECKED_DIR else f"{plan_id}-*.md"
+        pattern = (
+            f"**/{plan_id}-*.md"
+            if directory in {CHECKED_DIR, REPLANNED_DIR}
+            else f"{plan_id}-*.md"
+        )
         paths.extend(directory.glob(pattern))
     return paths
 

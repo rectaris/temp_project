@@ -1,6 +1,16 @@
 #!/bin/sh
 set -eu
 
+require_copier=${REQUIRE_COPIER:-0}
+case "$#" in
+  0) ;;
+  1)
+    [ "$1" = "--require-copier" ] || { echo "Usage: $0 [--require-copier]" >&2; exit 2; }
+    require_copier=1
+    ;;
+  *) echo "Usage: $0 [--require-copier]" >&2; exit 2 ;;
+esac
+
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 scratch_base=${SANDBOXED_PLAN_WORKER_SCRATCH_DIR:-${TMPDIR:-/tmp}}
 tmp=$(mktemp -d "$scratch_base/project-agent-workflow-update.XXXXXX")
@@ -51,7 +61,7 @@ fixture_clone() {
 }
 
 if ! copier_available; then
-  if [ "${REQUIRE_COPIER:-0}" = "1" ]; then
+  if [ "$require_copier" = "1" ]; then
     echo "copier CLI not found" >&2
     exit 127
   fi
@@ -98,11 +108,15 @@ for candidate_path in \
   template/.agents/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
   template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+  template/.project-agent-workflow/scripts/planlib.py \
   template/.project-agent-workflow/ownership.yaml \
+  template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
   template/.project-agent-workflow/skills/graph-memory/SKILL.md \
   template/.project-agent-workflow/skills/linear-ops/SKILL.md \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
@@ -126,11 +140,15 @@ fixture_git "$update_source" add \
   template/.agents/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
   template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+  template/.project-agent-workflow/scripts/planlib.py \
   template/.project-agent-workflow/ownership.yaml \
+  template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
   template/.project-agent-workflow/skills/graph-memory/SKILL.md \
   template/.project-agent-workflow/skills/linear-ops/SKILL.md \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
@@ -482,6 +500,36 @@ validate_common_lane() {
     grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
     grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
     grep -qi 'context files read-only' "$managed_orchestration" "$managed_agents"
+    test -f "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    test -f "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    test -f "$out/.project-agent-workflow/scripts/planlib.py"
+    grep -q 'run-sandboxed-plan-worker.py' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'sequential_plan_worker' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'The main agent owns task interpretation, integration, validation acceptance, planning updates, commits, and the final report.' "$managed_orchestration"
+    grep -q '^DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q '^DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q '^TERRA_CODEX_MODEL = "gpt-5.6-terra"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def select_plan_writable_profile' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def open_availability_state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q -- '--availability-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'skipped_known_unavailable_starts' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def correct_worker' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'correction_lineage' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def validate_candidate' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def open_lifecycle_state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q -- '--lifecycle-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'VALIDATION_AUTHORITY_SCOPE' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'network_enabled=False' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'implementation_risk' "$out/.project-agent-workflow/scripts/planlib.py"
+    grep -q 'implementation_ambiguity' "$out/.project-agent-workflow/scripts/planlib.py"
+    grep -q 'focused_validation' "$out/.project-agent-workflow/scripts/planlib.py"
+    grep -q 'validation_authority_scope' "$out/.project-agent-workflow/scripts/planlib.py"
+    grep -qi 'repository breadth alone is insufficient' "$managed_agents" "$managed_orchestration"
+    grep -qi 'admissible implementation slice' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -qi 'state path outside the repository' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'run-sandboxed-plan-worker.py correct' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'run-sandboxed-plan-worker.py validate' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'def has_pre_v1_adoption_provenance()' "$out/.project-agent-workflow/scripts/planlib.py"
   }
 
   assert_managed_orchestration_reports
@@ -625,6 +673,164 @@ grep -q 'Codex hooks mode: `install_templates`' "$latest_out/.project-agent-work
 grep -q 'SkillSpector mode: `disabled`' "$latest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`disabled`' "$latest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 test ! -f "$latest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
+
+replanned_history_out="$tmp/replanned-history-update"
+run_copier copy -q -f --vcs-ref "$latest_ref" --data-file "$root/tests/fixtures/python.answers.yml" "$update_source" "$replanned_history_out" >/dev/null
+fixture_git "$replanned_history_out" init -b main >/dev/null
+fixture_git "$replanned_history_out" config user.email "ci@example.invalid"
+fixture_git "$replanned_history_out" config user.name "CI"
+fixture_git "$replanned_history_out" add -A
+fixture_git "$replanned_history_out" commit -m "Initial generated workflow" >/dev/null
+python3 - "$replanned_history_out" <<'PY_REPLAN_SOURCE'
+import sys
+from pathlib import Path
+
+repository = Path(sys.argv[1])
+source_path = repository / "docs/plan/active/991-project-owned-history.md"
+source_path.parent.mkdir(parents=True, exist_ok=True)
+source_path.write_text("""# Project-owned history
+
+status: replan_required
+task_types:
+  - planning_docs
+review_class: C
+human_design_required: yes
+human_approval_status: approved
+write_scope:
+  - docs/plan/
+context_files:
+  - none
+required_specs:
+  - docs/agent/PROJECT_POLICY.md
+  - docs/agent/SPEC_VALIDATION.md
+  - docs/agent/SPEC_GIT_WORKFLOW.md
+  - docs/agent/SPEC_FILE_MANAGEMENT.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
+  - docs/agent/SPEC_HUMAN_REPORTING.md
+  - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+  - docs/agent/SPEC_PLAN_WORKFLOW.md
+validation:
+  - git diff --check
+acceptance:
+  - Preserve this project-owned acceptance record.
+replan_reason_codes:
+  - scope_drift
+checked_summary_ja: プロジェクト所有の再計画履歴を保持した。
+
+## Tasks
+
+- [ ] Stop before restructuring.
+""", encoding="utf-8")
+(repository / "docs/plan/plan.md").write_text(
+    "# Active Plan\n\nid\tpath\tstatus\n"
+    "991\tdocs/plan/active/991-project-owned-history.md\treplan_required\n",
+    encoding="utf-8",
+)
+PY_REPLAN_SOURCE
+fixture_git "$replanned_history_out" add docs/plan
+fixture_git "$replanned_history_out" commit -m "Add stopped project-owned plan" >/dev/null
+python3 - "$replanned_history_out" "$tmp/replanned-history-spec.json" <<'PY_REPLAN_SPEC'
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import date
+from pathlib import Path
+
+repository = Path(sys.argv[1])
+spec_path = Path(sys.argv[2])
+source_relative = "docs/plan/active/991-project-owned-history.md"
+source = (repository / source_relative).read_bytes()
+acceptance = "Preserve this project-owned acceptance record."
+sha = lambda value: "sha256:" + hashlib.sha256(value).hexdigest()
+acceptance_digest = sha(acceptance.encode())
+paths = ["docs/plan/active/992-project-owned-slice.md", "docs/plan/active/993-project-owned-integration.md"]
+
+def plan(title: str, invariant: str) -> str:
+    successors = "\n".join(f"  - {path}" for path in paths)
+    return f"""# {title}
+
+status: in_progress
+primary_invariant: {invariant}
+replan_source: {source_relative}
+replan_contract: docs/plan/replanned/contracts/991-project-owned-history.json
+integration_gates:
+  - verify the complete source acceptance
+successor_plans:
+{successors}
+inherited_acceptance_digests:
+  - {acceptance_digest}
+task_types:
+  - planning_docs
+review_class: C
+human_design_required: yes
+human_approval_status: approved
+write_scope:
+  - docs/plan/
+context_files:
+  - none
+required_specs:
+  - docs/agent/PROJECT_POLICY.md
+  - docs/agent/SPEC_VALIDATION.md
+  - docs/agent/SPEC_GIT_WORKFLOW.md
+  - docs/agent/SPEC_FILE_MANAGEMENT.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
+  - docs/agent/SPEC_HUMAN_REPORTING.md
+  - docs/agent/SPEC_DEVELOPMENT_FLOW.md
+  - docs/agent/SPEC_PLAN_WORKFLOW.md
+validation:
+  - git diff --check
+acceptance:
+  - {acceptance}
+checked_summary_ja: プロジェクト所有の後続計画。
+
+## Tasks
+
+- [ ] Preserve the source acceptance.
+"""
+
+today = date.today()
+half = "01-15" if today.day <= 15 else "16-31"
+spec = {
+    "schema_version": 1,
+    "source": {
+        "path": source_relative,
+        "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip(),
+        "plan_digest": sha(source),
+        "acceptance": [{"text": acceptance, "digest": acceptance_digest}],
+    },
+    "reason_codes": ["scope_drift"],
+    "dirty_product_paths": [],
+    "contract_path": "docs/plan/replanned/contracts/991-project-owned-history.json",
+    "archive_path": f"docs/plan/replanned/{today.year:04d}/{today.month:02d}/{half}/991-project-owned-history.md",
+    "successors": [{
+        "id": "992", "path": paths[0],
+        "content": plan("Project-owned slice", "preserve the project-owned archive"),
+        "acceptance_digests": [acceptance_digest],
+    }],
+    "integration": {
+        "id": "993", "path": paths[1],
+        "content": plan("Project-owned integration", "verify the project-owned history triplet"),
+        "acceptance_digests": [acceptance_digest],
+    },
+}
+spec_path.write_text(json.dumps(spec, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+PY_REPLAN_SPEC
+(cd "$replanned_history_out" && python3 "$root/scripts/restructure-plan.py" "$tmp/replanned-history-spec.json" >/dev/null)
+fixture_git "$replanned_history_out" add docs/plan
+fixture_git "$replanned_history_out" commit -m "Record project-owned replanned history" >/dev/null
+replanned_archive=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archive_path"])' "$tmp/replanned-history-spec.json")
+replanned_contract=docs/plan/replanned/contracts/991-project-owned-history.json
+replanned_index=docs/plan/replanned.md
+replanned_archive_before=$(fixture_git "$replanned_history_out" hash-object "$replanned_history_out/$replanned_archive")
+replanned_contract_before=$(fixture_git "$replanned_history_out" hash-object "$replanned_history_out/$replanned_contract")
+replanned_index_before=$(fixture_git "$replanned_history_out" hash-object "$replanned_history_out/$replanned_index")
+run_adoption "$replanned_history_out" "$target_ref" >/dev/null
+test "$(fixture_git "$replanned_history_out" hash-object "$replanned_history_out/$replanned_archive")" = "$replanned_archive_before"
+test "$(fixture_git "$replanned_history_out" hash-object "$replanned_history_out/$replanned_contract")" = "$replanned_contract_before"
+test "$(fixture_git "$replanned_history_out" hash-object "$replanned_history_out/$replanned_index")" = "$replanned_index_before"
+(cd "$replanned_history_out" && python3 .project-agent-workflow/scripts/restructure-plan.py --verify)
+(cd "$replanned_history_out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
 
 pre_v1_plan_out="$tmp/v050-managed-index-plans"
 run_copier copy -q -f --vcs-ref v0.5.0 --data-file "$root/tests/fixtures/python.answers.yml" "$update_source" "$pre_v1_plan_out" >/dev/null

@@ -4,16 +4,21 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
+import fcntl
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, Sequence
@@ -24,6 +29,20 @@ DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
 DEFAULT_CODEX_REASONING = "medium"
 DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"
 DEFAULT_FALLBACK_CODEX_REASONING = "max"
+TERRA_CODEX_MODEL = "gpt-5.6-terra"
+IMPLEMENTATION_CLASSIFICATIONS = frozenset({"low", "ordinary", "high"})
+WRITABLE_SOL_MODEL = "gpt-5.6-sol"
+AVAILABILITY_STATE_SCHEMA_VERSION = 1
+AVAILABILITY_STATE_MAX_BYTES = 4096
+AVAILABILITY_STATE_MAX_ENTRIES = 16
+AVAILABILITY_STATE_MAX_MODEL_BYTES = 128
+ORCHESTRATION_RUN_ID_MAX_BYTES = 128
+TELEMETRY_SCHEMA_VERSION = 1
+TELEMETRY_MAX_DURATION_SECONDS = 31_536_000.0
+LIFECYCLE_STATE_SCHEMA_VERSION = 1
+LIFECYCLE_STATE_MAX_BYTES = 8192
+CORRECTION_BRIEF_MAX_BYTES = 8192
+MAX_CORRECTION_ROUNDS = 2
 PLAN_PATTERN = re.compile(r"^docs/plan/active/\d{3}-[^/]+\.md$")
 STATUS_PATTERN = re.compile(r"^(?:\?\?|[ MARCUDT][ MD]) (.+)$")
 CODEX_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL)(?::|\b)", re.IGNORECASE)
@@ -67,6 +86,73 @@ CODEX_UNAVAILABLE_PATTERNS = (
 SHA256_BUFFER = 1024 * 1024
 ENV_PREFIX = "SANDBOXED_PLAN_WORKER_"
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+VALIDATION_AUTHORITY_SCOPE = (
+    ".codex/",
+    ".codex/hooks/",
+    ".github/",
+    ".project-agent-workflow/",
+    "template/",
+    "docs/agent/",
+    "scripts/",
+    "tests/",
+    "AGENTS.md",
+    "Makefile",
+    "Cargo.toml",
+    "Cargo.lock",
+    "Gemfile",
+    "Gemfile.lock",
+    "go.mod",
+    "go.sum",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "pyproject.toml",
+    "poetry.lock",
+    "uv.lock",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "setup.cfg",
+    "pytest.ini",
+    "noxfile.py",
+    "tox.ini",
+)
+VALIDATION_AUTHORITY_BASENAMES = frozenset(
+    {
+        "conftest.py",
+        "sitecustomize.py",
+        "usercustomize.py",
+        "build.rs",
+        "jest.config.js",
+        "jest.config.cjs",
+        "jest.config.mjs",
+        "jest.config.ts",
+        "vitest.config.js",
+        "vitest.config.mjs",
+        "vitest.config.ts",
+        "vite.config.js",
+        "vite.config.ts",
+        "eslint.config.js",
+        "eslint.config.mjs",
+        "tsconfig.json",
+    }
+)
+VALIDATION_MANIFEST_BASENAMES = frozenset(
+    PurePosixPath(entry).name for entry in VALIDATION_AUTHORITY_SCOPE if not entry.endswith("/")
+)
+VALIDATION_TEST_NAME = re.compile(r"(?:^|/)(?:test_[^/]+|[^/]+[._-](?:test|spec))\.[^/]+$")
+VALIDATION_CONFIG_NAME = re.compile(
+    r"(?:^|/)(?:[^/]+\.config\.[^/]+|tsconfig[^/]*\.json|[^/]*(?:rc|rc\.[^/]+))$"
+)
+SANDBOX_SYSTEM_DIRECTORIES = ("/usr", "/bin", "/sbin", "/lib", "/lib64")
+SANDBOX_SYSTEM_FILES = (
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/nsswitch.conf",
+    "/etc/hosts",
+    "/etc/resolv.conf",
+)
+SANDBOX_SYSTEM_OPTIONAL_DIRECTORIES = ("/etc/ssl", "/etc/alternatives")
 ARTIFACT_NAMES = (
     "worker.stdout",
     "worker.stderr",
@@ -79,6 +165,7 @@ ARTIFACT_NAMES = (
     "worker-fallback-last-message.txt",
     "candidate.patch",
     "manifest.json",
+    "validation.json",
 )
 RESERVED_WORKER_ENV = frozenset(
     {
@@ -97,12 +184,207 @@ RESERVED_WORKER_ENV = frozenset(
         f"{ENV_PREFIX}WORKER_REPO",
         f"{ENV_PREFIX}SCRATCH_DIR",
         f"{ENV_PREFIX}PLAN_PATH",
+        f"{ENV_PREFIX}CORRECTION_BRIEF",
     }
 )
 
 
 class RunnerError(RuntimeError):
     """Raised when the sandboxed runner must fail closed."""
+
+
+class AvailabilityState:
+    """Run-bound availability memory held through one verified parent directory fd."""
+
+    def __init__(
+        self,
+        *,
+        parent_fd: int,
+        target_name: str,
+        run_id: str,
+        unavailable: dict[str, str],
+        target_identity: tuple[int, int, int, int] | None,
+        lock_fd: int,
+    ) -> None:
+        self.parent_fd = parent_fd
+        self.target_name = target_name
+        self.run_id = run_id
+        self.unavailable = unavailable
+        self.target_identity = target_identity
+        self.lock_fd = lock_fd
+
+    def close(self) -> None:
+        if self.lock_fd >= 0:
+            os.close(self.lock_fd)
+            self.lock_fd = -1
+        if self.parent_fd >= 0:
+            os.close(self.parent_fd)
+            self.parent_fd = -1
+
+    def __enter__(self) -> AvailabilityState:
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        self.close()
+
+    def reason_for(self, model: str) -> str | None:
+        return self.unavailable.get(model)
+
+    def record(self, model: str, reason: str) -> None:
+        validate_model_name(model)
+        if reason not in {item[0] for item in CODEX_UNAVAILABLE_PATTERNS}:
+            raise RunnerError(f"availability reason is not allowlisted: {reason}")
+        existing = self.unavailable.get(model)
+        if existing is not None:
+            if existing != reason:
+                raise RunnerError(f"availability state has conflicting reasons for model: {model}")
+            return
+        if len(self.unavailable) >= AVAILABILITY_STATE_MAX_ENTRIES:
+            raise RunnerError("availability state exceeds the entry-count bound")
+        self.unavailable[model] = reason
+        try:
+            self._persist()
+        except BaseException:
+            self.unavailable.pop(model, None)
+            raise
+
+    def _current_target_identity(self) -> tuple[int, int, int, int] | None:
+        try:
+            descriptor = os.open(
+                self.target_name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=self.parent_fd,
+            )
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise RunnerError("availability state target is not a regular non-symlink file") from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise RunnerError("availability state target must be a regular file")
+            return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+        finally:
+            os.close(descriptor)
+
+    def _persist(self) -> None:
+        entries = [
+            {"model": model, "reason": reason}
+            for model, reason in sorted(self.unavailable.items())
+        ]
+        content = (
+            json.dumps(
+                {
+                    "schema_version": AVAILABILITY_STATE_SCHEMA_VERSION,
+                    "orchestration_run_id": self.run_id,
+                    "unavailable_models": entries,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        if len(content) > AVAILABILITY_STATE_MAX_BYTES:
+            raise RunnerError("availability state exceeds the byte bound")
+        if self._current_target_identity() != self.target_identity:
+            raise RunnerError("availability state target changed after it was opened")
+        temporary_name = f".{self.target_name}.tmp-{os.getpid()}-{time.monotonic_ns()}"
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=self.parent_fd,
+            )
+            view = memoryview(content)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise RunnerError("availability state write made no progress")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            if self._current_target_identity() != self.target_identity:
+                raise RunnerError("availability state target changed before atomic replacement")
+            os.replace(
+                temporary_name,
+                self.target_name,
+                src_dir_fd=self.parent_fd,
+                dst_dir_fd=self.parent_fd,
+            )
+            os.fsync(self.parent_fd)
+            self.target_identity = self._current_target_identity()
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=self.parent_fd)
+            except FileNotFoundError:
+                pass
+
+
+class LifecycleState:
+    """Locked run ledger that makes correction, validation, and apply transitions linear."""
+
+    def __init__(self, *, parent_fd: int, target_name: str, lock_fd: int, run_id: str, data: dict[str, Any] | None) -> None:
+        self.parent_fd = parent_fd
+        self.target_name = target_name
+        self.lock_fd = lock_fd
+        self.run_id = run_id
+        self.data = data
+
+    def __enter__(self) -> LifecycleState:
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        if self.lock_fd >= 0:
+            os.close(self.lock_fd)
+            self.lock_fd = -1
+        if self.parent_fd >= 0:
+            os.close(self.parent_fd)
+            self.parent_fd = -1
+
+    def require_existing(self) -> dict[str, Any]:
+        if self.data is None:
+            raise RunnerError("lifecycle state has not been initialized by candidate generation")
+        return self.data
+
+    def persist(self, data: dict[str, Any]) -> None:
+        validate_lifecycle_payload(data, self.run_id)
+        content = (json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(content) > LIFECYCLE_STATE_MAX_BYTES:
+            raise RunnerError("lifecycle state exceeds the byte bound")
+        temporary_name = f".{self.target_name}.tmp-{os.getpid()}-{time.monotonic_ns()}"
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=self.parent_fd,
+            )
+            view = memoryview(content)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise RunnerError("lifecycle state write made no progress")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            os.replace(temporary_name, self.target_name, src_dir_fd=self.parent_fd, dst_dir_fd=self.parent_fd)
+            os.fsync(self.parent_fd)
+            self.data = data
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=self.parent_fd)
+            except FileNotFoundError:
+                pass
 
 
 def fail(message: str) -> None:
@@ -143,6 +425,25 @@ def load_planlib() -> ModuleType:
     raise RunnerError("could not locate managed planlib.py")
 
 
+def load_plan_validation_commands() -> ModuleType:
+    script_dir = Path(__file__).resolve().parent
+    candidates = (
+        script_dir / "plan_validation_commands.py",
+        script_dir.parent / "template/.project-agent-workflow/scripts/plan_validation_commands.py",
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("sandboxed_plan_worker_validation_commands", candidate)
+        if spec is None or spec.loader is None:
+            break
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    raise RunnerError("could not locate managed plan_validation_commands.py")
+
+
 def run_subprocess(
     argv: Sequence[str],
     *,
@@ -178,6 +479,20 @@ def require_executable(name: str, configured: str) -> str:
     if resolved is None:
         raise RunnerError(f"{name} executable is unavailable: {configured}")
     return resolved
+
+
+def require_validation_executable(configured: str, clone_dir: Path) -> str:
+    if os.sep in configured:
+        candidate = (clone_dir / configured).resolve()
+        if not path_is_within(clone_dir, candidate) or not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise RunnerError("validation script must be an executable parent-owned clone path")
+        return str(candidate)
+    resolved = shutil.which(configured, path=DEFAULT_PATH)
+    if resolved is None or not any(
+        path_is_within(Path(root), Path(resolved)) for root in SANDBOX_SYSTEM_DIRECTORIES
+    ):
+        raise RunnerError(f"validation command executable is unavailable on the trusted system path: {configured}")
+    return str(Path(resolved).resolve())
 
 
 def ensure_bwrap_usable(bwrap_bin: str) -> None:
@@ -312,6 +627,20 @@ def scope_allows_path(scope_entries: Sequence[str], relative_path: str) -> bool:
     return False
 
 
+def is_validation_authority_path(relative_path: str) -> bool:
+    path = PurePosixPath(relative_path)
+    if scope_allows_path(VALIDATION_AUTHORITY_SCOPE, relative_path):
+        return True
+    if path.name in VALIDATION_AUTHORITY_BASENAMES or path.name in VALIDATION_MANIFEST_BASENAMES:
+        return True
+    if path.parts and path.parts[0].startswith("."):
+        return True
+    return (
+        VALIDATION_TEST_NAME.search(relative_path) is not None
+        or VALIDATION_CONFIG_NAME.search(relative_path) is not None
+    )
+
+
 def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path, str, dict[str, str | list[str]], list[str]]:
     plan_rel = normalize_manifest_path(repo_root, plan_arg)
     if not PLAN_PATTERN.fullmatch(plan_rel):
@@ -332,6 +661,49 @@ def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path
     return plan_path, plan_rel, values, normalized_scope
 
 
+def implementation_classification(values: dict[str, str | list[str]], key: str) -> str:
+    """Read one optional scalar classification; only absence receives a default."""
+    if key not in values:
+        return "ordinary"
+    raw = values[key]
+    if not isinstance(raw, str):
+        raise RunnerError(f"plan {key} must be one scalar classification")
+    value = raw.strip().lower()
+    if value not in IMPLEMENTATION_CLASSIFICATIONS:
+        allowed = ", ".join(sorted(IMPLEMENTATION_CLASSIFICATIONS))
+        raise RunnerError(f"plan {key} must be one of {allowed}; blank and unknown values are rejected")
+    return value
+
+
+def select_plan_writable_profile(values: dict[str, str | list[str]]) -> tuple[str, str]:
+    """Select a writable model from separate risk and ambiguity declarations."""
+    risk = implementation_classification(values, "implementation_risk")
+    ambiguity = implementation_classification(values, "implementation_ambiguity")
+    if "high" in {risk, ambiguity}:
+        raise RunnerError(
+            "writable sequential delegation is refused when implementation_risk or "
+            "implementation_ambiguity is high"
+        )
+    if risk == ambiguity == "low":
+        return DEFAULT_CODEX_MODEL, DEFAULT_CODEX_REASONING
+    return TERRA_CODEX_MODEL, "medium"
+
+
+def require_writable_model(model: str | None, label: str) -> str:
+    if model is None or not model.strip():
+        raise RunnerError(f"{label} Codex model must be non-empty")
+    normalized = model.strip()
+    if normalized.casefold() == WRITABLE_SOL_MODEL:
+        raise RunnerError("gpt-5.6-sol is reserved for independent review and cannot be a writable worker")
+    return normalized
+
+
+def require_reasoning_effort(reasoning: str | None, label: str) -> str:
+    if reasoning is None or not reasoning.strip():
+        raise RunnerError(f"{label} Codex reasoning effort must be non-empty")
+    return reasoning.strip()
+
+
 def ensure_no_symlink_components(path: Path) -> None:
     candidate = path.expanduser()
     if not candidate.is_absolute():
@@ -350,6 +722,363 @@ def path_is_within(root: Path, candidate: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def validate_bounded_text(value: str | None, label: str, maximum_bytes: int) -> str:
+    if value is None or not isinstance(value, str) or not value.strip():
+        raise RunnerError(f"{label} must be a nonblank string")
+    normalized = value.strip()
+    if len(normalized.encode("utf-8")) > maximum_bytes:
+        raise RunnerError(f"{label} exceeds the byte bound")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise RunnerError(f"{label} contains a control character")
+    return normalized
+
+
+def validate_model_name(model: str | None) -> str:
+    return validate_bounded_text(model, "availability model", AVAILABILITY_STATE_MAX_MODEL_BYTES)
+
+
+def target_identity(metadata: os.stat_result) -> tuple[int, int, int, int]:
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+
+
+def read_bounded_fd(descriptor: int, maximum_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, min(4096, maximum_bytes + 1 - total))
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > maximum_bytes:
+            raise RunnerError("availability state exceeds the byte bound")
+
+
+def validate_availability_payload(payload: object, run_id: str) -> dict[str, str]:
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "orchestration_run_id",
+        "unavailable_models",
+    }:
+        raise RunnerError("availability state has an invalid exact field shape")
+    if payload["schema_version"] != AVAILABILITY_STATE_SCHEMA_VERSION:
+        raise RunnerError("availability state has an unsupported schema version")
+    stored_run_id = payload["orchestration_run_id"]
+    if not isinstance(stored_run_id, str):
+        raise RunnerError("availability state orchestration run identifier must be a string")
+    stored_run_id = validate_bounded_text(
+        stored_run_id, "availability state orchestration run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES
+    )
+    if stored_run_id != run_id:
+        raise RunnerError("availability state belongs to a different orchestration run identifier")
+    entries = payload["unavailable_models"]
+    if not isinstance(entries, list):
+        raise RunnerError("availability state unavailable_models must be a list")
+    if len(entries) > AVAILABILITY_STATE_MAX_ENTRIES:
+        raise RunnerError("availability state exceeds the entry-count bound")
+    allowed_reasons = {item[0] for item in CODEX_UNAVAILABLE_PATTERNS}
+    unavailable: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"model", "reason"}:
+            raise RunnerError("availability state entry has an invalid exact field shape")
+        model = entry["model"]
+        reason = entry["reason"]
+        if not isinstance(model, str):
+            raise RunnerError("availability state model must be a string")
+        model = validate_model_name(model)
+        if not isinstance(reason, str) or reason not in allowed_reasons:
+            raise RunnerError("availability state reason must be one bounded availability code")
+        if model in unavailable:
+            raise RunnerError(f"availability state contains a duplicate model: {model}")
+        unavailable[model] = reason
+    return unavailable
+
+
+def validate_lifecycle_payload(payload: object, run_id: str) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "orchestration_run_id",
+        "current_manifest_digest",
+        "current_patch_digest",
+        "correction_round",
+        "candidate_generations",
+        "phase",
+        "focused_required",
+        "focused_validation_count",
+        "authoritative_validation_count",
+        "parent_review_rejections",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise RunnerError("lifecycle state has an invalid exact field shape")
+    if payload["schema_version"] != LIFECYCLE_STATE_SCHEMA_VERSION:
+        raise RunnerError("lifecycle state has an unsupported schema version")
+    if payload["orchestration_run_id"] != run_id:
+        raise RunnerError("lifecycle state belongs to a different orchestration run identifier")
+    for key in ("current_manifest_digest", "current_patch_digest"):
+        value = payload[key]
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise RunnerError(f"lifecycle state has an invalid digest: {key}")
+    for key in (
+        "correction_round",
+        "candidate_generations",
+        "focused_validation_count",
+        "authoritative_validation_count",
+        "parent_review_rejections",
+    ):
+        value = payload[key]
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 3:
+            raise RunnerError(f"lifecycle state has an invalid bounded counter: {key}")
+    if payload["candidate_generations"] != payload["correction_round"] + 1:
+        raise RunnerError("lifecycle state generation count does not match correction lineage")
+    if payload["parent_review_rejections"] != payload["correction_round"]:
+        raise RunnerError("lifecycle state rejection count does not match correction lineage")
+    if payload["correction_round"] > MAX_CORRECTION_ROUNDS:
+        raise RunnerError("lifecycle state exceeds the correction budget")
+    if payload["focused_validation_count"] > 1 or payload["authoritative_validation_count"] > 1:
+        raise RunnerError("lifecycle state validation counters exceed exactly-once bounds")
+    if not isinstance(payload["focused_required"], bool):
+        raise RunnerError("lifecycle state focused_required must be boolean")
+    if payload["phase"] not in {
+        "admitted",
+        "focused_passed",
+        "focused_failed",
+        "focused_running",
+        "authoritative_passed",
+        "authoritative_failed",
+        "authoritative_running",
+        "applying",
+        "applied",
+    }:
+        raise RunnerError("lifecycle state has an invalid phase")
+    phase = payload["phase"]
+    focused_count = payload["focused_validation_count"]
+    authoritative_count = payload["authoritative_validation_count"]
+    if phase == "admitted" and (focused_count or authoritative_count):
+        raise RunnerError("admitted lifecycle state cannot claim validation events")
+    if phase.startswith("focused_") and (focused_count != 1 or authoritative_count != 0):
+        raise RunnerError("focused lifecycle phase has inconsistent counters")
+    if phase in {"authoritative_running", "authoritative_passed", "authoritative_failed", "applying", "applied"}:
+        if authoritative_count != 1 or (payload["focused_required"] and focused_count != 1):
+            raise RunnerError("authoritative lifecycle phase has inconsistent counters")
+    return payload
+
+
+def validate_manifest_telemetry(payload: object, correction_round: int) -> None:
+    required = {
+        "schema_version",
+        "attempt_durations_seconds",
+        "runner_duration_seconds",
+        "model_starts",
+        "availability_failures",
+        "skipped_known_unavailable_starts",
+        "candidate_generations",
+        "full_validation_count",
+        "authoritative_validation_count",
+        "focused_validation_count",
+        "parent_review_rejections",
+        "correction_round",
+        "implementation_risk",
+        "implementation_ambiguity",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise RunnerError("candidate telemetry has an invalid exact field shape")
+    if payload["schema_version"] != TELEMETRY_SCHEMA_VERSION:
+        raise RunnerError("candidate telemetry has an unsupported schema version")
+    durations = payload["attempt_durations_seconds"]
+    if not isinstance(durations, list) or len(durations) > 2:
+        raise RunnerError("candidate telemetry attempt durations exceed the bound")
+    for value in [*durations, payload["runner_duration_seconds"]]:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise RunnerError("candidate telemetry duration must be finite numeric data")
+        if not 0 <= value <= TELEMETRY_MAX_DURATION_SECONDS:
+            raise RunnerError("candidate telemetry duration is outside the bound")
+    for key in (
+        "model_starts",
+        "availability_failures",
+        "skipped_known_unavailable_starts",
+        "candidate_generations",
+        "full_validation_count",
+        "authoritative_validation_count",
+        "focused_validation_count",
+        "parent_review_rejections",
+        "correction_round",
+    ):
+        value = payload[key]
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 3:
+            raise RunnerError(f"candidate telemetry counter is invalid: {key}")
+    if payload["correction_round"] != correction_round:
+        raise RunnerError("candidate telemetry correction round differs from lineage")
+    if payload["candidate_generations"] != correction_round + 1:
+        raise RunnerError("candidate telemetry generation count differs from lineage")
+    if payload["parent_review_rejections"] != correction_round:
+        raise RunnerError("candidate telemetry rejection count differs from lineage")
+    if any(payload[key] != 0 for key in ("full_validation_count", "authoritative_validation_count", "focused_validation_count")):
+        raise RunnerError("candidate manifest must not claim parent validation events")
+    for key in ("implementation_risk", "implementation_ambiguity"):
+        if payload[key] not in IMPLEMENTATION_CLASSIFICATIONS:
+            raise RunnerError(f"candidate telemetry classification is invalid: {key}")
+
+
+def open_lifecycle_state(repo_root: Path, raw_path: str, raw_run_id: str) -> LifecycleState:
+    run_id = validate_bounded_text(
+        raw_run_id, "orchestration run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES
+    )
+    requested = Path(raw_path).expanduser()
+    if not requested.is_absolute():
+        requested = (Path.cwd() / requested).absolute()
+    if requested.name in {"", ".", ".."}:
+        raise RunnerError("lifecycle state path must name a file")
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    lock_fd = -1
+    try:
+        for component in requested.parent.parts[1:]:
+            next_descriptor = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        actual_parent = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+        if path_is_within(repo_root, actual_parent / requested.name):
+            raise RunnerError("lifecycle state path must be outside the source repository")
+        lock_fd = os.open(
+            f".{requested.name}.lock",
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=descriptor,
+        )
+        if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+            raise RunnerError("lifecycle state lock must be a regular file")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        data: dict[str, Any] | None = None
+        try:
+            state_fd = os.open(
+                requested.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=descriptor
+            )
+        except FileNotFoundError:
+            state_fd = -1
+        if state_fd >= 0:
+            try:
+                if not stat.S_ISREG(os.fstat(state_fd).st_mode):
+                    raise RunnerError("lifecycle state target must be a regular file")
+                raw = read_bounded_fd(state_fd, LIFECYCLE_STATE_MAX_BYTES)
+            finally:
+                os.close(state_fd)
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RunnerError("lifecycle state is not valid UTF-8 JSON") from exc
+            data = validate_lifecycle_payload(parsed, run_id)
+        handle = LifecycleState(
+            parent_fd=descriptor,
+            target_name=requested.name,
+            lock_fd=lock_fd,
+            run_id=run_id,
+            data=data,
+        )
+        descriptor = -1
+        lock_fd = -1
+        return handle
+    except OSError as exc:
+        raise RunnerError("lifecycle state path and lock must be nonsymlink files") from exc
+    finally:
+        if lock_fd >= 0:
+            os.close(lock_fd)
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def open_availability_state(repo_root: Path, raw_path: str, raw_run_id: str) -> AvailabilityState:
+    run_id = validate_bounded_text(
+        raw_run_id, "orchestration run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES
+    )
+    requested = Path(raw_path).expanduser()
+    if not requested.is_absolute():
+        requested = (Path.cwd() / requested).absolute()
+    if requested.name in {"", ".", ".."}:
+        raise RunnerError("availability state path must name a file")
+    parent_parts = requested.parent.parts
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    lock_fd = -1
+    try:
+        for component in parent_parts[1:]:
+            try:
+                next_descriptor = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            except OSError as exc:
+                raise RunnerError("availability state ancestor must exist and must not be a symlink") from exc
+            os.close(descriptor)
+            descriptor = next_descriptor
+        try:
+            actual_parent = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+        except OSError as exc:
+            raise RunnerError("could not verify availability state parent directory") from exc
+        if path_is_within(repo_root, actual_parent / requested.name):
+            raise RunnerError("availability state path must be outside the source repository")
+        lock_fd = os.open(
+            f".{requested.name}.lock",
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=descriptor,
+        )
+        if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+            raise RunnerError("availability state lock must be a regular file")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        state_identity: tuple[int, int, int, int] | None = None
+        unavailable: dict[str, str] = {}
+        try:
+            state_fd = os.open(
+                requested.name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+        except FileNotFoundError:
+            state_fd = -1
+        except OSError as exc:
+            raise RunnerError("availability state target must not be a symlink") from exc
+        if state_fd >= 0:
+            try:
+                metadata = os.fstat(state_fd)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise RunnerError("availability state target must be a regular file")
+                state_identity = target_identity(metadata)
+                raw = read_bounded_fd(state_fd, AVAILABILITY_STATE_MAX_BYTES)
+            finally:
+                os.close(state_fd)
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RunnerError("availability state is not valid UTF-8 JSON") from exc
+            unavailable = validate_availability_payload(payload, run_id)
+        handle = AvailabilityState(
+            parent_fd=descriptor,
+            target_name=requested.name,
+            run_id=run_id,
+            unavailable=unavailable,
+            target_identity=state_identity,
+            lock_fd=lock_fd,
+        )
+        descriptor = -1
+        lock_fd = -1
+        return handle
+    finally:
+        if lock_fd >= 0:
+            os.close(lock_fd)
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def bounded_duration(started: float, finished: float) -> float:
+    duration = finished - started
+    if not math.isfinite(duration) or duration < 0 or duration > TELEMETRY_MAX_DURATION_SECONDS:
+        raise RunnerError("telemetry duration is outside the finite nonnegative bound")
+    return duration
 
 
 def materialize_output_dir(repo_root: Path, requested: str | None) -> Path:
@@ -394,13 +1123,33 @@ def build_worker_prompt(plan_rel: str, plan_digest: str) -> str:
         - Do not spawn agents, commit, edit plan status, or touch paths outside the plan write_scope.
         - Keep context bounded: read the plan, AGENTS.md, the listed context/spec files, and only implementation files needed for this task.
         - Do not inspect logs or unrelated plans.
-        - Run every validation command listed in the plan before finishing.
+        - Do not run plan validation. The parent performs review and authorizes validation after admission.
         - Write transient diagnostics, tool caches, and temporary artifacts only under
           $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
 
         The parent will reject any changed path outside write_scope.
         Report changed paths, validation results, blockers, remaining risks, and confirm whether any out-of-scope path changed.
 
+        Plan digest: {plan_digest}
+        """
+    )
+
+
+def build_correction_prompt(plan_rel: str, plan_digest: str) -> str:
+    return textwrap.dedent(
+        f"""\
+        Correct the rejected candidate already applied in this fresh isolated clone for {plan_rel}.
+
+        Constraints:
+        - Read the parent-authored correction brief at $SANDBOXED_PLAN_WORKER_CORRECTION_BRIEF.
+        - The brief is a read-only input. Do not search for or inspect any prior attempt artifact.
+        - Preserve correct prior work and change only what the brief requires.
+        - Do not spawn agents, commit, edit plan status, or touch paths outside write_scope.
+        - Write transient diagnostics, caches, and temporary artifacts only under
+          $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
+        - Report changed paths and blockers. Do not run broad plan validation.
+
+        The parent will admit one aggregate patch against the original source HEAD.
         Plan digest: {plan_digest}
         """
     )
@@ -470,11 +1219,12 @@ def build_bwrap_command(
     writable_shadows: Sequence[tuple[Path, Path]] = (),
     writable_clone: bool = False,
     hidden_directories: Sequence[Path] = (),
+    read_only_inputs: Sequence[Path] = (),
+    network_enabled: bool = True,
 ) -> list[str]:
     argv = [
         bwrap_bin,
         "--unshare-all",
-        "--share-net",
         "--unshare-user",
         "--new-session",
         "--disable-userns",
@@ -482,12 +1232,68 @@ def build_bwrap_command(
         "ALL",
         "--die-with-parent",
         "--clearenv",
-        "--ro-bind",
+        "--tmpfs",
         "/",
-        "/",
+        "--dir",
+        "/tmp",
+        "--dir",
+        "/run",
+        "--dir",
+        "/var",
+        "--dir",
+        "/etc",
+        "--dir",
+        "/home",
     ]
-    for hidden in hidden_directories:
-        argv.extend(("--tmpfs", str(hidden)))
+    if network_enabled:
+        argv.insert(2, "--share-net")
+    for raw in (*SANDBOX_SYSTEM_DIRECTORIES, *SANDBOX_SYSTEM_OPTIONAL_DIRECTORIES):
+        path = Path(raw)
+        if path.exists():
+            argv.extend(("--ro-bind", raw, raw))
+    for raw in SANDBOX_SYSTEM_FILES:
+        path = Path(raw)
+        if path.is_file():
+            argv.extend(("--ro-bind", raw, raw))
+    required_paths = [clone_dir, scratch_dir, *read_only_inputs]
+    executable = Path(command[0]) if command else Path()
+    runtime_root: Path | None = None
+    if executable.is_absolute() and not any(path_is_within(Path(root), executable) for root in SANDBOX_SYSTEM_DIRECTORIES) and not any(
+        path_is_within(visible, executable) for visible in (clone_dir, scratch_dir)
+    ):
+        runtime_root = next(
+            (
+                parent
+                for parent in executable.parents
+                if parent != Path("/") and (parent / "bin").is_dir() and (parent / "lib").is_dir()
+            ),
+            None,
+        )
+        executable_input = runtime_root or executable
+        for parent in reversed(executable_input.parents):
+            if parent != Path("/"):
+                argv.extend(("--dir", str(parent)))
+        argv.extend(("--ro-bind", str(executable_input), str(executable_input)))
+    for required in required_paths:
+        for parent in reversed(required.parents):
+            if parent != Path("/"):
+                argv.extend(("--dir", str(parent)))
+    external_files = [
+        path
+        for path in read_only_inputs
+        if not any(path_is_within(visible, path) for visible in (clone_dir, scratch_dir))
+    ]
+    if executable.is_absolute() and runtime_root is None and not any(
+        path_is_within(visible, executable) for visible in (clone_dir, scratch_dir)
+    ) and not any(path_is_within(Path(root), executable) for root in SANDBOX_SYSTEM_DIRECTORIES):
+        external_files.append(executable)
+    for index, parent in enumerate(sorted({path.parent for path in external_files}, key=str)):
+        empty_parent = scratch_dir / "empty-host-parents" / str(index)
+        empty_parent.mkdir(parents=True, exist_ok=True)
+        for explicit_file in (path for path in external_files if path.parent == parent):
+            shutil.copy2(explicit_file, empty_parent / explicit_file.name, follow_symlinks=True)
+        empty_parent.chmod(0o555)
+        argv.extend(("--ro-bind", str(empty_parent), str(parent)))
     argv.extend(
         [
         "--ro-bind" if not writable_clone else "--bind",
@@ -506,6 +1312,9 @@ def build_bwrap_command(
     )
     for shadow_path, clone_target in writable_shadows:
         argv.extend(("--bind", str(shadow_path), str(clone_target)))
+    for read_only_input in read_only_inputs:
+        if read_only_input not in external_files:
+            argv.extend(("--ro-bind", str(read_only_input), str(read_only_input)))
     for key, value in env_vars.items():
         argv.extend(["--setenv", key, value])
     argv.append("--")
@@ -618,7 +1427,9 @@ def resolve_source_object_directory(repo_root: Path, git_bin: str) -> Path:
     return object_dir
 
 
-def derive_changed_paths_from_patch(repo_root: Path, git_bin: str, patch_path: Path, base_rev: str) -> list[str]:
+def derive_changed_paths_from_patch(
+    repo_root: Path, git_bin: str, patch_bytes: bytes, base_rev: str
+) -> list[str]:
     with tempfile.TemporaryDirectory(prefix="sandboxed-plan-worker-apply-index-") as tmp:
         index_path = Path(tmp) / "index"
         object_dir = Path(tmp) / "objects"
@@ -629,14 +1440,45 @@ def derive_changed_paths_from_patch(repo_root: Path, git_bin: str, patch_path: P
         env["GIT_OBJECT_DIRECTORY"] = str(object_dir)
         env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = git_c_quote_path(source_object_dir)
         run_subprocess((git_bin, "read-tree", base_rev), cwd=repo_root, env=env)
-        run_subprocess((git_bin, "apply", "--cached", "--check", "--binary", str(patch_path)), cwd=repo_root, env=env)
-        run_subprocess((git_bin, "apply", "--cached", "--binary", str(patch_path)), cwd=repo_root, env=env)
+        run_subprocess(
+            (git_bin, "apply", "--cached", "--check", "--binary", "-"),
+            cwd=repo_root,
+            env=env,
+            stdin=patch_bytes,
+        )
+        run_subprocess(
+            (git_bin, "apply", "--cached", "--binary", "-"),
+            cwd=repo_root,
+            env=env,
+            stdin=patch_bytes,
+        )
         output = run_subprocess(
             (git_bin, "diff-index", "--cached", "--name-only", "-z", base_rev, "--"),
             cwd=repo_root,
             env=env,
         ).stdout
     return [item.decode("utf-8") for item in output.split(b"\0") if item]
+
+
+def collect_worktree_patch(repo_root: Path, git_bin: str, base_rev: str) -> bytes:
+    """Render the current source worktree against base without writing its index or objects."""
+    with tempfile.TemporaryDirectory(prefix="sandboxed-plan-worker-reconcile-index-") as tmp:
+        index_path = Path(tmp) / "index"
+        object_dir = Path(tmp) / "objects"
+        object_dir.mkdir()
+        env = sanitize_process_env()
+        env["GIT_INDEX_FILE"] = str(index_path)
+        env["GIT_OBJECT_DIRECTORY"] = str(object_dir)
+        env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = git_c_quote_path(
+            resolve_source_object_directory(repo_root, git_bin)
+        )
+        run_subprocess((git_bin, "read-tree", base_rev), cwd=repo_root, env=env)
+        run_subprocess((git_bin, "add", "--all", "--"), cwd=repo_root, env=env)
+        return run_subprocess(
+            (git_bin, "diff", "--cached", "--binary", "--full-index", base_rev, "--"),
+            cwd=repo_root,
+            env=env,
+        ).stdout
 
 
 def normalize_changed_paths(paths: Sequence[str], repo_root: Path) -> list[str]:
@@ -838,6 +1680,8 @@ def execute_isolated_attempt(
     model: str | None = None,
     reasoning: str | None = None,
     custom_command: Sequence[str] | None = None,
+    prior_patch: bytes | None = None,
+    correction_brief: bytes | None = None,
 ) -> dict[str, Any]:
     attempt_root = workspace / label
     clone_dir = attempt_root / "clone"
@@ -845,6 +1689,11 @@ def execute_isolated_attempt(
     scratch_dir.mkdir(parents=True, exist_ok=False)
     clone_at_head(repo_root, git_bin, head, clone_dir)
     initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
+    if prior_patch is not None:
+        run_subprocess(
+            (git_bin, "apply", "--check", "--binary", "-"), cwd=clone_dir, stdin=prior_patch
+        )
+        run_subprocess((git_bin, "apply", "--binary", "-"), cwd=clone_dir, stdin=prior_patch)
     shadows = prepare_writable_shadows(
         clone_dir=clone_dir,
         scratch_dir=scratch_dir,
@@ -854,9 +1703,28 @@ def execute_isolated_attempt(
     include_codex_home = custom_command is None
     stdin: bytes | None = None
     last_message_path = scratch_dir / "worker-last-message.txt"
+    read_only_inputs: list[Path] = []
+    correction_brief_path: Path | None = None
+    if correction_brief is not None:
+        correction_brief_path = scratch_dir / "correction-brief.txt"
+        correction_brief_path.write_bytes(correction_brief)
+        correction_brief_path.chmod(0o400)
+        read_only_inputs.append(correction_brief_path)
     if custom_command is None:
         if codex_bin is None or model is None or reasoning is None:
             raise RunnerError("Codex attempt requires an executable, model, and reasoning effort")
+        codex_path = Path(codex_bin)
+        has_runtime_root = any(
+            parent != Path("/") and (parent / "bin").is_dir() and (parent / "lib").is_dir()
+            for parent in codex_path.parents
+        )
+        if codex_path.is_absolute() and not any(
+            path_is_within(Path(root), codex_path) for root in SANDBOX_SYSTEM_DIRECTORIES
+        ) and not has_runtime_root:
+            copied_codex = scratch_dir / "codex-cli"
+            shutil.copy2(codex_path, copied_codex, follow_symlinks=True)
+            copied_codex.chmod(0o500)
+            codex_bin = str(copied_codex)
         command = default_worker_command(
             codex_bin=codex_bin,
             clone_dir=clone_dir,
@@ -865,9 +1733,23 @@ def execute_isolated_attempt(
             model=model,
             reasoning=reasoning,
         )
-        stdin = build_worker_prompt(plan_rel, plan_digest).encode("utf-8")
+        stdin = (
+            build_correction_prompt(plan_rel, plan_digest)
+            if correction_brief is not None
+            else build_worker_prompt(plan_rel, plan_digest)
+        ).encode("utf-8")
     else:
-        command = list(custom_command)
+        command = [custom_command[0]]
+        explicit_root = scratch_dir / "explicit-inputs"
+        for index, item in enumerate(custom_command[1:]):
+            item_path = Path(item)
+            if item_path.is_absolute() and item_path.is_file():
+                explicit_root.mkdir(exist_ok=True)
+                copied_input = explicit_root / f"{index}-{item_path.name}"
+                shutil.copy2(item_path, copied_input, follow_symlinks=True)
+                command.append(str(copied_input))
+            else:
+                command.append(item)
 
     env_vars = prepare_worker_environment(
         source_repo=repo_root,
@@ -877,6 +1759,9 @@ def execute_isolated_attempt(
         extra_env=extra_env,
         include_codex_home=include_codex_home,
     )
+    if correction_brief_path is not None:
+        env_vars[f"{ENV_PREFIX}CORRECTION_BRIEF"] = str(correction_brief_path)
+    attempt_started = time.monotonic()
     result = run_subprocess(
         build_bwrap_command(
             bwrap_bin=bwrap_bin,
@@ -889,12 +1774,14 @@ def execute_isolated_attempt(
                 hidden_directories,
                 visible_paths=(clone_dir, scratch_dir),
             ),
+            read_only_inputs=read_only_inputs,
         ),
         cwd=repo_root,
         env=sanitize_process_env(),
         stdin=stdin,
         check=False,
     )
+    attempt_duration = bounded_duration(attempt_started, time.monotonic())
 
     artifact_prefix = "worker" if label == "custom" else f"worker-{label}"
     stdout_path = reserved_artifacts[f"{artifact_prefix}.stdout"]
@@ -906,6 +1793,7 @@ def execute_isolated_attempt(
         "model": model,
         "reasoning_effort": reasoning,
         "returncode": result.returncode,
+        "duration_seconds": attempt_duration,
         "stdout_path": str(stdout_path),
         "stdout_digest": stdout_digest,
         "stderr_path": str(stderr_path),
@@ -956,7 +1844,45 @@ def select_attempt_artifacts(
     return worker_result
 
 
+def enforce_plan_execution_gate(args: argparse.Namespace, *, plan: str | None = None) -> None:
+    state = args.plan_execution_state
+    checker = Path(__file__).with_name("plan-execution-state.py")
+    if not checker.is_file():
+        raise RunnerError("plan execution state checker is unavailable")
+    command = [
+        sys.executable,
+        str(checker),
+        "check",
+        state,
+        "--run-id",
+        args.orchestration_run_id,
+        "--lifecycle-state",
+        args.lifecycle_state,
+    ]
+    if plan is not None:
+        command.extend(("--plan", plan))
+    completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise RunnerError(detail or "plan execution state gate rejected the operation")
+
+
+def plan_execution_lease(args: argparse.Namespace):
+    state = getattr(args, "plan_execution_state", None)
+    if not state:
+        return nullcontext()
+    lock_path = Path(state).with_name(Path(state).name + ".lock")
+    try:
+        descriptor = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise RunnerError(f"could not open plan execution lease: {exc}") from exc
+    handle = os.fdopen(descriptor, "rb")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+    return handle
+
+
 def run_worker(args: argparse.Namespace) -> int:
+    runner_started = time.monotonic()
     git_bin = require_executable("git", args.git_bin)
     bwrap_bin = require_executable("bwrap", args.bwrap_bin)
     ensure_bwrap_usable(bwrap_bin)
@@ -964,53 +1890,115 @@ def run_worker(args: argparse.Namespace) -> int:
     os.chdir(repo_root)
     planlib = load_planlib()
     ensure_clean_worktree(repo_root, git_bin)
-    plan_path, plan_rel, _values, normalized_scope = load_plan(planlib, repo_root, args.plan)
+    plan_path, plan_rel, values, normalized_scope = load_plan(planlib, repo_root, args.plan)
+    implementation_risk = implementation_classification(values, "implementation_risk")
+    implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
+    selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
     head = git_text(repo_root, git_bin, "rev-parse", "HEAD")
     plan_digest = hash_file(plan_path)
     output_dir = materialize_output_dir(repo_root, args.output_dir)
     reserved_artifacts = reserve_output_artifacts(output_dir)
+    state_path = args.availability_state
+    run_id = args.orchestration_run_id
+    if state_path is not None and run_id is None:
+        raise RunnerError("availability state requires an orchestration run identifier")
+    state_context = (
+        open_availability_state(repo_root, state_path, run_id)
+        if state_path is not None and run_id is not None
+        else nullcontext(None)
+    )
+    lifecycle_context = open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    )
 
-    with tempfile.TemporaryDirectory(prefix="sandboxed-plan-worker-workspace-") as workspace_tmp:
+    with lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
+        prefix="sandboxed-plan-worker-workspace-"
+    ) as workspace_tmp:
+        if lifecycle_state.data is not None:
+            raise RunnerError("lifecycle state is already initialized for this orchestration run")
         workspace = Path(workspace_tmp)
         attempts: list[dict[str, Any]] = []
         fallback_reason: str | None = None
+        availability_failures = 0
+        skipped_known_unavailable_starts = 0
         if args.worker_binary is None:
             codex_bin = require_executable("codex", args.codex_bin)
-            if not args.codex_model or not args.codex_reasoning_effort:
-                raise RunnerError("preferred Codex model and reasoning effort must be non-empty")
-            if not args.no_model_fallback and (
-                not args.fallback_codex_model or not args.fallback_codex_reasoning_effort
-            ):
-                raise RunnerError("fallback Codex model and reasoning effort must be non-empty")
-            primary = execute_isolated_attempt(
-                workspace=workspace,
-                label="primary",
-                repo_root=repo_root,
-                head=head,
-                plan_rel=plan_rel,
-                plan_digest=plan_digest,
-                normalized_scope=normalized_scope,
-                bwrap_bin=bwrap_bin,
-                git_bin=git_bin,
-                reserved_artifacts=reserved_artifacts,
-                extra_env=args.worker_env,
-                hidden_directories=(output_dir, host_codex_home_path()),
-                codex_bin=codex_bin,
-                model=args.codex_model,
-                reasoning=args.codex_reasoning_effort,
+            primary_model = require_writable_model(
+                args.codex_model if args.codex_model is not None else selected_plan_model,
+                "preferred",
             )
-            attempts.append(primary["record"])
+            primary_reasoning = require_reasoning_effort(
+                args.codex_reasoning_effort
+                if args.codex_reasoning_effort is not None
+                else selected_plan_reasoning,
+                "preferred",
+            )
+            fallback_model = require_writable_model(args.fallback_codex_model, "fallback")
+            fallback_reasoning_effort = require_reasoning_effort(
+                args.fallback_codex_reasoning_effort, "fallback"
+            )
             worker_kind = "codex"
-            if primary["result"].returncode == 0:
-                selected = primary
+            primary: dict[str, Any] | None = None
+            known_primary_reason = (
+                availability_state.reason_for(primary_model)
+                if availability_state is not None
+                else None
+            )
+            if known_primary_reason is not None:
+                skipped_known_unavailable_starts += 1
+                fallback_reason = known_primary_reason
             else:
-                fallback_reason = classify_codex_unavailability(
-                    primary["result"].stdout, primary["result"].stderr
+                primary = execute_isolated_attempt(
+                    workspace=workspace,
+                    label="primary",
+                    repo_root=repo_root,
+                    head=head,
+                    plan_rel=plan_rel,
+                    plan_digest=plan_digest,
+                    normalized_scope=normalized_scope,
+                    bwrap_bin=bwrap_bin,
+                    git_bin=git_bin,
+                    reserved_artifacts=reserved_artifacts,
+                    extra_env=args.worker_env,
+                    hidden_directories=(output_dir, host_codex_home_path()),
+                    codex_bin=codex_bin,
+                    model=primary_model,
+                    reasoning=primary_reasoning,
                 )
-                if args.no_model_fallback or fallback_reason is None:
-                    raise RunnerError(
-                        f"worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                attempts.append(primary["record"])
+                if primary["result"].returncode == 0:
+                    selected = primary
+                else:
+                    fallback_reason = classify_codex_unavailability(
+                        primary["result"].stdout, primary["result"].stderr
                     )
+                    if fallback_reason is None:
+                        raise RunnerError(
+                            f"worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                        )
+                    availability_failures += 1
+                    if availability_state is not None:
+                        availability_state.record(primary_model, fallback_reason)
+            if primary is None or primary["result"].returncode != 0:
+                if args.no_model_fallback:
+                    if primary is not None:
+                        raise RunnerError(
+                            f"worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                        )
+                    raise RunnerError(
+                        "preferred model is unavailable and model fallback is disabled"
+                    )
+                known_fallback_reason = (
+                    availability_state.reason_for(fallback_model)
+                    if availability_state is not None
+                    else None
+                )
+                if known_fallback_reason is not None:
+                    skipped_known_unavailable_starts += 1
+                    raise RunnerError("fallback model is already recorded unavailable for this orchestration run")
+                hidden_attempt_state = [output_dir, host_codex_home_path()]
+                if primary is not None:
+                    hidden_attempt_state.append(primary["attempt_root"])
                 fallback = execute_isolated_attempt(
                     workspace=workspace,
                     label="fallback",
@@ -1023,13 +2011,20 @@ def run_worker(args: argparse.Namespace) -> int:
                     git_bin=git_bin,
                     reserved_artifacts=reserved_artifacts,
                     extra_env=args.worker_env,
-                    hidden_directories=(output_dir, host_codex_home_path(), primary["attempt_root"]),
+                    hidden_directories=tuple(hidden_attempt_state),
                     codex_bin=codex_bin,
-                    model=args.fallback_codex_model,
-                    reasoning=args.fallback_codex_reasoning_effort,
+                    model=fallback_model,
+                    reasoning=fallback_reasoning_effort,
                 )
                 attempts.append(fallback["record"])
                 if fallback["result"].returncode != 0:
+                    fallback_unavailable_reason = classify_codex_unavailability(
+                        fallback["result"].stdout, fallback["result"].stderr
+                    )
+                    if fallback_unavailable_reason is not None:
+                        availability_failures += 1
+                        if availability_state is not None:
+                            availability_state.record(fallback_model, fallback_unavailable_reason)
                     raise RunnerError(
                         f"fallback worker exited with {fallback['result'].returncode}; stdout/stderr saved under {output_dir}"
                     )
@@ -1084,7 +2079,7 @@ def run_worker(args: argparse.Namespace) -> int:
         patch_path = reserved_artifacts["candidate.patch"]
         patch_digest = write_bytes(patch_path, patch_bytes)
         changed_paths = normalize_changed_paths(
-            derive_changed_paths_from_patch(repo_root, git_bin, patch_path, head),
+            derive_changed_paths_from_patch(repo_root, git_bin, patch_bytes, head),
             repo_root,
         )
         if not changed_paths:
@@ -1092,6 +2087,27 @@ def run_worker(args: argparse.Namespace) -> int:
         disallowed = [path for path in changed_paths if not scope_allows_path(normalized_scope, path)]
         if disallowed:
             raise RunnerError(f"worker changed paths outside write_scope: {', '.join(disallowed)}")
+
+        telemetry_attempts = attempts if worker_kind == "codex" else [selected["record"]]
+        telemetry = {
+            "schema_version": TELEMETRY_SCHEMA_VERSION,
+            "attempt_durations_seconds": [
+                bounded_duration(0.0, float(attempt["duration_seconds"]))
+                for attempt in telemetry_attempts
+            ],
+            "runner_duration_seconds": bounded_duration(runner_started, time.monotonic()),
+            "model_starts": len(attempts) if worker_kind == "codex" else 0,
+            "availability_failures": availability_failures,
+            "skipped_known_unavailable_starts": skipped_known_unavailable_starts,
+            "candidate_generations": 1,
+            "full_validation_count": 0,
+            "authoritative_validation_count": 0,
+            "focused_validation_count": 0,
+            "parent_review_rejections": 0,
+            "correction_round": 0,
+            "implementation_risk": implementation_risk,
+            "implementation_ambiguity": implementation_ambiguity,
+        }
 
         manifest = {
             "schema_version": SCHEMA_VERSION,
@@ -1102,10 +2118,29 @@ def run_worker(args: argparse.Namespace) -> int:
             "changed_paths": changed_paths,
             "patch_path": str(patch_path),
             "patch_digest": patch_digest,
+            "orchestration_run_id": args.orchestration_run_id,
+            "lifecycle_state_path": str(Path(args.lifecycle_state).expanduser().absolute()),
             "worker_result": worker_result,
+            "telemetry": telemetry,
         }
         manifest_path = reserved_artifacts["manifest.json"]
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        focused_raw = values.get("focused_validation", [])
+        lifecycle_state.persist(
+            {
+                "schema_version": LIFECYCLE_STATE_SCHEMA_VERSION,
+                "orchestration_run_id": args.orchestration_run_id,
+                "current_manifest_digest": hash_file(manifest_path),
+                "current_patch_digest": patch_digest,
+                "correction_round": 0,
+                "candidate_generations": 1,
+                "phase": "admitted",
+                "focused_required": isinstance(focused_raw, list) and bool(focused_raw),
+                "focused_validation_count": 0,
+                "authoritative_validation_count": 0,
+                "parent_review_rejections": 0,
+            }
+        )
     print(str(manifest_path))
     return 0
 
@@ -1122,45 +2157,91 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def apply_worker_result(args: argparse.Namespace) -> int:
-    git_bin = require_executable("git", args.git_bin)
-    repo_root = detect_repo_root(git_bin)
-    os.chdir(repo_root)
-    planlib = load_planlib()
-    ensure_clean_worktree(repo_root, git_bin)
-    manifest_path = Path(args.manifest).expanduser().resolve()
-    manifest = load_manifest(manifest_path)
+def read_bounded_regular_file(path: Path, maximum_bytes: int, label: str) -> bytes:
+    if not path.is_absolute():
+        path = (Path.cwd() / path).absolute()
+    ensure_no_symlink_components(path)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise RunnerError(f"{label} must be a regular non-symlink file") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RunnerError(f"{label} must be a regular file")
+        if metadata.st_size > maximum_bytes:
+            raise RunnerError(f"{label} exceeds the byte bound")
+        return read_bounded_fd(descriptor, maximum_bytes)
+    finally:
+        os.close(descriptor)
+
+
+def verify_candidate_manifest(
+    *,
+    repo_root: Path,
+    git_bin: str,
+    planlib: ModuleType,
+    manifest_path: Path,
+    expected_plan: str | None = None,
+    require_applicable: bool = True,
+    require_clean: bool = True,
+) -> dict[str, Any]:
+    manifest_bytes = read_bounded_regular_file(manifest_path, 1024 * 1024, "candidate manifest")
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunnerError("candidate manifest is not valid UTF-8 JSON") from exc
+    if not isinstance(manifest, dict):
+        raise RunnerError("candidate manifest must contain a JSON object")
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise RunnerError(f"unsupported manifest schema version: {manifest.get('schema_version')}")
+    run_id = manifest.get("orchestration_run_id")
+    lifecycle_path = manifest.get("lifecycle_state_path")
+    validate_bounded_text(run_id, "manifest orchestration run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES)
+    if not isinstance(lifecycle_path, str) or not Path(lifecycle_path).is_absolute():
+        raise RunnerError("manifest lifecycle_state_path must be an absolute path")
+    lineage = manifest.get("correction_lineage")
+    correction_round = 0 if lineage is None else lineage.get("correction_round", -1) if isinstance(lineage, dict) else -1
+    validate_manifest_telemetry(manifest.get("telemetry"), correction_round)
     plan_rel = manifest.get("plan_path")
     if not isinstance(plan_rel, str):
         raise RunnerError("manifest plan_path must be a string")
-    plan_path, plan_rel, _values, normalized_scope = load_plan(planlib, repo_root, plan_rel)
+    if expected_plan is not None and plan_rel != expected_plan:
+        raise RunnerError("prior manifest plan path does not match the requested correction plan")
+    plan_path, plan_rel, values, normalized_scope = load_plan(planlib, repo_root, plan_rel)
     current_head = git_text(repo_root, git_bin, "rev-parse", "HEAD")
     if current_head != manifest.get("source_head"):
         raise RunnerError("source HEAD no longer matches the worker manifest")
     current_plan_digest = hash_file(plan_path)
     if current_plan_digest != manifest.get("plan_digest"):
         raise RunnerError("active plan digest no longer matches the worker manifest")
-
+    manifest_scope = manifest.get("allowed_write_scope")
+    if not isinstance(manifest_scope, list):
+        raise RunnerError("manifest allowed_write_scope must be a list")
+    normalized_manifest_scope = parse_write_scope(manifest_scope)
+    if normalized_manifest_scope != normalized_scope:
+        raise RunnerError("candidate manifest write scope differs from the current plan")
     patch_path_raw = manifest.get("patch_path")
     if not isinstance(patch_path_raw, str):
         raise RunnerError("manifest patch_path must be a string")
-    patch_path = Path(patch_path_raw).expanduser().resolve()
-    if not patch_path.is_file():
-        raise RunnerError(f"candidate patch is missing: {patch_path}")
-    patch_digest = hash_file(patch_path)
+    patch_path = Path(patch_path_raw).expanduser()
+    if not patch_path.is_absolute():
+        patch_path = (manifest_path.parent / patch_path).absolute()
+    patch_bytes = read_bounded_regular_file(patch_path, 128 * 1024 * 1024, "candidate patch")
+    patch_digest = hashlib.sha256(patch_bytes).hexdigest()
     if patch_digest != manifest.get("patch_digest"):
         raise RunnerError("candidate patch digest no longer matches the worker manifest")
-
     changed_paths = normalize_changed_paths(
-        derive_changed_paths_from_patch(repo_root, git_bin, patch_path, current_head),
+        derive_changed_paths_from_patch(repo_root, git_bin, patch_bytes, current_head),
         repo_root,
     )
     manifest_changed = manifest.get("changed_paths", [])
     if not isinstance(manifest_changed, list):
         raise RunnerError("manifest changed_paths must be a list")
-    normalized_manifest_changed = [normalize_repo_relpath(item, label="manifest changed path")[0] for item in manifest_changed]
+    normalized_manifest_changed = [
+        normalize_repo_relpath(item, label="manifest changed path")[0]
+        for item in manifest_changed
+    ]
     if changed_paths != normalized_manifest_changed:
         raise RunnerError("candidate patch changed paths do not match the worker manifest")
     disallowed = [path for path in changed_paths if not scope_allows_path(normalized_scope, path)]
@@ -1168,13 +2249,652 @@ def apply_worker_result(args: argparse.Namespace) -> int:
         raise RunnerError(f"candidate patch changes paths outside the current write_scope: {', '.join(disallowed)}")
     for path in changed_paths:
         ensure_no_symlink_path_trick(repo_root, path)
+    if require_applicable:
+        run_subprocess(
+            (git_bin, "apply", "--check", "--binary", "-"), cwd=repo_root, stdin=patch_bytes
+        )
+    if require_clean:
+        ensure_clean_worktree(repo_root, git_bin)
+    if git_text(repo_root, git_bin, "rev-parse", "HEAD") != current_head:
+        raise RunnerError("source HEAD changed during candidate verification")
+    return {
+        "manifest": manifest,
+        "manifest_digest": hashlib.sha256(manifest_bytes).hexdigest(),
+        "plan_path": plan_path,
+        "plan_rel": plan_rel,
+        "values": values,
+        "normalized_scope": normalized_scope,
+        "head": current_head,
+        "plan_digest": current_plan_digest,
+        "patch_path": patch_path,
+        "patch_bytes": patch_bytes,
+        "patch_digest": patch_digest,
+        "changed_paths": changed_paths,
+    }
 
-    run_subprocess((git_bin, "apply", "--check", "--binary", str(patch_path)), cwd=repo_root)
+
+def next_correction_lineage(
+    prior_manifest: dict[str, Any],
+    *,
+    prior_manifest_digest: str,
+    prior_patch_digest: str,
+    correction_brief_digest: str,
+) -> dict[str, Any]:
+    prior_lineage = prior_manifest.get("correction_lineage")
+    if prior_lineage is None:
+        prior_round = 0
+    else:
+        required = {
+            "prior_manifest_digest",
+            "prior_patch_digest",
+            "correction_round",
+            "correction_brief_digest",
+        }
+        if not isinstance(prior_lineage, dict) or set(prior_lineage) != required:
+            raise RunnerError("prior correction lineage has an invalid exact field shape")
+        prior_round = prior_lineage.get("correction_round")
+        if not isinstance(prior_round, int) or isinstance(prior_round, bool) or prior_round < 1:
+            raise RunnerError("prior correction lineage has an invalid correction round")
+        for key in required - {"correction_round"}:
+            value = prior_lineage.get(key)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise RunnerError(f"prior correction lineage has an invalid digest: {key}")
+    correction_round = prior_round + 1
+    if correction_round > MAX_CORRECTION_ROUNDS:
+        raise RunnerError("correction budget exhausted after two isolated corrections")
+    return {
+        "prior_manifest_digest": prior_manifest_digest,
+        "prior_patch_digest": prior_patch_digest,
+        "correction_round": correction_round,
+        "correction_brief_digest": correction_brief_digest,
+    }
+
+
+def validate_candidate(args: argparse.Namespace) -> int:
+    if not args.parent_diff_approved or not args.critical_invariants_approved:
+        raise RunnerError(
+            "candidate validation requires explicit parent diff and critical-invariant approval"
+        )
+    validation_started = time.monotonic()
+    git_bin = require_executable("git", args.git_bin)
+    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+    ensure_bwrap_usable(bwrap_bin)
+    repo_root = detect_repo_root(git_bin)
+    os.chdir(repo_root)
+    planlib = load_planlib()
+    validation_commands = load_plan_validation_commands()
     ensure_clean_worktree(repo_root, git_bin)
-    if git_text(repo_root, git_bin, "rev-parse", "HEAD") != manifest.get("source_head"):
-        raise RunnerError("source HEAD changed after candidate preflight and before apply")
-    run_subprocess((git_bin, "apply", "--binary", str(patch_path)), cwd=repo_root)
-    print(str(patch_path))
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    verified = verify_candidate_manifest(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        planlib=planlib,
+        manifest_path=manifest_path,
+    )
+    if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
+        raise RunnerError("validation run identifier differs from the verified manifest")
+    if Path(args.lifecycle_state).expanduser().absolute() != Path(
+        verified["manifest"]["lifecycle_state_path"]
+    ):
+        raise RunnerError("validation lifecycle state path differs from the verified manifest")
+    immutable_selectors = {verified["plan_rel"]}
+    try:
+        immutable_selectors.add(str(Path(__file__).resolve().relative_to(repo_root)))
+    except ValueError:
+        pass
+    changed_selectors = sorted(immutable_selectors.intersection(verified["changed_paths"]))
+    if changed_selectors:
+        raise RunnerError(
+            "candidate must not change the active plan or runner that selects validation commands: "
+            + ", ".join(changed_selectors)
+        )
+    changed_authority = sorted(
+        path
+        for path in verified["changed_paths"]
+        if is_validation_authority_path(path)
+    )
+    declared_authority = verified["values"].get("validation_authority_scope", [])
+    if not isinstance(declared_authority, list):
+        raise RunnerError("plan validation_authority_scope must be a list")
+    normalized_declared_authority = parse_write_scope(declared_authority)
+    changed_authority.extend(
+        path
+        for path in verified["changed_paths"]
+        if path not in changed_authority
+        and scope_allows_path(normalized_declared_authority, path)
+    )
+    changed_authority.sort()
+    if changed_authority:
+        raise RunnerError(
+            "candidate changes parent-owned validation authority and requires bounded parent "
+            "implementation plus independent review: " + ", ".join(changed_authority)
+        )
+    key = "focused_validation" if args.suite == "focused" else "validation"
+    raw_commands = verified["values"].get(key, [])
+    if not isinstance(raw_commands, list):
+        raise RunnerError(f"plan {key} must be a list")
+    try:
+        commands = validation_commands.parse_validation_commands(raw_commands)
+    except ValueError as exc:
+        raise RunnerError(f"plan {key} contains an invalid command: {exc}") from exc
+    if args.suite == "focused" and not commands:
+        raise RunnerError("this plan has no focused validation stage")
+    output_dir = materialize_output_dir(repo_root, args.output_dir)
+    reserved = reserve_output_artifacts(output_dir)
+    records: list[dict[str, Any]] = []
+    failed = False
+    lifecycle_context = open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    )
+    with lifecycle_context as lifecycle_state, tempfile.TemporaryDirectory(
+        prefix="sandboxed-plan-worker-validation-"
+    ) as workspace_tmp:
+        lifecycle = lifecycle_state.require_existing()
+        if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
+            "current_patch_digest"
+        ] != verified["patch_digest"]:
+            raise RunnerError("validation manifest is not the current lifecycle leaf")
+        expected_phase = (
+            "focused_passed"
+            if args.suite == "authoritative" and lifecycle["focused_required"]
+            else "admitted"
+        )
+        if lifecycle["phase"] != expected_phase:
+            raise RunnerError(
+                f"{args.suite} validation is out of order or has already been attempted"
+            )
+        if args.suite == "focused" and not lifecycle["focused_required"]:
+            raise RunnerError("lifecycle state does not require focused validation")
+        focused_count = lifecycle["focused_validation_count"] + (args.suite == "focused")
+        authoritative_count = lifecycle["authoritative_validation_count"] + (
+            args.suite == "authoritative"
+        )
+        lifecycle_state.persist(
+            {
+                **lifecycle,
+                "phase": f"{args.suite}_running",
+                "focused_validation_count": int(focused_count),
+                "authoritative_validation_count": int(authoritative_count),
+            }
+        )
+        workspace = Path(workspace_tmp)
+        suite_error: RunnerError | None = None
+        for index, command in enumerate(commands):
+            command_root = workspace / f"command-{index}"
+            clone_dir = command_root / "review-clone"
+            scratch_dir = command_root / "scratch"
+            scratch_dir.mkdir(parents=True)
+            clone_at_head(repo_root, git_bin, verified["head"], clone_dir)
+            initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
+            run_subprocess(
+                (git_bin, "apply", "--check", "--binary", "-"),
+                cwd=clone_dir,
+                stdin=verified["patch_bytes"],
+            )
+            run_subprocess(
+                (git_bin, "apply", "--binary", "-"), cwd=clone_dir, stdin=verified["patch_bytes"]
+            )
+            env_vars = prepare_worker_environment(
+                source_repo=repo_root,
+                clone_dir=clone_dir,
+                scratch_dir=scratch_dir,
+                plan_rel=verified["plan_rel"],
+                extra_env=(),
+                include_codex_home=False,
+            )
+            env_vars["PATH"] = DEFAULT_PATH
+            validation_hidden = [output_dir, manifest_path.parent, host_codex_home_path()]
+            host_home = Path.home().resolve()
+            if host_home.is_dir():
+                validation_hidden.append(host_home)
+            command_argv = (
+                require_validation_executable(command.argv[0], clone_dir),
+                *command.argv[1:],
+            )
+            started = time.monotonic()
+            result = run_subprocess(
+                build_bwrap_command(
+                    bwrap_bin=bwrap_bin,
+                    clone_dir=clone_dir,
+                    scratch_dir=scratch_dir,
+                    command=command_argv,
+                    env_vars=env_vars,
+                    writable_clone=True,
+                    hidden_directories=normalize_hidden_directories(
+                        validation_hidden,
+                        visible_paths=(clone_dir, scratch_dir),
+                    ),
+                    network_enabled=False,
+                ),
+                cwd=repo_root,
+                env=sanitize_process_env(),
+                check=False,
+            )
+            records.append(
+                {
+                    "index": index,
+                    "argv": list(command.argv),
+                    "duration_seconds": bounded_duration(started, time.monotonic()),
+                    "returncode": result.returncode,
+                    "stdout_digest": hashlib.sha256(result.stdout).hexdigest(),
+                    "stderr_digest": hashlib.sha256(result.stderr).hexdigest(),
+                }
+            )
+            if result.returncode != 0:
+                failed = True
+                break
+            if git_text(clone_dir, git_bin, "rev-parse", "HEAD") != verified["head"]:
+                failed = True
+                suite_error = RunnerError("validation command changed review-clone HEAD")
+                break
+            if git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout != initial_refs:
+                failed = True
+                suite_error = RunnerError("validation command changed review-clone refs")
+                break
+        ensure_clean_worktree(repo_root, git_bin)
+        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            raise RunnerError("source HEAD changed during candidate validation")
+        report = {
+            "schema_version": 1,
+            "candidate_manifest_digest": verified["manifest_digest"],
+            "candidate_patch_digest": verified["patch_digest"],
+            "plan_path": verified["plan_rel"],
+            "suite": args.suite,
+            "parent_diff_approved": True,
+            "critical_invariants_approved": True,
+            "commands": records,
+            "passed": not failed,
+            "telemetry": {
+                "duration_seconds": bounded_duration(validation_started, time.monotonic()),
+                "focused_validation_count": focused_count,
+                "authoritative_validation_count": authoritative_count,
+                "full_validation_count": authoritative_count,
+            },
+        }
+        report_path = reserved["validation.json"]
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        lifecycle_state.persist(
+            {
+                **lifecycle,
+                "phase": f"{args.suite}_{'failed' if failed else 'passed'}",
+                "focused_validation_count": int(focused_count),
+                "authoritative_validation_count": int(authoritative_count),
+            }
+        )
+        if suite_error is not None:
+            raise suite_error
+    if failed:
+        raise RunnerError(f"{args.suite} validation failed; bounded report saved at {report_path}")
+    print(str(report_path))
+    return 0
+
+
+def correct_worker(args: argparse.Namespace) -> int:
+    runner_started = time.monotonic()
+    git_bin = require_executable("git", args.git_bin)
+    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+    ensure_bwrap_usable(bwrap_bin)
+    repo_root = detect_repo_root(git_bin)
+    os.chdir(repo_root)
+    planlib = load_planlib()
+    ensure_clean_worktree(repo_root, git_bin)
+    plan_rel = normalize_manifest_path(repo_root, args.plan)
+    prior_manifest_path = Path(args.prior_manifest).expanduser()
+    if not prior_manifest_path.is_absolute():
+        prior_manifest_path = (Path.cwd() / prior_manifest_path).absolute()
+    verified = verify_candidate_manifest(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        planlib=planlib,
+        manifest_path=prior_manifest_path,
+        expected_plan=plan_rel,
+    )
+    if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
+        raise RunnerError("correction run identifier differs from the verified manifest")
+    if Path(args.lifecycle_state).expanduser().absolute() != Path(
+        verified["manifest"]["lifecycle_state_path"]
+    ):
+        raise RunnerError("correction lifecycle state path differs from the verified manifest")
+    values = verified["values"]
+    implementation_risk = implementation_classification(values, "implementation_risk")
+    implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
+    selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
+    brief_path = Path(args.correction_brief).expanduser()
+    if not brief_path.is_absolute():
+        brief_path = (Path.cwd() / brief_path).absolute()
+    if path_is_within(repo_root, brief_path):
+        raise RunnerError("correction brief must be outside the source repository")
+    brief = read_bounded_regular_file(brief_path, CORRECTION_BRIEF_MAX_BYTES, "correction brief")
+    if not brief.strip():
+        raise RunnerError("correction brief must be nonblank")
+    brief_digest = hashlib.sha256(brief).hexdigest()
+    lineage = next_correction_lineage(
+        verified["manifest"],
+        prior_manifest_digest=verified["manifest_digest"],
+        prior_patch_digest=verified["patch_digest"],
+        correction_brief_digest=brief_digest,
+    )
+    output_dir = materialize_output_dir(repo_root, args.output_dir)
+    reserved_artifacts = reserve_output_artifacts(output_dir)
+    if args.availability_state is not None and args.orchestration_run_id is None:
+        raise RunnerError("availability state requires an orchestration run identifier")
+    state_context = (
+        open_availability_state(repo_root, args.availability_state, args.orchestration_run_id)
+        if args.availability_state is not None and args.orchestration_run_id is not None
+        else nullcontext(None)
+    )
+    lifecycle_context = open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    )
+    hidden_prior = {
+        prior_manifest_path.parent.resolve(),
+        verified["patch_path"].parent.resolve(),
+        brief_path.parent.resolve(),
+    }
+    with lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
+        prefix="sandboxed-plan-worker-correction-workspace-"
+    ) as workspace_tmp:
+        lifecycle = lifecycle_state.require_existing()
+        if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
+            "current_patch_digest"
+        ] != verified["patch_digest"]:
+            raise RunnerError("correction prior manifest is not the current lifecycle leaf")
+        if lifecycle["phase"] not in {"admitted", "focused_passed"}:
+            raise RunnerError("correction is not allowed after validation failure or final acceptance")
+        if lifecycle["correction_round"] != lineage["correction_round"] - 1:
+            raise RunnerError("correction lineage does not match the run-bound lifecycle round")
+        workspace = Path(workspace_tmp)
+        attempts: list[dict[str, Any]] = []
+        fallback_reason: str | None = None
+        availability_failures = 0
+        skipped_known_unavailable_starts = 0
+        common = {
+            "workspace": workspace,
+            "repo_root": repo_root,
+            "head": verified["head"],
+            "plan_rel": verified["plan_rel"],
+            "plan_digest": verified["plan_digest"],
+            "normalized_scope": verified["normalized_scope"],
+            "bwrap_bin": bwrap_bin,
+            "git_bin": git_bin,
+            "reserved_artifacts": reserved_artifacts,
+            "extra_env": args.worker_env,
+            "prior_patch": verified["patch_bytes"],
+            "correction_brief": brief,
+        }
+        if args.worker_binary is not None:
+            worker_binary = require_executable("worker", args.worker_binary)
+            selected = execute_isolated_attempt(
+                **common,
+                label="custom",
+                hidden_directories=tuple({output_dir.resolve(), *hidden_prior}),
+                custom_command=[worker_binary, *args.worker_arg],
+            )
+            worker_kind = "custom"
+            if selected["result"].returncode != 0:
+                raise RunnerError(
+                    f"correction worker exited with {selected['result'].returncode}; stdout/stderr saved under {output_dir}"
+                )
+        else:
+            codex_bin = require_executable("codex", args.codex_bin)
+            primary_model = require_writable_model(
+                args.codex_model if args.codex_model is not None else selected_plan_model,
+                "preferred",
+            )
+            primary_reasoning = require_reasoning_effort(
+                args.codex_reasoning_effort
+                if args.codex_reasoning_effort is not None
+                else selected_plan_reasoning,
+                "preferred",
+            )
+            fallback_model = require_writable_model(args.fallback_codex_model, "fallback")
+            fallback_reasoning = require_reasoning_effort(
+                args.fallback_codex_reasoning_effort, "fallback"
+            )
+            worker_kind = "codex"
+            primary: dict[str, Any] | None = None
+            known_primary = availability_state.reason_for(primary_model) if availability_state else None
+            if known_primary is not None:
+                skipped_known_unavailable_starts += 1
+                fallback_reason = known_primary
+            else:
+                primary = execute_isolated_attempt(
+                    **common,
+                    label="primary",
+                    hidden_directories=tuple({output_dir.resolve(), host_codex_home_path(), *hidden_prior}),
+                    codex_bin=codex_bin,
+                    model=primary_model,
+                    reasoning=primary_reasoning,
+                )
+                attempts.append(primary["record"])
+                if primary["result"].returncode == 0:
+                    selected = primary
+                else:
+                    fallback_reason = classify_codex_unavailability(
+                        primary["result"].stdout, primary["result"].stderr
+                    )
+                    if fallback_reason is None:
+                        raise RunnerError(
+                            f"correction worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                        )
+                    availability_failures += 1
+                    if availability_state:
+                        availability_state.record(primary_model, fallback_reason)
+            if primary is None or primary["result"].returncode != 0:
+                if args.no_model_fallback:
+                    raise RunnerError("preferred correction model is unavailable and fallback is disabled")
+                if availability_state and availability_state.reason_for(fallback_model) is not None:
+                    skipped_known_unavailable_starts += 1
+                    raise RunnerError("fallback correction model is already recorded unavailable for this run")
+                fallback = execute_isolated_attempt(
+                    **common,
+                    label="fallback",
+                    hidden_directories=tuple(
+                        {
+                            output_dir.resolve(),
+                            host_codex_home_path(),
+                            *hidden_prior,
+                            *([primary["attempt_root"]] if primary is not None else []),
+                        }
+                    ),
+                    codex_bin=codex_bin,
+                    model=fallback_model,
+                    reasoning=fallback_reasoning,
+                )
+                attempts.append(fallback["record"])
+                if fallback["result"].returncode != 0:
+                    reason = classify_codex_unavailability(
+                        fallback["result"].stdout, fallback["result"].stderr
+                    )
+                    if reason is not None:
+                        availability_failures += 1
+                        if availability_state:
+                            availability_state.record(fallback_model, reason)
+                    raise RunnerError(
+                        f"fallback correction worker exited with {fallback['result'].returncode}; stdout/stderr saved under {output_dir}"
+                    )
+                selected = fallback
+        worker_result = select_attempt_artifacts(selected, reserved_artifacts)
+        worker_result["kind"] = worker_kind
+        if attempts:
+            worker_result["attempts"] = attempts
+            worker_result["selected_attempt"] = selected["record"]["label"]
+        if fallback_reason is not None:
+            worker_result["fallback_reason"] = fallback_reason
+        materialize_writable_shadows(selected["shadows"])
+        patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
+            bwrap_bin=bwrap_bin,
+            git_bin=git_bin,
+            clone_dir=selected["clone_dir"],
+            scratch_dir=selected["scratch_dir"],
+            env_vars=selected["env_vars"],
+        )
+        if clone_head_after_worker != verified["head"]:
+            raise RunnerError("correction worker changed clone HEAD")
+        if refs_after_worker != selected["initial_refs"]:
+            raise RunnerError("correction worker changed clone refs")
+        if not patch_bytes:
+            raise RunnerError("correction produced no aggregate candidate changes")
+        patch_path = reserved_artifacts["candidate.patch"]
+        patch_digest = write_bytes(patch_path, patch_bytes)
+        changed_paths = normalize_changed_paths(
+            derive_changed_paths_from_patch(repo_root, git_bin, patch_bytes, verified["head"]),
+            repo_root,
+        )
+        if not changed_paths:
+            raise RunnerError("correction produced no aggregate candidate changes")
+        disallowed = [
+            path
+            for path in changed_paths
+            if not scope_allows_path(verified["normalized_scope"], path)
+        ]
+        if disallowed:
+            raise RunnerError(f"correction changed paths outside write_scope: {', '.join(disallowed)}")
+        for path in changed_paths:
+            ensure_no_symlink_path_trick(repo_root, path)
+        run_subprocess(
+            (git_bin, "apply", "--check", "--binary", "-"), cwd=repo_root, stdin=patch_bytes
+        )
+        ensure_clean_worktree(repo_root, git_bin)
+        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            raise RunnerError("source HEAD changed during correction admission")
+        telemetry_attempts = attempts if worker_kind == "codex" else [selected["record"]]
+        manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "source_head": verified["head"],
+            "plan_path": verified["plan_rel"],
+            "plan_digest": verified["plan_digest"],
+            "allowed_write_scope": verified["normalized_scope"],
+            "changed_paths": changed_paths,
+            "patch_path": str(patch_path),
+            "patch_digest": patch_digest,
+            "orchestration_run_id": args.orchestration_run_id,
+            "lifecycle_state_path": str(Path(args.lifecycle_state).expanduser().absolute()),
+            "correction_lineage": lineage,
+            "worker_result": worker_result,
+            "telemetry": {
+                "schema_version": TELEMETRY_SCHEMA_VERSION,
+                "attempt_durations_seconds": [
+                    bounded_duration(0.0, float(attempt["duration_seconds"]))
+                    for attempt in telemetry_attempts
+                ],
+                "runner_duration_seconds": bounded_duration(runner_started, time.monotonic()),
+                "model_starts": len(attempts) if worker_kind == "codex" else 0,
+                "availability_failures": availability_failures,
+                "skipped_known_unavailable_starts": skipped_known_unavailable_starts,
+                "candidate_generations": lineage["correction_round"] + 1,
+                "full_validation_count": 0,
+                "authoritative_validation_count": 0,
+                "focused_validation_count": 0,
+                "parent_review_rejections": lineage["correction_round"],
+                "correction_round": lineage["correction_round"],
+                "implementation_risk": implementation_risk,
+                "implementation_ambiguity": implementation_ambiguity,
+            },
+        }
+        manifest_path = reserved_artifacts["manifest.json"]
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        focused_raw = values.get("focused_validation", [])
+        lifecycle_state.persist(
+            {
+                **lifecycle,
+                "current_manifest_digest": hash_file(manifest_path),
+                "current_patch_digest": patch_digest,
+                "correction_round": lineage["correction_round"],
+                "candidate_generations": lineage["correction_round"] + 1,
+                "phase": "admitted",
+                "focused_required": isinstance(focused_raw, list) and bool(focused_raw),
+                "focused_validation_count": 0,
+                "authoritative_validation_count": 0,
+                "parent_review_rejections": lineage["correction_round"],
+            }
+        )
+    print(str(manifest_path))
+    return 0
+
+
+def apply_worker_result(args: argparse.Namespace) -> int:
+    git_bin = require_executable("git", args.git_bin)
+    repo_root = detect_repo_root(git_bin)
+    os.chdir(repo_root)
+    planlib = load_planlib()
+    ensure_clean_worktree(repo_root, git_bin)
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    verified = verify_candidate_manifest(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        planlib=planlib,
+        manifest_path=manifest_path,
+    )
+    if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
+        raise RunnerError("apply run identifier differs from the verified manifest")
+    if Path(args.lifecycle_state).expanduser().absolute() != Path(
+        verified["manifest"]["lifecycle_state_path"]
+    ):
+        raise RunnerError("apply lifecycle state path differs from the verified manifest")
+    lifecycle_context = open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    )
+    with lifecycle_context as lifecycle_state:
+        lifecycle = lifecycle_state.require_existing()
+        if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
+            "current_patch_digest"
+        ] != verified["patch_digest"]:
+            raise RunnerError("apply manifest is not the current lifecycle leaf")
+        if lifecycle["phase"] != "authoritative_passed" or lifecycle[
+            "authoritative_validation_count"
+        ] != 1:
+            raise RunnerError("apply requires exactly one successful authoritative validation")
+        ensure_clean_worktree(repo_root, git_bin)
+        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            raise RunnerError("source HEAD changed after candidate preflight and before apply")
+        lifecycle_state.persist({**lifecycle, "phase": "applying"})
+        run_subprocess(
+            (git_bin, "apply", "--binary", "-"), cwd=repo_root, stdin=verified["patch_bytes"]
+        )
+        try:
+            lifecycle_state.persist({**lifecycle, "phase": "applied"})
+        except BaseException as exc:
+            raise RunnerError(
+                "source patch was applied but lifecycle finalization failed; reconcile the applying state before retry"
+            ) from exc
+    print(str(verified["patch_path"]))
+    return 0
+
+
+def finalize_apply(args: argparse.Namespace) -> int:
+    git_bin = require_executable("git", args.git_bin)
+    repo_root = detect_repo_root(git_bin)
+    os.chdir(repo_root)
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    verified = verify_candidate_manifest(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        planlib=load_planlib(),
+        manifest_path=manifest_path,
+        require_applicable=False,
+        require_clean=False,
+    )
+    if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
+        raise RunnerError("finalize-apply run identifier differs from the verified manifest")
+    if Path(args.lifecycle_state).expanduser().absolute() != Path(
+        verified["manifest"]["lifecycle_state_path"]
+    ):
+        raise RunnerError("finalize-apply lifecycle state path differs from the verified manifest")
+    with open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    ) as lifecycle_state:
+        lifecycle = lifecycle_state.require_existing()
+        if lifecycle["phase"] != "applying":
+            raise RunnerError("finalize-apply requires an applying lifecycle state")
+        if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
+            "current_patch_digest"
+        ] != verified["patch_digest"]:
+            raise RunnerError("finalize-apply manifest is not the current lifecycle leaf")
+        if collect_worktree_patch(repo_root, git_bin, verified["head"]) != verified["patch_bytes"]:
+            raise RunnerError("source worktree does not exactly match the verified applied patch")
+        lifecycle_state.persist({**lifecycle, "phase": "applied"})
+    print(str(verified["patch_path"]))
     return 0
 
 
@@ -1243,6 +2963,8 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
             review_class: B
             human_design_required: no
             human_approval_status: not_required
+            implementation_risk: low
+            implementation_ambiguity: low
             write_scope:
               - allowed.txt
               - dir/
@@ -1251,7 +2973,7 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
             required_specs:
               - docs/agent/SPEC_PLAN_WORKFLOW.md
             validation:
-              - python3 tests/test-sandboxed-plan-worker.py
+              - git diff --check
             acceptance:
               - Self-test patch applies cleanly.
             checked_summary_ja: self-test
@@ -1286,6 +3008,8 @@ def run_self_test(args: argparse.Namespace) -> int:
         worker = Path(tmp) / "worker.py"
         write_self_test_worker(worker)
         output_dir = Path(tmp) / "output"
+        lifecycle_path = Path(tmp) / "lifecycle.json"
+        run_id = "self-test-run"
         original_cwd = Path.cwd()
         try:
             os.chdir(repo_root)
@@ -1294,11 +3018,14 @@ def run_self_test(args: argparse.Namespace) -> int:
                     git_bin=git_bin,
                     bwrap_bin=args.bwrap_bin,
                     codex_bin=args.codex_bin,
-                    codex_model=DEFAULT_CODEX_MODEL,
-                    codex_reasoning_effort=DEFAULT_CODEX_REASONING,
+                    codex_model=None,
+                    codex_reasoning_effort=None,
                     fallback_codex_model=DEFAULT_FALLBACK_CODEX_MODEL,
                     fallback_codex_reasoning_effort=DEFAULT_FALLBACK_CODEX_REASONING,
                     no_model_fallback=False,
+                    availability_state=None,
+                    orchestration_run_id=run_id,
+                    lifecycle_state=str(lifecycle_path),
                     output_dir=str(output_dir),
                     plan=plan_rel,
                     worker_binary=str(require_executable("python3", sys.executable)),
@@ -1311,10 +3038,25 @@ def run_self_test(args: argparse.Namespace) -> int:
                 raise RunnerError("self-test did not produce a manifest")
             if (repo_root / "allowed.txt").read_text(encoding="utf-8") != "original\n":
                 raise RunnerError("self-test mutated the source repository before apply")
+            validate_candidate(
+                argparse.Namespace(
+                    git_bin=git_bin,
+                    bwrap_bin=args.bwrap_bin,
+                    manifest=str(manifest_path),
+                    suite="authoritative",
+                    parent_diff_approved=True,
+                    critical_invariants_approved=True,
+                    output_dir=str(Path(tmp) / "validation-output"),
+                    orchestration_run_id=run_id,
+                    lifecycle_state=str(lifecycle_path),
+                )
+            )
             apply_worker_result(
                 argparse.Namespace(
                     git_bin=git_bin,
                     manifest=str(manifest_path),
+                    orchestration_run_id=run_id,
+                    lifecycle_state=str(lifecycle_path),
                 )
             )
             if (repo_root / "allowed.txt").read_text(encoding="utf-8") != "changed in clone\n":
@@ -1333,6 +3075,8 @@ def build_parser() -> argparse.ArgumentParser:
             """\
             Commands:
               run      execute a writable worker inside Bubblewrap and emit a candidate patch manifest
+              correct  repair a verified candidate in a fresh isolated clone and emit an aggregate patch
+              validate run a parent-authorized suite in a fresh review clone after candidate admission
               apply    re-check and apply a previously emitted candidate patch manifest
               self-test run a deterministic local end-to-end check without contacting Codex
             """
@@ -1347,12 +3091,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--bwrap-bin", default="bwrap", help="Bubblewrap executable to use")
     run_parser.add_argument("--codex-bin", default="codex", help="Codex executable to use for the default worker")
     run_parser.add_argument(
-        "--codex-model", default=DEFAULT_CODEX_MODEL, help="preferred Codex model for the default worker"
+        "--codex-model", default=None, help="preferred Codex model override for the default worker"
     )
     run_parser.add_argument(
         "--codex-reasoning-effort",
-        default=DEFAULT_CODEX_REASONING,
-        help="preferred Codex reasoning effort for the default worker",
+        default=None,
+        help="preferred Codex reasoning effort override for the default worker",
     )
     run_parser.add_argument(
         "--fallback-codex-model",
@@ -1369,6 +3113,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable automatic fallback when the preferred Codex model is unavailable",
     )
+    run_parser.add_argument(
+        "--availability-state",
+        help="ephemeral availability-state JSON path outside the source repository",
+    )
+    run_parser.add_argument(
+        "--orchestration-run-id",
+        required=True,
+        help="nonblank identifier that binds lifecycle and availability state to one run",
+    )
+    run_parser.add_argument("--lifecycle-state", required=True)
+    run_parser.add_argument("--plan-execution-state", required=True)
     run_parser.add_argument("--worker-binary", help="override the default Codex worker with a custom executable")
     run_parser.add_argument("--worker-arg", action="append", default=[], help="append one argument for --worker-binary")
     run_parser.add_argument(
@@ -1379,10 +3134,64 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.set_defaults(handler=run_worker)
 
+    correction_parser = subparsers.add_parser(
+        "correct", help="correct a verified candidate in a fresh isolated clone"
+    )
+    correction_parser.add_argument("plan", help="repository-relative active plan path")
+    correction_parser.add_argument("prior_manifest", help="prior candidate manifest rejected by parent review")
+    correction_parser.add_argument("correction_brief", help="bounded parent-authored correction brief outside the repository")
+    correction_parser.add_argument("--output-dir", help="directory outside the source repository for patch artifacts")
+    correction_parser.add_argument("--git-bin", default="git", help="git executable to use")
+    correction_parser.add_argument("--bwrap-bin", default="bwrap", help="Bubblewrap executable to use")
+    correction_parser.add_argument("--codex-bin", default="codex", help="Codex executable for the default worker")
+    correction_parser.add_argument("--codex-model", default=None, help="preferred Codex model override")
+    correction_parser.add_argument("--codex-reasoning-effort", default=None, help="preferred reasoning override")
+    correction_parser.add_argument("--fallback-codex-model", default=DEFAULT_FALLBACK_CODEX_MODEL)
+    correction_parser.add_argument(
+        "--fallback-codex-reasoning-effort", default=DEFAULT_FALLBACK_CODEX_REASONING
+    )
+    correction_parser.add_argument("--no-model-fallback", action="store_true")
+    correction_parser.add_argument("--availability-state")
+    correction_parser.add_argument("--orchestration-run-id", required=True)
+    correction_parser.add_argument("--lifecycle-state", required=True)
+    correction_parser.add_argument("--plan-execution-state", required=True)
+    correction_parser.add_argument("--worker-binary")
+    correction_parser.add_argument("--worker-arg", action="append", default=[])
+    correction_parser.add_argument("--worker-env", action="append", default=[])
+    correction_parser.set_defaults(handler=correct_worker)
+
+    validation_parser = subparsers.add_parser(
+        "validate", help="run parent-authorized validation in a fresh review clone"
+    )
+    validation_parser.add_argument("manifest", help="verified candidate manifest")
+    validation_parser.add_argument("--suite", choices=("focused", "authoritative"), required=True)
+    validation_parser.add_argument("--parent-diff-approved", action="store_true")
+    validation_parser.add_argument("--critical-invariants-approved", action="store_true")
+    validation_parser.add_argument("--output-dir", required=True)
+    validation_parser.add_argument("--orchestration-run-id", required=True)
+    validation_parser.add_argument("--lifecycle-state", required=True)
+    validation_parser.add_argument("--plan-execution-state", required=True)
+    validation_parser.add_argument("--git-bin", default="git")
+    validation_parser.add_argument("--bwrap-bin", default="bwrap")
+    validation_parser.set_defaults(handler=validate_candidate)
+
     apply_parser = subparsers.add_parser("apply", help="apply a previously emitted candidate patch manifest")
     apply_parser.add_argument("manifest", help="path to manifest.json emitted by the run command")
+    apply_parser.add_argument("--orchestration-run-id", required=True)
+    apply_parser.add_argument("--lifecycle-state", required=True)
+    apply_parser.add_argument("--plan-execution-state", required=True)
     apply_parser.add_argument("--git-bin", default="git", help="git executable to use")
     apply_parser.set_defaults(handler=apply_worker_result)
+
+    finalize_parser = subparsers.add_parser(
+        "finalize-apply", help="reconcile an applied source patch after lifecycle finalization failure"
+    )
+    finalize_parser.add_argument("manifest")
+    finalize_parser.add_argument("--orchestration-run-id", required=True)
+    finalize_parser.add_argument("--lifecycle-state", required=True)
+    finalize_parser.add_argument("--plan-execution-state", required=True)
+    finalize_parser.add_argument("--git-bin", default="git")
+    finalize_parser.set_defaults(handler=finalize_apply)
 
     self_test = subparsers.add_parser("self-test", help="run a deterministic local self-test")
     self_test.add_argument("--git-bin", default="git", help="git executable to use")
@@ -1397,7 +3206,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return int(args.handler(args))
+        with plan_execution_lease(args):
+            if args.command != "self-test":
+                plan = args.plan if args.command in {"run", "correct"} else None
+                enforce_plan_execution_gate(args, plan=plan)
+            return int(args.handler(args))
     except RunnerError as exc:
         fail(str(exc))
 

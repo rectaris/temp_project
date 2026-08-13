@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "requirements": [
+    {
+      "id": "P1",
+      "critical": true,
+      "text": "A hard trigger stops the current execution run before another implementation, validation, apply, or finalize operation."
+    },
+    {
+      "id": "P2",
+      "critical": true,
+      "text": "An atomic restructuring preserves every source acceptance item and records an integration plan before implementation resumes."
+    },
+    {
+      "id": "P3",
+      "critical": true,
+      "text": "A requirement replacement remains pending until separate explicit user authorization and cannot be accepted as clarification or acceptance mapping."
+    },
+    {
+      "id": "P4",
+      "critical": true,
+      "text": "Elapsed time is telemetry only; scope, specification, security, invariant, correction, review, and post-authoritative evidence determine restructuring."
+    }
+  ],
+  "holdout_file": "plan-restructuring-holdout.json",
+  "scenarios": [
+    {
+      "id": "median-multiple-independent-invariants",
+      "class": "median",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P4"],
+      "input": {
+        "event": "parent_review",
+        "independent_invariant_count": 2
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "multiple_independent_invariants",
+        "next_action": "atomic_restructure"
+      }
+    },
+    {
+      "id": "edge-delegated-correction-budget-exhausted",
+      "class": "edge",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P4"],
+      "input": {
+        "initial_generation_count": 1,
+        "rejected_correction_count": 2
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "candidate_correction_budget_exhausted",
+        "next_action": "atomic_restructure"
+      }
+    },
+    {
+      "id": "edge-parent-direct-review-budget-exhausted",
+      "class": "edge",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P4"],
+      "input": {
+        "independently_reviewed_parent_remediation_count": 2,
+        "remaining_finding_severity": "Medium"
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "parent_remediation_budget_exhausted",
+        "next_action": "atomic_restructure"
+      }
+    },
+    {
+      "id": "negative-scope-drift",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P4"],
+      "input": {
+        "event": "scope_drift"
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "scope_drift",
+        "next_action": "atomic_restructure"
+      }
+    },
+    {
+      "id": "negative-specification-drift",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P4"],
+      "input": {
+        "event": "spec_drift"
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "spec_drift",
+        "next_action": "atomic_restructure"
+      }
+    },
+    {
+      "id": "negative-security-boundary-drift",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P4"],
+      "input": {
+        "event": "security_boundary_drift"
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "security_boundary_drift",
+        "next_action": "atomic_restructure"
+      }
+    },
+    {
+      "id": "negative-post-authoritative-design-change",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P4"],
+      "input": {
+        "event": "post_authoritative_design_change",
+        "authoritative_validation_count": 1
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "post_authoritative_design_change",
+        "next_action": "atomic_restructure"
+      }
+    },
+    {
+      "id": "negative-unauthorized-requirement-replacement",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P3"],
+      "input": {
+        "operation": "replace_source_acceptance_text",
+        "explicit_user_authorization": false
+      },
+      "expected": {
+        "state": "pending_user_authorization",
+        "reason_code": "requirement_change_not_authorized",
+        "next_action": "reject_transition"
+      }
+    }
+  ]
+}
