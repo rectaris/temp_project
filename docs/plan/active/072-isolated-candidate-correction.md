@@ -49,6 +49,9 @@ validation:
   - python3 scripts/validate-changes.py --all
   - git diff --check
 acceptance:
+  - Add an explicit orchestration-run availability-state path outside the repository; after a bounded availability error, record only model and reason code and skip another start of that model while the same state is reused.
+  - Bind availability state to an explicit nonblank orchestration run identifier, validate its schema version and exact bounded field shape, and reject reuse with a different run identifier.
+  - Keep availability state ephemeral, reject malformed or symlinked state paths and symlink ancestors, write state atomically through directory-file-descriptor operations without following a swapped target or parent, never store raw output or credentials, and do not treat remembered unavailability as a semantic or validation result.
   - Add an isolated correction command that accepts an in-progress plan, a prior candidate manifest, and a bounded parent-authored correction brief.
   - Verify the prior manifest schema, source HEAD, plan path and digest, allowed write scope, patch path and digest, normalized changed paths, symlink ancestry, clone refs, and clean source before starting a correction.
   - Start every correction from a fresh isolated clone at the verified source HEAD, apply the verified prior patch only inside that clone, and provide the correction brief through a read-only input boundary.
@@ -58,6 +61,7 @@ acceptance:
   - Enforce a correction budget of at most two isolated corrections after the initial candidate; reject missing lineage, skipped rounds, a third correction, changed source HEAD, changed plan digest, widened scope, and tampered artifacts.
   - Keep model availability fallback limited to bounded model availability errors during the correction start; a parent rejection itself must not trigger model fallback or complete-plan regeneration.
   - Add deterministic tests for tampered lineage, fresh-clone isolation, absent prior state, source and object-database cleanliness, malicious path and Git metadata changes, correction failure cleanup, and successful aggregate-patch application.
+  - Add deterministic tests for first availability recording, same-run preferred-model skip, run-id mismatch, malformed schema and fields, target and ancestor symlink rejection, atomic state replacement under target and parent swap attempts, and fallback availability failure.
   - Keep root and generated policy, Skill, and runner behavior aligned and keep root/template runner implementations byte-identical.
   - Preserve non-destructive Copier updates and reject correction behavior that leaves rejection files, unresolved conflicts, or unclassified tracked-file deletion during a supported update.
 checked_summary_ja: 却下候補をsourceへ適用せず、新しい隔離clone内で最大2回まで局所修正して統合patchを再生成できるようにした。
@@ -74,6 +78,7 @@ When parent review rejects one part of a candidate, the only available implement
 - Use manifest lineage and a parent-authored correction brief instead of editing the active plan after every local rejection.
 - Keep the source repository and prior attempt state outside the correction worker's writable and readable boundaries.
 - Limit one candidate lineage to two correction rounds.
+- Keep ephemeral availability state scoped to one explicit orchestration run and independent from semantic correction lineage.
 
 ## Tasks
 

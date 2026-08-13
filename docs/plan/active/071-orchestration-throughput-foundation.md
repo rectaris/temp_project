@@ -1,4 +1,4 @@
-# Route delegated implementation by value and record execution cost
+# Route delegated implementation by value and implementation profile
 
 status: in_progress
 task_types:
@@ -62,15 +62,12 @@ acceptance:
   - Preserve independent security and regression review, parent acceptance, explicit write scope, read-only context, secret and external-write exclusions, and final ownership in the main session.
   - Add separate optional active-plan implementation risk and implementation ambiguity fields with low, ordinary, and high values; use Spark medium only when both inputs are low, use Terra medium when neither is high and at least one is ordinary, and refuse writable sequential delegation when either input is high.
   - Preserve explicit CLI model and reasoning overrides for writable profiles, reserve Sol high for independent security or regression review, reject Sol as a writable sequential override, and keep semantic, implementation, validation, sandbox, authentication, and unclassified failures outside model fallback eligibility.
-  - Add an explicit orchestration-run availability-state path outside the repository; after a bounded availability error, record only model and reason code and skip another start of that model while the same state is reused.
-  - Bind availability state to an explicit nonblank orchestration run identifier, validate its schema version and exact bounded field shape, and reject reuse with a different run identifier.
-  - Keep availability state ephemeral, reject malformed or symlinked state paths and symlink ancestors, write state atomically without following a swapped target, never store raw output or credentials, and do not treat remembered unavailability as a semantic or validation result.
-  - Record bounded telemetry in candidate manifests: attempt duration, total runner duration measured after candidate collection and admission checks, model starts, availability failures, skipped known-unavailable starts, and selected implementation risk and ambiguity, without storing prompts, output bodies, environment values, or credentials.
-  - Extend fixed median, edge, negative, and holdout orchestration scenarios so repository breadth alone is insufficient and independent value, writable-Sol rejection, model starts, candidate generations, and full-validation counts are observable requirements.
+  - Keep runtime availability fallback separate from correction of rejected work; availability-state persistence and bounded execution telemetry are implemented by later plans after this routing slice is accepted.
+  - Extend deterministic orchestration scenarios so repository breadth alone is insufficient and independent value, plan-selected Spark and Terra, both high-input refusals, explicit override, and writable-Sol rejection are executable requirements.
   - Keep root and generated policy, Skill, runner, and plan parsing semantically aligned, and preserve byte-identical root/template runner implementations.
   - Preserve non-destructive Copier updates and add negative coverage proving orchestration updates do not accept rejection files, unresolved conflicts, or unclassified tracked-file deletion.
-  - Add executable tests for plan-selected Spark and Terra, each high-input refusal, explicit override, writable Sol rejection, first availability recording, same-run preferred-model skip, run-id mismatch, malformed schema and fields, symlink path rejection, atomic state replacement, fallback availability failure, and every bounded telemetry counter and duration boundary.
-checked_summary_ja: 委譲の価値判定と作業の曖昧さ・リスク別モデル選択を追加し、同一実行での利用不能モデル再起動を防いで実行コストを記録した。
+  - Add executable tests for plan-selected Spark and Terra, each high-input refusal, explicit model and reasoning override, writable Sol rejection for preferred and fallback profiles, and nonavailability failures that remain ineligible for fallback.
+checked_summary_ja: 委譲の価値判定と作業の曖昧さ・リスク別モデル選択を追加し、広さだけを理由にした委譲と不適格な書込profileを防いだ。
 
 ## Context
 
@@ -85,7 +82,6 @@ The current orchestration fixture proves that broad work delegates safely but do
 - An admissible implementation slice is a set of changes that establishes one invariant, can be reviewed and validated independently, and has an explicit dependency on later integration checks.
 - An isolated correction is a parent-authorized action that verifies a prior candidate, repairs it only in a fresh isolated clone, and emits a new aggregate patch without mutating the source repository.
 - The delegation value gate is satisfied only when assigned helper output is independently useful and its expected context reduction, parallelism, or review value exceeds coordination cost.
-- Run-local unavailable-model state records that one configured model returned a bounded availability error and remains active only for the current orchestration run.
 - Focused validation means the plan-declared deterministic commands that exercise only the changed implementation slice after mechanical admission and semantic review.
 - Authoritative validation means the complete parent-owned validation command set executed for a candidate that has passed admission, review, and focused validation.
 - The correction budget is a maximum of two isolated corrections after one initial candidate for the same admissible implementation slice.
@@ -95,14 +91,13 @@ The current orchestration fixture proves that broad work delegates safely but do
 - Use an admissible implementation slice rather than a whole broad plan as the writable delegation unit.
 - Require the delegation value gate before helper creation.
 - Select the default writable implementation profile from separate plan ambiguity and risk inputs and keep runtime availability fallback separate from correction of rejected work.
-- Keep the run-local unavailable-model state outside Git and scoped to one explicit orchestration run.
+- Keep runtime availability fallback state and candidate correction separate from this routing slice.
 - Keep authoritative validation and each strategy-change decision parent-owned.
-- Establish bounded manifest telemetry before changing candidate correction and validation ordering in plans 072 and 073.
 
 ## Tasks
 
 - [ ] Update root and generated orchestration policy and sequential Skill guidance.
-- [ ] Add separate plan ambiguity and risk parsing, joint defaults and routing tests, run-local availability state, and bounded telemetry.
+- [ ] Add separate plan ambiguity and risk parsing, joint defaults, and routing tests.
 - [ ] Add deterministic runner, policy, template, generated-project, and Copier update coverage.
 - [ ] Run all required validation, archive, and commit before plan 072.
 
@@ -113,3 +108,5 @@ The current orchestration fixture proves that broad work delegates safely but do
 - The candidate was not applied because total runner duration ended before patch collection and admission, availability state had no run identity and did not validate schema version, and executable coverage did not exercise known-unavailable skip, writable Sol rejection, telemetry, or malformed and symlinked state paths.
 - Rejected correction candidate `/tmp/orchestration-plan-071-correction-4lwWPM/manifest.json`, source HEAD `05d1c11c412da3e382312ae4549d12489cc82f6d`. One GPT-5.6-Terra medium attempt generated the candidate without fallback.
 - The correction candidate was not applied because its runner suite failed `test_writable_profile_selection_and_sol_refusal`, availability-state replacement still depended on path rechecks rather than directory-file-descriptor operations that close parent-directory swap races, and executable coverage still omitted the same-run known-unavailable skip, both high-input refusals, plan-selected Terra, state-path symlink cases, fallback availability failure, and bounded telemetry counters and duration boundary.
+- Rejected second correction candidate `/tmp/orchestration-plan-071-correction2-2zqL0z/manifest.json`, source HEAD `ac4ba934ca921de861a2fe50c560d2f3602cdbe0`. One GPT-5.6-Terra medium attempt generated the candidate without fallback.
+- The second correction candidate was not applied because manifest telemetry omitted required generation and full-validation counters and its integration tests still omitted same-run availability skipping and telemetry boundaries. The correction budget is exhausted, so the implementation strategy changed: plan 071 is narrowed to value-gated delegation and writable-profile routing; availability state moves to plan 072 and telemetry and performance evaluation move to plan 073.
