@@ -10,6 +10,8 @@ human_design_required: no
 human_approval_status: not_required
 write_scope:
   - CHANGELOG.md
+  - copier.yml
+  - docs/agent/CODEX_CI_AUTOFIX.md
   - docs/plan/
   - scripts/check-copier-template.py
   - scripts/run-sandboxed-plan-worker.py
@@ -40,14 +42,10 @@ validation:
   - python3 scripts/validate-changes.py --all
   - git diff --check
 acceptance:
-  - Keep generated CI autofix patch generation and validation jobs read-only and keep branch credentials out of every dependency installer, project build, and test process.
-  - In generated direct-push mode, install declared Python and Node dependencies in validate-patch after applying the exact digest-bound patch, then run change-aware validation as a floor plus the trusted primary-language validation commands rendered by Copier.
-  - For TypeScript, require both npm run build and npm run test; for Python, require python3 -m pytest; for mixed projects, require all three. Missing commands, missing dependencies, or failed validation must stop before apply-patch.
-  - Treat dependency manifests, lockfiles, test sources, test-runner configuration, package build/test definitions, and other validation-contract paths as protected direct-push inputs; reject an autofix patch that changes one instead of executing candidate-controlled validation definitions.
-  - Use a non-mutating locked dependency operation when a lockfile exists, run Python tests through the same environment populated by the installer, and fail if dependency setup or validation changes tracked files.
-  - After required validation, reproduce the staged candidate diff and require its SHA-256 to match the downloaded artifact before publishing the digest used by apply-patch.
-  - Keep apply-patch limited to checkout, artifact download, digest verification, patch application, hook-disabled commit, push, and the existing PR comment.
-  - Add deterministic template and rendered-project fixtures proving that setup, dependency installation, and required build/test commands occur only in the read-only validation job, failed build/test blocks apply-patch, candidate changes to validation-contract paths are rejected, and tracked-state mutation fails the digest check.
+  - Fail closed by rendering every enabled CI autofix selection as patch-only until the generic template has an isolated, immutable validation contract that candidate code cannot rewrite directly or indirectly.
+  - Remove the manual direct-push input, validation-to-write job graph, branch write permission, patch commit, push, and automated PR comment from the generated workflow; keep patch generation read-only and artifact-only.
+  - Preserve the Copier `direct_push` answer value for non-destructive update compatibility, but label and document that it currently falls back to patch-only without external writes.
+  - Add deterministic template and rendered-project fixtures proving that a stored `direct_push` answer still renders only patch-only mode and that no generated job has repository write permission, pushes a branch, or applies a candidate patch in a write-capable job.
   - Resolve the source Git object directory through Git rather than assuming .git/objects, use a temporary object directory while deriving changed paths, and expose the source object directory only as an alternate for base-object reads.
   - Encode each alternate object path with Git-compatible C-style quoting so a legal colon or non-ASCII byte cannot become an alternate-list separator.
   - Prove that successful path derivation, manifest generation without apply, and rejected apply preflight do not add a unique candidate blob to the source object database, including repositories under a colon-containing path, linked worktrees using a common object directory, and a source object database with an existing alternate.
@@ -66,16 +64,14 @@ The sandboxed runner directs only its index to a temporary path while `git apply
 ## Decisions
 
 - Treat both review findings as valid.
-- Render a fixed trusted full-validation set from Copier's `primary_language` instead of trusting validation commands or package-script selection introduced by the candidate patch.
-- Reject direct-push candidates that modify the trusted dependency, build, test, or validation definitions consumed by that fixed validation set.
-- Keep managed change-aware validation as an additional floor rather than replacing it.
-- Duplicate dependency setup in the read-only validation job; do not move any installer or repository test into the write-capable apply job.
+- Do not execute candidate-controlled build or test code as a prerequisite to an automatic repository write in the current generic GitHub runner. Fixed command names are insufficient because candidate source can rewrite indirect runners, Git metadata, and GitHub command files.
+- Preserve the existing `direct_push` Copier answer for update compatibility, but render artifact-only patch behavior for it and remove every write-capable autofix path until a separately isolated and immutable validation contract is designed.
 - Preserve Git's patch and path semantics by isolating object writes with `GIT_OBJECT_DIRECTORY` and reading base objects through `GIT_ALTERNATE_OBJECT_DIRECTORIES`.
 - Keep the published v1.3.0 tag immutable and apply these corrections only to dev and PR 2.
 
 ## Tasks
 
-- [ ] Enforce primary-language build and test validation before generated direct-push.
+- [ ] Disable generated direct-push and retain patch-only artifact output.
 - [ ] Isolate candidate object writes during changed-path derivation.
 - [ ] Add deterministic regression coverage for both findings.
 - [ ] Run every required validation command and record results.
@@ -86,3 +82,5 @@ The sandboxed runner directs only its index to a temporary path while `git apply
 - Pending implementation.
 - Rejected candidate `/tmp/sandboxed-plan-worker-output-kiaFUi/manifest.json`, source HEAD `2b83d73f0e9489fc191b82af8ed4eb8b29c54db2`. GPT-5.3-Codex-Spark medium returned bounded `usage_limit`; GPT-5.6-Luna max generated the candidate in a fresh isolated attempt.
 - Parent review-clone validation passed 34 runner tests, runner self-test, template static checks, workflow lint, and smoke, but read-only security review found three acceptance failures: candidate-controlled validation definitions could still bypass build/test, the uv test interpreter did not use the synced environment, and an unquoted colon in an alternate object path broke legal repository paths. The patch was not applied.
+- Rejected candidate `/tmp/sandboxed-plan-worker-output-f137XK/manifest.json`, source HEAD `6f743e7a3c847b6bf9360b1daf8fab6491961b66`. GPT-5.3-Codex-Spark medium returned bounded `usage_limit`; GPT-5.6-Luna max generated the candidate in a fresh isolated attempt.
+- Parent review-clone validation passed 35 runner tests, runner self-test, template static checks, workflow lint with the pinned local actionlint binary, smoke, full managed validation, and diff checks. Read-only security review nevertheless found that indirect validation runners and GitHub command files remained candidate-controlled, the required executable negative fixtures were absent, and Python dependency installation downgraded after a declared dev-extra failure. The patch was not applied.
