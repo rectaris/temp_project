@@ -57,6 +57,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
@@ -90,6 +91,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
@@ -157,6 +159,10 @@ assert_managed_orchestration_reports() {
   grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
   grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
   grep -qi 'advisory' "$managed_orchestration"
+  grep -qi 'repository breadth alone is insufficient' "$managed_agents" "$managed_orchestration"
+  grep -q 'implementation_risk' "$managed_agents" "$managed_orchestration"
+  grep -q 'implementation_ambiguity' "$managed_agents" "$managed_orchestration"
+  grep -qi 'admissible implementation slice' "$managed_orchestration"
 }
 
 assert_ci_autofix_validation_graph() {
@@ -1015,6 +1021,10 @@ grep -q 'Do not commit changes' "$tmp/typescript/.codex/agents/sequential_plan_w
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run <plan>' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 python3 "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py" --help >/dev/null
 grep -q 'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'TERRA_CODEX_MODEL = "gpt-5.6-terra"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def select_plan_writable_profile' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'implementation_risk' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
+grep -q 'implementation_ambiguity' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
 grep -q 'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'DEFAULT_FALLBACK_CODEX_REASONING = "max"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q -- '--fallback-codex-model' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
@@ -1176,6 +1186,8 @@ grep -q 'SPEC_USER_COMMUNICATION.md' "$tmp/typescript/.project-agent-workflow/sk
 grep -q 'sequential_plan_worker' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'gpt-5.6-luna.*max fallback' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -q 'gpt-5.6-terra' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -qi 'admissible implementation slice' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'one bounded worker at a time' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/.project-agent-workflow/AGENTS.md"

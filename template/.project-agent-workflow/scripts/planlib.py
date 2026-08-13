@@ -55,10 +55,13 @@ SCALAR_KEYS = {
     "review_class",
     "human_design_required",
     "human_approval_status",
+    "implementation_risk",
+    "implementation_ambiguity",
     "expected_output",
     "checked_summary_ja",
     "completion_deferred_reason",
 }
+IMPLEMENTATION_CLASSIFICATION_KEYS = {"implementation_risk", "implementation_ambiguity"}
 LIST_KEYS = {
     "task_types",
     "target_files",
@@ -212,7 +215,11 @@ def parse_manifest(path: Path) -> dict[str, str | list[str]]:
             rest = rest.strip()
             current = None
             if key in SCALAR_KEYS:
-                values[key] = rest
+                if key in IMPLEMENTATION_CLASSIFICATION_KEYS and not rest:
+                    values[key] = []
+                    current = key
+                else:
+                    values[key] = rest
             elif key in LIST_KEYS:
                 current = key
                 if rest:

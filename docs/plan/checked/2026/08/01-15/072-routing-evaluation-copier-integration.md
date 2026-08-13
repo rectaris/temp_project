@@ -1,6 +1,6 @@
 # Route delegated implementation by value and implementation profile
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -84,13 +84,16 @@ Earlier candidates showed that routing code, fixed evaluation, and generated upd
 
 ## Tasks
 
-- [ ] Update root and generated orchestration policy and sequential Skill guidance.
-- [ ] Assert that one admissible implementation slice, not one broad plan, is the writable delegation unit.
-- [ ] Add strict plan classifications, writable-profile selection, overrides, and runner tests.
-- [ ] Add complete fixed value/routing evaluation without removing established critical requirements.
-- [ ] Update generated Copier assertions through the committed plan 071 harness.
-- [ ] Run all required validation, archive, and commit before plan 073.
+- [x] Update root and generated orchestration policy and sequential Skill guidance.
+- [x] Assert that one admissible implementation slice, not one broad plan, is the writable delegation unit.
+- [x] Add strict plan classifications, writable-profile selection, overrides, and runner tests.
+- [x] Add complete fixed value/routing evaluation without removing established critical requirements.
+- [x] Update generated Copier assertions through the committed plan 071 harness.
+- [x] Run all required validation, archive, and commit before plan 073.
 
 ## Validation Notes
 
-- Pending implementation after plan 071.
+- Parent-session implementation replaced breadth-only delegation with the independently-useful-output value gate and defined an admissible writable slice as one independently reviewable invariant with a later integration gate.
+- The managed parser now preserves optional scalar risk and ambiguity declarations, including present blank or list-valued inputs for fail-closed runner rejection. The runner selects Spark medium for low/low, Terra medium for ordinary without high, refuses either high, and rejects preferred or fallback writable Sol while preserving strict nonblank overrides.
+- Fixed evaluation preserves R1 through R5, adds slice and routing requirements, retains median/edge/negative/untuned-holdout cases, and checks exact value-gate and routing inputs/results under unique identifiers.
+- Runner root/template copies are byte-identical. Parent-session validation passed all declared commands: 39 runner tests, runner self-test, root policy check, Copier template check, workflow lint, smoke, required Copier update, change-aware validation, and diff checks.

@@ -4,7 +4,7 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 
 ## Proactive bounded delegation
 
-- Delegate repository-wide work proactively, without waiting for a per-task user instruction, when independent helper work is available and coordination is expected to be materially useful.
+- Delegate repository-wide work proactively without waiting for a per-task user instruction only when bounded, independent helper work produces independently useful output and its expected context reduction, parallelism, or review value exceeds coordination cost; repository breadth alone is insufficient.
 - Trigger proactive delegation when at least one applies:
   - multiple independent code or documentation areas are affected,
   - cross-specification reconciliation is required,
@@ -41,6 +41,10 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 - Delegate only concrete, bounded, independently useful work.
 - Assign non-overlapping write scopes.
 - For writable sequential active-plan implementation, use `scripts/run-sandboxed-plan-worker.py run` and `scripts/run-sandboxed-plan-worker.py apply`; the worker sees a read-only clone with writable shadow mounts only for normalized `write_scope` entries. Do not grant direct repository write access to the built-in `sequential_plan_worker` profile.
+- Admit one writable candidate only as an admissible implementation slice: one invariant that is independently reviewable and validatable and has an explicit later integration gate. Split a broad active plan before delegation rather than using its breadth as a candidate boundary.
+- Read optional scalar `implementation_risk` and `implementation_ambiguity` as `low`, `ordinary`, or `high`. Only an absent field defaults to `ordinary`; a present blank, whitespace-only, list-valued, or unknown value fails closed.
+- Use Spark medium only when both inputs are `low`; use Terra medium when neither is `high` and at least one is `ordinary`; refuse writable delegation when either input is `high`.
+- Preserve explicit nonblank preferred-model, preferred-reasoning, fallback-model, and fallback-reasoning overrides, but reject Sol as both a preferred and fallback writable model. Sol remains reserved for independent security and regression review.
 - The sandboxed sequential runner prefers `gpt-5.3-codex-spark` with medium reasoning. Only a bounded Codex CLI error line for a usage limit, rate limit, unavailable model, or denied model access may trigger one fallback to `gpt-5.6-luna` with max reasoning.
 - A fallback attempt must use the same committed source HEAD in a new isolated clone, scratch directory, writable-shadow set, staged authentication copy, and ephemeral Codex session. Do not reuse worker changes, Git configuration, caches, or output files from the preferred attempt.
 - Authentication, network, refusal, implementation, validation, sandbox, custom-worker, and unclassified failures stop without model fallback. Keep every attempt's raw output local and record only bounded provenance and digests in the successful manifest.
@@ -56,7 +60,7 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 ## Cost Gate
 
 Use local execution for short deterministic commands, direct user clarification, final integration, validation acceptance, commits, tags, pushes, releases, and high-risk decisions.
-Use helpers when context pressure, file size, semantic risk, or review value outweighs coordination cost.
+Use helpers only when they return independently useful output and expected context reduction, parallelism, or review value outweighs coordination cost.
 When helper output is used, include role, scope, and acceptance summary in the final report.
 
 ## Model Defaults

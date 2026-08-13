@@ -24,6 +24,9 @@ DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
 DEFAULT_CODEX_REASONING = "medium"
 DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"
 DEFAULT_FALLBACK_CODEX_REASONING = "max"
+TERRA_CODEX_MODEL = "gpt-5.6-terra"
+IMPLEMENTATION_CLASSIFICATIONS = frozenset({"low", "ordinary", "high"})
+WRITABLE_SOL_MODEL = "gpt-5.6-sol"
 PLAN_PATTERN = re.compile(r"^docs/plan/active/\d{3}-[^/]+\.md$")
 STATUS_PATTERN = re.compile(r"^(?:\?\?|[ MARCUDT][ MD]) (.+)$")
 CODEX_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL)(?::|\b)", re.IGNORECASE)
@@ -330,6 +333,49 @@ def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path
         raise RunnerError(f"plan write_scope must be a list: {plan_rel}")
     normalized_scope = parse_write_scope(write_scope)
     return plan_path, plan_rel, values, normalized_scope
+
+
+def implementation_classification(values: dict[str, str | list[str]], key: str) -> str:
+    """Read one optional scalar classification; only absence receives a default."""
+    if key not in values:
+        return "ordinary"
+    raw = values[key]
+    if not isinstance(raw, str):
+        raise RunnerError(f"plan {key} must be one scalar classification")
+    value = raw.strip().lower()
+    if value not in IMPLEMENTATION_CLASSIFICATIONS:
+        allowed = ", ".join(sorted(IMPLEMENTATION_CLASSIFICATIONS))
+        raise RunnerError(f"plan {key} must be one of {allowed}; blank and unknown values are rejected")
+    return value
+
+
+def select_plan_writable_profile(values: dict[str, str | list[str]]) -> tuple[str, str]:
+    """Select a writable model from separate risk and ambiguity declarations."""
+    risk = implementation_classification(values, "implementation_risk")
+    ambiguity = implementation_classification(values, "implementation_ambiguity")
+    if "high" in {risk, ambiguity}:
+        raise RunnerError(
+            "writable sequential delegation is refused when implementation_risk or "
+            "implementation_ambiguity is high"
+        )
+    if risk == ambiguity == "low":
+        return DEFAULT_CODEX_MODEL, DEFAULT_CODEX_REASONING
+    return TERRA_CODEX_MODEL, "medium"
+
+
+def require_writable_model(model: str | None, label: str) -> str:
+    if model is None or not model.strip():
+        raise RunnerError(f"{label} Codex model must be non-empty")
+    normalized = model.strip()
+    if normalized.casefold() == WRITABLE_SOL_MODEL:
+        raise RunnerError("gpt-5.6-sol is reserved for independent review and cannot be a writable worker")
+    return normalized
+
+
+def require_reasoning_effort(reasoning: str | None, label: str) -> str:
+    if reasoning is None or not reasoning.strip():
+        raise RunnerError(f"{label} Codex reasoning effort must be non-empty")
+    return reasoning.strip()
 
 
 def ensure_no_symlink_components(path: Path) -> None:
@@ -964,7 +1010,8 @@ def run_worker(args: argparse.Namespace) -> int:
     os.chdir(repo_root)
     planlib = load_planlib()
     ensure_clean_worktree(repo_root, git_bin)
-    plan_path, plan_rel, _values, normalized_scope = load_plan(planlib, repo_root, args.plan)
+    plan_path, plan_rel, values, normalized_scope = load_plan(planlib, repo_root, args.plan)
+    selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
     head = git_text(repo_root, git_bin, "rev-parse", "HEAD")
     plan_digest = hash_file(plan_path)
     output_dir = materialize_output_dir(repo_root, args.output_dir)
@@ -976,12 +1023,20 @@ def run_worker(args: argparse.Namespace) -> int:
         fallback_reason: str | None = None
         if args.worker_binary is None:
             codex_bin = require_executable("codex", args.codex_bin)
-            if not args.codex_model or not args.codex_reasoning_effort:
-                raise RunnerError("preferred Codex model and reasoning effort must be non-empty")
-            if not args.no_model_fallback and (
-                not args.fallback_codex_model or not args.fallback_codex_reasoning_effort
-            ):
-                raise RunnerError("fallback Codex model and reasoning effort must be non-empty")
+            primary_model = require_writable_model(
+                args.codex_model if args.codex_model is not None else selected_plan_model,
+                "preferred",
+            )
+            primary_reasoning = require_reasoning_effort(
+                args.codex_reasoning_effort
+                if args.codex_reasoning_effort is not None
+                else selected_plan_reasoning,
+                "preferred",
+            )
+            fallback_model = require_writable_model(args.fallback_codex_model, "fallback")
+            fallback_reasoning_effort = require_reasoning_effort(
+                args.fallback_codex_reasoning_effort, "fallback"
+            )
             primary = execute_isolated_attempt(
                 workspace=workspace,
                 label="primary",
@@ -996,8 +1051,8 @@ def run_worker(args: argparse.Namespace) -> int:
                 extra_env=args.worker_env,
                 hidden_directories=(output_dir, host_codex_home_path()),
                 codex_bin=codex_bin,
-                model=args.codex_model,
-                reasoning=args.codex_reasoning_effort,
+                model=primary_model,
+                reasoning=primary_reasoning,
             )
             attempts.append(primary["record"])
             worker_kind = "codex"
@@ -1025,8 +1080,8 @@ def run_worker(args: argparse.Namespace) -> int:
                     extra_env=args.worker_env,
                     hidden_directories=(output_dir, host_codex_home_path(), primary["attempt_root"]),
                     codex_bin=codex_bin,
-                    model=args.fallback_codex_model,
-                    reasoning=args.fallback_codex_reasoning_effort,
+                    model=fallback_model,
+                    reasoning=fallback_reasoning_effort,
                 )
                 attempts.append(fallback["record"])
                 if fallback["result"].returncode != 0:
@@ -1243,6 +1298,8 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
             review_class: B
             human_design_required: no
             human_approval_status: not_required
+            implementation_risk: low
+            implementation_ambiguity: low
             write_scope:
               - allowed.txt
               - dir/
@@ -1294,8 +1351,8 @@ def run_self_test(args: argparse.Namespace) -> int:
                     git_bin=git_bin,
                     bwrap_bin=args.bwrap_bin,
                     codex_bin=args.codex_bin,
-                    codex_model=DEFAULT_CODEX_MODEL,
-                    codex_reasoning_effort=DEFAULT_CODEX_REASONING,
+                    codex_model=None,
+                    codex_reasoning_effort=None,
                     fallback_codex_model=DEFAULT_FALLBACK_CODEX_MODEL,
                     fallback_codex_reasoning_effort=DEFAULT_FALLBACK_CODEX_REASONING,
                     no_model_fallback=False,
@@ -1347,12 +1404,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--bwrap-bin", default="bwrap", help="Bubblewrap executable to use")
     run_parser.add_argument("--codex-bin", default="codex", help="Codex executable to use for the default worker")
     run_parser.add_argument(
-        "--codex-model", default=DEFAULT_CODEX_MODEL, help="preferred Codex model for the default worker"
+        "--codex-model", default=None, help="preferred Codex model override for the default worker"
     )
     run_parser.add_argument(
         "--codex-reasoning-effort",
-        default=DEFAULT_CODEX_REASONING,
-        help="preferred Codex reasoning effort for the default worker",
+        default=None,
+        help="preferred Codex reasoning effort override for the default worker",
     )
     run_parser.add_argument(
         "--fallback-codex-model",

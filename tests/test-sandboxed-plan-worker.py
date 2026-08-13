@@ -220,6 +220,8 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             "review_class: B",
             "human_design_required: no",
             "human_approval_status: not_required",
+            "implementation_risk: low",
+            "implementation_ambiguity: low",
             "write_scope:",
             *(f"  - {entry}" for entry in write_scope),
             "context_files:",
@@ -282,7 +284,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
     ) -> subprocess.CompletedProcess[str]:
         fake_codex = output_dir.parent / f"fake-codex-{scenario}.py"
         write_fake_codex(fake_codex)
-        codex_home = output_dir.parent / f"codex-home-{scenario}"
+        codex_home = output_dir.parent / f"codex-home-{scenario}-{output_dir.name}"
         codex_home.mkdir()
         (codex_home / "auth.json").write_text('{"token":"fixture"}\n', encoding="utf-8")
         args = [
@@ -344,6 +346,45 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         for stdout, stderr, expected in cases:
             with self.subTest(stderr=stderr):
                 self.assertEqual(RUNNER.classify_codex_unavailability(stdout, stderr), expected)
+
+    def test_plan_writable_profile_selection_and_invalid_classifications(self) -> None:
+        self.assertEqual(
+            RUNNER.select_plan_writable_profile(
+                {"implementation_risk": "low", "implementation_ambiguity": "low"}
+            ),
+            ("gpt-5.3-codex-spark", "medium"),
+        )
+        self.assertEqual(
+            RUNNER.select_plan_writable_profile(
+                {"implementation_risk": "ordinary", "implementation_ambiguity": "low"}
+            ),
+            ("gpt-5.6-terra", "medium"),
+        )
+        self.assertEqual(RUNNER.select_plan_writable_profile({}), ("gpt-5.6-terra", "medium"))
+        invalid = (
+            {"implementation_risk": "high", "implementation_ambiguity": "low"},
+            {"implementation_risk": "low", "implementation_ambiguity": "high"},
+            {"implementation_risk": "", "implementation_ambiguity": "low"},
+            {"implementation_risk": "   ", "implementation_ambiguity": "low"},
+            {"implementation_risk": ["low"], "implementation_ambiguity": "low"},
+            {"implementation_risk": "unknown", "implementation_ambiguity": "low"},
+        )
+        for values in invalid:
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(RUNNER.RunnerError, "implementation"):
+                    RUNNER.select_plan_writable_profile(values)
+
+    def test_writable_model_and_reasoning_overrides_are_strict(self) -> None:
+        self.assertEqual(RUNNER.require_writable_model("custom-writable", "preferred"), "custom-writable")
+        self.assertEqual(RUNNER.require_reasoning_effort("high", "preferred"), "high")
+        for model in (None, "", "   ", "gpt-5.6-sol", "GPT-5.6-SOL"):
+            with self.subTest(model=model):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.require_writable_model(model, "preferred")
+        for reasoning in (None, "", "   "):
+            with self.subTest(reasoning=reasoning):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.require_reasoning_effort(reasoning, "preferred")
 
     def test_default_worker_stages_minimal_private_codex_home_under_scratch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -648,6 +689,94 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             [("gpt-5.3-codex-spark", "medium", True)],
         )
         self.assertFalse((output_dir / "worker-fallback.stdout").exists())
+
+    def test_ordinary_plan_selects_terra_and_explicit_override_is_honored(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        plan = repo / plan_path
+        plan.write_text(
+            plan.read_text(encoding="utf-8").replace("implementation_risk: low", "implementation_risk: ordinary"),
+            encoding="utf-8",
+        )
+        git(repo, "add", plan_path)
+        git(repo, "commit", "-qm", "ordinary classification")
+        terra_output = Path(temporary.name) / "terra-output"
+        terra = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "primary_success",
+            output_dir=terra_output,
+            fake_env={"FAKE_PRIMARY_MODEL": "gpt-5.6-terra"},
+        )
+        self.assertEqual(terra.returncode, 0, terra.stderr)
+        terra_manifest = json.loads(Path(terra.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(terra_manifest["worker_result"]["attempts"][0]["model"], "gpt-5.6-terra")
+
+        override_output = Path(temporary.name) / "override-output"
+        override = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "primary_success",
+            output_dir=override_output,
+            extra_args=(
+                "--codex-model",
+                "custom-writable",
+                "--codex-reasoning-effort",
+                "high",
+            ),
+            fake_env={"FAKE_PRIMARY_MODEL": "custom-writable", "FAKE_PRIMARY_REASONING": "high"},
+        )
+        self.assertEqual(override.returncode, 0, override.stderr)
+        override_manifest = json.loads(Path(override.stdout.strip()).read_text(encoding="utf-8"))
+        attempt = override_manifest["worker_result"]["attempts"][0]
+        self.assertEqual((attempt["model"], attempt["reasoning_effort"]), ("custom-writable", "high"))
+
+    def test_cli_refuses_high_classifications_blank_values_and_writable_sol(self) -> None:
+        classification_cases = (
+            ("implementation_risk: low", "implementation_risk: high"),
+            ("implementation_ambiguity: low", "implementation_ambiguity: high"),
+            ("implementation_risk: low", "implementation_risk:"),
+            ("implementation_risk: low", "implementation_risk:\n  - low"),
+            ("implementation_risk: low", "implementation_risk: unknown"),
+        )
+        for index, (before, after) in enumerate(classification_cases):
+            with self.subTest(classification=after):
+                temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+                self.addCleanup(temporary.cleanup)
+                plan = repo / plan_path
+                plan.write_text(plan.read_text(encoding="utf-8").replace(before, after), encoding="utf-8")
+                git(repo, "add", plan_path)
+                git(repo, "commit", "-qm", f"invalid classification {index}")
+                result, output_dir, _worker = self.run_with_worker(
+                    repo,
+                    plan_path,
+                    '(worker_repo / "allowed.txt").write_text("must not run\\n", encoding="utf-8")',
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("implementation_", result.stderr)
+                self.assertFalse((output_dir / "candidate.patch").exists())
+
+        override_cases = (
+            ("--codex-model", ""),
+            ("--codex-reasoning-effort", "  "),
+            ("--codex-model", "gpt-5.6-sol"),
+            ("--fallback-codex-model", "GPT-5.6-SOL"),
+        )
+        for index, override in enumerate(override_cases):
+            with self.subTest(override=override):
+                temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+                self.addCleanup(temporary.cleanup)
+                output_dir = Path(temporary.name) / f"rejected-override-{index}"
+                result = self.run_with_fake_codex(
+                    repo,
+                    plan_path,
+                    "primary_success",
+                    output_dir=output_dir,
+                    extra_args=override,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertRegex(result.stderr, "non-empty|reserved for independent review")
+                self.assertFalse((output_dir / "worker-primary.stdout").exists())
 
     def test_unavailable_preferred_codex_uses_fresh_fallback_clone_and_records_provenance(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])

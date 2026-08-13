@@ -72,3 +72,4 @@ id	path
 069	docs/plan/checked/2026/08/01-15/069-copier-update-clean-source.md
 070	docs/plan/checked/2026/08/01-15/070-pr2-review-remediation.md
 071	docs/plan/checked/2026/08/01-15/071-orchestration-throughput-foundation.md
+072	docs/plan/checked/2026/08/01-15/072-routing-evaluation-copier-integration.md

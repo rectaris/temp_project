@@ -30,7 +30,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Before introducing a new domain or workflow label in design, investigation, remediation, causal-summary, or naming work, fix its concrete referent and preserve unresolved facts according to `docs/agent/SPEC_REFERENT_FIRST.md`; use `.codex/skills/define-referents-first` for the operational workflow. In chat naming work, show an unnamed referent and uncertainty stage before any candidate or controlled term.
 - Use repo-local generic Codex skills such as `.codex/skills/implementation-guidelines`, `.codex/skills/mcp-ops`, `.codex/skills/linear-ops`, `.codex/skills/graph-memory`, and `.codex/skills/plan-archive` only as auxiliary workflow guidance; keep project-specific values in `docs/agent/` policy files.
 - Use `scripts/run-sandboxed-plan-worker.py` for writable sequential-plan implementation; keep `.codex/agents/sequential_plan_worker.toml` read-only and apply only parent-admitted candidate patches.
-- Keep GPT-5.3-Codex-Spark with medium reasoning as that runner's preferred model. Allow exactly one fresh isolated GPT-5.6-Luna max attempt only when the Codex CLI itself reports a bounded usage limit, rate limit, unavailable-model, or denied-model-access error; do not fall back for other failures.
+- Route the writable runner from the plan's separate `implementation_risk` and `implementation_ambiguity` fields: GPT-5.3-Codex-Spark medium only for low/low, GPT-5.6-Terra medium when neither is high and at least one is ordinary, and refuse either high. Reserve Sol for independent review. Allow exactly one fresh isolated GPT-5.6-Luna max attempt only when the Codex CLI itself reports a bounded usage limit, rate limit, unavailable-model, or denied-model-access error; do not fall back for other failures.
 - Before submitting a substantive progress update, proposal, explanation, blocking report, or final summary, follow `docs/agent/SPEC_USER_COMMUNICATION.md` and use `.codex/skills/write-for-reader` for its operational workflow.
 - When creating or updating Codex skills, follow `docs/agent/SPEC_SKILL_AUTHORING.md`.
 - Validate with `scripts/lint-project-workflow.sh` and `tests/smoke.sh` before completion.
@@ -55,7 +55,7 @@ This repository packages reusable coding-agent project management, file routing,
 
 ## Delegation Safety and Ownership
 
-- Delegate repository-wide work proactively without requiring a separate per-task user instruction when independent helper work is available and materially useful, bounded, and can be split into independent helper roles.
+- Delegate proactively without requiring a separate per-task user instruction only when a bounded helper can return independently useful output and expected context reduction, parallelism, or review value exceeds coordination cost; repository breadth alone is insufficient.
 - Keep final ownership in the main agent for interpretation, final integration, validation acceptance, planning updates, commits, and the final report/completion reporting.
 - Do not delegate short deterministic commands (including pass/fail commands), direct user clarification, final policy judgment, authorization decisions, external writes, secret handling, or destructive changes unless an explicit external policy grants that authority.
 - Keep helper delegation bounded by `write_scope`, keep context files read-only, and keep final acceptance and reporting in the main session.

@@ -498,6 +498,12 @@ validate_common_lane() {
     grep -q 'The main agent owns task interpretation, integration, validation acceptance, planning updates, commits, and the final report.' "$managed_orchestration"
     grep -q '^DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q '^DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q '^TERRA_CODEX_MODEL = "gpt-5.6-terra"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def select_plan_writable_profile' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'implementation_risk' "$out/.project-agent-workflow/scripts/planlib.py"
+    grep -q 'implementation_ambiguity' "$out/.project-agent-workflow/scripts/planlib.py"
+    grep -qi 'repository breadth alone is insufficient' "$managed_agents" "$managed_orchestration"
+    grep -qi 'admissible implementation slice' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
     grep -q 'def has_pre_v1_adoption_provenance()' "$out/.project-agent-workflow/scripts/planlib.py"
   }
 

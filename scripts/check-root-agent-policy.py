@@ -237,6 +237,10 @@ def check_sandboxed_worker_fallback() -> None:
         '"--fallback-codex-model"',
         '"--fallback-codex-reasoning-effort"',
         '"--no-model-fallback"',
+        "def select_plan_writable_profile",
+        "implementation_risk",
+        "implementation_ambiguity",
+        "WRITABLE_SOL_MODEL",
     )
     for marker in runner_markers:
         if marker not in runner:
@@ -502,10 +506,10 @@ def check_orchestration_policy() -> None:
         "repository-wide",
         "independent helper work",
         "main agent owns",
-        "multiple independent",
-        "cross-specification",
-        "validation, security, or orchestration",
-        "large or dense",
+        "expected context reduction",
+        "parallelism",
+        "review value",
+        "repository breadth alone",
         "proactively",
         "short deterministic",
         "cost",
@@ -521,6 +525,11 @@ def check_orchestration_policy() -> None:
         "final report",
         "role",
         "write scope",
+        "admissible implementation slice",
+        "implementation_risk",
+        "implementation_ambiguity",
+        "spark medium",
+        "terra medium",
     )
     for marker in shared_markers:
         if marker not in policy:
@@ -557,25 +566,119 @@ def check_orchestration_policy() -> None:
         fail("orchestration fixture must contain requirements and scenarios arrays")
     if not requirements or not any(item.get("critical") is True for item in requirements):
         fail("orchestration requirements need at least one critical requirement")
+    requirement_ids: set[str] = set()
+    requirement_markers = {
+        "R1": ("independently useful", "coordination cost", "repository breadth alone"),
+        "R2": ("short deterministic", "direct user clarification", "main session"),
+        "R3": ("authorization", "secrets", "external writes", "destructive"),
+        "R4": ("helpers were used", "role", "write scope", "acceptance path"),
+        "R5": ("write scope", "read-only context"),
+        "R6": ("independently reviewable", "validatable", "integration gate"),
+        "R7": ("risk", "ambiguity", "spark", "terra", "sol"),
+    }
     for requirement in requirements:
         if not isinstance(requirement, dict) or requirement.get("id") is None:
             fail("orchestration requirements must each be an object with an id")
+        requirement_id = requirement["id"]
+        if not isinstance(requirement_id, str) or not requirement_id or requirement_id in requirement_ids:
+            fail("orchestration requirement identifiers must be unique nonblank strings")
+        requirement_ids.add(requirement_id)
         if "threshold" not in requirement:
             fail(f"orchestration requirement missing threshold: {requirement.get('id')}")
+        requirement_text = f"{requirement.get('threshold', '')} {requirement.get('text', '')}".lower()
+        for marker in requirement_markers[requirement_id]:
+            if marker not in requirement_text:
+                fail(f"orchestration requirement {requirement_id} missing preserved marker: {marker}")
+    if requirement_ids != {"R1", "R2", "R3", "R4", "R5", "R6", "R7"}:
+        fail("orchestration fixture must preserve R1-R5 and add slice and routing requirements")
 
     required_classes = {"median", "edge", "negative", "holdout"}
     observed = {item.get("class") for item in scenarios if isinstance(item, dict) and "class" in item}
     if not required_classes.issubset(observed):
         fail(f"orchestration fixture missing scenario classes: {sorted(required_classes - observed)}")
 
+    expected_value_cases = {
+        "median-repository-wide-reconciliation": (
+            {"independently_useful": True, "expected_benefit": "parallelism", "benefit_exceeds_coordination": True},
+            "delegate",
+        ),
+        "edge-cross-spec-security-review": (
+            {"independently_useful": True, "expected_benefit": "review", "benefit_exceeds_coordination": True},
+            "delegate-read-only",
+        ),
+        "negative-deterministic-update": (
+            {"independently_useful": False, "expected_benefit": "none", "benefit_exceeds_coordination": False},
+            "keep-local",
+        ),
+        "negative-broad-but-coupled": (
+            {"independently_useful": False, "expected_benefit": "repository-breadth-only", "benefit_exceeds_coordination": False},
+            "keep-local",
+        ),
+        "holdout-randomized-boundary-check": (
+            {"independently_useful": True, "expected_benefit": "context-reduction", "benefit_exceeds_coordination": True},
+            "delegate-read-only",
+        ),
+    }
+    expected_routing_cases = {
+        "routing-spark-low-low": (
+            {"implementation_risk": "low", "implementation_ambiguity": "low", "preferred_model_override": None, "preferred_reasoning_override": None, "fallback_model_override": None, "fallback_reasoning_override": None},
+            {"decision": "run", "preferred_model": "gpt-5.3-codex-spark", "preferred_reasoning": "medium"},
+        ),
+        "routing-terra-ordinary-low": (
+            {"implementation_risk": "ordinary", "implementation_ambiguity": "low", "preferred_model_override": None, "preferred_reasoning_override": None, "fallback_model_override": None, "fallback_reasoning_override": None},
+            {"decision": "run", "preferred_model": "gpt-5.6-terra", "preferred_reasoning": "medium"},
+        ),
+        "routing-absent-defaults": (
+            {"implementation_risk": None, "implementation_ambiguity": None, "preferred_model_override": None, "preferred_reasoning_override": None, "fallback_model_override": None, "fallback_reasoning_override": None},
+            {"decision": "run", "preferred_model": "gpt-5.6-terra", "preferred_reasoning": "medium"},
+        ),
+        "routing-risk-high-refusal": (
+            {"implementation_risk": "high", "implementation_ambiguity": "low", "preferred_model_override": None, "preferred_reasoning_override": None, "fallback_model_override": None, "fallback_reasoning_override": None},
+            {"decision": "refuse", "reason": "implementation-risk-high"},
+        ),
+        "routing-ambiguity-high-refusal": (
+            {"implementation_risk": "low", "implementation_ambiguity": "high", "preferred_model_override": None, "preferred_reasoning_override": None, "fallback_model_override": None, "fallback_reasoning_override": None},
+            {"decision": "refuse", "reason": "implementation-ambiguity-high"},
+        ),
+        "routing-explicit-override": (
+            {"implementation_risk": "low", "implementation_ambiguity": "low", "preferred_model_override": "custom-writable", "preferred_reasoning_override": "high", "fallback_model_override": "custom-fallback", "fallback_reasoning_override": "xhigh"},
+            {"decision": "run", "preferred_model": "custom-writable", "preferred_reasoning": "high", "fallback_model": "custom-fallback", "fallback_reasoning": "xhigh"},
+        ),
+        "routing-preferred-sol-refusal": (
+            {"implementation_risk": "low", "implementation_ambiguity": "low", "preferred_model_override": "gpt-5.6-sol", "preferred_reasoning_override": "high", "fallback_model_override": None, "fallback_reasoning_override": None},
+            {"decision": "refuse", "reason": "preferred-sol-reserved"},
+        ),
+        "routing-fallback-sol-refusal": (
+            {"implementation_risk": "low", "implementation_ambiguity": "low", "preferred_model_override": None, "preferred_reasoning_override": None, "fallback_model_override": "gpt-5.6-sol", "fallback_reasoning_override": "high"},
+            {"decision": "refuse", "reason": "fallback-sol-reserved"},
+        ),
+    }
+    expected_ids = set(expected_value_cases) | set(expected_routing_cases)
+    scenario_ids: set[str] = set()
     for scenario in scenarios:
         if not isinstance(scenario, dict):
             fail("orchestration scenario must be an object")
         for key in ("id", "class", "task", "source", "expected"):
             if key not in scenario:
                 fail(f"orchestration scenario missing {key}: {scenario}")
+        scenario_id = scenario["id"]
+        if not isinstance(scenario_id, str) or not scenario_id or scenario_id in scenario_ids:
+            fail("orchestration scenario identifiers must be unique nonblank strings")
+        scenario_ids.add(scenario_id)
+        if scenario_id in expected_value_cases:
+            expected_input, expected_result = expected_value_cases[scenario_id]
+            if scenario.get("value_gate") != expected_input or scenario.get("expected") != expected_result:
+                fail(f"orchestration value-gate scenario has incorrect exact input/result: {scenario_id}")
+        elif scenario_id in expected_routing_cases:
+            expected_input, expected_result = expected_routing_cases[scenario_id]
+            if scenario.get("routing_input") != expected_input or scenario.get("expected") != expected_result:
+                fail(f"orchestration routing scenario has incorrect exact input/result: {scenario_id}")
+        else:
+            fail(f"unexpected orchestration scenario identifier: {scenario_id}")
         if scenario.get("class") == "holdout" and scenario.get("used_for_tuning") is not False:
             fail("orchestration holdout scenario must set used_for_tuning=false")
+    if scenario_ids != expected_ids:
+        fail(f"orchestration fixture scenario set differs: {sorted(expected_ids - scenario_ids)}")
 
 
 def check_active_plans() -> None:

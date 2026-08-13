@@ -5,6 +5,7 @@
 - CI autofix workflow を patch artifact のみを生成する fail-closed 動作へ変更し、保存済みの `direct_push` Copier 回答も外部書き込みなしで互換維持するようにしました。
 - sandboxed plan worker の候補 patch の path 導出で Git object database を一時領域へ隔離し、source object database へ候補 blob を書き込まないようにしました。
 - orchestration 生成物の更新前チェックを Copier 更新ハーネスの simulation source と stage の対象へ追加し、更新時の現行 semantics 検証を固定しました。
+- 委譲を repository 規模ではなく独立した価値と実装 slice で判断し、逐次 worker を実装 risk・曖昧さに応じて Spark または Terra へ振り分け、high と書き込み用 Sol を拒否するようにしました。
 
 ## 2026-08-13 v1.3.0
 

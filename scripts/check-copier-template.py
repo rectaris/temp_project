@@ -497,10 +497,10 @@ def require_orchestration_policy_markers() -> None:
         "repository-wide",
         "independent helper work",
         "main agent owns",
-        "multiple independent",
-        "cross-specification",
-        "validation, security, or orchestration",
-        "large or dense",
+        "expected context reduction",
+        "parallelism",
+        "review value",
+        "repository breadth alone",
         "proactively",
         "non-overlapping",
         "short deterministic",
@@ -517,6 +517,11 @@ def require_orchestration_policy_markers() -> None:
         "final report",
         "role",
         "acceptance",
+        "admissible implementation slice",
+        "implementation_risk",
+        "implementation_ambiguity",
+        "spark medium",
+        "terra medium",
         "run-sandboxed-plan-worker.py run",
         "read-only",
     )
@@ -525,7 +530,6 @@ def require_orchestration_policy_markers() -> None:
             fail(f"template managed SPEC_ORCHESTRATION missing marker: {marker}")
     for marker in (
         "per-task user instruction",
-        "repository-wide",
         "do not delegate",
         "final ownership",
         "main session",
@@ -664,6 +668,10 @@ def require_sandboxed_plan_worker_alignment() -> None:
         '"--fallback-codex-model"',
         '"--fallback-codex-reasoning-effort"',
         '"--no-model-fallback"',
+        "def select_plan_writable_profile",
+        "implementation_risk",
+        "implementation_ambiguity",
+        "WRITABLE_SOL_MODEL",
     ):
         if marker not in template_runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")
