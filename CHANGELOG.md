@@ -2,6 +2,8 @@
 
 ## 未リリース
 
+- writable worker の model 選択説明を risk と ambiguity に基づく実装へ合わせ、再構成された plan の履歴・契約・検証コマンドを planning guide に追記しました。
+
 ## 2026-08-13 v1.4.0
 
 - plan の実行境界が不適切と判明した場合に `replan_required` で停止し、元の要件と受入れ条件を保持したまま後続 plan へ再構成する lifecycle 契約を追加しました。
