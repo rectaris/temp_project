@@ -52,6 +52,7 @@ SOURCE_REQUIRED = [
     "scripts/plan_validation_commands.py",
     "scripts/run-sandboxed-plan-worker.py",
     "scripts/restructure-plan.py",
+    "scripts/plan-execution-state.py",
     "scripts/referent-contract.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
@@ -170,6 +171,7 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py",
     "template/.project-agent-workflow/scripts/planlib.py",
     "template/.project-agent-workflow/scripts/restructure-plan.py",
+    "template/.project-agent-workflow/scripts/plan-execution-state.py",
     "template/.project-agent-workflow/scripts/plan_validation_commands.py",
     "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     "template/.project-agent-workflow/scripts/referent-contract.py",
@@ -332,6 +334,7 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/scripts/next-plan-id.sh",
     ".project-agent-workflow/scripts/planlib.py",
     ".project-agent-workflow/scripts/restructure-plan.py",
+    ".project-agent-workflow/scripts/plan-execution-state.py",
     ".project-agent-workflow/scripts/plan_validation_commands.py",
     ".project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     ".project-agent-workflow/scripts/referent-contract.py",
@@ -553,6 +556,9 @@ def require_orchestration_policy_markers() -> None:
         "replan_required",
         "requirement change needs separate explicit user authorization",
         "elapsed time is telemetry",
+        "plan-execution-state.py",
+        "independent-review receipt",
+        "--plan-execution-state",
         "at least 30 percent lower median",
         "p95 time no more than 10 percent worse",
         "run-sandboxed-plan-worker.py run",
@@ -729,6 +735,12 @@ def require_sandboxed_plan_worker_alignment() -> None:
         fail("plan restructuring root/template scripts differ")
     if (root_restructure.stat().st_mode & 0o777) != (template_restructure.stat().st_mode & 0o777):
         fail("plan restructuring root/template script modes differ")
+    root_execution_state = ROOT / "scripts/plan-execution-state.py"
+    template_execution_state = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
+    if root_execution_state.read_bytes() != template_execution_state.read_bytes():
+        fail("plan execution state root/template scripts differ")
+    if (root_execution_state.stat().st_mode & 0o777) != (template_execution_state.stat().st_mode & 0o777):
+        fail("plan execution state root/template script modes differ")
     for marker in (
         'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
         'DEFAULT_CODEX_REASONING = "medium"',

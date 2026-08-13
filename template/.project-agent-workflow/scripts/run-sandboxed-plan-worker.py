@@ -1844,6 +1844,43 @@ def select_attempt_artifacts(
     return worker_result
 
 
+def enforce_plan_execution_gate(args: argparse.Namespace, *, plan: str | None = None) -> None:
+    state = args.plan_execution_state
+    checker = Path(__file__).with_name("plan-execution-state.py")
+    if not checker.is_file():
+        raise RunnerError("plan execution state checker is unavailable")
+    command = [
+        sys.executable,
+        str(checker),
+        "check",
+        state,
+        "--run-id",
+        args.orchestration_run_id,
+        "--lifecycle-state",
+        args.lifecycle_state,
+    ]
+    if plan is not None:
+        command.extend(("--plan", plan))
+    completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise RunnerError(detail or "plan execution state gate rejected the operation")
+
+
+def plan_execution_lease(args: argparse.Namespace):
+    state = getattr(args, "plan_execution_state", None)
+    if not state:
+        return nullcontext()
+    lock_path = Path(state).with_name(Path(state).name + ".lock")
+    try:
+        descriptor = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise RunnerError(f"could not open plan execution lease: {exc}") from exc
+    handle = os.fdopen(descriptor, "rb")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+    return handle
+
+
 def run_worker(args: argparse.Namespace) -> int:
     runner_started = time.monotonic()
     git_bin = require_executable("git", args.git_bin)
@@ -3086,6 +3123,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="nonblank identifier that binds lifecycle and availability state to one run",
     )
     run_parser.add_argument("--lifecycle-state", required=True)
+    run_parser.add_argument("--plan-execution-state", required=True)
     run_parser.add_argument("--worker-binary", help="override the default Codex worker with a custom executable")
     run_parser.add_argument("--worker-arg", action="append", default=[], help="append one argument for --worker-binary")
     run_parser.add_argument(
@@ -3116,6 +3154,7 @@ def build_parser() -> argparse.ArgumentParser:
     correction_parser.add_argument("--availability-state")
     correction_parser.add_argument("--orchestration-run-id", required=True)
     correction_parser.add_argument("--lifecycle-state", required=True)
+    correction_parser.add_argument("--plan-execution-state", required=True)
     correction_parser.add_argument("--worker-binary")
     correction_parser.add_argument("--worker-arg", action="append", default=[])
     correction_parser.add_argument("--worker-env", action="append", default=[])
@@ -3131,6 +3170,7 @@ def build_parser() -> argparse.ArgumentParser:
     validation_parser.add_argument("--output-dir", required=True)
     validation_parser.add_argument("--orchestration-run-id", required=True)
     validation_parser.add_argument("--lifecycle-state", required=True)
+    validation_parser.add_argument("--plan-execution-state", required=True)
     validation_parser.add_argument("--git-bin", default="git")
     validation_parser.add_argument("--bwrap-bin", default="bwrap")
     validation_parser.set_defaults(handler=validate_candidate)
@@ -3139,6 +3179,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("manifest", help="path to manifest.json emitted by the run command")
     apply_parser.add_argument("--orchestration-run-id", required=True)
     apply_parser.add_argument("--lifecycle-state", required=True)
+    apply_parser.add_argument("--plan-execution-state", required=True)
     apply_parser.add_argument("--git-bin", default="git", help="git executable to use")
     apply_parser.set_defaults(handler=apply_worker_result)
 
@@ -3148,6 +3189,7 @@ def build_parser() -> argparse.ArgumentParser:
     finalize_parser.add_argument("manifest")
     finalize_parser.add_argument("--orchestration-run-id", required=True)
     finalize_parser.add_argument("--lifecycle-state", required=True)
+    finalize_parser.add_argument("--plan-execution-state", required=True)
     finalize_parser.add_argument("--git-bin", default="git")
     finalize_parser.set_defaults(handler=finalize_apply)
 
@@ -3164,7 +3206,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return int(args.handler(args))
+        with plan_execution_lease(args):
+            if args.command != "self-test":
+                plan = args.plan if args.command in {"run", "correct"} else None
+                enforce_plan_execution_gate(args, plan=plan)
+            return int(args.handler(args))
     except RunnerError as exc:
         fail(str(exc))
 

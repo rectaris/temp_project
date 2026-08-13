@@ -61,6 +61,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
+    template/.project-agent-workflow/scripts/plan-execution-state.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
@@ -99,6 +100,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
+    template/.project-agent-workflow/scripts/plan-execution-state.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \

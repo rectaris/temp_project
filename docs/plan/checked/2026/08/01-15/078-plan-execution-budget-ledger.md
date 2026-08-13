@@ -1,6 +1,6 @@
 # Enforce plan execution and review budgets
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -31,7 +31,7 @@ write_scope:
 context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
-  - docs/plan/active/077-atomic-plan-restructuring.md
+  - docs/plan/checked/2026/08/01-15/077-atomic-plan-restructuring.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
@@ -68,11 +68,20 @@ checked_summary_ja: 委譲と親直接実装に共通する実行予算を記録
 
 ## Tasks
 
-- [ ] Add exact locked execution-ledger storage and event transitions.
-- [ ] Integrate delegated and parent-direct review budgets with runner admission.
-- [ ] Add replay, tampering, multi-invariant, scope-drift, and post-authoritative negative tests.
-- [ ] Run required validation, independent review, archive, and commit before plan 079.
+- [x] Add exact locked execution-ledger storage and event transitions.
+- [x] Integrate delegated and parent-direct review budgets with runner admission.
+- [x] Add replay, tampering, multi-invariant, scope-drift, and post-authoritative negative tests.
+- [x] Run required validation, independent review, archive, and commit before plan 079.
 
 ## Validation Notes
 
-- Pending plans 076 and 077.
+- `python3 tests/test-plan-execution-state.py`: 9 tests passed.
+- `python3 tests/test-sandboxed-plan-worker.py`: 65 tests passed.
+- `python3 scripts/run-sandboxed-plan-worker.py self-test`: passed.
+- `python3 scripts/check-root-agent-policy.py`: passed.
+- `python3 scripts/check-copier-template.py`: passed.
+- `scripts/lint-project-workflow.sh`: passed.
+- `tests/smoke.sh`: passed with the documented actionlint-unavailable skip and fallback backend.
+- `python3 scripts/validate-changes.py --all`: passed.
+- `git diff --check`: passed.
+- Independent `change_reviewer` found two High and two Medium issues in gate optionality, concurrent trigger admission, lifecycle content binding, and valid-shape history rewriting. The final event-derived state fix closed the last bypass; final rereview reported zero unresolved High or Medium findings.

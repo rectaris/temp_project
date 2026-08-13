@@ -42,70 +42,77 @@ def run_cli(repo: Path, *args: str, env: dict[str, str] | None = None) -> subpro
     if env:
         child_env.update(env)
     command_args = list(args)
-    if command_args and command_args[0] in {"run", "correct", "validate", "apply"} and "--lifecycle-state" not in command_args:
-        manifest_path = None
+    operations = {"run", "correct", "validate", "apply", "finalize-apply"}
+    manifest_path = None
+    if command_args and command_args[0] in operations:
         if command_args[0] == "correct" and len(command_args) >= 3:
             manifest_path = Path(command_args[2])
-        elif command_args[0] in {"validate", "apply"} and len(command_args) >= 2:
+        elif command_args[0] in {"validate", "apply", "finalize-apply"} and len(command_args) >= 2:
             manifest_path = Path(command_args[1])
-        if manifest_path is not None and manifest_path.is_file():
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            lifecycle_path = manifest["lifecycle_state_path"]
-            run_id = manifest["orchestration_run_id"]
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path and manifest_path.is_file() else None
+        if "--lifecycle-state" not in command_args:
+            if manifest:
+                lifecycle_path = manifest["lifecycle_state_path"]
+                run_id = manifest["orchestration_run_id"]
+            else:
+                output_path = (
+                    Path(command_args[command_args.index("--output-dir") + 1]).absolute()
+                    if "--output-dir" in command_args
+                    else Path(tempfile.mkdtemp(prefix="test-lifecycle-")) / "output"
+                )
+                lifecycle_path = str(output_path.with_name(output_path.name + ".lifecycle.json"))
+                run_id = hashlib.sha256(lifecycle_path.encode()).hexdigest()[:24]
+            command_args.extend(["--lifecycle-state", lifecycle_path])
+            if "--orchestration-run-id" not in command_args:
+                command_args.extend(["--orchestration-run-id", run_id])
+        lifecycle_path = command_args[command_args.index("--lifecycle-state") + 1]
+        run_id = command_args[command_args.index("--orchestration-run-id") + 1]
+        if "--plan-execution-state" not in command_args:
+            execution_state = str(Path(lifecycle_path).with_name(Path(lifecycle_path).name + f".{run_id}.plan-execution.json"))
+            plan_rel = manifest["plan_path"] if manifest else command_args[1]
+            plan_file = repo / plan_rel
+            if not Path(execution_state).exists():
+                plan_text = plan_file.read_text(encoding="utf-8")
+                invariant_match = __import__("re").search(r"^primary_invariant: (.+)$", plan_text, flags=__import__("re").MULTILINE)
+                invariant = invariant_match.group(1) if invariant_match else "legacy candidate invariant"
+                initialized = subprocess.run(
+                    [
+                        sys.executable, str(ROOT / "scripts/plan-execution-state.py"), "init", execution_state,
+                        "--run-id", run_id, "--plan", plan_rel,
+                        "--plan-digest", "sha256:" + hashlib.sha256(plan_file.read_bytes()).hexdigest(),
+                        "--source-head", git(repo, "rev-parse", "HEAD").stdout.strip(),
+                        "--primary-invariant-digest", "sha256:" + hashlib.sha256(invariant.encode()).hexdigest(),
+                        "--lifecycle-state", lifecycle_path, "--implementation-mode", "candidate",
+                    ], cwd=repo, env=dict(os.environ), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                if initialized.returncode != 0:
+                    return initialized
+            command_args.extend(["--plan-execution-state", execution_state])
         else:
-            output_path = (
-                Path(command_args[command_args.index("--output-dir") + 1]).absolute()
-                if "--output-dir" in command_args
-                else Path(tempfile.mkdtemp(prefix="test-lifecycle-")) / "output"
-            )
-            lifecycle_path = str(output_path.with_name(output_path.name + ".lifecycle.json"))
-            run_id = hashlib.sha256(lifecycle_path.encode("utf-8")).hexdigest()[:24]
-        command_args.extend(["--lifecycle-state", lifecycle_path])
-        if "--orchestration-run-id" not in command_args:
-            command_args.extend(["--orchestration-run-id", run_id])
+            execution_state = command_args[command_args.index("--plan-execution-state") + 1]
         if command_args[0] == "apply" and manifest_path is not None and manifest_path.is_file():
             try:
                 lifecycle = json.loads(Path(lifecycle_path).read_text(encoding="utf-8"))
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 lifecycle = {}
-                manifest = {}
             validation_base = [
-                sys.executable,
-                str(SCRIPT),
-                "validate",
-                str(manifest_path),
-                "--parent-diff-approved",
-                "--critical-invariants-approved",
-                "--lifecycle-state",
-                lifecycle_path,
-                "--orchestration-run-id",
-                run_id,
+                sys.executable, str(SCRIPT), "validate", str(manifest_path),
+                "--parent-diff-approved", "--critical-invariants-approved",
+                "--lifecycle-state", lifecycle_path, "--orchestration-run-id", run_id,
+                "--plan-execution-state", execution_state,
             ]
             if lifecycle.get("phase") == "admitted" and lifecycle.get("focused_required"):
-                focused_output = tempfile.mkdtemp(prefix="auto-focused-", dir=manifest_path.parent)
                 focused = subprocess.run(
-                    [*validation_base, "--suite", "focused", "--output-dir", focused_output],
-                    cwd=repo,
-                    env=child_env,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=False,
+                    [*validation_base, "--suite", "focused", "--output-dir", tempfile.mkdtemp(prefix="auto-focused-", dir=manifest_path.parent)],
+                    cwd=repo, env=child_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
                 if focused.returncode != 0:
                     return focused
                 lifecycle = json.loads(Path(lifecycle_path).read_text(encoding="utf-8"))
             if lifecycle.get("phase") in {"admitted", "focused_passed"}:
-                authoritative_output = tempfile.mkdtemp(prefix="auto-authoritative-", dir=manifest_path.parent)
                 authoritative = subprocess.run(
-                    [*validation_base, "--suite", "authoritative", "--output-dir", authoritative_output],
-                    cwd=repo,
-                    env=child_env,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=False,
+                    [*validation_base, "--suite", "authoritative", "--output-dir", tempfile.mkdtemp(prefix="auto-authoritative-", dir=manifest_path.parent)],
+                    cwd=repo, env=child_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
                 if authoritative.returncode != 0:
                     return authoritative
@@ -2219,6 +2226,12 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(initial.returncode, 0, initial.stderr)
         manifest_path = Path(initial.stdout.strip())
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        execution_state = str(
+            Path(manifest["lifecycle_state_path"]).with_name(
+                Path(manifest["lifecycle_state_path"]).name
+                + f".{manifest['orchestration_run_id']}.plan-execution.json"
+            )
+        )
         direct = subprocess.run(
             [
                 sys.executable,
@@ -2229,6 +2242,8 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 manifest["lifecycle_state_path"],
                 "--orchestration-run-id",
                 manifest["orchestration_run_id"],
+                "--plan-execution-state",
+                execution_state,
             ],
             cwd=repo,
             text=True,
