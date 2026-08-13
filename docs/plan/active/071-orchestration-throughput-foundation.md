@@ -63,11 +63,13 @@ acceptance:
   - Add separate optional active-plan implementation risk and implementation ambiguity fields with low, ordinary, and high values; use Spark medium only when both inputs are low, use Terra medium when neither is high and at least one is ordinary, and refuse writable sequential delegation when either input is high.
   - Preserve explicit CLI model and reasoning overrides for writable profiles, reserve Sol high for independent security or regression review, reject Sol as a writable sequential override, and keep semantic, implementation, validation, sandbox, authentication, and unclassified failures outside model fallback eligibility.
   - Add an explicit orchestration-run availability-state path outside the repository; after a bounded availability error, record only model and reason code and skip another start of that model while the same state is reused.
-  - Keep availability state ephemeral, reject malformed or symlinked state paths, never store raw output or credentials, and do not treat remembered unavailability as a semantic or validation result.
-  - Record bounded telemetry in candidate manifests: attempt duration, total runner duration, model starts, availability failures, and selected implementation risk, without storing prompts, output bodies, environment values, or credentials.
+  - Bind availability state to an explicit nonblank orchestration run identifier, validate its schema version and exact bounded field shape, and reject reuse with a different run identifier.
+  - Keep availability state ephemeral, reject malformed or symlinked state paths and symlink ancestors, write state atomically without following a swapped target, never store raw output or credentials, and do not treat remembered unavailability as a semantic or validation result.
+  - Record bounded telemetry in candidate manifests: attempt duration, total runner duration measured after candidate collection and admission checks, model starts, availability failures, skipped known-unavailable starts, and selected implementation risk and ambiguity, without storing prompts, output bodies, environment values, or credentials.
   - Extend fixed median, edge, negative, and holdout orchestration scenarios so repository breadth alone is insufficient and independent value, writable-Sol rejection, model starts, candidate generations, and full-validation counts are observable requirements.
   - Keep root and generated policy, Skill, runner, and plan parsing semantically aligned, and preserve byte-identical root/template runner implementations.
   - Preserve non-destructive Copier updates and add negative coverage proving orchestration updates do not accept rejection files, unresolved conflicts, or unclassified tracked-file deletion.
+  - Add executable tests for plan-selected Spark and Terra, each high-input refusal, explicit override, writable Sol rejection, first availability recording, same-run preferred-model skip, run-id mismatch, malformed schema and fields, symlink path rejection, atomic state replacement, fallback availability failure, and every bounded telemetry counter and duration boundary.
 checked_summary_ja: 委譲の価値判定と作業の曖昧さ・リスク別モデル選択を追加し、同一実行での利用不能モデル再起動を防いで実行コストを記録した。
 
 ## Context
@@ -106,4 +108,6 @@ The current orchestration fixture proves that broad work delegates safely but do
 
 ## Validation Notes
 
-- Pending implementation.
+- Rejected initial candidate `/tmp/orchestration-plan-071-9UJZcX/manifest.json`, source HEAD `701d8a60aea8d7412c6ab640e7bb4507c0e74dd5`. One GPT-5.6-Terra medium attempt generated the candidate without fallback.
+- Parent review-clone validation passed 37 runner tests, runner self-test, root policy, Copier static checks, workflow lint, smoke, non-destructive Copier update, full managed validation, root/template runner parity, Python compilation, and diff checks.
+- The candidate was not applied because total runner duration ended before patch collection and admission, availability state had no run identity and did not validate schema version, and executable coverage did not exercise known-unavailable skip, writable Sol rejection, telemetry, or malformed and symlinked state paths.
