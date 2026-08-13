@@ -1,6 +1,6 @@
 # Record run-local availability and bounded execution telemetry
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -76,12 +76,15 @@ Availability state and execution telemetry must exist before correction and stag
 
 ## Tasks
 
-- [ ] Add bounded run-local availability state and preferred and fallback skip behavior.
-- [ ] Add parent-produced initial-candidate telemetry and exact schema bounds.
-- [ ] Add executable positive, edge, race, negative, custom-worker, and telemetry-boundary coverage.
-- [ ] Align root/generated policy, Skill, runner, checks, and documentation.
-- [ ] Run all required validation, archive, and commit before plan 074.
+- [x] Add bounded run-local availability state and preferred and fallback skip behavior.
+- [x] Add parent-produced initial-candidate telemetry and exact schema bounds.
+- [x] Add executable positive, edge, race, negative, custom-worker, and telemetry-boundary coverage.
+- [x] Align root/generated policy, Skill, runner, checks, and documentation.
+- [x] Run all required validation, archive, and commit before plan 074.
 
 ## Validation Notes
 
-- Pending implementation.
+- Parent-session implementation added an optional external state path paired with a nonblank run identifier. The exact versioned state holds only bounded model/reason entries; same-run preferred and fallback models already recorded unavailable are skipped without creating semantic or validation results.
+- State reads and atomic replacements use a verified parent directory descriptor and `O_NOFOLLOW`. Tests reject target and ancestor symlinks, malformed and oversized payloads, duplicate models, run mismatch, target replacement, and repository-local state; a renamed/swapped parent cannot redirect the write.
+- Parent-produced manifest telemetry records all attempt durations, total runner duration after candidate admission, model starts, availability failures, skipped starts, one candidate generation, zero full validations, and separate risk/ambiguity. Custom workers record one duration and zero model starts; numeric bounds reject negative, non-finite, and excessive durations.
+- Root/template runners are byte-identical. Parent-session validation passed all declared commands: 47 runner tests, runner self-test, root policy check, Copier template check, workflow lint, smoke, required Copier update, change-aware validation, and diff checks.

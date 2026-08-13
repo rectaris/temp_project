@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -128,7 +129,7 @@ def write_fake_codex(path: Path) -> None:
                     raise SystemExit(f"unexpected primary reasoning: {{reasoning}}")
                 if scenario == "primary_success":
                     target.write_text("preferred\\n", encoding="utf-8")
-                elif scenario in {{"unavailable_then_success", "unavailable_then_failure"}}:
+                elif scenario in {{"unavailable_then_success", "unavailable_then_failure", "both_unavailable"}}:
                     target.write_text("discarded-primary\\n", encoding="utf-8")
                     if last_message is not None:
                         last_message.write_text("failed preferred output\\n", encoding="utf-8")
@@ -160,6 +161,9 @@ def write_fake_codex(path: Path) -> None:
                 elif scenario == "unavailable_then_failure":
                     print("ERROR: fallback implementation failed", file=sys.stderr)
                     raise SystemExit(2)
+                elif scenario == "both_unavailable":
+                    print("FATAL: rate limit exceeded", file=sys.stderr)
+                    raise SystemExit(1)
                 else:
                     raise SystemExit("fallback ran unexpectedly")
             else:
@@ -309,6 +313,21 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
     def assert_no_workspace_directories(self, tmpdir_root: Path) -> None:
         leftovers = sorted(path.name for path in tmpdir_root.glob("sandboxed-plan-worker-workspace-*"))
         self.assertEqual(leftovers, [])
+
+    def write_availability_state(
+        self,
+        path: Path,
+        run_id: str,
+        entries: list[dict[str, str]],
+        **extra: object,
+    ) -> None:
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "orchestration_run_id": run_id,
+            "unavailable_models": entries,
+            **extra,
+        }
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
     def test_default_worker_command_uses_supported_external_sandbox_flags(self) -> None:
         command = RUNNER.default_worker_command(
@@ -558,6 +577,32 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(manifest["worker_result"]["kind"], "custom")
         self.assertNotIn("attempts", manifest["worker_result"])
         self.assertNotIn("fallback_reason", manifest["worker_result"])
+        telemetry = manifest["telemetry"]
+        self.assertEqual(
+            {key: telemetry[key] for key in (
+                "schema_version",
+                "model_starts",
+                "availability_failures",
+                "skipped_known_unavailable_starts",
+                "candidate_generations",
+                "full_validation_count",
+                "implementation_risk",
+                "implementation_ambiguity",
+            )},
+            {
+                "schema_version": 1,
+                "model_starts": 0,
+                "availability_failures": 0,
+                "skipped_known_unavailable_starts": 0,
+                "candidate_generations": 1,
+                "full_validation_count": 0,
+                "implementation_risk": "low",
+                "implementation_ambiguity": "low",
+            },
+        )
+        self.assertEqual(len(telemetry["attempt_durations_seconds"]), 1)
+        self.assertGreaterEqual(telemetry["attempt_durations_seconds"][0], 0)
+        self.assertGreaterEqual(telemetry["runner_duration_seconds"], telemetry["attempt_durations_seconds"][0])
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
         self.assertFalse((repo / "dir" / "nested.txt").exists())
         apply = run_cli(repo, "apply", str(manifest_path))
@@ -810,6 +855,266 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         apply = run_cli(repo, "apply", str(manifest_path))
         self.assertEqual(apply.returncode, 0, apply.stderr)
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "fallback\n")
+
+    def test_availability_state_records_and_skips_preferred_with_bounded_telemetry(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "availability.json"
+        common_args = (
+            "--availability-state",
+            str(state_path),
+            "--orchestration-run-id",
+            "run-routing-001",
+        )
+        first_output = Path(temporary.name) / "availability-first"
+        first = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "unavailable_then_success",
+            output_dir=first_output,
+            extra_args=common_args,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            state,
+            {
+                "schema_version": 1,
+                "orchestration_run_id": "run-routing-001",
+                "unavailable_models": [
+                    {"model": "gpt-5.3-codex-spark", "reason": "usage_limit"}
+                ],
+            },
+        )
+        self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn("prompt", json.dumps(state).lower())
+        self.assertNotIn("credential", json.dumps(state).lower())
+        first_manifest = json.loads(Path(first.stdout.strip()).read_text(encoding="utf-8"))
+        first_telemetry = first_manifest["telemetry"]
+        self.assertEqual(first_telemetry["model_starts"], 2)
+        self.assertEqual(first_telemetry["availability_failures"], 1)
+        self.assertEqual(first_telemetry["skipped_known_unavailable_starts"], 0)
+        self.assertEqual(first_telemetry["candidate_generations"], 1)
+        self.assertEqual(first_telemetry["full_validation_count"], 0)
+        self.assertEqual(len(first_telemetry["attempt_durations_seconds"]), 2)
+
+        second_output = Path(temporary.name) / "availability-second"
+        second = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "unavailable_then_success",
+            output_dir=second_output,
+            extra_args=common_args,
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        second_manifest = json.loads(Path(second.stdout.strip()).read_text(encoding="utf-8"))
+        attempts = second_manifest["worker_result"]["attempts"]
+        self.assertEqual([(item["label"], item["model"]) for item in attempts], [("fallback", "gpt-5.6-luna")])
+        second_telemetry = second_manifest["telemetry"]
+        self.assertEqual(second_telemetry["model_starts"], 1)
+        self.assertEqual(second_telemetry["availability_failures"], 0)
+        self.assertEqual(second_telemetry["skipped_known_unavailable_starts"], 1)
+        self.assertEqual(len(second_telemetry["attempt_durations_seconds"]), 1)
+        for value in [
+            second_telemetry["runner_duration_seconds"],
+            *second_telemetry["attempt_durations_seconds"],
+        ]:
+            self.assertIsInstance(value, (int, float))
+            self.assertTrue(math.isfinite(value))
+            self.assertGreaterEqual(value, 0)
+            self.assertLessEqual(value, RUNNER.TELEMETRY_MAX_DURATION_SECONDS)
+
+    def test_availability_state_records_fallback_failure_and_skips_both_models(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "both-unavailable.json"
+        args = (
+            "--availability-state",
+            str(state_path),
+            "--orchestration-run-id",
+            "run-both-unavailable",
+        )
+        first_output = Path(temporary.name) / "both-first"
+        first = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "both_unavailable",
+            output_dir=first_output,
+            extra_args=args,
+        )
+        self.assertEqual(first.returncode, 1)
+        self.assertIn("fallback worker exited", first.stderr)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            state["unavailable_models"],
+            [
+                {"model": "gpt-5.3-codex-spark", "reason": "usage_limit"},
+                {"model": "gpt-5.6-luna", "reason": "rate_limit"},
+            ],
+        )
+        second_output = Path(temporary.name) / "both-second"
+        second = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "both_unavailable",
+            output_dir=second_output,
+            extra_args=args,
+        )
+        self.assertEqual(second.returncode, 1)
+        self.assertIn("already recorded unavailable", second.stderr)
+        self.assertFalse((second_output / "worker-primary.stdout").exists())
+        self.assertFalse((second_output / "worker-fallback.stdout").exists())
+
+    def test_known_unavailable_fallback_is_skipped_after_one_preferred_start(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "fallback-known.json"
+        self.write_availability_state(
+            state_path,
+            "run-fallback-known",
+            [{"model": "gpt-5.6-luna", "reason": "rate_limit"}],
+        )
+        output_dir = Path(temporary.name) / "fallback-known-output"
+        result = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "unavailable_then_success",
+            output_dir=output_dir,
+            extra_args=(
+                "--availability-state",
+                str(state_path),
+                "--orchestration-run-id",
+                "run-fallback-known",
+            ),
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("already recorded unavailable", result.stderr)
+        self.assertTrue((output_dir / "worker-primary.stdout").is_file())
+        self.assertFalse((output_dir / "worker-fallback.stdout").exists())
+        entries = json.loads(state_path.read_text(encoding="utf-8"))["unavailable_models"]
+        self.assertEqual({entry["model"] for entry in entries}, {"gpt-5.3-codex-spark", "gpt-5.6-luna"})
+
+    def test_availability_state_schema_identity_and_size_bounds_fail_closed(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        cases: list[tuple[str, object, str]] = [
+            ("schema", {"schema_version": 2, "orchestration_run_id": "run", "unavailable_models": []}, "schema version"),
+            ("shape", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [], "extra": True}, "field shape"),
+            ("entries-type", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": {}}, "must be a list"),
+            ("duplicates", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": "m", "reason": "usage_limit"}, {"model": "m", "reason": "rate_limit"}]}, "duplicate model"),
+            ("entry-shape", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": "m", "reason": "usage_limit", "raw": "secret"}]}, "field shape"),
+            ("reason", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": "m", "reason": "validation"}]}, "availability code"),
+            ("model-bound", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": "m" * 129, "reason": "usage_limit"}]}, "byte bound"),
+            ("count-bound", {"schema_version": 1, "orchestration_run_id": "run", "unavailable_models": [{"model": f"m-{index}", "reason": "usage_limit"} for index in range(17)]}, "entry-count"),
+        ]
+        for label, payload, message in cases:
+            with self.subTest(case=label):
+                path = root / f"invalid-{label}.json"
+                path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(RUNNER.RunnerError, message):
+                    RUNNER.open_availability_state(repo, str(path), "run")
+
+        oversized = root / "oversized.json"
+        oversized.write_bytes(b"x" * (RUNNER.AVAILABILITY_STATE_MAX_BYTES + 1))
+        with self.assertRaisesRegex(RUNNER.RunnerError, "byte bound"):
+            RUNNER.open_availability_state(repo, str(oversized), "run")
+        valid = root / "different-run.json"
+        self.write_availability_state(valid, "run-a", [])
+        with self.assertRaisesRegex(RUNNER.RunnerError, "different orchestration run"):
+            RUNNER.open_availability_state(repo, str(valid), "run-b")
+        for run_id in ("", "   ", "r" * 129):
+            with self.subTest(run_id=run_id):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.open_availability_state(repo, str(root / "missing.json"), run_id)
+
+    def test_availability_state_rejects_symlinks_and_target_swap(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        real = root / "real.json"
+        self.write_availability_state(real, "run", [])
+        target_link = root / "target-link.json"
+        target_link.symlink_to(real)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "symlink"):
+            RUNNER.open_availability_state(repo, str(target_link), "run")
+        real_parent = root / "real-parent"
+        real_parent.mkdir()
+        ancestor_link = root / "ancestor-link"
+        ancestor_link.symlink_to(real_parent, target_is_directory=True)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "ancestor"):
+            RUNNER.open_availability_state(repo, str(ancestor_link / "state.json"), "run")
+        with self.assertRaisesRegex(RUNNER.RunnerError, "outside"):
+            RUNNER.open_availability_state(repo, str(repo / "state.json"), "run")
+
+        swapped = root / "swapped.json"
+        self.write_availability_state(swapped, "run", [])
+        with RUNNER.open_availability_state(repo, str(swapped), "run") as state:
+            swapped.unlink()
+            swapped.write_text("attacker\n", encoding="utf-8")
+            with self.assertRaisesRegex(RUNNER.RunnerError, "target changed"):
+                state.record("model-a", "usage_limit")
+        self.assertEqual(swapped.read_text(encoding="utf-8"), "attacker\n")
+
+    def test_availability_state_parent_fd_does_not_follow_parent_swap(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        parent = root / "state-parent"
+        parent.mkdir()
+        moved_parent = root / "state-parent-original"
+        attacker = root / "attacker"
+        attacker.mkdir()
+        with RUNNER.open_availability_state(repo, str(parent / "state.json"), "run-parent") as state:
+            parent.rename(moved_parent)
+            parent.symlink_to(attacker, target_is_directory=True)
+            state.record("model-a", "usage_limit")
+        self.assertTrue((moved_parent / "state.json").is_file())
+        self.assertFalse((attacker / "state.json").exists())
+
+    def test_telemetry_duration_bounds_are_finite_and_nonnegative(self) -> None:
+        self.assertEqual(RUNNER.bounded_duration(4.0, 4.0), 0.0)
+        self.assertEqual(RUNNER.bounded_duration(1.0, 2.5), 1.5)
+        for started, finished in (
+            (2.0, 1.0),
+            (0.0, math.inf),
+            (0.0, math.nan),
+            (0.0, RUNNER.TELEMETRY_MAX_DURATION_SECONDS + 1),
+        ):
+            with self.subTest(started=started, finished=finished):
+                with self.assertRaisesRegex(RUNNER.RunnerError, "finite nonnegative"):
+                    RUNNER.bounded_duration(started, finished)
+
+    def test_availability_state_path_and_run_identifier_must_be_paired(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output_root = Path(temporary.name)
+        cases = (
+            ("--availability-state", str(output_root / "state.json")),
+            ("--orchestration-run-id", "run-only"),
+        )
+        for index, extra_args in enumerate(cases):
+            with self.subTest(extra_args=extra_args):
+                worker = output_root / f"paired-worker-{index}.py"
+                write_worker(
+                    worker,
+                    '(worker_repo / "allowed.txt").write_text("must-not-run\\n", encoding="utf-8")',
+                )
+                command = [
+                    "run",
+                    plan_path,
+                    "--output-dir",
+                    str(output_root / f"pair-cli-{index}"),
+                    "--worker-binary",
+                    sys.executable,
+                    "--worker-arg",
+                    str(worker),
+                    *extra_args,
+                ]
+                result = run_cli(repo, *command)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("must be provided together", result.stderr)
+                self.assertFalse((output_root / f"pair-cli-{index}" / "candidate.patch").exists())
 
     def test_nonavailability_failure_and_disabled_fallback_do_not_retry(self) -> None:
         for scenario, extra_args in (

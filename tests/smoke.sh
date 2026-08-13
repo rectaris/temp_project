@@ -163,6 +163,8 @@ assert_managed_orchestration_reports() {
   grep -q 'implementation_risk' "$managed_agents" "$managed_orchestration"
   grep -q 'implementation_ambiguity' "$managed_agents" "$managed_orchestration"
   grep -qi 'admissible implementation slice' "$managed_orchestration"
+  grep -qi 'state path outside the repository' "$managed_orchestration"
+  grep -qi 'skipped known-unavailable starts' "$managed_orchestration"
 }
 
 assert_ci_autofix_validation_graph() {
@@ -1023,6 +1025,9 @@ python3 "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-work
 grep -q 'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'TERRA_CODEX_MODEL = "gpt-5.6-terra"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'def select_plan_writable_profile' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def open_availability_state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q -- '--availability-state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'skipped_known_unavailable_starts' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'implementation_risk' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
 grep -q 'implementation_ambiguity' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
 grep -q 'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
@@ -1188,6 +1193,7 @@ grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp
 grep -q 'gpt-5.6-luna.*max fallback' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'gpt-5.6-terra' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -qi 'admissible implementation slice' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -qi 'state path outside the repository' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'one bounded worker at a time' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/.project-agent-workflow/AGENTS.md"

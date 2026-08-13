@@ -522,6 +522,12 @@ def require_orchestration_policy_markers() -> None:
         "implementation_ambiguity",
         "spark medium",
         "terra medium",
+        "state path outside the repository",
+        "orchestration run identifier",
+        "symlinked targets or ancestors",
+        "skipped known-unavailable starts",
+        "finite and nonnegative",
+        "prompts, raw output, environment values, or credentials",
         "run-sandboxed-plan-worker.py run",
         "read-only",
     )
@@ -672,6 +678,12 @@ def require_sandboxed_plan_worker_alignment() -> None:
         "implementation_risk",
         "implementation_ambiguity",
         "WRITABLE_SOL_MODEL",
+        "AVAILABILITY_STATE_MAX_BYTES",
+        "def open_availability_state",
+        '"--availability-state"',
+        '"--orchestration-run-id"',
+        '"telemetry"',
+        '"skipped_known_unavailable_starts"',
     ):
         if marker not in template_runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")

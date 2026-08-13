@@ -4,16 +4,20 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, Sequence
@@ -27,6 +31,13 @@ DEFAULT_FALLBACK_CODEX_REASONING = "max"
 TERRA_CODEX_MODEL = "gpt-5.6-terra"
 IMPLEMENTATION_CLASSIFICATIONS = frozenset({"low", "ordinary", "high"})
 WRITABLE_SOL_MODEL = "gpt-5.6-sol"
+AVAILABILITY_STATE_SCHEMA_VERSION = 1
+AVAILABILITY_STATE_MAX_BYTES = 4096
+AVAILABILITY_STATE_MAX_ENTRIES = 16
+AVAILABILITY_STATE_MAX_MODEL_BYTES = 128
+ORCHESTRATION_RUN_ID_MAX_BYTES = 128
+TELEMETRY_SCHEMA_VERSION = 1
+TELEMETRY_MAX_DURATION_SECONDS = 31_536_000.0
 PLAN_PATTERN = re.compile(r"^docs/plan/active/\d{3}-[^/]+\.md$")
 STATUS_PATTERN = re.compile(r"^(?:\?\?|[ MARCUDT][ MD]) (.+)$")
 CODEX_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL)(?::|\b)", re.IGNORECASE)
@@ -106,6 +117,134 @@ RESERVED_WORKER_ENV = frozenset(
 
 class RunnerError(RuntimeError):
     """Raised when the sandboxed runner must fail closed."""
+
+
+class AvailabilityState:
+    """Run-bound availability memory held through one verified parent directory fd."""
+
+    def __init__(
+        self,
+        *,
+        parent_fd: int,
+        target_name: str,
+        run_id: str,
+        unavailable: dict[str, str],
+        target_identity: tuple[int, int, int, int] | None,
+    ) -> None:
+        self.parent_fd = parent_fd
+        self.target_name = target_name
+        self.run_id = run_id
+        self.unavailable = unavailable
+        self.target_identity = target_identity
+
+    def close(self) -> None:
+        if self.parent_fd >= 0:
+            os.close(self.parent_fd)
+            self.parent_fd = -1
+
+    def __enter__(self) -> AvailabilityState:
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        self.close()
+
+    def reason_for(self, model: str) -> str | None:
+        return self.unavailable.get(model)
+
+    def record(self, model: str, reason: str) -> None:
+        validate_model_name(model)
+        if reason not in {item[0] for item in CODEX_UNAVAILABLE_PATTERNS}:
+            raise RunnerError(f"availability reason is not allowlisted: {reason}")
+        existing = self.unavailable.get(model)
+        if existing is not None:
+            if existing != reason:
+                raise RunnerError(f"availability state has conflicting reasons for model: {model}")
+            return
+        if len(self.unavailable) >= AVAILABILITY_STATE_MAX_ENTRIES:
+            raise RunnerError("availability state exceeds the entry-count bound")
+        self.unavailable[model] = reason
+        try:
+            self._persist()
+        except BaseException:
+            self.unavailable.pop(model, None)
+            raise
+
+    def _current_target_identity(self) -> tuple[int, int, int, int] | None:
+        try:
+            descriptor = os.open(
+                self.target_name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=self.parent_fd,
+            )
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise RunnerError("availability state target is not a regular non-symlink file") from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise RunnerError("availability state target must be a regular file")
+            return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+        finally:
+            os.close(descriptor)
+
+    def _persist(self) -> None:
+        entries = [
+            {"model": model, "reason": reason}
+            for model, reason in sorted(self.unavailable.items())
+        ]
+        content = (
+            json.dumps(
+                {
+                    "schema_version": AVAILABILITY_STATE_SCHEMA_VERSION,
+                    "orchestration_run_id": self.run_id,
+                    "unavailable_models": entries,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        if len(content) > AVAILABILITY_STATE_MAX_BYTES:
+            raise RunnerError("availability state exceeds the byte bound")
+        if self._current_target_identity() != self.target_identity:
+            raise RunnerError("availability state target changed after it was opened")
+        temporary_name = f".{self.target_name}.tmp-{os.getpid()}-{time.monotonic_ns()}"
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=self.parent_fd,
+            )
+            view = memoryview(content)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise RunnerError("availability state write made no progress")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            if self._current_target_identity() != self.target_identity:
+                raise RunnerError("availability state target changed before atomic replacement")
+            os.replace(
+                temporary_name,
+                self.target_name,
+                src_dir_fd=self.parent_fd,
+                dst_dir_fd=self.parent_fd,
+            )
+            os.fsync(self.parent_fd)
+            self.target_identity = self._current_target_identity()
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=self.parent_fd)
+            except FileNotFoundError:
+                pass
 
 
 def fail(message: str) -> None:
@@ -396,6 +535,154 @@ def path_is_within(root: Path, candidate: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def validate_bounded_text(value: str | None, label: str, maximum_bytes: int) -> str:
+    if value is None or not isinstance(value, str) or not value.strip():
+        raise RunnerError(f"{label} must be a nonblank string")
+    normalized = value.strip()
+    if len(normalized.encode("utf-8")) > maximum_bytes:
+        raise RunnerError(f"{label} exceeds the byte bound")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise RunnerError(f"{label} contains a control character")
+    return normalized
+
+
+def validate_model_name(model: str | None) -> str:
+    return validate_bounded_text(model, "availability model", AVAILABILITY_STATE_MAX_MODEL_BYTES)
+
+
+def target_identity(metadata: os.stat_result) -> tuple[int, int, int, int]:
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+
+
+def read_bounded_fd(descriptor: int, maximum_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, min(4096, maximum_bytes + 1 - total))
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > maximum_bytes:
+            raise RunnerError("availability state exceeds the byte bound")
+
+
+def validate_availability_payload(payload: object, run_id: str) -> dict[str, str]:
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "orchestration_run_id",
+        "unavailable_models",
+    }:
+        raise RunnerError("availability state has an invalid exact field shape")
+    if payload["schema_version"] != AVAILABILITY_STATE_SCHEMA_VERSION:
+        raise RunnerError("availability state has an unsupported schema version")
+    stored_run_id = payload["orchestration_run_id"]
+    if not isinstance(stored_run_id, str):
+        raise RunnerError("availability state orchestration run identifier must be a string")
+    stored_run_id = validate_bounded_text(
+        stored_run_id, "availability state orchestration run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES
+    )
+    if stored_run_id != run_id:
+        raise RunnerError("availability state belongs to a different orchestration run identifier")
+    entries = payload["unavailable_models"]
+    if not isinstance(entries, list):
+        raise RunnerError("availability state unavailable_models must be a list")
+    if len(entries) > AVAILABILITY_STATE_MAX_ENTRIES:
+        raise RunnerError("availability state exceeds the entry-count bound")
+    allowed_reasons = {item[0] for item in CODEX_UNAVAILABLE_PATTERNS}
+    unavailable: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"model", "reason"}:
+            raise RunnerError("availability state entry has an invalid exact field shape")
+        model = entry["model"]
+        reason = entry["reason"]
+        if not isinstance(model, str):
+            raise RunnerError("availability state model must be a string")
+        model = validate_model_name(model)
+        if not isinstance(reason, str) or reason not in allowed_reasons:
+            raise RunnerError("availability state reason must be one bounded availability code")
+        if model in unavailable:
+            raise RunnerError(f"availability state contains a duplicate model: {model}")
+        unavailable[model] = reason
+    return unavailable
+
+
+def open_availability_state(repo_root: Path, raw_path: str, raw_run_id: str) -> AvailabilityState:
+    run_id = validate_bounded_text(
+        raw_run_id, "orchestration run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES
+    )
+    requested = Path(raw_path).expanduser()
+    if not requested.is_absolute():
+        requested = (Path.cwd() / requested).absolute()
+    if requested.name in {"", ".", ".."}:
+        raise RunnerError("availability state path must name a file")
+    parent_parts = requested.parent.parts
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for component in parent_parts[1:]:
+            try:
+                next_descriptor = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            except OSError as exc:
+                raise RunnerError("availability state ancestor must exist and must not be a symlink") from exc
+            os.close(descriptor)
+            descriptor = next_descriptor
+        try:
+            actual_parent = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+        except OSError as exc:
+            raise RunnerError("could not verify availability state parent directory") from exc
+        if path_is_within(repo_root, actual_parent / requested.name):
+            raise RunnerError("availability state path must be outside the source repository")
+        state_identity: tuple[int, int, int, int] | None = None
+        unavailable: dict[str, str] = {}
+        try:
+            state_fd = os.open(
+                requested.name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+        except FileNotFoundError:
+            state_fd = -1
+        except OSError as exc:
+            raise RunnerError("availability state target must not be a symlink") from exc
+        if state_fd >= 0:
+            try:
+                metadata = os.fstat(state_fd)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise RunnerError("availability state target must be a regular file")
+                state_identity = target_identity(metadata)
+                raw = read_bounded_fd(state_fd, AVAILABILITY_STATE_MAX_BYTES)
+            finally:
+                os.close(state_fd)
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RunnerError("availability state is not valid UTF-8 JSON") from exc
+            unavailable = validate_availability_payload(payload, run_id)
+        handle = AvailabilityState(
+            parent_fd=descriptor,
+            target_name=requested.name,
+            run_id=run_id,
+            unavailable=unavailable,
+            target_identity=state_identity,
+        )
+        descriptor = -1
+        return handle
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def bounded_duration(started: float, finished: float) -> float:
+    duration = finished - started
+    if not math.isfinite(duration) or duration < 0 or duration > TELEMETRY_MAX_DURATION_SECONDS:
+        raise RunnerError("telemetry duration is outside the finite nonnegative bound")
+    return duration
 
 
 def materialize_output_dir(repo_root: Path, requested: str | None) -> Path:
@@ -923,6 +1210,7 @@ def execute_isolated_attempt(
         extra_env=extra_env,
         include_codex_home=include_codex_home,
     )
+    attempt_started = time.monotonic()
     result = run_subprocess(
         build_bwrap_command(
             bwrap_bin=bwrap_bin,
@@ -941,6 +1229,7 @@ def execute_isolated_attempt(
         stdin=stdin,
         check=False,
     )
+    attempt_duration = bounded_duration(attempt_started, time.monotonic())
 
     artifact_prefix = "worker" if label == "custom" else f"worker-{label}"
     stdout_path = reserved_artifacts[f"{artifact_prefix}.stdout"]
@@ -952,6 +1241,7 @@ def execute_isolated_attempt(
         "model": model,
         "reasoning_effort": reasoning,
         "returncode": result.returncode,
+        "duration_seconds": attempt_duration,
         "stdout_path": str(stdout_path),
         "stdout_digest": stdout_digest,
         "stderr_path": str(stderr_path),
@@ -1003,6 +1293,7 @@ def select_attempt_artifacts(
 
 
 def run_worker(args: argparse.Namespace) -> int:
+    runner_started = time.monotonic()
     git_bin = require_executable("git", args.git_bin)
     bwrap_bin = require_executable("bwrap", args.bwrap_bin)
     ensure_bwrap_usable(bwrap_bin)
@@ -1011,16 +1302,31 @@ def run_worker(args: argparse.Namespace) -> int:
     planlib = load_planlib()
     ensure_clean_worktree(repo_root, git_bin)
     plan_path, plan_rel, values, normalized_scope = load_plan(planlib, repo_root, args.plan)
+    implementation_risk = implementation_classification(values, "implementation_risk")
+    implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
     selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
     head = git_text(repo_root, git_bin, "rev-parse", "HEAD")
     plan_digest = hash_file(plan_path)
     output_dir = materialize_output_dir(repo_root, args.output_dir)
     reserved_artifacts = reserve_output_artifacts(output_dir)
+    state_path = args.availability_state
+    run_id = args.orchestration_run_id
+    if (state_path is None) != (run_id is None):
+        raise RunnerError("availability state path and orchestration run identifier must be provided together")
+    state_context = (
+        open_availability_state(repo_root, state_path, run_id)
+        if state_path is not None and run_id is not None
+        else nullcontext(None)
+    )
 
-    with tempfile.TemporaryDirectory(prefix="sandboxed-plan-worker-workspace-") as workspace_tmp:
+    with state_context as availability_state, tempfile.TemporaryDirectory(
+        prefix="sandboxed-plan-worker-workspace-"
+    ) as workspace_tmp:
         workspace = Path(workspace_tmp)
         attempts: list[dict[str, Any]] = []
         fallback_reason: str | None = None
+        availability_failures = 0
+        skipped_known_unavailable_starts = 0
         if args.worker_binary is None:
             codex_bin = require_executable("codex", args.codex_bin)
             primary_model = require_writable_model(
@@ -1037,35 +1343,68 @@ def run_worker(args: argparse.Namespace) -> int:
             fallback_reasoning_effort = require_reasoning_effort(
                 args.fallback_codex_reasoning_effort, "fallback"
             )
-            primary = execute_isolated_attempt(
-                workspace=workspace,
-                label="primary",
-                repo_root=repo_root,
-                head=head,
-                plan_rel=plan_rel,
-                plan_digest=plan_digest,
-                normalized_scope=normalized_scope,
-                bwrap_bin=bwrap_bin,
-                git_bin=git_bin,
-                reserved_artifacts=reserved_artifacts,
-                extra_env=args.worker_env,
-                hidden_directories=(output_dir, host_codex_home_path()),
-                codex_bin=codex_bin,
-                model=primary_model,
-                reasoning=primary_reasoning,
-            )
-            attempts.append(primary["record"])
             worker_kind = "codex"
-            if primary["result"].returncode == 0:
-                selected = primary
+            primary: dict[str, Any] | None = None
+            known_primary_reason = (
+                availability_state.reason_for(primary_model)
+                if availability_state is not None
+                else None
+            )
+            if known_primary_reason is not None:
+                skipped_known_unavailable_starts += 1
+                fallback_reason = known_primary_reason
             else:
-                fallback_reason = classify_codex_unavailability(
-                    primary["result"].stdout, primary["result"].stderr
+                primary = execute_isolated_attempt(
+                    workspace=workspace,
+                    label="primary",
+                    repo_root=repo_root,
+                    head=head,
+                    plan_rel=plan_rel,
+                    plan_digest=plan_digest,
+                    normalized_scope=normalized_scope,
+                    bwrap_bin=bwrap_bin,
+                    git_bin=git_bin,
+                    reserved_artifacts=reserved_artifacts,
+                    extra_env=args.worker_env,
+                    hidden_directories=(output_dir, host_codex_home_path()),
+                    codex_bin=codex_bin,
+                    model=primary_model,
+                    reasoning=primary_reasoning,
                 )
-                if args.no_model_fallback or fallback_reason is None:
-                    raise RunnerError(
-                        f"worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                attempts.append(primary["record"])
+                if primary["result"].returncode == 0:
+                    selected = primary
+                else:
+                    fallback_reason = classify_codex_unavailability(
+                        primary["result"].stdout, primary["result"].stderr
                     )
+                    if fallback_reason is None:
+                        raise RunnerError(
+                            f"worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                        )
+                    availability_failures += 1
+                    if availability_state is not None:
+                        availability_state.record(primary_model, fallback_reason)
+            if primary is None or primary["result"].returncode != 0:
+                if args.no_model_fallback:
+                    if primary is not None:
+                        raise RunnerError(
+                            f"worker exited with {primary['result'].returncode}; stdout/stderr saved under {output_dir}"
+                        )
+                    raise RunnerError(
+                        "preferred model is unavailable and model fallback is disabled"
+                    )
+                known_fallback_reason = (
+                    availability_state.reason_for(fallback_model)
+                    if availability_state is not None
+                    else None
+                )
+                if known_fallback_reason is not None:
+                    skipped_known_unavailable_starts += 1
+                    raise RunnerError("fallback model is already recorded unavailable for this orchestration run")
+                hidden_attempt_state = [output_dir, host_codex_home_path()]
+                if primary is not None:
+                    hidden_attempt_state.append(primary["attempt_root"])
                 fallback = execute_isolated_attempt(
                     workspace=workspace,
                     label="fallback",
@@ -1078,13 +1417,20 @@ def run_worker(args: argparse.Namespace) -> int:
                     git_bin=git_bin,
                     reserved_artifacts=reserved_artifacts,
                     extra_env=args.worker_env,
-                    hidden_directories=(output_dir, host_codex_home_path(), primary["attempt_root"]),
+                    hidden_directories=tuple(hidden_attempt_state),
                     codex_bin=codex_bin,
                     model=fallback_model,
                     reasoning=fallback_reasoning_effort,
                 )
                 attempts.append(fallback["record"])
                 if fallback["result"].returncode != 0:
+                    fallback_unavailable_reason = classify_codex_unavailability(
+                        fallback["result"].stdout, fallback["result"].stderr
+                    )
+                    if fallback_unavailable_reason is not None:
+                        availability_failures += 1
+                        if availability_state is not None:
+                            availability_state.record(fallback_model, fallback_unavailable_reason)
                     raise RunnerError(
                         f"fallback worker exited with {fallback['result'].returncode}; stdout/stderr saved under {output_dir}"
                     )
@@ -1148,6 +1494,23 @@ def run_worker(args: argparse.Namespace) -> int:
         if disallowed:
             raise RunnerError(f"worker changed paths outside write_scope: {', '.join(disallowed)}")
 
+        telemetry_attempts = attempts if worker_kind == "codex" else [selected["record"]]
+        telemetry = {
+            "schema_version": TELEMETRY_SCHEMA_VERSION,
+            "attempt_durations_seconds": [
+                bounded_duration(0.0, float(attempt["duration_seconds"]))
+                for attempt in telemetry_attempts
+            ],
+            "runner_duration_seconds": bounded_duration(runner_started, time.monotonic()),
+            "model_starts": len(attempts) if worker_kind == "codex" else 0,
+            "availability_failures": availability_failures,
+            "skipped_known_unavailable_starts": skipped_known_unavailable_starts,
+            "candidate_generations": 1,
+            "full_validation_count": 0,
+            "implementation_risk": implementation_risk,
+            "implementation_ambiguity": implementation_ambiguity,
+        }
+
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "source_head": head,
@@ -1158,6 +1521,7 @@ def run_worker(args: argparse.Namespace) -> int:
             "patch_path": str(patch_path),
             "patch_digest": patch_digest,
             "worker_result": worker_result,
+            "telemetry": telemetry,
         }
         manifest_path = reserved_artifacts["manifest.json"]
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1356,6 +1720,8 @@ def run_self_test(args: argparse.Namespace) -> int:
                     fallback_codex_model=DEFAULT_FALLBACK_CODEX_MODEL,
                     fallback_codex_reasoning_effort=DEFAULT_FALLBACK_CODEX_REASONING,
                     no_model_fallback=False,
+                    availability_state=None,
+                    orchestration_run_id=None,
                     output_dir=str(output_dir),
                     plan=plan_rel,
                     worker_binary=str(require_executable("python3", sys.executable)),
@@ -1425,6 +1791,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-model-fallback",
         action="store_true",
         help="disable automatic fallback when the preferred Codex model is unavailable",
+    )
+    run_parser.add_argument(
+        "--availability-state",
+        help="ephemeral availability-state JSON path outside the source repository",
+    )
+    run_parser.add_argument(
+        "--orchestration-run-id",
+        help="nonblank identifier that binds an availability-state file to one orchestration run",
     )
     run_parser.add_argument("--worker-binary", help="override the default Codex worker with a custom executable")
     run_parser.add_argument("--worker-arg", action="append", default=[], help="append one argument for --worker-binary")

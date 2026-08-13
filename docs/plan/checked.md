@@ -73,3 +73,4 @@ id	path
 070	docs/plan/checked/2026/08/01-15/070-pr2-review-remediation.md
 071	docs/plan/checked/2026/08/01-15/071-orchestration-throughput-foundation.md
 072	docs/plan/checked/2026/08/01-15/072-routing-evaluation-copier-integration.md
+073	docs/plan/checked/2026/08/01-15/073-orchestration-execution-state.md

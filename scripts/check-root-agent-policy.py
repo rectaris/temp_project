@@ -241,6 +241,12 @@ def check_sandboxed_worker_fallback() -> None:
         "implementation_risk",
         "implementation_ambiguity",
         "WRITABLE_SOL_MODEL",
+        "AVAILABILITY_STATE_MAX_BYTES",
+        "def open_availability_state",
+        '"--availability-state"',
+        '"--orchestration-run-id"',
+        '"telemetry"',
+        '"skipped_known_unavailable_starts"',
     )
     for marker in runner_markers:
         if marker not in runner:
@@ -530,6 +536,12 @@ def check_orchestration_policy() -> None:
         "implementation_ambiguity",
         "spark medium",
         "terra medium",
+        "state path outside the repository",
+        "orchestration run identifier",
+        "symlinked targets or ancestors",
+        "skipped known-unavailable starts",
+        "finite and nonnegative",
+        "prompts, raw output, environment values, or credentials",
     )
     for marker in shared_markers:
         if marker not in policy:
