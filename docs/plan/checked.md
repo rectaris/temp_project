@@ -81,3 +81,4 @@ id	path
 078	docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
 080	docs/plan/checked/2026/08/01-15/080-successor-acceptance-authority.md
 081	docs/plan/checked/2026/08/01-15/081-plan-restructuring-integration.md
+082	docs/plan/checked/2026/08/01-15/082-release-v140.md
