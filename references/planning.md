@@ -43,6 +43,13 @@ Optional fields for new active and backlog plans:
 - `target_json`
 - `acceptance_focus`
 - `completion_deferred_reason` (required when `status` is `deferred`)
+- `primary_invariant`
+- `integration_gates`
+- `replan_source`
+- `replan_contract`
+- `successor_plans`
+- `inherited_acceptance_digests`
+- `replan_reason_codes` (required when `status` is `replan_required`)
 
 Checked archives created with the previous manifest may contain `task_type`,
 `target_files`, and `expected_output`. Preserve those fields as legacy archive
@@ -55,6 +62,8 @@ Review classes:
 - `C`: architecture, product direction, story, frame, or philosophy. Requires explicit human approval.
 
 Prefer English for manifest values and operational detail so agents can parse plans consistently. Japanese is expected for human-facing summaries, domain terms, and `checked_summary_ja`.
+
+`replan_required` stops execution while the parent preserves the source requirement baseline and rebuilds only plan boundaries, ordering, implementation methods, or validation methods. `replanned` is historical replacement evidence, not successful completion. Requirement changes require separate explicit user authorization.
 
 ## Lifecycle Scripts
 

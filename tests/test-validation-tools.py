@@ -70,6 +70,32 @@ class PlanValidationCommandsTest(unittest.TestCase):
             )
             self.assertEqual(module.parse_manifest(plan)["validation_authority_scope"], ["tools/"])
 
+    def test_planlib_parses_optional_replan_lineage_without_requiring_it(self) -> None:
+        module = load_module(PLANLIB, "replan_lineage_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+            plan.write_text(
+                "primary_invariant: preserve one invariant\n"
+                "replan_source: docs/plan/active/001-source.md\n"
+                "replan_contract: docs/plan/replanned/contracts/001-source.json\n"
+                "integration_gates:\n  - combined acceptance\n"
+                "successor_plans:\n  - docs/plan/active/002-successor.md\n"
+                "inherited_acceptance_digests:\n  - sha256:" + "a" * 64 + "\n"
+                "replan_reason_codes:\n  - multiple_independent_invariants\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            values = module.parse_manifest(plan)
+            self.assertEqual(values["primary_invariant"], "preserve one invariant")
+            self.assertEqual(values["integration_gates"], ["combined acceptance"])
+            self.assertEqual(
+                values["inherited_acceptance_digests"], ["sha256:" + "a" * 64]
+            )
+            legacy = Path(tmp) / "legacy.md"
+            legacy.write_text("status: in_progress\n\n## Tasks\n", encoding="utf-8")
+            legacy_values = module.parse_manifest(legacy)
+            self.assertEqual(legacy_values["replan_reason_codes"], [])
+            self.assertEqual(module.manifest_scalar(legacy_values, "primary_invariant"), "")
+
     def test_title_does_not_hide_manifest_validation_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp) / "plan.md"

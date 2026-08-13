@@ -20,8 +20,9 @@ CHECKED = ROOT / "docs/plan/checked.md"
 ACTIVE_DIR = ROOT / "docs/plan/active"
 BACKLOG_DIR = ROOT / "docs/plan/backlog"
 CHECKED_DIR = ROOT / "docs/plan/checked"
+REPLANNED_DIR = ROOT / "docs/plan/replanned"
 OPEN_PLAN_DIRS = [ACTIVE_DIR, BACKLOG_DIR]
-PLAN_DIRS = [*OPEN_PLAN_DIRS, CHECKED_DIR]
+PLAN_DIRS = [*OPEN_PLAN_DIRS, CHECKED_DIR, REPLANNED_DIR]
 
 REQUIRED_FIELDS = (
     "status",
@@ -61,6 +62,9 @@ SCALAR_KEYS = {
     "expected_output",
     "checked_summary_ja",
     "completion_deferred_reason",
+    "primary_invariant",
+    "replan_source",
+    "replan_contract",
 }
 IMPLEMENTATION_CLASSIFICATION_KEYS = {"implementation_risk", "implementation_ambiguity"}
 LIST_KEYS = {
@@ -75,6 +79,10 @@ LIST_KEYS = {
     "validation_authority_scope",
     "acceptance",
     "acceptance_focus",
+    "integration_gates",
+    "successor_plans",
+    "inherited_acceptance_digests",
+    "replan_reason_codes",
 }
 CONTEXT_FIELDS = (
     "TASK_TYPES",
@@ -305,7 +313,7 @@ def plan_ids() -> set[int]:
             continue
         pattern = (
             "**/[0-9][0-9][0-9]-*.md"
-            if directory == CHECKED_DIR
+            if directory in {CHECKED_DIR, REPLANNED_DIR}
             else "[0-9][0-9][0-9]-*.md"
         )
         for path in directory.glob(pattern):
@@ -421,7 +429,11 @@ def _plan_paths_for_id(plan_id: str) -> list[Path]:
     for directory in PLAN_DIRS:
         if not directory.exists():
             continue
-        pattern = f"**/{plan_id}-*.md" if directory == CHECKED_DIR else f"{plan_id}-*.md"
+        pattern = (
+            f"**/{plan_id}-*.md"
+            if directory in {CHECKED_DIR, REPLANNED_DIR}
+            else f"{plan_id}-*.md"
+        )
         paths.extend(directory.glob(pattern))
     return paths
 

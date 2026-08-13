@@ -1,6 +1,6 @@
 # Define plan restructuring policy and schema
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -17,6 +17,7 @@ write_scope:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/plan/
   - references/orchestration.md
+  - references/planning.md
   - scripts/check-copier-template.py
   - scripts/check-root-agent-policy.py
   - template/.project-agent-workflow/AGENTS.md.jinja
@@ -67,11 +68,18 @@ checked_summary_ja: 要件を変更せずplan境界だけを再構成する状�
 
 ## Tasks
 
-- [ ] Define lifecycle, requirement-preservation, trigger, and authority policy.
-- [ ] Add optional parser fields and generated-plan lint rules without performing transitions.
-- [ ] Add fixed positive and negative schema coverage.
-- [ ] Run required validation, independent review, archive, and commit before plan 077.
+- [x] Define lifecycle, requirement-preservation, trigger, and authority policy.
+- [x] Add optional parser fields and generated-plan lint rules without performing transitions.
+- [x] Add fixed positive and negative schema coverage.
+- [x] Run required validation, independent review, archive, and commit before plan 077.
 
 ## Validation Notes
 
-- Pending implementation.
+- `python3 tests/test-validation-tools.py`: 29 tests passed.
+- `python3 scripts/check-root-agent-policy.py`: passed.
+- `python3 scripts/check-copier-template.py`: passed.
+- `scripts/lint-project-workflow.sh`: passed.
+- `tests/smoke.sh`: passed with the documented actionlint-unavailable skip and fallback backend.
+- `python3 scripts/validate-changes.py --all`: passed.
+- `git diff --check`: passed.
+- Independent `change_reviewer` review found four Medium issues in recursive historical discovery, historical-policy isolation, mandatory lineage, and test coverage; all were corrected. Final rereview reported zero unresolved High or Medium findings.

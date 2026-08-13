@@ -503,7 +503,18 @@ def require_current_plan_manifest_reference(planning: str) -> None:
         "acceptance",
         "checked_summary_ja",
     )
-    optional_fields = ("target_json", "acceptance_focus", "completion_deferred_reason")
+    optional_fields = (
+        "target_json",
+        "acceptance_focus",
+        "completion_deferred_reason",
+        "primary_invariant",
+        "integration_gates",
+        "replan_source",
+        "replan_contract",
+        "successor_plans",
+        "inherited_acceptance_digests",
+        "replan_reason_codes",
+    )
     legacy_fields = ("task_type", "target_files", "expected_output")
     try:
         manifest_reference, _ = planning.split("## Lifecycle Scripts", 1)
@@ -852,6 +863,9 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "authoritative",
         "bounded parent implementation",
         "independent change review",
+        "replan_required",
+        "requirement change needs separate explicit user authorization",
+        "elapsed time is telemetry",
         "at least 30 percent lower median",
         "p95 time no more than 10 percent worse",
     )

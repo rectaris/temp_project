@@ -9,6 +9,8 @@ This repository root is a template development repository. It is not a Copier-ge
 - `docs/plan/checked.md`: completed-work index.
 - `docs/plan/checked/YYYY/MM/01-15/*.md`: durable completion records completed in the first half of a month.
 - `docs/plan/checked/YYYY/MM/16-31/*.md`: durable completion records completed in the second half of a month.
+- `docs/plan/replanned/YYYY/MM/01-15/*.md` and `16-31/*.md`: historical records of plans replaced by an accepted restructuring contract; these records are not completion evidence.
+- `docs/plan/replanned/contracts/*.json`: exact requirement-preservation and successor-mapping contracts for restructured plans.
 
 ## Agent Log Boundary
 
@@ -44,8 +46,23 @@ This repository root is a template development repository. It is not a Copier-ge
 - Archive completed work under `checked/YYYY/MM/01-15/` or `checked/YYYY/MM/16-31/` based on completion date.
 - Keep `checked.md` as the machine-readable index for all checked archives, including nested paths.
 - Treat checked archives as historical completion records, not current implementation guidance.
+- Treat replanned archives as historical replacement records, not successful completion evidence.
 - Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
 - Keep active plans executable. Use `## Decisions` for final accepted decisions, not full decision-audit output.
 - Keep active-plan operational prose in English by default.
 - Record completed task checkboxes and non-pending validation evidence, then run `scripts/complete-plan.sh` before `scripts/finalize-active-plan.sh`.
 - Treat `status: checked` as the terminal state written by finalization.
+
+## Restructuring Contract
+
+Plan restructuring changes execution boundaries, ordering, implementation methods, or validation methods. It does not change the user requirement baseline. The baseline consists of the user requirements, accepted safety conditions, and every normalized `acceptance` item in the source plan.
+
+- Use `status: replan_required` when the current plan must stop before further implementation, candidate generation or correction, validation, apply, completion, or archival.
+- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a design change after authoritative validation has started; exhaustion of the initial candidate plus two correction rounds; or two parent-direct remediation rounds that still leave a High or Medium independent-review finding.
+- Elapsed time is telemetry and a checkpoint signal only. It can prompt review of the plan boundary, but it cannot prove semantic failure or authorize requirement changes.
+- Preserve the exact source plan path, source HEAD, source-plan digest, and digest of every normalized source acceptance item in the parent-owned replan contract.
+- Map every source acceptance digest to at least one successor plan or integration gate. The integration plan must retain the source acceptance text exactly and prove the combined successors against it.
+- A successor may change plan boundaries, ordering, implementation methods, and validation methods. Replacing, weakening, deleting, or adding a user requirement or accepted safety condition requires explicit user authorization recorded separately from the restructuring operation.
+- Preserve committed work. Do not reset, stash, delete, commit, or apply product changes as part of restructuring. Record dirty paths and cover each one with a successor write scope before implementation resumes.
+- After an atomic restructuring transition, archive the source with terminal `status: replanned`. This state means “replaced while preserving requirements”; it is distinct from successful `checked` completion and prerequisite-based `deferred` work.
+- Keep full option analysis and decision matrices outside active plans. Active successors contain only accepted decisions, bounded lineage fields, executable scope, validation, and acceptance.
