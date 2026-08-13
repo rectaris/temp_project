@@ -18,6 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STATE_SCRIPT = ROOT / "scripts/plan-execution-state.py"
 RUNNER = ROOT / "scripts/run-sandboxed-plan-worker.py"
+SCENARIOS = ROOT / "tests/fixtures/orchestration/plan-restructuring-scenarios.json"
+HOLDOUT = ROOT / "tests/fixtures/orchestration/plan-restructuring-holdout.json"
 
 
 def digest(text: str) -> str:
@@ -114,6 +116,42 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("multiple_independent_invariants", self.payload()["replan_reason_codes"])
 
+    def test_each_boundary_drift_stops_a_fresh_execution_run(self) -> None:
+        for index, event_type in enumerate(("scope_drift", "spec_drift", "security_boundary_drift"), start=1):
+            with self.subTest(event_type=event_type):
+                run_id = f"boundary-{index}"
+                state = self.base / f"{run_id}.json"
+                lifecycle = self.base / f"{run_id}-lifecycle.json"
+                initialized = self.run_cli(
+                    "init", str(state), "--run-id", run_id,
+                    "--plan", "docs/plan/active/001-test.md",
+                    "--plan-digest", digest(self.plan.read_text()),
+                    "--source-head", self.head,
+                    "--primary-invariant-digest", digest("one invariant"),
+                    "--lifecycle-state", str(lifecycle),
+                    "--implementation-mode", "candidate",
+                )
+                self.assertEqual(initialized.returncode, 0, initialized.stderr)
+                lifecycle.write_text(event_type + "\n", encoding="utf-8")
+                recorded = self.run_cli(
+                    "record", str(state), "--run-id", run_id,
+                    "--event-id", event_type, "--event-type", event_type,
+                    "--implementation-mode", "candidate",
+                    "--invariant-digest", digest("one invariant"),
+                    "--candidate-lifecycle-digest", digest(event_type + "\n"),
+                    "--lifecycle-state", str(lifecycle),
+                )
+                self.assertEqual(recorded.returncode, 0, recorded.stderr)
+                payload = json.loads(state.read_text(encoding="utf-8"))
+                self.assertEqual(payload["state"], "replan_required")
+                self.assertEqual(payload["replan_reason_codes"], [event_type])
+                denied = self.run_cli(
+                    "check", str(state), "--run-id", run_id,
+                    "--lifecycle-state", str(lifecycle),
+                )
+                self.assertNotEqual(denied.returncode, 0)
+                self.assertIn("stopped for restructuring", denied.stderr)
+
     def test_post_authoritative_change_requires_authoritative_event(self) -> None:
         affected = ("--invariant-digest", digest("one invariant"))
         self.assertNotEqual(self.record("design-early", "post_authoritative_design_change", *affected).returncode, 0)
@@ -191,6 +229,128 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("--plan-execution-state", result.stderr)
+
+    def test_fixed_hard_trigger_scenarios_block_every_runner_operation(self) -> None:
+        fixture = json.loads(SCENARIOS.read_text(encoding="utf-8"))
+        hard_scenarios = [
+            scenario for scenario in fixture["scenarios"]
+            if scenario["expected"]["next_action"] == "atomic_restructure"
+        ]
+        self.assertEqual(len(hard_scenarios), 7)
+        for index, scenario in enumerate(hard_scenarios, start=1):
+            with self.subTest(scenario=scenario["id"]):
+                run_id = f"scenario-{index}"
+                state = self.base / f"{run_id}.json"
+                lifecycle = self.base / f"{run_id}-lifecycle.json"
+                initialized = self.run_cli(
+                    "init", str(state), "--run-id", run_id,
+                    "--plan", "docs/plan/active/001-test.md",
+                    "--plan-digest", digest(self.plan.read_text()),
+                    "--source-head", self.head,
+                    "--primary-invariant-digest", digest("one invariant"),
+                    "--lifecycle-state", str(lifecycle),
+                    "--implementation-mode", "candidate",
+                )
+                self.assertEqual(initialized.returncode, 0, initialized.stderr)
+
+                event_number = 0
+
+                def record_event(event_type: str, *extra: str, mode: str = "candidate") -> None:
+                    nonlocal event_number
+                    event_number += 1
+                    event_id = f"{scenario['id']}-{event_number}"
+                    lifecycle.write_text(event_id + "\n", encoding="utf-8")
+                    result = self.run_cli(
+                        "record", str(state), "--run-id", run_id,
+                        "--event-id", event_id, "--event-type", event_type,
+                        "--implementation-mode", mode,
+                        "--candidate-lifecycle-digest", digest(event_id + "\n"),
+                        "--lifecycle-state", str(lifecycle), *extra,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+                reason = scenario["expected"]["reason_code"]
+                invariant = ("--invariant-digest", digest("one invariant"))
+                if reason == "multiple_independent_invariants":
+                    record_event(
+                        "parent_review", *invariant,
+                        "--invariant-digest", digest("second invariant"),
+                        "--finding-severity", "Low",
+                    )
+                elif reason == "candidate_correction_budget_exhausted":
+                    record_event("candidate_generation")
+                    record_event("correction_rejected")
+                    record_event("correction_rejected")
+                elif reason == "parent_remediation_budget_exhausted":
+                    for round_number in (1, 2):
+                        record_event(
+                            "parent_review", *invariant,
+                            "--finding-severity", "Medium",
+                            "--independent-review-receipt-digest", digest(f"receipt-{round_number}"),
+                            mode="parent_direct",
+                        )
+                elif reason == "post_authoritative_design_change":
+                    record_event("authoritative_validation")
+                    record_event("post_authoritative_design_change", *invariant)
+                else:
+                    record_event(reason, *invariant)
+
+                payload = json.loads(state.read_text(encoding="utf-8"))
+                self.assertEqual(payload["state"], "replan_required")
+                self.assertIn(reason, payload["replan_reason_codes"])
+                common = [
+                    "--orchestration-run-id", run_id,
+                    "--lifecycle-state", str(lifecycle),
+                    "--plan-execution-state", str(state),
+                ]
+                commands = (
+                    ["run", self.source_path_for_runner(), *common],
+                    ["correct", self.source_path_for_runner(), "missing-manifest", "missing-brief", *common],
+                    ["validate", "missing-manifest", "--suite", "focused", "--output-dir", str(self.base / "validation"), *common],
+                    ["apply", "missing-manifest", *common],
+                    ["finalize-apply", "missing-manifest", *common],
+                )
+                for command in commands:
+                    denied = subprocess.run(
+                        [sys.executable, str(RUNNER), *command], cwd=self.repo,
+                        check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    )
+                    self.assertNotEqual(denied.returncode, 0)
+                    self.assertIn("stopped for restructuring", denied.stderr)
+                    self.assertNotIn("missing-manifest", denied.stderr)
+
+    def test_untuned_holdout_security_drift_stops_the_runner(self) -> None:
+        scenario = json.loads(HOLDOUT.read_text(encoding="utf-8"))["scenarios"][0]
+        self.assertIs(scenario["used_for_tuning"], False)
+        self.assertEqual(scenario["input"]["event"], "security_boundary_drift")
+        event_id = scenario["id"]
+        self.lifecycle.write_text(event_id + "\n", encoding="utf-8")
+        recorded = self.run_cli(
+            "record", str(self.state), "--run-id", "run-1",
+            "--event-id", event_id, "--event-type", scenario["input"]["event"],
+            "--implementation-mode", "candidate",
+            "--invariant-digest", digest("one invariant"),
+            "--candidate-lifecycle-digest", digest(event_id + "\n"),
+            "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        payload = self.payload()
+        self.assertEqual(payload["state"], scenario["expected"]["state"])
+        self.assertIn(scenario["expected"]["reason_code"], payload["replan_reason_codes"])
+        denied = subprocess.run(
+            [
+                sys.executable, str(RUNNER), "run", self.source_path_for_runner(),
+                "--orchestration-run-id", "run-1", "--lifecycle-state", str(self.lifecycle),
+                "--plan-execution-state", str(self.state),
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("stopped for restructuring", denied.stderr)
+
+    def source_path_for_runner(self) -> str:
+        return self.plan.relative_to(self.repo).as_posix()
 
 
 if __name__ == "__main__":

@@ -155,6 +155,36 @@ class PlanValidationCommandsTest(unittest.TestCase):
         with self.assertRaises(template_module.ValidationCommandError):
             template_module.parse_validation_command("tests/smoke.sh")
 
+    def test_root_accepts_bounded_workflow_behavior_tests(self) -> None:
+        root_module = load_module(PLAN_COMMAND_MODULES[0], "root_behavior_tests")
+        for command in (
+            "python3 tests/test-plan-restructure.py",
+            "python3 tests/test-plan-execution-state.py",
+            "python3 tests/test-sandboxed-plan-worker.py",
+            "python3 tests/test-validation-tools.py",
+            "python3 scripts/run-sandboxed-plan-worker.py self-test",
+            "python3 scripts/check-copier-template.py",
+            "tests/copier-update.sh --require-copier",
+        ):
+            with self.subTest(command=command):
+                root_module.parse_validation_command(command)
+
+    def test_copier_update_required_mode_rejects_an_unavailable_cli(self) -> None:
+        environment = os.environ.copy()
+        environment["PATH"] = "/usr/bin:/bin"
+        environment.pop("REQUIRE_COPIER", None)
+        result = subprocess.run(
+            [str(ROOT / "tests/copier-update.sh"), "--require-copier"],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 127)
+        self.assertIn("copier CLI not found", result.stderr)
+
     def test_template_accepts_namespaced_hook_and_script_compilation(self) -> None:
         template_module = load_module(PLAN_COMMAND_MODULES[1], "template_namespaced_compile")
         template_module.parse_validation_command(

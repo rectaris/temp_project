@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import copy
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/restructure-plan.py"
+SCENARIOS = ROOT / "tests/fixtures/orchestration/plan-restructuring-scenarios.json"
+HOLDOUT = ROOT / "tests/fixtures/orchestration/plan-restructuring-holdout.json"
 
 
 def digest(value: bytes | str) -> str:
@@ -49,6 +52,9 @@ class PlanRestructureTest(unittest.TestCase):
         shutil.copy2(SCRIPT, self.repo / "scripts/restructure-plan.py")
         (self.repo / "docs/plan").joinpath("replanned.md").write_text(
             "# Replanned Plan Index\n\nid\tpath\tcontract\n", encoding="utf-8"
+        )
+        (self.repo / "docs/plan").joinpath("checked.md").write_text(
+            "# Checked Plan Index\n\nid\tpath\n", encoding="utf-8"
         )
         self.source_path = "docs/plan/active/001-source.md"
         self.acceptance = ["Preserve user data.", "Run the integration check."]
@@ -221,6 +227,60 @@ class PlanRestructureTest(unittest.TestCase):
         contract_path.write_text(json.dumps(contract) + "\n", encoding="utf-8")
         self.assertNotEqual(self.run_verify().returncode, 0)
 
+    def test_durable_contract_rehashed_added_acceptance_is_rejected(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        successor = contract["successors"][0]
+        successor["content"] = successor["content"].replace(
+            "  - Preserve user data.\nchecked_summary_ja:",
+            "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+        )
+        successor["content_digest"] = digest(successor["content"])
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_live_successor_acceptance_drift_is_rejected_without_contract_change(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        successor_path = self.repo / str(self.spec["successors"][0]["path"])  # type: ignore[index]
+        successor_path.write_text(
+            successor_path.read_text(encoding="utf-8").replace(
+                "  - Preserve user data.\nchecked_summary_ja:",
+                "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_checked_successor_is_verified_and_checked_drift_is_rejected(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        successor = self.spec["successors"][0]  # type: ignore[index]
+        active = self.repo / str(successor["path"])
+        checked_relative = "docs/plan/checked/2026/08/01-15/002-data.md"
+        checked = self.repo / checked_relative
+        checked.parent.mkdir(parents=True)
+        checked.write_text(
+            active.read_text(encoding="utf-8").replace("status: in_progress", "status: checked", 1),
+            encoding="utf-8",
+        )
+        active.unlink()
+        (self.repo / "docs/plan/checked.md").write_text(
+            "# Checked Plan Index\n\nid\tpath\n002\t" + checked_relative + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+        checked.write_text(
+            checked.read_text(encoding="utf-8").replace(
+                "  - Preserve user data.\nchecked_summary_ja:",
+                "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
     def test_tampered_source_digest_is_rejected_without_writes(self) -> None:
         self.spec["source"]["plan_digest"] = "sha256:" + "0" * 64  # type: ignore[index]
         self.write_spec()
@@ -236,6 +296,16 @@ class PlanRestructureTest(unittest.TestCase):
         self.assert_source_unchanged()
 
     def test_replaced_acceptance_text_and_duplicate_plan_id_are_rejected(self) -> None:
+        fixture = json.loads(SCENARIOS.read_text(encoding="utf-8"))
+        requirement_case = next(
+            item for item in fixture["scenarios"]
+            if item["id"] == "negative-unauthorized-requirement-replacement"
+        )
+        self.assertEqual(
+            requirement_case["input"],
+            {"operation": "replace_source_acceptance_text", "explicit_user_authorization": False},
+        )
+        self.assertEqual(requirement_case["expected"]["next_action"], "reject_transition")
         integration = self.spec["integration"]
         assert isinstance(integration, dict)
         integration["content"] = str(integration["content"]).replace(
@@ -259,6 +329,135 @@ class PlanRestructureTest(unittest.TestCase):
         self.write_spec()
         self.assertNotEqual(self.run_command().returncode, 0)
         self.assert_source_unchanged()
+
+    def test_added_clarification_requirement_and_reordered_mapping_are_rejected(self) -> None:
+        successor = self.spec["successors"][0]  # type: ignore[index]
+        original = str(successor["content"])
+        successor["content"] = original.replace(
+            "  - Preserve user data.\nchecked_summary_ja:",
+            "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+        )
+        self.write_spec()
+        self.assertNotEqual(self.run_command().returncode, 0)
+        self.assert_source_unchanged()
+
+        self.spec = self.make_spec()
+        successor = self.spec["successors"][0]  # type: ignore[index]
+        successor["content"] = str(successor["content"]).replace(
+            "  - Preserve user data.\nchecked_summary_ja:",
+            "  - Preserve user data.\n  - Add an unrelated requirement.\nchecked_summary_ja:",
+        )
+        self.write_spec()
+        self.assertNotEqual(self.run_command().returncode, 0)
+        self.assert_source_unchanged()
+
+        self.spec = self.make_spec()
+        successor = self.spec["successors"][0]  # type: ignore[index]
+        records = self.spec["source"]["acceptance"]  # type: ignore[index]
+        second_digest = records[1]["digest"]
+        successor["acceptance_digests"] = [second_digest, records[0]["digest"]]
+        successor["content"] = str(successor["content"]).replace(
+            f"inherited_acceptance_digests:\n  - {records[0]['digest']}",
+            f"inherited_acceptance_digests:\n  - {second_digest}\n  - {records[0]['digest']}",
+        ).replace(
+            "acceptance:\n  - Preserve user data.",
+            "acceptance:\n  - Run the integration check.\n  - Preserve user data.",
+        )
+        self.write_spec()
+        self.assertNotEqual(self.run_command().returncode, 0)
+        self.assert_source_unchanged()
+
+    def test_fixed_hard_trigger_scenarios_complete_atomic_restructuring(self) -> None:
+        fixture = json.loads(SCENARIOS.read_text(encoding="utf-8"))
+        hard_scenarios = [
+            scenario for scenario in fixture["scenarios"]
+            if scenario["expected"]["next_action"] == "atomic_restructure"
+        ]
+        self.assertEqual(len(hard_scenarios), 7)
+        for index, scenario in enumerate(hard_scenarios, start=1):
+            with self.subTest(scenario=scenario["id"]):
+                scenario_repo = self.base / f"scenario-{index}"
+                subprocess.run(
+                    ["git", "clone", "-q", str(self.repo), str(scenario_repo)], check=True
+                )
+                git(scenario_repo, "config", "user.name", "Test")
+                git(scenario_repo, "config", "user.email", "test@example.invalid")
+                reason = scenario["expected"]["reason_code"]
+                source = scenario_repo / self.source_path
+                if reason != "multiple_independent_invariants":
+                    source.write_text(
+                        source.read_text(encoding="utf-8").replace(
+                            "  - multiple_independent_invariants", f"  - {reason}"
+                        ),
+                        encoding="utf-8",
+                    )
+                    git(scenario_repo, "add", self.source_path)
+                    git(scenario_repo, "commit", "-qm", f"stop for {reason}")
+                scenario_spec = copy.deepcopy(self.spec)
+                scenario_spec["source"]["head"] = git(scenario_repo, "rev-parse", "HEAD")
+                scenario_spec["source"]["plan_digest"] = digest(source.read_bytes())
+                scenario_spec["reason_codes"] = [reason]
+                spec_path = self.base / f"scenario-{index}.json"
+                spec_path.write_text(
+                    json.dumps(scenario_spec, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                transitioned = subprocess.run(
+                    [sys.executable, "scripts/restructure-plan.py", str(spec_path)],
+                    cwd=scenario_repo, check=False, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                self.assertEqual(transitioned.returncode, 0, transitioned.stderr)
+                verified = subprocess.run(
+                    [sys.executable, "scripts/restructure-plan.py", "--verify"],
+                    cwd=scenario_repo, check=False, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                self.assertEqual(verified.returncode, 0, verified.stderr)
+                self.assertFalse(source.exists())
+                self.assertTrue((scenario_repo / str(scenario_spec["archive_path"])).is_file())
+                self.assertTrue((scenario_repo / str(scenario_spec["contract_path"])).is_file())
+                integration = scenario_spec["integration"]
+                self.assertTrue((scenario_repo / str(integration["path"])).is_file())
+                active_index = (scenario_repo / "docs/plan/plan.md").read_text(encoding="utf-8")
+                self.assertIn(f"{integration['id']}\t{integration['path']}\tin_progress", active_index)
+
+    def test_untuned_holdout_preserves_dirty_product_path_during_transition(self) -> None:
+        scenario = json.loads(HOLDOUT.read_text(encoding="utf-8"))["scenarios"][0]
+        self.assertIs(scenario["used_for_tuning"], False)
+        self.assertEqual(
+            scenario["expected"]["next_action"],
+            "atomic_restructure_preserving_dirty_path",
+        )
+        dirty_relative = scenario["input"]["dirty_product_path"]
+        dirty = self.repo / dirty_relative
+        dirty.parent.mkdir(parents=True)
+        dirty_bytes = b"project_owned: true\n"
+        dirty.write_bytes(dirty_bytes)
+        self.spec["dirty_product_paths"] = [dirty_relative]
+        integration = self.spec["integration"]
+        integration["content"] = str(integration["content"]).replace(
+            "write_scope:\n  - tests/",
+            "write_scope:\n  - tests/\n  - config/",
+        )
+        self.spec["reason_codes"] = [scenario["expected"]["reason_code"]]
+        source = self.repo / self.source_path
+        source.write_text(
+            source.read_text(encoding="utf-8").replace(
+                "  - multiple_independent_invariants",
+                f"  - {scenario['expected']['reason_code']}",
+            ),
+            encoding="utf-8",
+        )
+        git(self.repo, "add", self.source_path)
+        git(self.repo, "commit", "-qm", "record holdout security drift")
+        self.spec["source"]["head"] = git(self.repo, "rev-parse", "HEAD")
+        self.spec["source"]["plan_digest"] = digest(source.read_bytes())
+        self.write_spec()
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(dirty.read_bytes(), dirty_bytes)
+        self.assertEqual(self.run_verify().returncode, 0)
 
     def test_collision_and_path_traversal_are_rejected(self) -> None:
         destination = self.repo / "docs/plan/active/002-data.md"

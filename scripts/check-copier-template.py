@@ -213,6 +213,8 @@ SOURCE_REQUIRED = [
     "tests/fixtures/orchestration/staged-baseline-events.json",
     "tests/fixtures/orchestration/staged-holdout-events.json",
     "tests/fixtures/orchestration/staged-paired-measured-example.json",
+    "tests/fixtures/orchestration/plan-restructuring-scenarios.json",
+    "tests/fixtures/orchestration/plan-restructuring-holdout.json",
     "scripts/init-project-workflow.sh",
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",
@@ -647,6 +649,58 @@ def require_orchestration_policy_markers() -> None:
         "maximum_unresolved_high_medium_findings": 0,
     }:
         fail("staged orchestration thresholds differ from the accepted contract")
+
+    restructuring = json.loads(read("tests/fixtures/orchestration/plan-restructuring-scenarios.json"))
+    restructuring_holdout = json.loads(read("tests/fixtures/orchestration/plan-restructuring-holdout.json"))
+    if set(restructuring) != {"schema_version", "requirements", "holdout_file", "scenarios"}:
+        fail("plan restructuring fixture has an invalid exact shape")
+    if restructuring.get("schema_version") != 1 or restructuring.get("holdout_file") != "plan-restructuring-holdout.json":
+        fail("plan restructuring fixture has an unsupported schema or holdout")
+    requirements = restructuring.get("requirements")
+    if not isinstance(requirements, list) or {item.get("id") for item in requirements if isinstance(item, dict)} != {"P1", "P2", "P3", "P4"}:
+        fail("plan restructuring fixture lost a critical requirement")
+    if any(not isinstance(item, dict) or item.get("critical") is not True for item in requirements):
+        fail("plan restructuring requirements must remain critical")
+    expected_cases = {
+        "median-multiple-independent-invariants": ("median", ["P1", "P2", "P4"], "multiple_independent_invariants", "atomic_restructure", "replan_required"),
+        "edge-delegated-correction-budget-exhausted": ("edge", ["P1", "P2", "P4"], "candidate_correction_budget_exhausted", "atomic_restructure", "replan_required"),
+        "edge-parent-direct-review-budget-exhausted": ("edge", ["P1", "P2", "P4"], "parent_remediation_budget_exhausted", "atomic_restructure", "replan_required"),
+        "negative-scope-drift": ("negative", ["P1", "P2", "P4"], "scope_drift", "atomic_restructure", "replan_required"),
+        "negative-specification-drift": ("negative", ["P1", "P2", "P4"], "spec_drift", "atomic_restructure", "replan_required"),
+        "negative-security-boundary-drift": ("negative", ["P1", "P2", "P4"], "security_boundary_drift", "atomic_restructure", "replan_required"),
+        "negative-post-authoritative-design-change": ("negative", ["P1", "P2", "P4"], "post_authoritative_design_change", "atomic_restructure", "replan_required"),
+        "negative-unauthorized-requirement-replacement": ("negative", ["P3"], "requirement_change_not_authorized", "reject_transition", "pending_user_authorization"),
+    }
+    scenarios = restructuring.get("scenarios")
+    if not isinstance(scenarios, list) or len(scenarios) != len(expected_cases):
+        fail("plan restructuring scenario set is incomplete")
+    observed: set[str] = set()
+    for scenario in scenarios:
+        if not isinstance(scenario, dict) or set(scenario) != {"id", "class", "used_for_tuning", "requirements", "input", "expected"}:
+            fail("plan restructuring scenario has an invalid exact shape")
+        scenario_id = scenario["id"]
+        if scenario_id not in expected_cases or scenario_id in observed:
+            fail("plan restructuring scenario identifiers differ from the accepted contract")
+        scenario_class, covered, reason, action, state = expected_cases[scenario_id]
+        if scenario["class"] != scenario_class or scenario["used_for_tuning"] is not True:
+            fail(f"plan restructuring scenario class/tuning differs: {scenario_id}")
+        if scenario["requirements"] != covered or scenario["expected"] != {"state": state, "reason_code": reason, "next_action": action}:
+            fail(f"plan restructuring expected result differs: {scenario_id}")
+        observed.add(scenario_id)
+    if observed != set(expected_cases):
+        fail("plan restructuring scenario set differs from the accepted contract")
+    expected_holdout = [{
+        "id": "holdout-security-drift-with-dirty-product-path",
+        "class": "holdout",
+        "used_for_tuning": False,
+        "requirements": ["P1", "P2", "P4"],
+        "input": {"event": "security_boundary_drift", "dirty_product_path": "config/project-owned.yaml"},
+        "expected": {"state": "replan_required", "reason_code": "security_boundary_drift", "next_action": "atomic_restructure_preserving_dirty_path"},
+    }]
+    if set(restructuring_holdout) != {"schema_version", "scenarios"} or restructuring_holdout.get("schema_version") != 1:
+        fail("plan restructuring holdout has an invalid exact shape")
+    if restructuring_holdout.get("scenarios") != expected_holdout:
+        fail("plan restructuring holdout must remain fixed and outside tuning scenarios")
 
 
 def template_source_files() -> set[str]:

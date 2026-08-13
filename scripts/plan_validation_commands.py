@@ -29,6 +29,12 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "scripts/security-static-check.py": {(), ("--changed",), ("--managed",)},
     "scripts/structure-map.py": {("--check",)},
     "scripts/plan_validation_commands.py": {("--self-test",)},
+    "scripts/run-sandboxed-plan-worker.py": {("self-test",)},
+    "scripts/check-copier-template.py": {()},
+    "tests/test-plan-restructure.py": {()},
+    "tests/test-plan-execution-state.py": {()},
+    "tests/test-sandboxed-plan-worker.py": {()},
+    "tests/test-validation-tools.py": {()},
 }
 VALIDATE_CHANGES_FLAGS = frozenset({"--all", "--staged", "--print-only", "--json"})
 SHELL_SCRIPT_ARGUMENTS = {
@@ -39,7 +45,7 @@ SHELL_SCRIPT_ARGUMENTS = {
 DIRECT_SCRIPT_ARGUMENTS = {
     "scripts/lint-project-workflow.sh": {()},
     "tests/copier-minimum.sh": {()},
-    "tests/copier-update.sh": {()},
+    "tests/copier-update.sh": {(), ("--require-copier",)},
     "tests/root-plan-lifecycle.sh": {()},
     "tests/smoke.sh": {()},
 }

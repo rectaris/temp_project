@@ -297,6 +297,26 @@ def render_replanned(rows: list[tuple[str, str, str]]) -> str:
     return f"# Replanned Plan Index\n\nid\tpath\tcontract\n{body}\n"
 
 
+def checked_paths_for_id(plan_id: str) -> list[str]:
+    index = ROOT / "docs/plan/checked.md"
+    if not index.is_file():
+        return []
+    paths: list[str] = []
+    for line in index.read_text(encoding="utf-8").splitlines():
+        if line.startswith(plan_id + "\t"):
+            parts = line.split("\t")
+            if len(parts) != 2:
+                raise RestructureError(f"malformed checked index row for {plan_id}")
+            path = parts[1]
+            expected_name = Path(path).name
+            if not re.fullmatch(r"docs/plan/checked/(?:[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/)?" + re.escape(plan_id) + r"-[a-z0-9][a-z0-9-]*\.md", path):
+                raise RestructureError(f"invalid checked successor path for {plan_id}: {path}")
+            if not expected_name.startswith(plan_id + "-"):
+                raise RestructureError(f"checked successor filename mismatch for {plan_id}")
+            paths.append(path)
+    return paths
+
+
 def validate_plan_entry(
     entry: Any,
     *,
@@ -305,6 +325,7 @@ def validate_plan_entry(
     contract_path: str,
     all_plan_paths: list[str],
     source_digests: set[str],
+    source_ordered_digests: list[str],
     source_text_by_digest: dict[str, str],
 ) -> dict[str, Any]:
     obj = exact_object(entry, {"id", "path", "content", "acceptance_digests"}, label)
@@ -322,6 +343,8 @@ def validate_plan_entry(
         raise RestructureError(f"{label}.acceptance_digests must be a non-empty unique list")
     if any(not isinstance(value, str) or value not in source_digests for value in digests):
         raise RestructureError(f"{label}.acceptance_digests contains an unknown source acceptance")
+    if digests != [value for value in source_ordered_digests if value in set(digests)]:
+        raise RestructureError(f"{label}.acceptance_digests must preserve source order")
     manifest = parse_manifest(content)
     missing_fields = sorted(
         key for key in REQUIRED_PLAN_FIELDS
@@ -365,10 +388,11 @@ def validate_plan_entry(
         raise RestructureError(f"{label} class C in-progress plan requires approval")
     if scalar(manifest, "human_design_required") == "yes" and scalar(manifest, "review_class") != "C":
         raise RestructureError(f"{label} human design work requires class C")
-    plan_acceptance = set(items(manifest, "acceptance"))
-    for mapped_digest in digests:
-        if source_text_by_digest[mapped_digest] not in plan_acceptance:
-            raise RestructureError(f"{label} mapped acceptance digest lacks its exact source text")
+    expected_acceptance = [source_text_by_digest[mapped_digest] for mapped_digest in digests]
+    if items(manifest, "acceptance") != expected_acceptance:
+        raise RestructureError(
+            f"{label} acceptance must exactly equal mapped source text in source order"
+        )
     validate_current_plan_rules(manifest, label)
     return {**obj, "manifest": manifest, "content_digest": sha256(content.encode("utf-8"))}
 
@@ -494,7 +518,8 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
     ]
     if len(raw_paths) != len(set(raw_paths)):
         raise RestructureError("created plan paths must be unique")
-    source_digests = {record["digest"] for record in expected_acceptance}
+    ordered_digests = [record["digest"] for record in expected_acceptance]
+    source_digests = set(ordered_digests)
     source_text_by_digest = {record["digest"]: record["text"] for record in expected_acceptance}
     entries = [
         validate_plan_entry(
@@ -504,6 +529,7 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
             contract_path=contract_path,
             all_plan_paths=raw_paths,
             source_digests=source_digests,
+            source_ordered_digests=ordered_digests,
             source_text_by_digest=source_text_by_digest,
         )
         for index, entry in enumerate(raw_entries)
@@ -512,7 +538,6 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if len(ids) != len(set(ids)) or source_id in ids:
         raise RestructureError("created plan ids must be unique and differ from the source id")
     integration = entries[-1]
-    ordered_digests = [record["digest"] for record in expected_acceptance]
     if integration["acceptance_digests"] != ordered_digests:
         raise RestructureError("integration must inherit every acceptance digest in source order")
     if items(integration["manifest"], "acceptance") != [record["text"] for record in expected_acceptance]:
@@ -741,12 +766,37 @@ def verify_repository_contracts() -> None:
             digests = successor["acceptance_digests"]
             if not isinstance(digests, list) or not digests or len(digests) != len(set(digests)):
                 raise RestructureError(f"contract successor mapping is invalid for {plan_id}")
+            if any(digest not in source_text_by_digest for digest in digests):
+                raise RestructureError(f"contract successor mapping is unknown for {plan_id}")
+            if digests != [digest for digest in source_digests if digest in set(digests)]:
+                raise RestructureError(f"contract successor mapping order mismatch for {plan_id}")
             if items(successor_manifest, "inherited_acceptance_digests") != digests:
                 raise RestructureError(f"contract successor lineage mismatch for {plan_id}")
-            successor_acceptance = set(items(successor_manifest, "acceptance"))
-            for mapped_digest in digests:
-                if mapped_digest not in source_text_by_digest or source_text_by_digest[mapped_digest] not in successor_acceptance:
-                    raise RestructureError(f"contract successor acceptance mismatch for {plan_id}")
+            expected_successor_acceptance = [source_text_by_digest[digest] for digest in digests]
+            if items(successor_manifest, "acceptance") != expected_successor_acceptance:
+                raise RestructureError(f"contract successor acceptance mismatch for {plan_id}")
+            reject_symlink_ancestors(path, include_target=True)
+            active_file = ROOT / path
+            checked_paths = checked_paths_for_id(successor["id"])
+            active_exists = active_file.is_file()
+            if active_exists and checked_paths:
+                raise RestructureError(f"successor exists in both active and checked indexes: {path}")
+            if len(checked_paths) > 1:
+                raise RestructureError(f"successor has multiple checked index entries: {path}")
+            if active_exists:
+                live_successor_file = active_file
+            elif checked_paths:
+                reject_symlink_ancestors(checked_paths[0], include_target=True)
+                live_successor_file = ROOT / checked_paths[0]
+                if not live_successor_file.is_file():
+                    raise RestructureError(f"missing checked successor plan for {plan_id}: {checked_paths[0]}")
+            else:
+                raise RestructureError(f"missing live successor plan for {plan_id}: {path}")
+            live_successor_manifest = parse_manifest(live_successor_file.read_text(encoding="utf-8"))
+            if items(live_successor_manifest, "inherited_acceptance_digests") != digests:
+                raise RestructureError(f"live successor lineage mismatch for {plan_id}: {path}")
+            if items(live_successor_manifest, "acceptance") != expected_successor_acceptance:
+                raise RestructureError(f"live successor acceptance mismatch for {plan_id}: {path}")
             mapped.update(digests)
             paths.append(path)
             if successor["integration"] is True:

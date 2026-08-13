@@ -79,3 +79,5 @@ id	path
 076	docs/plan/checked/2026/08/01-15/076-plan-restructuring-policy-schema.md
 077	docs/plan/checked/2026/08/01-15/077-atomic-plan-restructuring.md
 078	docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
+080	docs/plan/checked/2026/08/01-15/080-successor-acceptance-authority.md
+081	docs/plan/checked/2026/08/01-15/081-plan-restructuring-integration.md
