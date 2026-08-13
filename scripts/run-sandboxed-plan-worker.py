@@ -591,9 +591,14 @@ def normalize_manifest_path(repo_root: Path, raw: str) -> str:
     return normalized
 
 
-def ensure_no_symlink_path_trick(repo_root: Path, relative_path: str) -> None:
+def ensure_no_symlink_path_trick(
+    repo_root: Path, relative_path: str, *, include_target: bool = True
+) -> None:
     current = repo_root
-    for part in PurePosixPath(relative_path).parts:
+    parts = PurePosixPath(relative_path).parts
+    if not include_target:
+        parts = parts[:-1]
+    for part in parts:
         current = current / part
         if current.exists() or current.is_symlink():
             if current.is_symlink():
@@ -1481,14 +1486,18 @@ def collect_worktree_patch(repo_root: Path, git_bin: str, base_rev: str) -> byte
         ).stdout
 
 
-def normalize_changed_paths(paths: Sequence[str], repo_root: Path) -> list[str]:
+def normalize_changed_paths(
+    paths: Sequence[str], repo_root: Path, *, include_symlink_targets: bool = True
+) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
     for raw in paths:
         match = STATUS_PATTERN.fullmatch(raw)
         candidate = match.group(1) if match else raw
         value, _ = normalize_repo_relpath(candidate, label="changed path")
-        ensure_no_symlink_path_trick(repo_root, value)
+        ensure_no_symlink_path_trick(
+            repo_root, value, include_target=include_symlink_targets
+        )
         if value in seen:
             continue
         normalized.append(value)
@@ -2185,6 +2194,7 @@ def verify_candidate_manifest(
     expected_plan: str | None = None,
     require_applicable: bool = True,
     require_clean: bool = True,
+    allow_applied_symlink_targets: bool = False,
 ) -> dict[str, Any]:
     manifest_bytes = read_bounded_regular_file(manifest_path, 1024 * 1024, "candidate manifest")
     try:
@@ -2234,6 +2244,7 @@ def verify_candidate_manifest(
     changed_paths = normalize_changed_paths(
         derive_changed_paths_from_patch(repo_root, git_bin, patch_bytes, current_head),
         repo_root,
+        include_symlink_targets=not allow_applied_symlink_targets,
     )
     manifest_changed = manifest.get("changed_paths", [])
     if not isinstance(manifest_changed, list):
@@ -2248,7 +2259,9 @@ def verify_candidate_manifest(
     if disallowed:
         raise RunnerError(f"candidate patch changes paths outside the current write_scope: {', '.join(disallowed)}")
     for path in changed_paths:
-        ensure_no_symlink_path_trick(repo_root, path)
+        ensure_no_symlink_path_trick(
+            repo_root, path, include_target=not allow_applied_symlink_targets
+        )
     if require_applicable:
         run_subprocess(
             (git_bin, "apply", "--check", "--binary", "-"), cwd=repo_root, stdin=patch_bytes
@@ -2331,6 +2344,7 @@ def validate_candidate(args: argparse.Namespace) -> int:
         planlib=planlib,
         manifest_path=manifest_path,
     )
+    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("validation run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -2826,6 +2840,7 @@ def apply_worker_result(args: argparse.Namespace) -> int:
         planlib=planlib,
         manifest_path=manifest_path,
     )
+    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("apply run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -2874,7 +2889,9 @@ def finalize_apply(args: argparse.Namespace) -> int:
         manifest_path=manifest_path,
         require_applicable=False,
         require_clean=False,
+        allow_applied_symlink_targets=True,
     )
+    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("finalize-apply run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -3009,10 +3026,36 @@ def run_self_test(args: argparse.Namespace) -> int:
         write_self_test_worker(worker)
         output_dir = Path(tmp) / "output"
         lifecycle_path = Path(tmp) / "lifecycle.json"
+        execution_state_path = Path(tmp) / "plan-execution.json"
         run_id = "self-test-run"
         original_cwd = Path.cwd()
         try:
             os.chdir(repo_root)
+            plan_digest = "sha256:" + hashlib.sha256((repo_root / plan_rel).read_bytes()).hexdigest()
+            source_head = git_text(repo_root, git_bin, "rev-parse", "HEAD")
+            run_subprocess(
+                (
+                    sys.executable,
+                    str(Path(__file__).with_name("plan-execution-state.py")),
+                    "init",
+                    str(execution_state_path),
+                    "--run-id",
+                    run_id,
+                    "--plan",
+                    plan_rel,
+                    "--plan-digest",
+                    plan_digest,
+                    "--source-head",
+                    source_head,
+                    "--primary-invariant-digest",
+                    "sha256:" + hashlib.sha256(b"legacy candidate invariant").hexdigest(),
+                    "--lifecycle-state",
+                    str(lifecycle_path),
+                    "--implementation-mode",
+                    "candidate",
+                ),
+                cwd=repo_root,
+            )
             run_worker(
                 argparse.Namespace(
                     git_bin=git_bin,
@@ -3049,6 +3092,7 @@ def run_self_test(args: argparse.Namespace) -> int:
                     output_dir=str(Path(tmp) / "validation-output"),
                     orchestration_run_id=run_id,
                     lifecycle_state=str(lifecycle_path),
+                    plan_execution_state=str(execution_state_path),
                 )
             )
             apply_worker_result(
@@ -3057,6 +3101,7 @@ def run_self_test(args: argparse.Namespace) -> int:
                     manifest=str(manifest_path),
                     orchestration_run_id=run_id,
                     lifecycle_state=str(lifecycle_path),
+                    plan_execution_state=str(execution_state_path),
                 )
             )
             if (repo_root / "allowed.txt").read_text(encoding="utf-8") != "changed in clone\n":

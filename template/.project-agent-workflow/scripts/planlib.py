@@ -47,7 +47,6 @@ LEGACY_REQUIRED_FIELDS = (
     "target_files",
     "required_specs",
     "validation",
-    "focused_validation",
     "acceptance",
     "expected_output",
     "checked_summary_ja",

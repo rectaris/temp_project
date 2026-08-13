@@ -152,6 +152,12 @@ def object_database_snapshot(repo: Path) -> dict[str, bytes]:
     }
 
 
+def execution_state_path(manifest: dict[str, object]) -> Path:
+    lifecycle = Path(str(manifest["lifecycle_state_path"]))
+    run_id = str(manifest["orchestration_run_id"])
+    return lifecycle.with_name(lifecycle.name + f".{run_id}.plan-execution.json")
+
+
 def write_worker(path: Path, body: str) -> None:
     header = textwrap.dedent(
         f"""\
@@ -2352,6 +2358,98 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(rejected.returncode, 1)
         self.assertIn("validation authority", rejected.stderr)
 
+    def test_manifest_operations_reject_execution_ledger_for_another_plan(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        other_plan = "docs/plan/active/002-other.md"
+        (repo / other_plan).write_text(
+            (repo / plan_path).read_text(encoding="utf-8").replace(
+                "# Sandboxed worker test", "# Other plan"
+            ),
+            encoding="utf-8",
+        )
+        with (repo / "docs/plan/plan.md").open("a", encoding="utf-8") as handle:
+            handle.write(f"002\t{other_plan}\tin_progress\n")
+        git(repo, "add", other_plan, "docs/plan/plan.md")
+        git(repo, "commit", "-qm", "add another active plan")
+
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "wrong-ledger-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        wrong_state = root / "wrong-plan-execution.json"
+        other_bytes = (repo / other_plan).read_bytes()
+        initialized = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/plan-execution-state.py"),
+                "init",
+                str(wrong_state),
+                "--run-id",
+                manifest["orchestration_run_id"],
+                "--plan",
+                other_plan,
+                "--plan-digest",
+                "sha256:" + hashlib.sha256(other_bytes).hexdigest(),
+                "--source-head",
+                manifest["source_head"],
+                "--primary-invariant-digest",
+                "sha256:" + hashlib.sha256(b"other invariant").hexdigest(),
+                "--lifecycle-state",
+                manifest["lifecycle_state_path"],
+                "--implementation-mode",
+                "candidate",
+            ],
+            cwd=repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+
+        common = [
+            "--orchestration-run-id",
+            manifest["orchestration_run_id"],
+            "--lifecycle-state",
+            manifest["lifecycle_state_path"],
+            "--plan-execution-state",
+            str(wrong_state),
+        ]
+        commands = (
+            ["finalize-apply", str(manifest_path), *common],
+            ["apply", str(manifest_path), *common],
+            [
+                "validate",
+                str(manifest_path),
+                "--suite",
+                "authoritative",
+                "--parent-diff-approved",
+                "--critical-invariants-approved",
+                "--output-dir",
+                str(root / "wrong-ledger-validation"),
+                *common,
+            ],
+        )
+        for command in commands:
+            with self.subTest(operation=command[0]):
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), *command],
+                    cwd=repo,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("plan path mismatch", result.stderr)
+
     def test_verified_patch_bytes_survive_path_swap_before_apply(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
         self.addCleanup(temporary.cleanup)
@@ -2397,6 +2495,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                         git_bin="git",
                         lifecycle_state=manifest["lifecycle_state_path"],
                         orchestration_run_id=manifest["orchestration_run_id"],
+                        plan_execution_state=str(execution_state_path(manifest)),
                     )
                 )
         finally:
@@ -2503,6 +2602,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                             manifest=str(manifest_path), git_bin="git",
                             lifecycle_state=manifest["lifecycle_state_path"],
                             orchestration_run_id=manifest["orchestration_run_id"],
+                            plan_execution_state=str(execution_state_path(manifest)),
                         )
                     )
         finally:
@@ -2518,12 +2618,92 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                     manifest=str(manifest_path), git_bin="git",
                     lifecycle_state=manifest["lifecycle_state_path"],
                     orchestration_run_id=manifest["orchestration_run_id"],
+                    plan_execution_state=str(execution_state_path(manifest)),
                 )
             )
         finally:
             os.chdir(previous_cwd)
         lifecycle = json.loads(Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8"))
         self.assertEqual(lifecycle["phase"], "applied")
+
+    def test_apply_recovery_allows_only_exact_patch_created_symlink_target(self) -> None:
+        for tamper in ("none", "ancestor", "target"):
+            with self.subTest(tamper=tamper):
+                temporary, repo, plan_path = self.make_repo(
+                    ["links/"],
+                    files={"target.txt": "target\n", "other.txt": "other\n"},
+                    repo_name=f"repo-{tamper}",
+                )
+                self.addCleanup(temporary.cleanup)
+                root = Path(temporary.name)
+                initial, _output, _worker = self.run_with_worker(
+                    repo,
+                    plan_path,
+                    '(worker_repo / "links").mkdir(exist_ok=True)\n'
+                    '(worker_repo / "links" / "created").symlink_to("../target.txt")',
+                    output_dir=root / f"symlink-recovery-{tamper}",
+                )
+                self.assertEqual(initial.returncode, 0, initial.stderr)
+                manifest_path = Path(initial.stdout.strip())
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                validated = run_cli(
+                    repo,
+                    "validate",
+                    str(manifest_path),
+                    "--suite",
+                    "authoritative",
+                    "--parent-diff-approved",
+                    "--critical-invariants-approved",
+                    "--output-dir",
+                    str(root / f"symlink-validation-{tamper}"),
+                )
+                self.assertEqual(validated.returncode, 0, validated.stderr)
+                original_persist = RUNNER.LifecycleState.persist
+
+                def fail_finalization(state, data):
+                    if data.get("phase") == "applied":
+                        raise OSError("injected finalization failure")
+                    return original_persist(state, data)
+
+                args = argparse.Namespace(
+                    manifest=str(manifest_path),
+                    git_bin="git",
+                    lifecycle_state=manifest["lifecycle_state_path"],
+                    orchestration_run_id=manifest["orchestration_run_id"],
+                    plan_execution_state=str(execution_state_path(manifest)),
+                )
+                previous_cwd = Path.cwd()
+                try:
+                    os.chdir(repo)
+                    with mock.patch.object(
+                        RUNNER.LifecycleState, "persist", new=fail_finalization
+                    ):
+                        with self.assertRaisesRegex(RUNNER.RunnerError, "source patch was applied"):
+                            RUNNER.apply_worker_result(args)
+                    created = repo / "links/created"
+                    self.assertTrue(created.is_symlink())
+                    if tamper == "ancestor":
+                        outside = root / "outside-links"
+                        (repo / "links").rename(outside)
+                        (repo / "links").symlink_to(outside, target_is_directory=True)
+                    elif tamper == "target":
+                        created.unlink()
+                        created.symlink_to("../other.txt")
+
+                    if tamper == "none":
+                        RUNNER.finalize_apply(args)
+                        lifecycle = json.loads(
+                            Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8")
+                        )
+                        self.assertEqual(lifecycle["phase"], "applied")
+                    elif tamper == "ancestor":
+                        with self.assertRaisesRegex(RUNNER.RunnerError, "symlink"):
+                            RUNNER.finalize_apply(args)
+                    else:
+                        with self.assertRaisesRegex(RUNNER.RunnerError, "does not exactly match"):
+                            RUNNER.finalize_apply(args)
+                finally:
+                    os.chdir(previous_cwd)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 ## 未リリース
 
+- plan worker の後続操作を manifest の plan と execution ledger へ結合し、旧 archive の focused validation 互換性、dirty path scope、symlink 適用後の復旧処理を修正しました。
 - writable worker の model 選択説明を risk と ambiguity に基づく実装へ合わせ、再構成された plan の履歴・契約・検証コマンドを planning guide に追記しました。
 
 ## 2026-08-13 v1.4.0

@@ -480,6 +480,30 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertEqual(dirty.read_text(encoding="utf-8"), "user: true\n")
         self.assert_source_unchanged()
 
+    def test_dirty_product_path_requires_trailing_slash_for_directory_scope(self) -> None:
+        dirty = self.repo / "config/project-owned.yaml"
+        dirty.parent.mkdir()
+        dirty.write_text("user: true\n", encoding="utf-8")
+        self.spec["dirty_product_paths"] = ["config/project-owned.yaml"]
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        integration["content"] = str(integration["content"]).replace(
+            "write_scope:\n  - tests/", "write_scope:\n  - config"
+        )
+        self.write_spec()
+        rejected = self.run_command()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("outside successor write scopes", rejected.stderr)
+        self.assertEqual(dirty.read_text(encoding="utf-8"), "user: true\n")
+        self.assert_source_unchanged()
+
+        integration["content"] = str(integration["content"]).replace(
+            "write_scope:\n  - config", "write_scope:\n  - config/"
+        )
+        self.write_spec()
+        accepted = self.run_command()
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(dirty.read_text(encoding="utf-8"), "user: true\n")
+
     def test_injected_midwrite_failure_rolls_back_metadata(self) -> None:
         old_cwd = Path.cwd()
         try:

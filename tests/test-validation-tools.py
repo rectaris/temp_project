@@ -44,6 +44,7 @@ def load_module(path: Path, name: str) -> ModuleType:
 class PlanValidationCommandsTest(unittest.TestCase):
     def test_planlib_parses_optional_focused_validation_without_requiring_it(self) -> None:
         module = load_module(PLANLIB, "focused_validation_planlib")
+        self.assertNotIn("focused_validation", module.LEGACY_REQUIRED_FIELDS)
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp) / "plan.md"
             plan.write_text(
@@ -59,6 +60,23 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(module.parse_manifest(plan)["focused_validation"], [])
+            legacy = Path(tmp) / "legacy-checked.md"
+            legacy.write_text(
+                "status: checked\n"
+                "task_type: planning_docs\n"
+                "review_class: B\n"
+                "human_design_required: no\n"
+                "human_approval_status: not_required\n"
+                "target_files:\n  - docs/plan/\n"
+                "required_specs:\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+                "validation:\n  - git diff --check\n"
+                "acceptance:\n  - Preserve the legacy archive.\n"
+                "expected_output: Historical record.\n"
+                "checked_summary_ja: 旧形式の完了記録。\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            values = module.require_manifest_fields(legacy, module.LEGACY_REQUIRED_FIELDS)
+            self.assertEqual(values["focused_validation"], [])
 
     def test_planlib_parses_optional_validation_authority_scope(self) -> None:
         module = load_module(PLANLIB, "validation_authority_planlib")
