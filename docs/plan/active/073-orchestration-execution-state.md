@@ -62,7 +62,7 @@ checked_summary_ja: 同一実行内の利用不能model再起動を防ぎ、候�
 
 ## Context
 
-Plan 071 establishes value-gated delegation and selects writable profiles from separate implementation risk and ambiguity inputs.
+Plans 071 and 072 establish value-gated delegation, writable-profile routing, fixed evaluation, and Copier integration.
 
 Availability state and execution telemetry must exist before correction and staged validation change the event sequence being measured.
 
@@ -70,7 +70,7 @@ Availability state and execution telemetry must exist before correction and stag
 
 - Keep availability memory ephemeral, explicitly run-bound, size-bounded, and independent from semantic candidate acceptance.
 - Produce telemetry in the parent-controlled runner rather than candidate-controlled files.
-- Establish the initial-generation telemetry schema before plans 073 and 074 add correction, review, and validation events.
+- Establish the initial-generation telemetry schema before plans 074 and 075 add correction, review, and validation events.
 
 ## Tasks
 
@@ -78,7 +78,7 @@ Availability state and execution telemetry must exist before correction and stag
 - [ ] Add parent-produced initial-candidate telemetry and exact schema bounds.
 - [ ] Add executable positive, edge, race, negative, custom-worker, and telemetry-boundary coverage.
 - [ ] Align root/generated policy, Skill, runner, checks, and documentation.
-- [ ] Run all required validation, archive, and commit before plan 073.
+- [ ] Run all required validation, archive, and commit before plan 074.
 
 ## Validation Notes
 

@@ -57,7 +57,7 @@ acceptance:
   - Record lineage using bounded manifest fields for the prior manifest digest, prior patch digest, correction round, and correction brief digest without embedding the brief or worker output.
   - Enforce a correction budget of at most two isolated corrections after the initial candidate; reject missing lineage, skipped rounds, a third correction, changed source HEAD, changed plan digest, widened scope, and tampered artifacts.
   - Keep model availability fallback limited to bounded model availability errors during the correction start; a parent rejection itself must not trigger model fallback or complete-plan regeneration.
-  - Reuse plan 072's run-local availability state during correction without changing its run identifier; skip correction starts for preferred and fallback models already unavailable in the same run and keep semantic rejection outside fallback eligibility.
+  - Reuse plan 073's run-local availability state during correction without changing its run identifier; skip correction starts for preferred and fallback models already unavailable in the same run and keep semantic rejection outside fallback eligibility.
   - Add deterministic tests for tampered lineage, fresh-clone isolation, absent prior state, source and object-database cleanliness, malicious path and Git metadata changes, correction failure cleanup, and successful aggregate-patch application.
   - Add correction-specific executable tests for same-run preferred and fallback skip, run-identifier preservation and mismatch, and bounded availability-error-only fallback.
   - Keep root and generated policy, Skill, and runner behavior aligned and keep root/template runner implementations byte-identical.
@@ -83,7 +83,7 @@ When parent review rejects one part of a candidate, the only available implement
 - [ ] Add deterministic positive, tampering, isolation, cleanup, and budget coverage.
 - [ ] Add correction-specific run-local availability integration and fallback-eligibility coverage.
 - [ ] Align root/generated policy, Skill, runner, checks, and documentation.
-- [ ] Run all required validation, archive, and commit before plan 074.
+- [ ] Run all required validation, archive, and commit before plan 075.
 
 ## Validation Notes
 
