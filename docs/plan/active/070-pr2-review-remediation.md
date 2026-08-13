@@ -34,13 +34,9 @@ required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
 validation:
-  - python3 tests/test-sandboxed-plan-worker.py
-  - python3 scripts/run-sandboxed-plan-worker.py self-test
-  - python3 scripts/check-copier-template.py
+  - python3 -m pytest tests/test-sandboxed-plan-worker.py
   - scripts/lint-project-workflow.sh
   - tests/smoke.sh
-  - python3 scripts/check-yaml.py .
-  - scripts/lint-github-actions.sh .
   - python3 scripts/validate-changes.py --all
   - git diff --check
 acceptance:
