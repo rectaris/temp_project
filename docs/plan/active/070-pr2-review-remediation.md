@@ -9,6 +9,7 @@ review_class: B
 human_design_required: no
 human_approval_status: not_required
 write_scope:
+  - .github/workflows/codex-ci-autofix.yml
   - CHANGELOG.md
   - copier.yml
   - docs/agent/CODEX_CI_AUTOFIX.md
@@ -42,10 +43,11 @@ validation:
   - python3 scripts/validate-changes.py --all
   - git diff --check
 acceptance:
-  - Fail closed by rendering every enabled CI autofix selection as patch-only until the generic template has an isolated, immutable validation contract that candidate code cannot rewrite directly or indirectly.
+  - Fail closed in both this repository's CI autofix workflow and every generated workflow by using patch-only behavior until an isolated, immutable validation contract exists that candidate code cannot rewrite directly or indirectly.
   - Remove the manual direct-push input, validation-to-write job graph, branch write permission, patch commit, push, and automated PR comment from the generated workflow; keep patch generation read-only and artifact-only.
   - Preserve the Copier `direct_push` answer value for non-destructive update compatibility, but label and document that it currently falls back to patch-only without external writes.
-  - Add deterministic template and rendered-project fixtures proving that a stored `direct_push` answer still renders only patch-only mode and that no generated job has repository write permission, pushes a branch, or applies a candidate patch in a write-capable job.
+  - Add deterministic root-workflow, template, and rendered-project fixtures proving that a stored `direct_push` answer still renders only patch-only mode and that no root or generated job has repository write permission, pushes a branch, comments on a PR, or applies a candidate patch in a write-capable job.
+  - Keep the root and generated CI autofix documentation accurate for their patch-only behavior, with no stale instructions for direct-push mode, validate-patch, apply-patch, generated commits, or manual mode selection.
   - Resolve the source Git object directory through Git rather than assuming .git/objects, use a temporary object directory while deriving changed paths, and expose the source object directory only as an alternate for base-object reads.
   - Encode each alternate object path with Git-compatible C-style quoting so a legal colon or non-ASCII byte cannot become an alternate-list separator.
   - Prove that successful path derivation, manifest generation without apply, and rejected apply preflight do not add a unique candidate blob to the source object database, including repositories under a colon-containing path, linked worktrees using a common object directory, and a source object database with an existing alternate.
@@ -65,7 +67,7 @@ The sandboxed runner directs only its index to a temporary path while `git apply
 
 - Treat both review findings as valid.
 - Do not execute candidate-controlled build or test code as a prerequisite to an automatic repository write in the current generic GitHub runner. Fixed command names are insufficient because candidate source can rewrite indirect runners, Git metadata, and GitHub command files.
-- Preserve the existing `direct_push` Copier answer for update compatibility, but render artifact-only patch behavior for it and remove every write-capable autofix path until a separately isolated and immutable validation contract is designed.
+- Preserve the existing `direct_push` Copier answer for update compatibility, but use artifact-only patch behavior in both the root and rendered workflows and remove every write-capable autofix path until a separately isolated and immutable validation contract is designed.
 - Preserve Git's patch and path semantics by isolating object writes with `GIT_OBJECT_DIRECTORY` and reading base objects through `GIT_ALTERNATE_OBJECT_DIRECTORIES`.
 - Keep the published v1.3.0 tag immutable and apply these corrections only to dev and PR 2.
 
@@ -84,3 +86,5 @@ The sandboxed runner directs only its index to a temporary path while `git apply
 - Parent review-clone validation passed 34 runner tests, runner self-test, template static checks, workflow lint, and smoke, but read-only security review found three acceptance failures: candidate-controlled validation definitions could still bypass build/test, the uv test interpreter did not use the synced environment, and an unquoted colon in an alternate object path broke legal repository paths. The patch was not applied.
 - Rejected candidate `/tmp/sandboxed-plan-worker-output-f137XK/manifest.json`, source HEAD `6f743e7a3c847b6bf9360b1daf8fab6491961b66`. GPT-5.3-Codex-Spark medium returned bounded `usage_limit`; GPT-5.6-Luna max generated the candidate in a fresh isolated attempt.
 - Parent review-clone validation passed 35 runner tests, runner self-test, template static checks, workflow lint with the pinned local actionlint binary, smoke, full managed validation, and diff checks. Read-only security review nevertheless found that indirect validation runners and GitHub command files remained candidate-controlled, the required executable negative fixtures were absent, and Python dependency installation downgraded after a declared dev-extra failure. The patch was not applied.
+- Rejected candidate `/tmp/sandboxed-plan-worker-output-third-ohMrEE/manifest.json`, source HEAD `1cc3beda169596efa84f0b645f057be0b40b466b`. GPT-5.3-Codex-Spark medium returned bounded `usage_limit`; GPT-5.6-Luna max generated the candidate in a fresh isolated attempt.
+- Parent review-clone validation passed 34 runner tests, runner self-test, template static checks, workflow lint, smoke, full managed validation, and diff checks. Parent inspection found that the candidate removed writes only from the template while the root workflow retained direct-push; its partial root documentation update then contradicted the still-active root jobs. The patch was not applied.
