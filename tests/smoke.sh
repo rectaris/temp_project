@@ -167,6 +167,9 @@ assert_managed_orchestration_reports() {
   grep -qi 'skipped known-unavailable starts' "$managed_orchestration"
   grep -qi 'aggregate patch' "$managed_orchestration"
   grep -qi 'at most two correction rounds' "$managed_orchestration"
+  grep -qi 'candidate generation and correction do not run plan validation' "$managed_orchestration"
+  grep -q 'focused_validation' "$managed_orchestration"
+  grep -qi 'bounded parent implementation' "$managed_orchestration"
 }
 
 assert_ci_autofix_validation_graph() {
@@ -1032,8 +1035,15 @@ grep -q -- '--availability-state' "$tmp/typescript/.project-agent-workflow/scrip
 grep -q 'skipped_known_unavailable_starts' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'def correct_worker' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'correction_lineage' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def validate_candidate' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def open_lifecycle_state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q -- '--lifecycle-state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'VALIDATION_AUTHORITY_SCOPE' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'network_enabled=False' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'implementation_risk' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
 grep -q 'implementation_ambiguity' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
+grep -q 'focused_validation' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
+grep -q 'validation_authority_scope' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
 grep -q 'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'DEFAULT_FALLBACK_CODEX_REASONING = "max"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q -- '--fallback-codex-model' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
@@ -1199,6 +1209,7 @@ grep -q 'gpt-5.6-terra' "$tmp/typescript/.project-agent-workflow/skills/sequenti
 grep -qi 'admissible implementation slice' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -qi 'state path outside the repository' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'run-sandboxed-plan-worker.py correct' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -q 'run-sandboxed-plan-worker.py validate' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'one bounded worker at a time' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/.project-agent-workflow/AGENTS.md"

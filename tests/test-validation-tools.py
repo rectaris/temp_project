@@ -28,6 +28,7 @@ SECURITY_RULE_MODULE = ROOT / "template/.project-agent-workflow/scripts/security
 SECURITY_CHECK_MODULE = ROOT / "template/.project-agent-workflow/scripts/security-static-check.py"
 LEGACY_MIGRATOR = ROOT / "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py"
 ROOT_EXTERNAL_SERVICE_CHECK = ROOT / "scripts/check-external-service-policy.py"
+PLANLIB = ROOT / "template/.project-agent-workflow/scripts/planlib.py"
 
 
 def load_module(path: Path, name: str) -> ModuleType:
@@ -41,6 +42,34 @@ def load_module(path: Path, name: str) -> ModuleType:
 
 
 class PlanValidationCommandsTest(unittest.TestCase):
+    def test_planlib_parses_optional_focused_validation_without_requiring_it(self) -> None:
+        module = load_module(PLANLIB, "focused_validation_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+            plan.write_text(
+                "status: in_progress\nvalidation:\n  - git diff --check\n"
+                "focused_validation:\n  - python3 -m pytest tests/focused.py\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            values = module.parse_manifest(plan)
+            self.assertEqual(values["validation"], ["git diff --check"])
+            self.assertEqual(values["focused_validation"], ["python3 -m pytest tests/focused.py"])
+            plan.write_text(
+                "status: in_progress\nvalidation:\n  - git diff --check\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(module.parse_manifest(plan)["focused_validation"], [])
+
+    def test_planlib_parses_optional_validation_authority_scope(self) -> None:
+        module = load_module(PLANLIB, "validation_authority_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+            plan.write_text(
+                "validation_authority_scope:\n  - tools/\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(module.parse_manifest(plan)["validation_authority_scope"], ["tools/"])
+
     def test_title_does_not_hide_manifest_validation_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp) / "plan.md"

@@ -8,6 +8,7 @@
 - 委譲を repository 規模ではなく独立した価値と実装 slice で判断し、逐次 worker を実装 risk・曖昧さに応じて Spark または Terra へ振り分け、high と書き込み用 Sol を拒否するようにしました。
 - 逐次 worker に run 単位の bounded availability state と親生成 telemetry を追加し、同一 run で利用不能と判定済みの model を再起動しないようにしました。
 - 親 review で却下した候補を source へ適用せず、新規隔離 clone 内で最大2回まで局所修正し、original HEAD に対する aggregate patch を再生成できるようにしました。
+- 候補生成から全 plan 検証を外し、親の diff・critical invariant review 後に focused 検証、受入れ直前に authoritative 検証を各隔離 clone で実行する段階的受入れへ変更しました。
 
 ## 2026-08-13 v1.3.0
 

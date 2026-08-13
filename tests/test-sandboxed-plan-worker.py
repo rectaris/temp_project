@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
+import hashlib
 import json
 import math
 import os
@@ -39,8 +41,76 @@ def run_cli(repo: Path, *args: str, env: dict[str, str] | None = None) -> subpro
     child_env = dict(os.environ)
     if env:
         child_env.update(env)
+    command_args = list(args)
+    if command_args and command_args[0] in {"run", "correct", "validate", "apply"} and "--lifecycle-state" not in command_args:
+        manifest_path = None
+        if command_args[0] == "correct" and len(command_args) >= 3:
+            manifest_path = Path(command_args[2])
+        elif command_args[0] in {"validate", "apply"} and len(command_args) >= 2:
+            manifest_path = Path(command_args[1])
+        if manifest_path is not None and manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            lifecycle_path = manifest["lifecycle_state_path"]
+            run_id = manifest["orchestration_run_id"]
+        else:
+            output_path = (
+                Path(command_args[command_args.index("--output-dir") + 1]).absolute()
+                if "--output-dir" in command_args
+                else Path(tempfile.mkdtemp(prefix="test-lifecycle-")) / "output"
+            )
+            lifecycle_path = str(output_path.with_name(output_path.name + ".lifecycle.json"))
+            run_id = hashlib.sha256(lifecycle_path.encode("utf-8")).hexdigest()[:24]
+        command_args.extend(["--lifecycle-state", lifecycle_path])
+        if "--orchestration-run-id" not in command_args:
+            command_args.extend(["--orchestration-run-id", run_id])
+        if command_args[0] == "apply" and manifest_path is not None and manifest_path.is_file():
+            try:
+                lifecycle = json.loads(Path(lifecycle_path).read_text(encoding="utf-8"))
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                lifecycle = {}
+                manifest = {}
+            validation_base = [
+                sys.executable,
+                str(SCRIPT),
+                "validate",
+                str(manifest_path),
+                "--parent-diff-approved",
+                "--critical-invariants-approved",
+                "--lifecycle-state",
+                lifecycle_path,
+                "--orchestration-run-id",
+                run_id,
+            ]
+            if lifecycle.get("phase") == "admitted" and lifecycle.get("focused_required"):
+                focused_output = tempfile.mkdtemp(prefix="auto-focused-", dir=manifest_path.parent)
+                focused = subprocess.run(
+                    [*validation_base, "--suite", "focused", "--output-dir", focused_output],
+                    cwd=repo,
+                    env=child_env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                if focused.returncode != 0:
+                    return focused
+                lifecycle = json.loads(Path(lifecycle_path).read_text(encoding="utf-8"))
+            if lifecycle.get("phase") in {"admitted", "focused_passed"}:
+                authoritative_output = tempfile.mkdtemp(prefix="auto-authoritative-", dir=manifest_path.parent)
+                authoritative = subprocess.run(
+                    [*validation_base, "--suite", "authoritative", "--output-dir", authoritative_output],
+                    cwd=repo,
+                    env=child_env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                if authoritative.returncode != 0:
+                    return authoritative
     return subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
+        [sys.executable, str(SCRIPT), *command_args],
         cwd=repo,
         env=child_env,
         text=True,
@@ -144,8 +214,8 @@ def write_fake_codex(path: Path) -> None:
             elif model == fallback_model:
                 if reasoning != fallback_reasoning:
                     raise SystemExit(f"unexpected fallback reasoning: {{reasoning}}")
-                expected_start = "initial candidate\\n" if "{ENV_PREFIX}CORRECTION_BRIEF" in os.environ else "original\\n"
-                if target.read_text(encoding="utf-8") != expected_start:
+                expected_starts = {{"initial candidate\\n", "fallback\\n"}} if "{ENV_PREFIX}CORRECTION_BRIEF" in os.environ else {{"original\\n"}}
+                if target.read_text(encoding="utf-8") not in expected_starts:
                     raise SystemExit("fallback inherited preferred-attempt changes")
                 host_codex_home = Path(os.environ["FAKE_HOST_CODEX_HOME"])
                 output_dir = Path(os.environ["FAKE_OUTPUT_DIR"])
@@ -198,6 +268,9 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         files: dict[str, str] | None = None,
         *,
         repo_name: str = "repo",
+        validation: list[str] | None = None,
+        focused_validation: list[str] | None = None,
+        validation_authority_scope: list[str] | None = None,
     ) -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
         temporary = tempfile.TemporaryDirectory()
         repo = Path(temporary.name) / repo_name
@@ -234,7 +307,17 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             "required_specs:",
             "  - docs/agent/SPEC_PLAN_WORKFLOW.md",
             "validation:",
-            "  - python3 tests/test-sandboxed-plan-worker.py",
+            *(f"  - {command}" for command in (validation or ["git diff --check"])),
+            *(
+                ["focused_validation:", *(f"  - {command}" for command in focused_validation)]
+                if focused_validation is not None
+                else []
+            ),
+            *(
+                ["validation_authority_scope:", *(f"  - {entry}" for entry in validation_authority_scope)]
+                if validation_authority_scope is not None
+                else []
+            ),
             "acceptance:",
             "  - Test fixture.",
             "checked_summary_ja: fixture",
@@ -258,6 +341,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         output_dir: Path | None = None,
         worker_env: dict[str, str] | None = None,
         parent_env: dict[str, str] | None = None,
+        extra_args: tuple[str, ...] = (),
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         temp_root = output_dir.parent if output_dir is not None else Path(tempfile.mkdtemp(prefix="sandboxed-worker-run-"))
         actual_output = output_dir if output_dir is not None else temp_root / "output"
@@ -272,6 +356,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             sys.executable,
             "--worker-arg",
             str(worker_path),
+            *extra_args,
         ]
         for key, value in (worker_env or {}).items():
             args.extend(["--worker-env", f"{key}={value}"])
@@ -415,6 +500,9 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertNotIn("--sandbox", command)
         self.assertNotIn("--ask-for-approval", command)
         self.assertNotIn("--dangerously-bypass-hook-trust", command)
+        prompt = RUNNER.build_worker_prompt("docs/plan/active/001-test.md", "0" * 64)
+        self.assertIn("Do not run plan validation", prompt)
+        self.assertNotIn("Run every validation command", prompt)
 
     def test_codex_unavailability_classifier_is_bounded_to_cli_error_lines(self) -> None:
         cases = (
@@ -703,7 +791,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         ).stdout.decode("ascii").strip()
 
         self.assertEqual(
-            RUNNER.derive_changed_paths_from_patch(repo, "git", patch_path, git(repo, "rev-parse", "HEAD").stdout.strip()),
+            RUNNER.derive_changed_paths_from_patch(repo, "git", patch_path.read_bytes(), git(repo, "rev-parse", "HEAD").stdout.strip()),
             ["allowed.txt"],
         )
         self.assertEqual(object_database_snapshot(repo), before)
@@ -1160,10 +1248,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
         self.addCleanup(temporary.cleanup)
         output_root = Path(temporary.name)
-        cases = (
-            ("--availability-state", str(output_root / "state.json")),
-            ("--orchestration-run-id", "run-only"),
-        )
+        cases = (("--availability-state", str(output_root / "state.json")),)
         for index, extra_args in enumerate(cases):
             with self.subTest(extra_args=extra_args):
                 worker = output_root / f"paired-worker-{index}.py"
@@ -1182,9 +1267,22 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                     str(worker),
                     *extra_args,
                 ]
-                result = run_cli(repo, *command)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("must be provided together", result.stderr)
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT),
+                        *command,
+                        "--lifecycle-state",
+                        str(output_root / "lifecycle.json"),
+                    ],
+                    cwd=repo,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("orchestration-run-id", result.stderr)
                 self.assertFalse((output_root / f"pair-cli-{index}" / "candidate.patch").exists())
 
     def test_correction_emits_verified_aggregate_patch_without_mutating_source_or_objects(self) -> None:
@@ -1414,6 +1512,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             plan_path,
             '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
             output_dir=root / "availability-correction-initial",
+            extra_args=("--orchestration-run-id", "same-correction-run"),
         )
         self.assertEqual(initial.returncode, 0, initial.stderr)
         prior = Path(initial.stdout.strip())
@@ -1443,7 +1542,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         second = self.run_correction_with_fake_codex(
             repo,
             plan_path,
-            prior,
+            Path(first.stdout.strip()),
             brief,
             "unavailable_then_success",
             output_dir=root / "correction-availability-second",
@@ -1473,7 +1572,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             ),
         )
         self.assertEqual(mismatched.returncode, 1)
-        self.assertIn("different orchestration run", mismatched.stderr)
+        self.assertIn("run identifier differs", mismatched.stderr)
 
         semantic = self.run_correction_with_fake_codex(
             repo,
@@ -1484,7 +1583,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             output_dir=root / "correction-semantic-failure",
         )
         self.assertEqual(semantic.returncode, 1)
-        self.assertIn("correction worker exited", semantic.stderr)
+        self.assertIn("current lifecycle leaf", semantic.stderr)
         self.assertFalse((root / "correction-semantic-failure" / "worker-fallback.stdout").exists())
 
     def test_correction_sandbox_denies_source_out_of_scope_and_git_metadata_writes(self) -> None:
@@ -1528,6 +1627,153 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(correction.returncode, 0, correction.stderr)
         self.assertFalse((repo / "blocked.txt").exists())
         self.assertFalse((repo / "outside-scope.txt").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_parent_authorized_focused_and_authoritative_validation_use_fresh_clone(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            validation=["git diff --check"],
+            focused_validation=["git diff --check"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate for validation\\n", encoding="utf-8")',
+            output_dir=root / "validation-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest = Path(initial.stdout.strip())
+        for suite, focused_count, authoritative_count in (
+            ("focused", 1, 0),
+            ("authoritative", 1, 1),
+        ):
+            with self.subTest(suite=suite):
+                output = root / f"validation-{suite}"
+                result = run_cli(
+                    repo,
+                    "validate",
+                    str(manifest),
+                    "--suite",
+                    suite,
+                    "--parent-diff-approved",
+                    "--critical-invariants-approved",
+                    "--output-dir",
+                    str(output),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+                self.assertTrue(report["passed"])
+                self.assertEqual(report["suite"], suite)
+                self.assertEqual(len(report["commands"]), 1)
+                self.assertEqual(report["commands"][0]["argv"], ["git", "diff", "--check"])
+                self.assertEqual(report["telemetry"]["focused_validation_count"], focused_count)
+                self.assertEqual(report["telemetry"]["authoritative_validation_count"], authoritative_count)
+                self.assertEqual(report["telemetry"]["full_validation_count"], authoritative_count)
+                self.assertNotIn("candidate for validation", json.dumps(report))
+                self.assertGreaterEqual(report["telemetry"]["duration_seconds"], 0)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_focused_validation_absence_is_compatible_and_requires_parent_approvals(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"], validation=["git diff --check"]
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "optional-focused-initial",
+        )
+        manifest = Path(initial.stdout.strip())
+        denied = run_cli(
+            repo,
+            "validate",
+            str(manifest),
+            "--suite",
+            "focused",
+            "--output-dir",
+            str(root / "approval-denied"),
+        )
+        self.assertEqual(denied.returncode, 1)
+        self.assertIn("explicit parent diff", denied.stderr)
+        approved = run_cli(
+            repo,
+            "validate",
+            str(manifest),
+            "--suite",
+            "focused",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "optional-focused-approved"),
+        )
+        self.assertEqual(approved.returncode, 1)
+        self.assertIn("no focused validation stage", approved.stderr)
+
+    def test_validation_rejects_candidate_modified_plan_and_records_bounded_failure(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt", "docs/plan/"],
+            validation=["git diff --check"],
+            focused_validation=["python3 -m pytest tests/missing-focused.py"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        modified_plan, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            textwrap.dedent(
+                """\
+                plan = worker_repo / plan_path
+                plan.write_text(plan.read_text(encoding="utf-8") + "\\nworker change\\n", encoding="utf-8")
+                """
+            ),
+            output_dir=root / "modified-plan-candidate",
+        )
+        self.assertEqual(modified_plan.returncode, 0, modified_plan.stderr)
+        rejected = run_cli(
+            repo,
+            "validate",
+            modified_plan.stdout.strip(),
+            "--suite",
+            "focused",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "modified-plan-validation"),
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("must not change the active plan", rejected.stderr)
+
+        failing, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("failing validation candidate\\n", encoding="utf-8")',
+            output_dir=root / "failing-validation-candidate",
+        )
+        failure_output = root / "failing-validation-report"
+        failed = run_cli(
+            repo,
+            "validate",
+            failing.stdout.strip(),
+            "--suite",
+            "focused",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(failure_output),
+        )
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("bounded report saved", failed.stderr)
+        report = json.loads((failure_output / "validation.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["passed"])
+        self.assertNotEqual(report["commands"][0]["returncode"], 0)
+        self.assertNotIn("stdout_body", report["commands"][0])
+        self.assertNotIn("stderr_body", report["commands"][0])
+        self.assertIn("stdout_digest", report["commands"][0])
+        self.assertIn("stderr_digest", report["commands"][0])
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_nonavailability_failure_and_disabled_fallback_do_not_retry(self) -> None:
@@ -1959,6 +2205,310 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, expected_code, result.stderr)
                 self.assert_no_workspace_directories(cleanup_root)
+
+    def test_apply_requires_digest_bound_authoritative_lifecycle_receipt(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "lifecycle-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        direct = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "apply",
+                str(manifest_path),
+                "--lifecycle-state",
+                manifest["lifecycle_state_path"],
+                "--orchestration-run-id",
+                manifest["orchestration_run_id"],
+            ],
+            cwd=repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(direct.returncode, 1)
+        self.assertIn("authoritative validation", direct.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_validation_rejects_candidate_owned_authority_paths(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["tests/"], files={"tests/original.py": "pass\n"})
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "tests" / "original.py").write_text("raise SystemExit(0)\\n", encoding="utf-8")',
+            output_dir=root / "authority-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        rejected = run_cli(
+            repo,
+            "validate",
+            initial.stdout.strip(),
+            "--suite",
+            "authoritative",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "authority-validation"),
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("validation authority", rejected.stderr)
+
+    def test_validation_authority_classifier_covers_indirect_and_generated_paths(self) -> None:
+        for path in (
+            ".project-agent-workflow/scripts/validate-changes.py",
+            "template/app/tests/check.py",
+            "nested/conftest.py",
+            "src/widget.test.ts",
+            "pytest.ini",
+            "Cargo.toml",
+            "webpack.config.js",
+            "tsconfig.build.json",
+            "build.rs",
+            "packages/app/package.json",
+            "packages/app/pyproject.toml",
+            "packages/app/pnpm-lock.yaml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(RUNNER.is_validation_authority_path(path))
+        self.assertFalse(RUNNER.is_validation_authority_path("src/widget.ts"))
+
+    def test_validation_rejects_nested_workspace_manifest_bypass(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["packages/"],
+            files={
+                "package.json": '{"scripts":{"test":"npm --prefix packages/app test"}}\n',
+                "packages/app/package.json": '{"scripts":{"test":"exit 1"}}\n',
+            },
+            validation=["npm run test"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "packages" / "app" / "package.json").write_text(\'{"scripts":{"test":"exit 0"}}\\n\', encoding="utf-8")',
+            output_dir=root / "workspace-authority-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        rejected = run_cli(
+            repo, "validate", initial.stdout.strip(), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "workspace-authority-validation"),
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("validation authority", rejected.stderr)
+
+    def test_plan_declared_validation_authority_rejects_transitive_harness(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["tools/"],
+            files={
+                "package.json": '{"scripts":{"test":"node tools/harness.js"}}\n',
+                "tools/harness.js": "process.exit(1)\n",
+            },
+            validation=["npm run test"],
+            validation_authority_scope=["tools/"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "tools" / "harness.js").write_text("process.exit(0)\\n", encoding="utf-8")',
+            output_dir=root / "declared-authority-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        rejected = run_cli(
+            repo, "validate", initial.stdout.strip(), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "declared-authority-validation"),
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("validation authority", rejected.stderr)
+
+    def test_verified_patch_bytes_survive_path_swap_before_apply(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("safe\\n", encoding="utf-8")',
+            output_dir=root / "swap-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validated = run_cli(
+            repo,
+            "validate",
+            str(manifest_path),
+            "--suite",
+            "authoritative",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "swap-validation"),
+        )
+        self.assertEqual(validated.returncode, 0, validated.stderr)
+        original_verify = RUNNER.verify_candidate_manifest
+
+        def swap_after_verify(**kwargs):
+            verified = original_verify(**kwargs)
+            Path(manifest["patch_path"]).write_text(
+                "diff --git a/blocked.txt b/blocked.txt\nnew file mode 100644\nindex 0000000..e69de29\n",
+                encoding="utf-8",
+            )
+            return verified
+
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(repo)
+            with mock.patch.object(RUNNER, "verify_candidate_manifest", side_effect=swap_after_verify):
+                RUNNER.apply_worker_result(
+                    argparse.Namespace(
+                        manifest=str(manifest_path),
+                        git_bin="git",
+                        lifecycle_state=manifest["lifecycle_state_path"],
+                        orchestration_run_id=manifest["orchestration_run_id"],
+                    )
+                )
+        finally:
+            os.chdir(previous_cwd)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "safe\n")
+        self.assertFalse((repo / "blocked.txt").exists())
+
+    def test_validation_head_mutation_consumes_exactly_once_attempt(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            files={
+                "allowed.txt": "original\n",
+                "tests/smoke.sh": "#!/bin/sh\ngit -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm validation-mutation\n",
+            },
+            validation=["tests/smoke.sh"],
+        )
+        self.addCleanup(temporary.cleanup)
+        (repo / "tests/smoke.sh").chmod(0o755)
+        git(repo, "add", "tests/smoke.sh")
+        git(repo, "commit", "-qm", "make smoke executable")
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "head-mutation-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        args = (
+            "validate", initial.stdout.strip(), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "head-mutation-validation"),
+        )
+        first = run_cli(repo, *args)
+        self.assertEqual(first.returncode, 1)
+        self.assertIn("changed review-clone HEAD", first.stderr)
+        replay = run_cli(repo, *args[:-1], str(root / "head-mutation-replay"))
+        self.assertEqual(replay.returncode, 1)
+        self.assertIn("already been attempted", replay.stderr)
+
+    def test_validation_ignores_ambient_home_toolchain_path(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            files={"allowed.txt": "original\n", "scripts/check.py": "value = 1\n"},
+            validation=["python3 -m py_compile scripts/check.py"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        fake_bin = root / "home" / ".local" / "bin"
+        fake_bin.mkdir(parents=True)
+        sentinel = root / "ambient-python-used"
+        fake_python = fake_bin / "python3"
+        fake_python.write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 0\n", encoding="utf-8")
+        fake_python.chmod(0o755)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "trusted-path-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        result = run_cli(
+            repo, "validate", initial.stdout.strip(), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "trusted-path-validation"),
+            env={"PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(sentinel.exists())
+
+    def test_apply_finalization_failure_leaves_recoverable_applying_state(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("applied\\n", encoding="utf-8")',
+            output_dir=root / "apply-recovery-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        validated = run_cli(
+            repo, "validate", str(manifest_path), "--suite", "authoritative",
+            "--parent-diff-approved", "--critical-invariants-approved",
+            "--output-dir", str(root / "apply-recovery-validation"),
+        )
+        self.assertEqual(validated.returncode, 0, validated.stderr)
+        original_persist = RUNNER.LifecycleState.persist
+
+        def fail_finalization(state, data):
+            if data.get("phase") == "applied":
+                raise OSError("injected finalization failure")
+            return original_persist(state, data)
+
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(repo)
+            with mock.patch.object(RUNNER.LifecycleState, "persist", new=fail_finalization):
+                with self.assertRaisesRegex(RUNNER.RunnerError, "source patch was applied"):
+                    RUNNER.apply_worker_result(
+                        argparse.Namespace(
+                            manifest=str(manifest_path), git_bin="git",
+                            lifecycle_state=manifest["lifecycle_state_path"],
+                            orchestration_run_id=manifest["orchestration_run_id"],
+                        )
+                    )
+        finally:
+            os.chdir(previous_cwd)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "applied\n")
+        lifecycle = json.loads(Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle["phase"], "applying")
+        previous_cwd = Path.cwd()
+        try:
+            os.chdir(repo)
+            RUNNER.finalize_apply(
+                argparse.Namespace(
+                    manifest=str(manifest_path), git_bin="git",
+                    lifecycle_state=manifest["lifecycle_state_path"],
+                    orchestration_run_id=manifest["orchestration_run_id"],
+                )
+            )
+        finally:
+            os.chdir(previous_cwd)
+        lifecycle = json.loads(Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle["phase"], "applied")
 
 
 if __name__ == "__main__":

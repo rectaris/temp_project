@@ -1,0 +1,7 @@
+{
+  "schema_version": 2,
+  "version": "2026-08-13-holdout-v2",
+  "scenarios": [
+    {"id":"holdout-coupled-security-slice","class":"holdout","used_for_tuning":false,"baseline":{"source_plan":"docs/plan/checked/2026/08/01-15/070-pr2-review-remediation.md","start_commit":"09d6c99eff03cf586e08c34bb8e83e9f7284842c","accept_commit":"a1c70558763557f969a1ec1f6df996cccc341581","model_start_evidence":"named_model_starts"},"rollout_observation":{"source_plan":"docs/plan/checked/2026/08/01-15/071-orchestration-throughput-foundation.md","start_commit":"8069393df812ace95990d8281e198bd232aacbba","accept_commit":"c08e3721f035a2af5fab1e649662b2b9ebd1faba","events":["parent_implementation","authoritative_validation"],"unresolved_high_medium_findings":0}}
+  ]
+}

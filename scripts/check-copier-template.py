@@ -204,6 +204,10 @@ SOURCE_REQUIRED = [
     "tests/fixtures/referent-contract/evaluation-protocol.md",
     "tests/fixtures/write-for-reader/scenarios.json",
     "tests/fixtures/browser-ops/scenarios.json",
+    "tests/fixtures/orchestration/staged-acceptance.json",
+    "tests/fixtures/orchestration/staged-baseline-events.json",
+    "tests/fixtures/orchestration/staged-holdout-events.json",
+    "tests/fixtures/orchestration/staged-paired-measured-example.json",
     "scripts/init-project-workflow.sh",
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",
@@ -532,6 +536,17 @@ def require_orchestration_policy_markers() -> None:
         "aggregate patch",
         "at most two correction rounds",
         "rejected patch never touches the source",
+        "candidate generation and correction do not run plan validation",
+        "parent diff review",
+        "critical-invariant review",
+        "focused_validation",
+        "validation_authority_scope",
+        "network-isolated review clone",
+        "authoritative",
+        "bounded parent implementation",
+        "independent change review",
+        "at least 30 percent lower median",
+        "p95 time no more than 10 percent worse",
         "run-sandboxed-plan-worker.py run",
         "read-only",
     )
@@ -583,6 +598,41 @@ def require_orchestration_policy_markers() -> None:
     ):
         if marker not in root_orchestration:
             fail(f"root orchestration policy missing marker for template parity: {marker}")
+
+    try:
+        staged = json.loads(read("tests/fixtures/orchestration/staged-acceptance.json"))
+    except json.JSONDecodeError as exc:
+        fail(f"invalid staged orchestration fixture: {exc}")
+    if staged.get("schema_version") != 2:
+        fail("staged orchestration fixture is missing the event-evidence schema")
+    if staged.get("performance_claim_status") not in {"measurement_pending", "measured_pass"}:
+        fail("staged orchestration performance claim status is invalid")
+    if staged.get("measured_evidence_file") != "staged-paired-measured-example.json":
+        fail("staged orchestration must identify its paired runner evidence")
+    if staged.get("evidence_file") != "staged-baseline-events.json" or staged.get("holdout_file") != "staged-holdout-events.json":
+        fail("staged orchestration evidence and holdout must remain physically separated")
+    evidence = json.loads(read("tests/fixtures/orchestration/staged-baseline-events.json"))
+    holdout = json.loads(read("tests/fixtures/orchestration/staged-holdout-events.json"))
+    scenarios = [*evidence.get("scenarios", []), *holdout.get("scenarios", [])]
+    thresholds = staged.get("thresholds", {})
+    if evidence.get("schema_version") != 2 or holdout.get("schema_version") != 2:
+        fail("staged orchestration evidence must use commit-backed schema")
+    if evidence.get("version") != "2026-08-13-plans-062-064-070-v3":
+        fail("staged orchestration fixture is missing the versioned baseline")
+    if {item.get("class") for item in scenarios if isinstance(item, dict)} != {"median", "edge", "negative", "holdout"}:
+        fail("staged orchestration fixture must cover median, edge, negative, and holdout")
+    holdouts = [item for item in scenarios if isinstance(item, dict) and item.get("class") == "holdout"]
+    if len(holdouts) != 1 or holdouts[0].get("used_for_tuning") is not False:
+        fail("staged orchestration holdout must remain outside reusable tuning prompts")
+    if thresholds != {
+        "minimum_median_reduction_fraction": 0.3,
+        "maximum_p95_regression_fraction": 0.1,
+        "maximum_implementation_generations": 3,
+        "maximum_known_unavailable_primary_starts": 1,
+        "authoritative_full_suite_runs_per_accepted_candidate": 1,
+        "maximum_unresolved_high_medium_findings": 0,
+    }:
+        fail("staged orchestration thresholds differ from the accepted contract")
 
 
 def template_source_files() -> set[str]:
@@ -693,6 +743,16 @@ def require_sandboxed_plan_worker_alignment() -> None:
         '"correct"',
         "MAX_CORRECTION_ROUNDS",
         '"correction_lineage"',
+        "def validate_candidate",
+        "def open_lifecycle_state",
+        '"--lifecycle-state"',
+        "VALIDATION_AUTHORITY_SCOPE",
+        '"authoritative_passed"',
+        '"apply requires exactly one successful authoritative validation"',
+        "load_plan_validation_commands",
+        '"focused_validation_count"',
+        '"authoritative_validation_count"',
+        "network_enabled=False",
     ):
         if marker not in template_runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")

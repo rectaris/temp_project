@@ -1,6 +1,6 @@
 # Stage candidate review and bound orchestration escalation
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -33,13 +33,12 @@ write_scope:
   - tests/test-validation-tools.py
 context_files:
   - docs/agent/spec-index.yaml
-  - docs/agent/SPEC_VALIDATION.md
+  - references/validation.md
   - docs/plan/checked/2026/08/01-15/056-ci-autofix-required-validation.md
   - docs/plan/checked/2026/08/01-15/062-filtered-write-scope-sandbox.md
   - docs/plan/checked/2026/08/01-15/064-browser-task-routing.md
   - docs/plan/checked/2026/08/01-15/067-root-external-write-policy.md
   - docs/plan/checked/2026/08/01-15/070-pr2-review-remediation.md
-  - references/validation.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -52,12 +51,29 @@ validation:
   - python3 tests/test-validation-tools.py
   - python3 scripts/run-sandboxed-plan-worker.py self-test
   - python3 scripts/check-root-agent-policy.py
+  - python3 scripts/check-root-agent-policy.py --include-holdout
   - python3 scripts/check-copier-template.py
   - scripts/lint-project-workflow.sh
   - tests/smoke.sh
   - REQUIRE_COPIER=1 tests/copier-update.sh
   - python3 scripts/validate-changes.py --all
   - git diff --check
+focused_validation:
+  - python3 tests/test-sandboxed-plan-worker.py
+  - python3 tests/test-validation-tools.py
+  - python3 scripts/check-root-agent-policy.py
+  - python3 scripts/check-copier-template.py
+validation_authority_scope:
+  - AGENTS.md
+  - .codex/
+  - .github/
+  - docs/agent/
+  - references/
+  - scripts/
+  - template/
+  - tests/
+  - package.json
+  - pyproject.toml
 acceptance:
   - Extend bounded telemetry with parent-review rejection, correction-round, focused-validation, and authoritative-validation events without storing prompts, output bodies, environment values, or credentials.
   - Define focused validation as plan-declared deterministic checks for one admissible implementation slice and authoritative validation as the complete parent-owned acceptance suite.
@@ -92,16 +108,23 @@ The current worker prompt runs every validation command, while the parent must s
 - End automatic candidate work after one initial generation and two isolated corrections.
 - Permit bounded parent implementation only as an explicit high-judgment or exhausted-budget escalation with independent review.
 - Evaluate throughput using event counts and relative representative-scenario measurements instead of unsupported absolute wall-clock thresholds.
+- Keep the current performance claim pending: the historical and 071-074 rollout records are commit-backed but are not paired executions of equivalent workloads. Apply the 30 percent median and p95 criteria only after paired runner evidence exists.
 - Keep bounded telemetry parent-produced and sufficient to distinguish generation, correction, review rejection, focused validation, and authoritative validation events.
 
 ## Tasks
 
-- [ ] Add focused-validation plan parsing and staged worker/parent guidance.
-- [ ] Add bounded strategy-change and parent-implementation policy with negative coverage.
-- [ ] Add fixed median, edge, negative, and holdout event-count fixtures and relative-performance evaluation.
-- [ ] Extend bounded manifest telemetry for correction, review, and validation events and add executable boundary tests.
-- [ ] Run all required validation, archive, and commit.
+- [x] Add focused-validation plan parsing and staged worker/parent guidance.
+- [x] Add bounded strategy-change and parent-implementation policy with negative coverage.
+- [x] Add fixed median, edge, negative, and holdout event-count fixtures and relative-performance evaluation.
+- [x] Extend bounded manifest telemetry for correction, review, and validation events and add executable boundary tests.
+- [x] Run all required validation, archive, and commit.
 
 ## Validation Notes
 
-- Pending implementation.
+- Parent-session implementation separated candidate generation from parent-authorized focused and authoritative validation. Candidate admission, parent diff review, critical-invariant review, lifecycle receipts, exactly-once validation, and digest-bound apply now form an enforced state sequence.
+- Validation runs use a fresh network-isolated clone per command, trusted executables, no credentials, parent-owned command definitions, declared transitive validation authority, verified patch bytes, and an immutable minimal filesystem view.
+- The lifecycle ledger now binds the current candidate, limits one initial generation plus two corrections, rejects replay and forks, records validation attempts before execution, and recovers an applied patch whose final ledger persistence failed.
+- Historical plans 062, 064, and 070 and rollout plans 072 through 074 are commit-backed observations only. The performance claim remains `measurement_pending` because equivalent paired executions have not been captured.
+- A future `measured_pass` requires fixed median, edge, negative, and holdout runs; raw runner manifests, lifecycle ledgers, parent timestamp events, workload digests, runner revisions, and the measured index must all match Git blobs and cross-linked digests. The checker rejects schema-example promotion, missing classes, digest changes, synthetic summaries, and baseline/staged side swapping.
+- Independent change review iteratively identified admission, validation-authority, lifecycle, isolation, telemetry, performance-evidence, and side-swap weaknesses. The final read-only review found zero unresolved High or Medium findings.
+- Parent-session authoritative validation passed: 65 sandboxed-runner tests, 28 validation-tool tests, runner self-test, root policy checks with and without holdout, Copier static checks, workflow lint, smoke, required Copier update, full change-aware validation, and diff checks. `actionlint` was unavailable and was skipped by the existing validation policy.

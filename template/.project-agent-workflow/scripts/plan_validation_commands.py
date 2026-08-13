@@ -24,6 +24,7 @@ UNSUPPORTED_CHARS = frozenset("\"'~*?[]{}()")
 ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 PYTHON_SCRIPT_ARGUMENTS = {
+    "scripts/check-root-agent-policy.py": {(), ("--include-holdout",)},
     ".project-agent-workflow/scripts/check-external-service-policy.py": {("check",)},
     ".project-agent-workflow/scripts/check-codex-toml.py": {()},
     ".project-agent-workflow/scripts/lint-plan-docs.py": {()},
