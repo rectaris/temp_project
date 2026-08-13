@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -20,6 +21,15 @@ SECRET_VALUE_RE = re.compile(r"(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,
 MAX_STRING = 12000
 MAX_LIST = 200
 MAX_DICT = 200
+ALLOWED_METADATA_KEYS = {
+    "cwd",
+    "hook_event_name",
+    "session_id",
+    "stop_hook_active",
+    "tool",
+    "tool_name",
+}
+OPERATIONAL_PAYLOAD_KEYS = {*ALLOWED_METADATA_KEYS, "transcript_path"}
 
 
 def utc_now() -> str:
@@ -34,13 +44,21 @@ def repo_root() -> Path:
     return current
 
 
-def run_id() -> str:
+def run_id(payload: dict[str, Any]) -> str:
     existing = os.environ.get("CODEX_AGENT_LOG_RUN_ID") or os.environ.get("AGENT_LOG_RUN_ID")
     if existing:
         return safe_name(existing)
-    session = os.environ.get("CODEX_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
-    date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
-    seed = f"{repo_root()}:{session or date_prefix}"
+    session = (
+        os.environ.get("CODEX_SESSION_ID")
+        or os.environ.get("CODEX_THREAD_ID")
+        or payload.get("session_id")
+    )
+    if isinstance(session, str) and session:
+        seed = f"{repo_root()}:{session}"
+        digest = hashlib.sha256(seed.encode("utf-8", errors="replace")).hexdigest()[:16]
+        return f"codex-session-{digest}"
+    date_prefix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    seed = f"{repo_root()}:{date_prefix}:{os.getpid()}"
     digest = hashlib.sha256(seed.encode("utf-8", errors="replace")).hexdigest()[:10]
     return f"{date_prefix}-codex-{digest}"
 
@@ -85,9 +103,26 @@ def load_payload() -> dict[str, Any]:
         if not raw.strip():
             return {}
         value = json.loads(raw)
-        return value if isinstance(value, dict) else {"payload": value}
+        if not isinstance(value, dict):
+            return {}
+        return {key: item for key, item in value.items() if key in OPERATIONAL_PAYLOAD_KEYS}
     except Exception as exc:
         return {"_parse_error": str(exc)}
+
+
+def event_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for key in sorted(ALLOWED_METADATA_KEYS):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            metadata[key] = value
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            metadata[key] = value
+        elif isinstance(value, str):
+            metadata[key] = value[:512]
+    if payload.get("transcript_path"):
+        metadata["transcript_available"] = True
+    return metadata
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -139,7 +174,7 @@ def update_manifest(run_dir: Path, run: str, event_path: Path) -> None:
         "present": True,
         "path": hook_rel,
         "status": "present",
-        "redaction_status": "automatic_redaction",
+        "redaction_status": "pending_review",
     }
     manifest["coverage"] = coverage
     missing_sources = []
@@ -174,7 +209,7 @@ def ensure_redaction_report(run_dir: Path) -> None:
 
 def append_event(event: str, payload: dict[str, Any]) -> None:
     root = repo_root()
-    run = run_id()
+    run = run_id(payload)
     run_dir = root / ".agent-logs" / run
     raw_dir = run_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -184,12 +219,17 @@ def append_event(event: str, payload: dict[str, Any]) -> None:
         "event": event,
         "created_at": utc_now(),
         "cwd": str(Path.cwd()),
-        "payload": redact(payload),
+        "payload": redact(event_metadata(payload)),
     }
-    with event_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-    update_manifest(run_dir, run, event_path)
-    ensure_redaction_report(run_dir)
+    with (run_dir / ".events.lock").open("a", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            with event_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+            update_manifest(run_dir, run, event_path)
+            ensure_redaction_report(run_dir)
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
     if event == "Stop":
         import_external_transcript(root, run, payload)
 
@@ -223,7 +263,8 @@ def main() -> int:
     parser.add_argument("--event", default="unknown")
     args = parser.parse_args()
     try:
-        append_event(args.event, load_payload())
+        payload = load_payload()
+        append_event(args.event, payload)
     except Exception:
         pass
     print("{}")

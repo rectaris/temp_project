@@ -76,6 +76,51 @@ model = "duplicate"
         with self.assertRaises(MODULE.ProfileError):
             MODULE.render_profile(original, "gpt-5.6-luna", "low")
 
+    def test_preserves_field_like_lines_in_basic_multiline_strings(self) -> None:
+        instructions = '''Keep this exact text.
+model = "not a profile field"
+model_reasoning_effort = "not a profile field"'''
+        original = f'''name = "worker"
+description = "Customized worker."
+developer_instructions = """
+{instructions}
+"""
+'''
+        rendered = MODULE.render_profile(original, "gpt-5.6-luna", "low")
+        self.assertIn(f'developer_instructions = """\n{instructions}\n"""', rendered)
+        self.assertEqual(rendered.count('model = "gpt-5.6-luna"'), 1)
+        self.assertEqual(rendered.count('model_reasoning_effort = "low"'), 1)
+
+    def test_preserves_field_like_lines_in_literal_multiline_strings(self) -> None:
+        instructions = '''model = "not a profile field"
+model_reasoning_effort = "not a profile field"'''
+        original = f'''name = "worker"
+description = "Customized worker."
+developer_instructions = \'\'\'
+{instructions}
+\'\'\'
+'''
+        rendered = MODULE.render_profile(original, "gpt-5.6-luna", "low")
+        self.assertIn(f"developer_instructions = '''\n{instructions}\n'''", rendered)
+        self.assertEqual(rendered.count('model = "gpt-5.6-luna"'), 1)
+        self.assertEqual(rendered.count('model_reasoning_effort = "low"'), 1)
+
+    def test_ignores_nested_table_profile_fields(self) -> None:
+        original = '''name = "worker"
+description = "Customized worker."
+model = "old-model"
+model_reasoning_effort = "max"
+
+[metadata]
+model = "project-owned"
+model_reasoning_effort = "project-owned"
+'''
+        rendered = MODULE.render_profile(original, "gpt-5.6-luna", "low")
+        self.assertIn('[metadata]\nmodel = "project-owned"', rendered)
+        self.assertIn('model_reasoning_effort = "project-owned"', rendered)
+        self.assertEqual(rendered.count('model = "gpt-5.6-luna"'), 1)
+        self.assertEqual(rendered.count('model_reasoning_effort = "low"'), 1)
+
     def test_refuses_invalid_toml(self) -> None:
         original = '''name = "worker"
 sandbox_mode = "read-only"

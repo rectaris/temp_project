@@ -2,14 +2,16 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/project-agent-workflow-smoke.XXXXXX")
+scratch_base=${SANDBOXED_PLAN_WORKER_SCRATCH_DIR:-${TMPDIR:-/tmp}}
+tmp=$(mktemp -d "$scratch_base/project-agent-workflow-smoke.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 . "$root/tests/lib-copier.sh"
-source_ref=${COPIER_SMOKE_REF:-HEAD}
+source_ref=${COPIER_SMOKE_REF:-}
+render_source=$root
 
 run_root_python() {
   if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
-    (cd "$root" && UV_CACHE_DIR="$root/.uv-cache" uv run python "$@")
+    (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" uv run python "$@")
   else
     python3 "$@"
   fi
@@ -27,17 +29,109 @@ if ! copier_available; then
   exit 0
 fi
 
+if ! command -v copier >/dev/null 2>&1; then
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/copier" <<'EOF_COPIER_SHIM'
+#!/bin/sh
+exec env UV_CACHE_DIR="$COPIER_TEST_CACHE" uv run --project "$COPIER_TEST_ROOT" copier "$@"
+EOF_COPIER_SHIM
+  chmod +x "$tmp/bin/copier"
+  COPIER_TEST_CACHE="$tmp/uv-cache"
+  COPIER_TEST_ROOT="$root"
+  export COPIER_TEST_CACHE COPIER_TEST_ROOT
+  PATH="$tmp/bin:$PATH"
+  export PATH
+fi
+
+if [ -z "$source_ref" ]; then
+  render_source="$tmp/render-source"
+  git clone -q "$root" "$render_source"
+  for candidate_path in \
+    copier.yml \
+    scripts/validate-copier-update.py \
+    template/README.md.jinja \
+    template/.github/workflows/project-agent-workflow.yml \
+    template/.github/workflows/codex-ci-autofix.yml.jinja \
+    template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
+    template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+    template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
+    template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
+    template/.project-agent-workflow/scripts/validate-changes.py \
+    template/.project-agent-workflow/scripts/update-from-copier.sh \
+    template/.project-agent-workflow/scripts/validate-copier-update.py \
+    template/.agents/skills/browser-ops/SKILL.md \
+    template/.project-agent-workflow/AGENTS.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+    template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+    template/.project-agent-workflow/ownership.yaml \
+    template/.project-agent-workflow/skills/browser-ops/SKILL.md \
+    template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
+    template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/.project-agent-workflow/skills/graph-memory/SKILL.md \
+    template/.project-agent-workflow/skills/linear-ops/SKILL.md \
+    template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
+    template/docs/agent/external-services.yaml.jinja
+  do
+    mkdir -p "$(dirname "$render_source/$candidate_path")"
+    cp "$root/$candidate_path" "$render_source/$candidate_path"
+  done
+  git -C "$render_source" add \
+    copier.yml \
+    scripts/validate-copier-update.py \
+    template/README.md.jinja \
+    template/.github/workflows/project-agent-workflow.yml \
+    template/.github/workflows/codex-ci-autofix.yml.jinja \
+    template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
+    template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+    template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
+    template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
+    template/.project-agent-workflow/scripts/validate-changes.py \
+    template/.project-agent-workflow/scripts/update-from-copier.sh \
+    template/.project-agent-workflow/scripts/validate-copier-update.py \
+    template/.agents/skills/browser-ops/SKILL.md \
+    template/.project-agent-workflow/AGENTS.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
+    template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
+    template/.project-agent-workflow/ownership.yaml \
+    template/.project-agent-workflow/skills/browser-ops/SKILL.md \
+    template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
+    template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/.project-agent-workflow/skills/graph-memory/SKILL.md \
+    template/.project-agent-workflow/skills/linear-ops/SKILL.md \
+    template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
+    template/docs/agent/external-services.yaml.jinja
+  git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
+    commit --allow-empty -qm "Create isolated smoke candidate"
+  git -C "$render_source" tag v1.2.2
+  source_ref=v1.2.2
+fi
+
 render_fixture() {
   fixture=$1
   out=$2
-  set -- copy -q -f --trust --vcs-ref "$source_ref" --data-file "$fixture"
-  set -- "$@" "$root" "$out"
+  set -- copy -q -f --trust --data-file "$fixture"
+  if [ -n "$source_ref" ]; then
+    set -- "$@" --vcs-ref "$source_ref"
+  fi
+  set -- "$@" "$render_source" "$out"
   run_copier "$@" >/dev/null
 }
 
 render_defaults() {
   out=$1
-  run_copier copy -q -f --trust --defaults --vcs-ref "$source_ref" "$root" "$out" >/dev/null
+  set -- copy -q -f --trust --defaults
+  if [ -n "$source_ref" ]; then
+    set -- "$@" --vcs-ref "$source_ref"
+  fi
+  run_copier "$@" "$render_source" "$out" >/dev/null
 }
 
 assert_generated_inventory() {
@@ -63,6 +157,120 @@ assert_managed_orchestration_reports() {
   grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
   grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
   grep -qi 'advisory' "$managed_orchestration"
+}
+
+assert_ci_autofix_validation_graph() {
+  workflow=$1
+  grep -q '^  prepare:$' "$workflow"
+  grep -q '^  generate-fix:$' "$workflow"
+  if grep -q '^  validate-patch:\|^  apply-patch:\|^  patch-only-notice:' "$workflow"; then
+    echo "generated CI autofix workflow retained a removed write graph" >&2
+    exit 1
+  fi
+  if grep -q 'direct-push\|max_attempts\|git push\|createComment\|git commit' "$workflow"; then
+    echo "generated CI autofix workflow retained a removed direct-write marker" >&2
+    exit 1
+  fi
+  if grep -Eq '^\s*permissions:\s+(write|write-all)$|^\s+[A-Za-z0-9_-]+:\s+write(-all)?$' "$workflow"; then
+    echo "generated CI autofix workflow retained a write permission" >&2
+    exit 1
+  fi
+  grep -Fq 'let mode = "patch-only";' "$workflow"
+  grep -Fq 'set("mode", mode);' "$workflow"
+  grep -Fq 'git status --porcelain=v1 --untracked-files=all' "$workflow"
+  grep -Fq 'git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]' "$workflow"
+  grep -Fq 'dependency setup changed tracked, staged, or non-ignored untracked paths' "$workflow"
+  grep -Fq 'git diff --quiet "origin/${BASE_BRANCH}...HEAD" -- .github/codex/prompts/ci-autofix.md' "$workflow"
+  grep -Fq 'git show "origin/${BASE_BRANCH}:.github/codex/prompts/ci-autofix.md" > "$RUNNER_TEMP/codex-ci-autofix-prompt.md"' "$workflow"
+  python3 - "$workflow" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+
+def job(name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(name)}:\n.*?(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        raise SystemExit(f"generated CI autofix workflow missing job: {name}")
+    return match.group(0)
+
+
+jobs_section = text.split("jobs:\n", 1)[1]
+jobs = re.findall(r"^  ([a-zA-Z0-9_-]+):\n", jobs_section, re.MULTILINE)
+if jobs != ["prepare", "generate-fix"]:
+    raise SystemExit(f"generated CI autofix workflow has unexpected jobs: {jobs}")
+for marker in ("permissions: write", "permissions: write-all", "contents: write", "pull-requests: write"):
+    if marker in text:
+        raise SystemExit(f"generated CI autofix workflow has write marker: {marker}")
+PY
+}
+
+assert_dependency_setup_rejection() {
+  fixture="$tmp/dependency-mutation-fixture"
+  mkdir -p "$fixture"
+  git -C "$fixture" init -q -b main
+  git -C "$fixture" config user.email ci@example.invalid
+  git -C "$fixture" config user.name CI
+  printf 'baseline\n' >"$fixture/tracked.txt"
+  printf 'staged baseline\n' >"$fixture/staged.txt"
+  git -C "$fixture" add tracked.txt staged.txt
+  git -C "$fixture" commit -qm baseline
+  cat >"$fixture/installer.sh" <<'EOF_INSTALLER'
+#!/bin/sh
+set -eu
+printf 'installer changed\n' > tracked.txt
+printf 'installer staged\n' > staged.txt
+git add staged.txt
+printf 'installer created\n' > generated.txt
+EOF_INSTALLER
+  chmod +x "$fixture/installer.sh"
+  (cd "$fixture" && ./installer.sh)
+  if (
+    cd "$fixture" &&
+    git diff --quiet &&
+    git diff --cached --quiet &&
+    [ -z "$(git ls-files --others --exclude-standard)" ]
+  ); then
+    echo "dependency mutation fixture was not rejected" >&2
+    exit 1
+  fi
+  test -n "$(git -C "$fixture" status --porcelain=v1 --untracked-files=all)"
+}
+
+assert_dependency_setup_rejection
+
+assert_generated_whitespace_range() {
+  out=$1
+  workflow="$out/.github/workflows/project-agent-workflow.yml"
+
+  grep -Fq 'BASE_SHA: ${{ github.event.pull_request.base.sha }}' "$workflow"
+  grep -Fq 'BEFORE_SHA: ${{ github.event.before }}' "$workflow"
+  grep -Fq 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' "$workflow"
+  grep -Fq 'REF_TYPE: ${{ github.ref_type }}' "$workflow"
+  grep -Fq 'git diff --check "$BASE_SHA...$PR_HEAD_SHA"' "$workflow"
+  grep -Fq 'git diff --check "$HEAD_SHA^..$HEAD_SHA"' "$workflow"
+  grep -Fq 'git diff --check "$BEFORE_SHA..$HEAD_SHA"' "$workflow"
+  grep -Fq 'EMPTY_TREE=$(git hash-object -t tree /dev/null)' "$workflow"
+  grep -Fq 'git diff --check "$EMPTY_TREE" "$HEAD_SHA"' "$workflow"
+
+  git -C "$out" init -b whitespace-range-main >/dev/null
+  git -C "$out" add .
+  git -C "$out" -c user.name=CI -c user.email=ci@example.invalid commit -qm 'Baseline generated project'
+  before_sha=$(git -C "$out" rev-parse HEAD)
+  printf 'committed trailing whitespace \n' >"$out/committed-whitespace.txt"
+  git -C "$out" add committed-whitespace.txt
+  git -C "$out" -c user.name=CI -c user.email=ci@example.invalid commit -qm 'Add whitespace regression fixture'
+  head_sha=$(git -C "$out" rev-parse HEAD)
+  if git -C "$out" diff --check "$before_sha..$head_sha" >/dev/null 2>&1; then
+    echo "generated workflow push range missed committed trailing whitespace" >&2
+    exit 1
+  fi
 }
 
 run_plan_lifecycle_smoke() {
@@ -474,6 +682,10 @@ PY
 run_external_policy_smoke() {
   out=$1
   policy="$out/.agent-artifacts/external-services-configured.yaml"
+  broad_policy="$out/.agent-artifacts/external-services-task-scoped.yaml"
+  unsupported_policy="$out/.agent-artifacts/external-services-unsupported.yaml"
+  ordinary_confirmation_policy="$out/.agent-artifacts/external-services-ordinary-confirmation.yaml"
+  ordinary_denied_policy="$out/.agent-artifacts/external-services-ordinary-denied.yaml"
   mkdir -p "$out/.agent-artifacts"
   cat >"$policy" <<'EOF_EXTERNAL_POLICY'
 version: 1
@@ -505,6 +717,83 @@ EOF_EXTERNAL_POLICY
     echo "external-service validator accepted credential material as a platform identifier" >&2
     exit 1
   fi
+  cat >"$broad_policy" <<'EOF_BROAD_EXTERNAL_POLICY'
+version: 2
+access_profile: task_scoped_default_allow
+provider_requirement: runtime_configured
+task_scope_rule: current_user_request
+confirmation_required_effects:
+  - remote_delete
+  - public_communication
+  - financial_commitment
+  - production_change
+  - access_control_change
+denied_effects:
+  - credential_material_transfer
+  - secret_persistence
+  - write_credentials_to_untrusted_code
+unclassified_write_effect: require_confirmation
+unavailable_fallback: "Keep work local."
+external_services:
+  example:
+    unavailable_fallback: "Keep the example local."
+EOF_BROAD_EXTERNAL_POLICY
+  broad_check="python3 .project-agent-workflow/scripts/check-external-service-policy.py --policy $broad_policy"
+  (cd "$out" && $broad_check check)
+  (cd "$out" && $broad_check authorize example read issue.read --provider-configured --task-authorized --target issue-123 --effect ordinary)
+  (cd "$out" && $broad_check authorize example write issue.update --provider-configured --task-authorized --target issue-123 --effect ordinary)
+  if (cd "$out" && $broad_check authorize example write issue.delete --provider-configured --task-authorized --target issue-123 --effect remote_delete >/dev/null 2>&1); then
+    echo "version 2 validator accepted deletion without exact confirmation" >&2
+    exit 1
+  fi
+  (cd "$out" && $broad_check authorize example write issue.delete --provider-configured --task-authorized --target issue-123 --effect remote_delete --confirmed-target issue-123 --confirmed-effect remote_delete)
+  if (cd "$out" && $broad_check authorize example write issue.delete --provider-configured --task-authorized --target issue-123 --effect remote_delete --confirmed-target issue-456 --confirmed-effect remote_delete >/dev/null 2>&1); then
+    echo "version 2 validator accepted mismatched confirmation" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example write secret.send --provider-configured --task-authorized --target provider --effect credential_material_transfer --confirmed-target provider --confirmed-effect credential_material_transfer >/dev/null 2>&1); then
+    echo "version 2 validator accepted a denied credential effect" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example read secret.query --provider-configured --task-authorized --target provider --effect credential_material_transfer >/dev/null 2>&1); then
+    echo "version 2 validator accepted credential transfer during a read" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example read secret.query --provider-configured --task-authorized --target provider --effect ordinary --effect credential_material_transfer >/dev/null 2>&1); then
+    echo "version 2 validator let ordinary override credential transfer during a read" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example write custom.write --provider-configured --task-authorized --target object-1 --effect custom_effect >/dev/null 2>&1); then
+    echo "version 2 validator accepted an unclassified write without confirmation" >&2
+    exit 1
+  fi
+  (cd "$out" && $broad_check authorize example write custom.write --provider-configured --task-authorized --target object-1 --effect custom_effect --confirmed-target object-1 --confirmed-effect custom_effect)
+  if (cd "$out" && $broad_check authorize example read issue.read --task-authorized --target issue-123 --effect ordinary >/dev/null 2>&1); then
+    echo "version 2 validator accepted a read without a configured provider" >&2
+    exit 1
+  fi
+  if (cd "$out" && $broad_check authorize example read issue.read --provider-configured --task-authorized >/dev/null 2>&1); then
+    echo "version 2 validator accepted a read without exact target and effect facts" >&2
+    exit 1
+  fi
+  cp "$broad_policy" "$ordinary_confirmation_policy"
+  sed -i '/^confirmation_required_effects:$/a\  - ordinary' "$ordinary_confirmation_policy"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py --policy "$ordinary_confirmation_policy" check >/dev/null 2>&1); then
+    echo "version 2 validator accepted ordinary as a confirmation-required effect" >&2
+    exit 1
+  fi
+  cp "$broad_policy" "$ordinary_denied_policy"
+  sed -i '/^denied_effects:$/a\  - ordinary' "$ordinary_denied_policy"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py --policy "$ordinary_denied_policy" check >/dev/null 2>&1); then
+    echo "version 2 validator accepted ordinary as a denied effect" >&2
+    exit 1
+  fi
+  cp "$broad_policy" "$unsupported_policy"
+  sed -i 's/^version: 2$/version: 3/' "$unsupported_policy"
+  if (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py --policy "$unsupported_policy" check >/dev/null 2>&1); then
+    echo "external-service validator accepted an unsupported policy version" >&2
+    exit 1
+  fi
 }
 
 for fixture in "$root"/tests/fixtures/*.answers.yml; do
@@ -513,6 +802,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
   assert_managed_orchestration_reports "$out"
+  assert_generated_whitespace_range "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
   run_root_python "$root/scripts/check-yaml.py" "$out" >/dev/null
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
@@ -527,7 +817,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
 done
 
 tab=$(printf '\t')
-while IFS="$tab" read -r case_name primary_language human_report_mode codex_hooks_mode skillspector_mode mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
+while IFS="$tab" read -r case_name primary_language human_report_mode codex_hooks_mode skillspector_mode external_access_profile mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
   [ "$case_name" != "case" ] || continue
   [ -n "$case_name" ] || continue
   fixture="$tmp/$case_name.answers.yml"
@@ -540,6 +830,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode codex_hook
     printf 'human_report_mode: %s\n' "$human_report_mode"
     printf 'codex_hooks_mode: %s\n' "$codex_hooks_mode"
     printf 'skillspector_mode: %s\n' "$skillspector_mode"
+    printf 'external_access_profile: %s\n' "$external_access_profile"
     printf 'mcp_policy_mode: %s\n' "$mcp_policy_mode"
     printf 'linear_sync_mode: %s\n' "$linear_sync_mode"
     printf 'graph_memory_mode: %s\n' "$graph_memory_mode"
@@ -570,6 +861,7 @@ expected = {
     "human_report_mode": "agent_select_local",
     "codex_hooks_mode": "install_templates",
     "skillspector_mode": "disabled",
+    "external_access_profile": "restricted",
     "mcp_policy_mode": "disabled",
     "linear_sync_mode": "disabled",
     "graph_memory_mode": "disabled",
@@ -693,6 +985,10 @@ test -f "$tmp/typescript/.codex/agents/repo_explorer.toml"
 test -f "$tmp/typescript/.codex/agents/evidence_synthesizer.toml"
 test -f "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
 test -f "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
+test -f "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+test -x "$root/scripts/run-sandboxed-plan-worker.py"
+test -x "$root/template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q '^model = "gpt-5.6-sol"$' "$tmp/typescript/.codex/agents/change_reviewer.toml"
 grep -q '^model_reasoning_effort = "high"$' "$tmp/typescript/.codex/agents/change_reviewer.toml"
 grep -q '^model = "gpt-5.6-luna"$' "$tmp/typescript/.codex/agents/docs_researcher.toml"
@@ -711,10 +1007,18 @@ grep -q 'Require an explicit write scope and predetermined validation' "$tmp/typ
 grep -q 'Do not commit, tag, push, release' "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
 grep -q '^model = "gpt-5.3-codex-spark"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q '^model_reasoning_effort = "medium"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
+grep -q '^sandbox_mode = "read-only"$' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q 'Do not process the next active plan' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q 'Do not spawn descendant agents' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q "Do not edit the assigned plan's status" "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 grep -q 'Do not commit changes' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
+grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run <plan>' "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
+python3 "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py" --help >/dev/null
+grep -q 'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'DEFAULT_FALLBACK_CODEX_REASONING = "max"' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q -- '--fallback-codex-model' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q -- '--no-model-fallback' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 test -f "$tmp/typescript/.codex/hooks/pre_tool_hardening_gate.py"
 test -f "$tmp/typescript/.codex/hooks/agent_log_event.py"
 test -f "$tmp/typescript/.codex/hooks/semantic_guard_advisory.py"
@@ -769,6 +1073,9 @@ grep -q 'copier_adoption:' "$tmp/typescript/.project-agent-workflow/docs/agent/s
 grep -q 'Copier Adoption' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
 grep -q 'Conflict Handling' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
 grep -q 'Copier may represent a conflict with inline conflict markers' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
+grep -q '.project-agent-workflow/scripts/update-from-copier.sh' "$tmp/typescript/README.md"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/update-from-copier.sh"
+cmp "$root/scripts/validate-copier-update.py" "$tmp/typescript/.project-agent-workflow/scripts/validate-copier-update.py"
 test -f "$tmp/typescript/docs/agent/external-services.yaml"
 grep -q 'external_services:' "$tmp/typescript/docs/agent/external-services.yaml"
 grep -q 'state: documented' "$tmp/typescript/docs/agent/external-services.yaml"
@@ -790,9 +1097,11 @@ grep -q 'CI autofix mode: `disabled`' "$tmp/docs/.project-agent-workflow/AGENTS.
 test -f "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
 test -f "$tmp/python/.github/workflows/codex-ci-autofix.yml"
 test ! -f "$tmp/docs/.github/workflows/codex-ci-autofix.yml"
-grep -q 'mode = "direct-push";' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
-grep -q 'mode = "patch-only";' "$tmp/python/.github/workflows/codex-ci-autofix.yml"
+grep -q 'let mode = "patch-only";' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
+grep -q 'let mode = "patch-only";' "$tmp/python/.github/workflows/codex-ci-autofix.yml"
 grep -Fq 'ref: ${{ needs.prepare.outputs.head_sha }}' "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
+assert_ci_autofix_validation_graph "$tmp/typescript/.github/workflows/codex-ci-autofix.yml"
+assert_ci_autofix_validation_graph "$tmp/python/.github/workflows/codex-ci-autofix.yml"
 grep -q 'Use tmux for long-running, shared, or interactive commands' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Command Sessions' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Proactive bounded delegation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
@@ -801,6 +1110,10 @@ grep -q 'non-delegation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPE
 grep -q 'Do not delegate short deterministic commands' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'external writes' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'sequential_plan_worker.*exactly one assigned active plan' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'gpt-5.3-codex-spark.*medium reasoning' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'gpt-5.6-luna.*max reasoning' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'usage limit, rate limit, unavailable model, or denied model access' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'fast_scoped_worker.*predetermined validation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'evidence_synthesizer.*multiple evidence sources' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Use xhigh through `evidence_synthesizer`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
@@ -808,9 +1121,9 @@ grep -q 'gpt-5.6-sol.*high reasoning.*change_reviewer' "$tmp/typescript/.project
 grep -q 'Do not redefine it here as a custom candidate' "$tmp/typescript/docs/plan/sub-agents/custom-agents.md"
 grep -q 'Name tmux sessions descriptively' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'docs/agent/external-services.yaml' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'MCP: `documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Linear sync: `documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
-grep -q 'Graph memory: `documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'MCP=`documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'Linear=`documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+grep -q 'graph memory=`documented`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'configured_write_capable' "$tmp/python/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'Agent Logging' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md"
 grep -q 'agent_log_event.py' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md"
@@ -861,6 +1174,8 @@ grep -q 'name: sequential-plan-orchestrator' "$tmp/typescript/.project-agent-wor
 grep -q 'name: write-for-reader' "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/SKILL.md"
 grep -q 'SPEC_USER_COMMUNICATION.md' "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/SKILL.md"
 grep -q 'sequential_plan_worker' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -q 'gpt-5.6-luna.*max fallback' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'one bounded worker at a time' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
@@ -901,6 +1216,12 @@ test -f "$tmp/typescript/.project-agent-workflow/scripts/sync-plan-to-linear.sh"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-commands "python3 .project-agent-workflow/scripts/validate-changes.py --print-only --json")
 sample_archive_path=$(cat "$tmp/typescript/.sample-archive-path")
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/sync-plan-to-linear.sh "$sample_archive_path" --dry-run | grep -q 'Desired status: Done')
+(cd "$tmp/broad" && .project-agent-workflow/scripts/create-plan.sh active broad-linear --summary "Exercise the Linear version 2 gate." --summary-ja "Linear version 2 ゲートを検証する。" >/dev/null)
+if (cd "$tmp/broad" && .project-agent-workflow/scripts/sync-plan-to-linear.sh docs/plan/active/001-broad-linear.md --ensure-issue 2>"$tmp/broad-linear.err"); then
+  echo "generic Linear adapter treated the version 2 profile as operation authorization" >&2
+  exit 1
+fi
+grep -q 'check-external-service-policy.py with provider, current-task, target, effect, and confirmation facts' "$tmp/broad-linear.err"
 grep -q 'Plan Validation Commands' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_VALIDATION.md"
 grep -q 'Linear sync dry-run' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
 grep -q 'Machine-readable workflow status' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"

@@ -5,6 +5,7 @@ primary_language: python
 human_report_mode: disabled
 codex_hooks_mode: install_templates
 skillspector_mode: disabled
+external_access_profile: restricted
 mcp_policy_mode: disabled
 linear_sync_mode: disabled
 graph_memory_mode: disabled

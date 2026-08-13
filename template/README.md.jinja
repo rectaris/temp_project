@@ -28,12 +28,13 @@ AI agent skill を追加または更新するリポジトリでは、任意で N
 
 ## 外部サービス連携
 
-MCP、Linear、graph memory は任意機能です。
-現在の policy state と設定手順は [`SPEC_EXTERNAL_SERVICES.md`](.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md) と [`external-services.yaml`](docs/agent/external-services.yaml) を確認してください。
+MCP、Linear、graph memory、Browser Run は任意機能です。
+現在の access profile、policy schema、設定手順は [`SPEC_EXTERNAL_SERVICES.md`](.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md) と [`external-services.yaml`](docs/agent/external-services.yaml) を確認してください。
 
 - 連携しない場合も、ローカルの plan、validation、Git workflow はそのまま使えます。
 - 認証情報はリポジトリに置かず、環境変数または secret store で管理します。
-- 外部への書き込みは、明示された lifecycle command またはユーザー指示がある場合だけ実行します。
+- version 1 の外部書き込みは現在のユーザー指示または明示された lifecycle command が対象と効果を要求する場合に限り、version 2 では現在のユーザー指示自体が要求する場合に限ります。
+- task-scoped profile でも、秘密情報に関する禁止と、削除、公開、課金、権限変更、本番変更に対する個別確認は維持します。
 
 ## テンプレート更新
 
@@ -44,15 +45,16 @@ MCP、Linear、graph memory は任意機能です。
 `--trust` は task の実行を許可するだけであり、更新差分の安全性を保証しません。
 
 ```sh
-copier update --trust
+.project-agent-workflow/scripts/update-from-copier.sh
 ```
 
 特定のタグへ更新する場合:
 
 ```sh
-copier update --trust --vcs-ref vX.Y.Z
+.project-agent-workflow/scripts/update-from-copier.sh --vcs-ref vX.Y.Z
 ```
 
 clean な状態から更新し、製品コード、プロジェクト固有規則、設定、計画履歴が保持されていることを差分で確認してください。
-`*.rej`、未解決競合、分類できない Git 管理対象ファイルの削除がある場合は、コミットせずに原因を解消してください。
+`update-from-copier.sh` は force flag を拒否し、Copier の終了後に `*.rej`、未解決競合、分類できない Git 管理対象ファイルの削除を検査します。
+`update-from-copier.sh` が失敗した場合はコミットせず、作業ツリーと index に残った結果を確認して原因を解消してください。
 `.codex/agents/*.toml` では `model` と `model_reasoning_effort` だけがテンプレートの固定値へ戻り、ほかのフィールドはプロジェクト所有のまま保持されます。

@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import re
 import subprocess
 import sys
+import os
+from typing import Any
 from itertools import combinations, product
 from pathlib import Path
 
@@ -46,9 +50,11 @@ SOURCE_REQUIRED = [
     "scripts/install-actionlint.sh",
     "scripts/lint-github-actions.sh",
     "scripts/plan_validation_commands.py",
+    "scripts/run-sandboxed-plan-worker.py",
     "scripts/referent-contract.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
+    "scripts/validate-copier-update.py",
     "template/AGENTS.md.jinja",
     "template/README.md.jinja",
     "template/.project-agent-workflow/AGENTS.md.jinja",
@@ -85,6 +91,7 @@ SOURCE_REQUIRED = [
     "template/.agents/skills/plan-archive/SKILL.md",
     "template/.agents/skills/sequential-plan-orchestrator/SKILL.md",
     "template/.agents/skills/write-for-reader/SKILL.md",
+    "template/.agents/skills/browser-ops/SKILL.md",
     "template/.project-agent-workflow/skills/define-referents-first/SKILL.md",
     "template/.project-agent-workflow/skills/define-referents-first/agents/openai.yaml",
     "template/.project-agent-workflow/skills/define-referents-first/references/workflow.md",
@@ -104,6 +111,9 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml",
     "template/.project-agent-workflow/skills/write-for-reader/SKILL.md",
     "template/.project-agent-workflow/skills/write-for-reader/agents/openai.yaml",
+    "template/.project-agent-workflow/skills/browser-ops/SKILL.md",
+    "template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml",
+    "template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md",
     "template/[[ _copier_conf.answers_file ]].jinja",
     "template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja",
     "template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md",
@@ -158,10 +168,13 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py",
     "template/.project-agent-workflow/scripts/planlib.py",
     "template/.project-agent-workflow/scripts/plan_validation_commands.py",
+    "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     "template/.project-agent-workflow/scripts/referent-contract.py",
     "template/.project-agent-workflow/scripts/format-plan-docs.py",
     "template/.project-agent-workflow/scripts/search-plan-archive.py",
     "template/.project-agent-workflow/scripts/validate-changes.py",
+    "template/.project-agent-workflow/scripts/validate-copier-update.py",
+    "template/.project-agent-workflow/scripts/update-from-copier.sh",
     "template/.project-agent-workflow/scripts/security_rules.py",
     "template/.project-agent-workflow/scripts/security-static-check.py",
     "template/.project-agent-workflow/scripts/skillspector-scan.sh",
@@ -185,10 +198,12 @@ SOURCE_REQUIRED = [
     "tests/test-copier-migration.py",
     "tests/test-copier-adoption.py",
     "tests/test-referent-contract.py",
+    "tests/test-sandboxed-plan-worker.py",
     "tests/test-validation-tools.py",
     "tests/fixtures/referent-contract/scenarios.json",
     "tests/fixtures/referent-contract/evaluation-protocol.md",
     "tests/fixtures/write-for-reader/scenarios.json",
+    "tests/fixtures/browser-ops/scenarios.json",
     "scripts/init-project-workflow.sh",
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",
@@ -228,6 +243,7 @@ GENERATED_REQUIRED = [
     ".agents/skills/plan-archive/SKILL.md",
     ".agents/skills/sequential-plan-orchestrator/SKILL.md",
     ".agents/skills/write-for-reader/SKILL.md",
+    ".agents/skills/browser-ops/SKILL.md",
     ".project-agent-workflow/skills/define-referents-first/SKILL.md",
     ".project-agent-workflow/skills/define-referents-first/agents/openai.yaml",
     ".project-agent-workflow/skills/define-referents-first/references/workflow.md",
@@ -247,6 +263,9 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml",
     ".project-agent-workflow/skills/write-for-reader/SKILL.md",
     ".project-agent-workflow/skills/write-for-reader/agents/openai.yaml",
+    ".project-agent-workflow/skills/browser-ops/SKILL.md",
+    ".project-agent-workflow/skills/browser-ops/agents/openai.yaml",
+    ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md",
     "AGENTS.md",
     "README.md",
     ".github/workflows/project-agent-workflow.yml",
@@ -305,12 +324,15 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/scripts/next-plan-id.sh",
     ".project-agent-workflow/scripts/planlib.py",
     ".project-agent-workflow/scripts/plan_validation_commands.py",
+    ".project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
     ".project-agent-workflow/scripts/referent-contract.py",
     ".project-agent-workflow/scripts/promote-plan.sh",
     ".project-agent-workflow/scripts/search-plan-archive.py",
     ".project-agent-workflow/scripts/security_rules.py",
     ".project-agent-workflow/scripts/structure-map.py",
     ".project-agent-workflow/scripts/validate-changes.py",
+    ".project-agent-workflow/scripts/validate-copier-update.py",
+    ".project-agent-workflow/scripts/update-from-copier.sh",
     ".project-agent-workflow/scripts/security-static-check.py",
     ".project-agent-workflow/scripts/sync-plan-to-linear.sh",
 ]
@@ -327,6 +349,7 @@ QUESTIONS = {
     "human_report_mode",
     "codex_hooks_mode",
     "skillspector_mode",
+    "external_access_profile",
     "mcp_policy_mode",
     "linear_sync_mode",
     "graph_memory_mode",
@@ -338,6 +361,7 @@ EXPECTED_CHOICE_VALUES = {
     "human_report_mode": {"disabled", "agent_select_local"},
     "codex_hooks_mode": {"disabled", "install_templates", "enable_local_logging"},
     "skillspector_mode": {"disabled", "document_optional"},
+    "external_access_profile": {"restricted", "task_scoped_default_allow"},
     "mcp_policy_mode": {"disabled", "document_optional"},
     "linear_sync_mode": {"disabled", "document_optional"},
     "graph_memory_mode": {"disabled", "document_optional"},
@@ -346,6 +370,7 @@ EXPECTED_CHOICE_VALUES = {
 
 EXPECTED_DEFAULT_VALUES = {
     "human_report_mode": "agent_select_local",
+    "external_access_profile": "restricted",
     "ci_autofix_mode": "disabled",
 }
 
@@ -398,11 +423,12 @@ def require_sequential_worker() -> None:
         'name = "sequential_plan_worker"',
         'model = "gpt-5.3-codex-spark"',
         'model_reasoning_effort = "medium"',
-        'sandbox_mode = "workspace-write"',
+        'sandbox_mode = "read-only"',
         "Do not process the next active plan",
         "Do not spawn descendant agents",
         "Do not edit the assigned plan's status",
         "Do not commit changes",
+        ".project-agent-workflow/scripts/run-sandboxed-plan-worker.py run <plan>",
     )
     for marker in required:
         if marker not in text:
@@ -491,6 +517,8 @@ def require_orchestration_policy_markers() -> None:
         "final report",
         "role",
         "acceptance",
+        "run-sandboxed-plan-worker.py run",
+        "read-only",
     )
     for marker in shared_markers:
         if marker not in template_spec:
@@ -509,6 +537,8 @@ def require_orchestration_policy_markers() -> None:
         "role",
         "scope",
         "acceptance",
+        "run-sandboxed-plan-worker.py",
+        "read-only",
     ):
         if marker not in template_agents:
             fail(f"template managed AGENTS missing marker: {marker}")
@@ -534,6 +564,8 @@ def require_orchestration_policy_markers() -> None:
         "final high-risk",
         "write scope",
         "acceptance",
+        "run-sandboxed-plan-worker.py run",
+        "read-only",
     ):
         if marker not in root_orchestration:
             fail(f"root orchestration policy missing marker for template parity: {marker}")
@@ -606,6 +638,125 @@ def require_user_communication_alignment() -> None:
             template_text = normalized_template_core(template_path)
         if read(root_path) != template_text:
             fail(f"user-communication root/template files differ: {root_path} != {template_path}")
+
+
+def require_sandboxed_plan_worker_alignment() -> None:
+    root_runner = read("scripts/run-sandboxed-plan-worker.py")
+    template_runner = read("template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py")
+    if root_runner != template_runner:
+        fail("sandboxed plan worker root/template scripts differ")
+    root_mode = os.stat(ROOT / "scripts/run-sandboxed-plan-worker.py").st_mode & 0o777
+    template_mode = os.stat(ROOT / "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py").st_mode & 0o777
+    if root_mode != template_mode:
+        fail("sandboxed plan worker root/template script modes differ")
+    if root_mode & 0o111 == 0:
+        fail("sandboxed plan worker scripts must be executable")
+    for marker in (
+        'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
+        'DEFAULT_CODEX_REASONING = "medium"',
+        'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"',
+        'DEFAULT_FALLBACK_CODEX_REASONING = "max"',
+        "def classify_codex_unavailability",
+        'label="fallback"',
+        '"attempts"',
+        '"selected_attempt"',
+        '"fallback_reason"',
+        '"--fallback-codex-model"',
+        '"--fallback-codex-reasoning-effort"',
+        '"--no-model-fallback"',
+    ):
+        if marker not in template_runner:
+            fail(f"sandboxed plan worker missing model fallback marker: {marker}")
+    pairs = (
+        (
+            ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+            "template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md",
+        ),
+    )
+    for root_path, template_path in pairs:
+        template_text = normalized_template_core(template_path)
+        if read(root_path) != template_text:
+            fail(f"sandboxed plan worker orchestration text differs: {root_path} != {template_path}")
+    for relative in (
+        "template/.project-agent-workflow/AGENTS.md.jinja",
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+        "template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        text = read(relative).lower()
+        for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
+            if marker not in text:
+                fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
+
+
+def run_hook_payload(script_path: str, run_id: str, payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
+    env = dict(os.environ)
+    env["CODEX_AGENT_LOG_RUN_ID"] = run_id
+    result = subprocess.run(
+        [sys.executable, str(ROOT / script_path), "--event", str(payload.get("hook_event_name", "UserPromptSubmit"))],
+        input=json.dumps(payload),
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    if result.returncode != 0:
+        fail(f"hook logger execution failed for {script_path}: {result.stderr}")
+    event_path = cwd / ".agent-logs" / run_id / "raw" / "events.jsonl"
+    if not event_path.is_file():
+        fail(f"hook log file missing for {script_path}: {event_path}")
+    lines = [line for line in event_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        fail(f"hook log file empty for {script_path}: {event_path}")
+    try:
+        return json.loads(lines[-1])
+    except Exception as exc:
+        fail(f"invalid hook log JSON for {script_path}: {event_path}: {exc}")
+
+
+def require_hook_logging_parity() -> None:
+    payload = {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "hook-parity-session",
+        "tool": "Bash",
+        "tool_name": "bash",
+        "prompt": "secret=should-not-log",
+        "tool_input": "rm -rf /",
+        "response": "tool result should not log",
+        "output": "tool output should not log",
+        "api_key": "sk-abcdefghijklmnopqrstuvwxyz",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        root_record = run_hook_payload(".project-agent-workflow/hooks/agent_log_event.py", "root-parity", payload, repo)
+        template_record = run_hook_payload("template/.project-agent-workflow/hooks/agent_log_event.py", "template-parity", payload, repo)
+    if root_record.get("event") != template_record.get("event"):
+        fail("root/template hook event field diverged")
+    if root_record.get("payload", {}).get("session_id") != payload["session_id"]:
+        fail("root hook payload stopped logging session_id")
+    if template_record.get("payload", {}).get("session_id") != payload["session_id"]:
+        fail("template hook payload stopped logging session_id")
+    for field in ("prompt", "tool_input", "response", "output", "api_key"):
+        if field in root_record.get("payload", {}):
+            fail(f"root hook payload leaked disallowed field: {field}")
+        if field in template_record.get("payload", {}):
+            fail(f"template hook payload leaked disallowed field: {field}")
+
+    if root_record.get("payload", {}) != template_record.get("payload", {}):
+        fail("root/template hook payload structure diverged")
+
+
+def require_root_pre_tool_hardening() -> None:
+    hooks = json.loads(read(".codex/hooks.json"))
+    entries = hooks.get("hooks", {}).get("PreToolUse", [{}])[0].get("hooks", [])
+    commands = [entry.get("command", "") for entry in entries]
+    if len(commands) != 2:
+        fail("root PreToolUse must contain the event logger and hardening gate")
+    if "agent_log_event.py" not in commands[0]:
+        fail("root PreToolUse must run event logging before the hardening gate")
+    if ".project-agent-workflow/hooks/pre_tool_hardening_gate.py" not in commands[1]:
+        fail("root PreToolUse must run the hardening gate")
 
 
 def parse_fixture(path: Path) -> dict[str, str]:
@@ -761,6 +912,8 @@ def require_update_boundaries(copier_yml: str) -> None:
         "scripts/migrate-to-namespaced-layout.py",
         "version: v1.1.1",
         "scripts/update_hook_wiring.py",
+        "version: v1.2.2",
+        "scripts/validate-copier-update.py",
         'when: "[[ _stage == \'before\' ]]"',
         'when: "[[ _stage == \'after\' ]]"',
     )
@@ -850,7 +1003,7 @@ def require_copier_documentation_contract() -> None:
         "template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md": (
             "## Non-Destructive Update Contract",
             "copier copy --trust",
-            "copier update --trust",
+            ".project-agent-workflow/scripts/update-from-copier.sh",
             "The `model` and `model_reasoning_effort` fields are the only exceptions.",
             "`--trust` authorizes the bundled task; it does not prove that the resulting diff is safe to commit.",
         ),
@@ -870,26 +1023,128 @@ def require_copier_documentation_contract() -> None:
     if "requires `--trust` only" in read("references/template-development.md"):
         fail("template development documentation still limits --trust to migrations")
 
+    source_validator = ROOT / "scripts/validate-copier-update.py"
+    generated_validator = ROOT / "template/.project-agent-workflow/scripts/validate-copier-update.py"
+    if source_validator.read_bytes() != generated_validator.read_bytes():
+        fail("source and generated Copier update validators must be byte-identical")
 
-def require_ci_autofix_root_boundaries() -> None:
-    text = read(".github/workflows/codex-ci-autofix.yml")
+    wrapper = read("template/.project-agent-workflow/scripts/update-from-copier.sh")
+    for marker in (
+        '"$script_dir/../.."',
+        "copier update --trust",
+        "validate-copier-update.py --destination .",
+        "--force|--force=*",
+        "-*f*",
+    ):
+        if marker not in wrapper:
+            fail(f"generated Copier update wrapper missing marker: {marker}")
+
+
+def workflow_job(text: str, job_name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        fail(f"CI autofix workflow missing job: {job_name}")
+    return match.group(0)
+
+
+def require_markers(path: str, subject: str, text: str, markers: tuple[str, ...]) -> None:
+    for marker in markers:
+        if marker not in text:
+            fail(f"{path} {subject} missing marker: {marker}")
+
+
+def require_ci_autofix_boundaries(
+    path: str,
+    boundary_validation_command: str,
+) -> None:
+    text = read(path)
     required = (
         "ref: ${{ needs.prepare.outputs.head_sha }}",
-        'cp .github/codex/prompts/ci-autofix.md "$RUNNER_TEMP/codex-ci-autofix-prompt.md"',
+        'git show "origin/${BASE_BRANCH}:.github/codex/prompts/ci-autofix.md" > "$RUNNER_TEMP/codex-ci-autofix-prompt.md"',
         'prompt-file: ${{ runner.temp }}/codex-ci-autofix-prompt.md',
         'output-file: ${{ runner.temp }}/codex-ci-autofix-output.md',
         'git diff --binary HEAD > "$RUNNER_TEMP/codex-ci-autofix.patch"',
         "git diff --check HEAD",
-        "python3 template/.project-agent-workflow/scripts/security-static-check.py --changed",
+        boundary_validation_command,
         'path: ${{ runner.temp }}/codex-ci-autofix.patch',
         'path: ${{ runner.temp }}/codex-ci-autofix-output.md',
-        'git apply --index "$RUNNER_TEMP/codex-ci-autofix.patch"',
         'protected=$(git diff --name-only HEAD | grep -E \'^(\\.github/workflows/|\\.github/codex/|\\.env($|\\.)|.*production.*|.*deploy.*)\' || true)',
         'deleted_tests=$(git diff --diff-filter=D --name-only HEAD -- tests || true)',
+        'git status --porcelain=v1 --untracked-files=all',
+        'git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]',
+        'echo "dependency setup changed tracked, staged, or non-ignored untracked paths" >&2',
+        'let mode = "patch-only";',
     )
-    for marker in required:
-        if marker not in text:
-            fail(f"root CI autofix workflow must include boundary guard marker: {marker}")
+    require_markers(path, "workflow", text, required)
+
+    prompt_guard = 'git diff --quiet "origin/${BASE_BRANCH}...HEAD" -- .github/codex/prompts/ci-autofix.md'
+    require_markers(path, "workflow", text, (prompt_guard,))
+    if text.index(prompt_guard) > text.index("- name: Run Codex"):
+        fail(f"{path} must reject pull request prompt changes before Codex execution")
+
+    if re.search(r"(?m)(^\s*max_attempts:\b|^\s*maxAttempts\b|max_attempts)", text):
+        fail(f"{path} must not contain the obsolete commit-count max_attempts guard")
+    for marker in ("direct-push", "validate-patch", "apply-patch", "patch-only-notice", "git push", "createComment", "git commit"):
+        if marker in text:
+            fail(f"{path} contains removed CI autofix write-path marker: {marker}")
+
+    if re.search(r"(?m)^\s*permissions:\s+(?:write|write-all)\s*$", text):
+        fail(f"{path} workflow permissions must not grant write-all or write")
+    if re.search(r"(?m)^\s+[A-Za-z0-9_-]+:\s+write(?:-all)?\s*$", text):
+        fail(f"{path} contains a job-level write permission")
+
+    generate = workflow_job(text, "generate-fix")
+    require_markers(
+        path,
+        "generate-fix job",
+        generate,
+        (
+            "permissions:\n      actions: read\n      contents: read\n      pull-requests: read",
+            prompt_guard,
+        ),
+    )
+    if "contents: write" in generate:
+        fail(f"{path} generate-fix job must not have branch write permission")
+
+
+def require_ci_autofix_root_boundaries() -> None:
+    require_ci_autofix_boundaries(
+        ".github/workflows/codex-ci-autofix.yml",
+        "python3 template/.project-agent-workflow/scripts/security-static-check.py --changed",
+    )
+    require_ci_autofix_boundaries(
+        "template/.github/workflows/codex-ci-autofix.yml.jinja",
+        "python3 .project-agent-workflow/scripts/security-static-check.py --changed",
+    )
+
+
+def require_generated_whitespace_range() -> None:
+    path = "template/.github/workflows/project-agent-workflow.yml"
+    text = read(path)
+    required = (
+        "BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+        "BEFORE_SHA: ${{ github.event.before }}",
+        "EVENT_NAME: ${{ github.event_name }}",
+        "HEAD_SHA: ${{ github.sha }}",
+        "PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+        "REF_TYPE: ${{ github.ref_type }}",
+        "if [ \"$EVENT_NAME\" = pull_request ]; then",
+        'git diff --check "$BASE_SHA...$PR_HEAD_SHA"',
+        '[ "$REF_TYPE" = tag ]',
+        'git diff --check "$HEAD_SHA^..$HEAD_SHA"',
+        '[ "$BEFORE_SHA" != 0000000000000000000000000000000000000000 ]',
+        'git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null',
+        'git diff --check "$BEFORE_SHA..$HEAD_SHA"',
+        "EMPTY_TREE=$(git hash-object -t tree /dev/null)",
+        'git diff --check "$EMPTY_TREE" "$HEAD_SHA"',
+    )
+    require_markers(path, "whitespace range selection", text, required)
+    if "run: git diff --check" in text:
+        fail(f"{path} must not check only the clean worktree")
 
 
 def require_namespaced_reference_paths() -> None:
@@ -945,6 +1200,8 @@ def require_namespaced_reference_paths() -> None:
         if marker in planning:
             fail(f"references/planning.md still contains stale managed path marker: {marker}")
 
+    require_current_plan_manifest_reference(planning)
+
     validation = read("references/validation.md")
     validation_required = (
         "`.project-agent-workflow/scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
@@ -967,6 +1224,143 @@ def require_namespaced_reference_paths() -> None:
     for marker in validation_forbidden:
         if marker in validation:
             fail(f"references/validation.md still contains stale managed path marker: {marker}")
+
+
+def require_current_plan_manifest_reference(planning: str) -> None:
+    required_fields = (
+        "status",
+        "task_types",
+        "review_class",
+        "human_design_required",
+        "human_approval_status",
+        "write_scope",
+        "context_files",
+        "required_specs",
+        "validation",
+        "acceptance",
+        "checked_summary_ja",
+    )
+    optional_fields = ("target_json", "acceptance_focus", "completion_deferred_reason")
+    legacy_fields = ("task_type", "target_files", "expected_output")
+    try:
+        manifest_reference, _ = planning.split("## Lifecycle Scripts", 1)
+        required_section, optional_section = manifest_reference.split(
+            "Optional fields for new active and backlog plans:", 1
+        )
+    except ValueError:
+        fail("references/planning.md missing current active-plan manifest sections")
+    for field in required_fields:
+        if f"- `{field}`" not in required_section:
+            fail(f"references/planning.md missing required active-plan field: {field}")
+    for field in optional_fields:
+        if f"- `{field}`" not in optional_section:
+            fail(f"references/planning.md missing optional active-plan field: {field}")
+    for field in legacy_fields:
+        if f"- `{field}`" in manifest_reference:
+            fail(f"references/planning.md recommends removed active-plan field: {field}")
+        if f"`{field}`" not in optional_section:
+            fail(f"references/planning.md missing legacy archive note for: {field}")
+
+
+def require_browser_automation_contract() -> None:
+    index = read("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja")
+    required_route = (
+        "  browser_automation:",
+        ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
+        ".project-agent-workflow/docs/agent/SPEC_SECURITY.md",
+        ".agents/skills/browser-ops/SKILL.md",
+        ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md",
+    )
+    require_markers("template spec index", "browser route", index, required_route)
+
+    bridge = read("template/.agents/skills/browser-ops/SKILL.md")
+    if ".project-agent-workflow/skills/browser-ops/SKILL.md" not in bridge:
+        fail("browser discovery bridge does not point at managed skill")
+    skill = read("template/.project-agent-workflow/skills/browser-ops/SKILL.md")
+    require_markers(
+        "managed browser skill",
+        "policy reads",
+        skill,
+        (
+            "references/browser-run-policy.md",
+            ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
+            "docs/agent/external-services.yaml",
+        ),
+    )
+    policy = read("template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md")
+    require_markers(
+        "browser backend policy",
+        "compatibility boundary",
+        policy,
+        (
+            "https://blog.cloudflare.com/kitesurf/",
+            "beta",
+            "lower CPU and memory consumption",
+            "configured_write_capable",
+            "exact `write_authorization_rule` match",
+            "current user authorization",
+            "WebGL",
+            "real TLS fingerprints",
+            "ordinary HTTP retrieval",
+            "Cloudflare Browser Run as one service",
+            "distinct project-owned external-service record",
+        ),
+    )
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .agents/skills/browser-ops/SKILL.md" not in ownership:
+        fail("browser discovery bridge is not reserved by Copier ownership")
+    fixture = json.loads(read("tests/fixtures/browser-ops/scenarios.json"))
+    requirements = fixture.get("requirements", [])
+    scenarios = fixture.get("scenarios", [])
+    if not any(item.get("critical") is True for item in requirements):
+        fail("browser scenarios need a critical requirement")
+    classes = {item.get("class") for item in scenarios}
+    if not {"median", "edge", "holdout"}.issubset(classes):
+        fail("browser scenarios need median, edge, and holdout cases")
+    expected = {"authorized Kitesurf", "Chromium fallback", "ordinary HTTP retrieval", "documented unavailable fallback", "deny browser write"}
+    if not expected.issubset({item.get("expected") for item in scenarios}):
+        fail("browser scenarios do not cover backend, plain HTTP, fallback, and write denial")
+    expected_conditions = {
+        "kitesurf-pdf": {
+            "needs_rendered_browser": True,
+            "access": "read",
+            "browser_run_authorized": True,
+            "provider_available": True,
+            "requires_chromium": False,
+        },
+        "chromium-webgl": {
+            "needs_rendered_browser": True,
+            "access": "read",
+            "browser_run_authorized": True,
+            "provider_available": True,
+            "requires_chromium": True,
+        },
+        "plain-http": {"needs_rendered_browser": False},
+        "provider-unavailable": {
+            "needs_rendered_browser": True,
+            "access": "read",
+            "browser_run_authorized": True,
+            "provider_available": False,
+            "requires_chromium": False,
+        },
+        "unauthorized-submit": {
+            "needs_rendered_browser": True,
+            "access": "write",
+            "browser_run_authorized": True,
+            "provider_available": True,
+            "operation_allowlisted": True,
+            "exact_write_authorization_rule": True,
+            "current_user_authorization": False,
+            "requires_chromium": False,
+        },
+    }
+    actual_conditions = {item.get("id"): item.get("conditions") for item in scenarios}
+    if actual_conditions != expected_conditions:
+        fail("browser scenarios have incorrect condition-to-route mappings")
+    for scenario_id in ("kitesurf-pdf", "chromium-webgl"):
+        request = next(item["request"] for item in scenarios if item.get("id") == scenario_id)
+        if "configured Browser Run record" not in request:
+            fail(f"{scenario_id} request lacks configured Browser Run authorization premise")
 
 
 def main() -> int:
@@ -1005,7 +1399,9 @@ def main() -> int:
     require_agent_profile_task()
     require_copier_documentation_contract()
     require_ci_autofix_root_boundaries()
+    require_generated_whitespace_range()
     require_namespaced_reference_paths()
+    require_browser_automation_contract()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")
@@ -1026,6 +1422,9 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_user_communication_alignment()
+    require_sandboxed_plan_worker_alignment()
+    require_hook_logging_parity()
+    require_root_pre_tool_hardening()
     require_orchestration_policy_markers()
     require_template_manifest_complete()
 

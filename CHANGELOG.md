@@ -2,7 +2,14 @@
 
 ## 未リリース
 
+- CI autofix workflow を patch artifact のみを生成する fail-closed 動作へ変更し、保存済みの `direct_push` Copier 回答も外部書き込みなしで互換維持するようにしました。
+- sandboxed plan worker の候補 patch の path 導出で Git object database を一時領域へ隔離し、source object database へ候補 blob を書き込まないようにしました。
+
+## 2026-08-13 v1.3.0
+
+- 逐次 plan worker は GPT-5.3-Codex-Spark / medium を優先し、Codex CLI が利用不能を報告した場合だけ、新しい隔離環境で GPT-5.6-Luna / max を一度使用するようにしました。
 - README の Copier 導入手順を現在の `v1.2.1` に合わせ、バージョンを指定しない最新安定版、固定 tag、開発版の最新コミットの選択方法を区別しました。
+- ルートリポジトリに GitHub の正確な操作、対象、効果を直前に検査し、保護された効果を確認または拒否する task-scoped 外部サービス方針と検査入口を追加しました。
 
 ## v1.2.1
 

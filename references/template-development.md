@@ -37,7 +37,7 @@ Codex helper agents are installed by default and recorded in generated docs/conf
 
 `codex_hooks_mode` separates installed hook scripts from active `.codex/hooks.json` wiring.
 
-External-service modules use generated policy states in `docs/agent/external-services.yaml`; template answers do not authorize MCP, Linear, or graph-memory reads or writes by themselves.
+External-service modules use `docs/agent/external-services.yaml`; the restricted default authorizes no operation by itself, while an explicitly selected task-scoped profile authorizes task-required ordinary operations only after runtime provider configuration and effect checks pass.
 
 Repository-owned:
 

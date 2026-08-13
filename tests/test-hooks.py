@@ -14,11 +14,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOG = ROOT / "template/.project-agent-workflow/hooks/agent_log_event.py"
+ROOT_HOOK_LOG = ROOT / ".project-agent-workflow/hooks/agent_log_event.py"
 IMPORTER = ROOT / "template/.project-agent-workflow/scripts/import-codex-transcript.py"
 MANIFEST_HELPER = ROOT / "template/.project-agent-workflow/scripts/agent_log_manifest.py"
 MANIFEST_CHECKER = ROOT / "template/.project-agent-workflow/scripts/check-agent-log-manifest.py"
 CONTEXT_COMPRESS = ROOT / "template/.project-agent-workflow/scripts/context-compress.sh"
+ROOT_IMPORTER = ROOT / "scripts/import-codex-transcript.py"
+ROOT_MANIFEST_CHECKER = ROOT / "scripts/check-agent-log-manifest.py"
+ROOT_CONTEXT_COMPRESS = ROOT / "scripts/context-compress.sh"
 PRE_TOOL = ROOT / "template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py"
+ROOT_PRE_TOOL = ROOT / ".project-agent-workflow/hooks/pre_tool_hardening_gate.py"
 STOP_REVIEW = ROOT / "template/.project-agent-workflow/hooks/stop_review_gate.py"
 LEGACY_STOP_BRIDGE = ROOT / "template/.codex/hooks/stop_review_gate.py"
 SEMANTIC_GUARD = ROOT / "template/.project-agent-workflow/hooks/semantic_guard_advisory.py"
@@ -99,6 +104,14 @@ def write_sample_codex_transcript(path: Path) -> None:
 
 
 class PreToolHardeningGateTest(unittest.TestCase):
+    def test_root_gate_blocks_nested_tool_input(self) -> None:
+        output = run_hook(
+            ROOT_PRE_TOOL,
+            {"tool_name": "exec_command", "tool_input": {"cmd": "git reset --hard HEAD~1"}},
+        )
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("hard reset", output["reason"])
+
     def test_blocks_destructive_git_reset(self) -> None:
         output = run_hook(PRE_TOOL, {"cmd": "git reset --hard HEAD~1"})
         self.assertEqual(output["decision"], "block")
@@ -129,6 +142,70 @@ class PreToolHardeningGateTest(unittest.TestCase):
 
 
 class AgentLogEventTest(unittest.TestCase):
+    def test_root_pre_tool_use_wires_logging_before_hardening_gate(self) -> None:
+        hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+        entries = hooks["hooks"]["PreToolUse"][0]["hooks"]
+        commands = [entry["command"] for entry in entries]
+        self.assertEqual(len(commands), 2)
+        self.assertIn("agent_log_event.py", commands[0])
+        self.assertIn("pre_tool_hardening_gate.py", commands[1])
+
+    def test_root_hook_wired_from_session_start_config(self) -> None:
+        hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+        for event, matchers in hooks["hooks"].items():
+            for matcher in matchers:
+                hooks_to_check = matcher.get("hooks") or []
+                for entry in hooks_to_check:
+                    command = entry.get("command", "")
+                    if "agent_log_event.py" not in command:
+                        continue
+                    self.assertNotIn("template/.project-agent-workflow/hooks/agent_log_event.py", command)
+                    self.assertIn(".project-agent-workflow/hooks/agent_log_event.py", command)
+
+    def test_root_hook_logs_only_allowlisted_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            payload = {
+                "prompt": "AWS_SECRET_ACCESS_KEY=must-not-persist",
+                "tool_input": "cat /etc/passwd",
+                "tool": "Bash",
+                "tool_name": "Bash",
+                "response": "tool output",
+                "api_key": "sk-abcdefghijklmnopqrstuvwxyz",
+                "session_id": "session-metadata-root",
+                "hook_event_name": "UserPromptSubmit",
+                "tool_result": "should-not-log",
+                "stop_hook_active": True,
+            }
+            output = run_hook(
+                ROOT_HOOK_LOG,
+                payload,
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "test-root-run"},
+                args=["--event", "UserPromptSubmit"],
+            )
+            self.assertEqual(output, {})
+            event_path = repo / ".agent-logs/test-root-run/raw/events.jsonl"
+            manifest_path = repo / ".agent-logs/test-root-run/manifest.json"
+            self.assertTrue(event_path.is_file())
+            self.assertTrue(manifest_path.is_file())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertIn("raw/events.jsonl", manifest["raw_logs"])
+            record = json.loads(event_path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(record["event"], "UserPromptSubmit")
+            self.assertEqual(record["payload"]["session_id"], "session-metadata-root")
+            self.assertEqual(record["payload"]["hook_event_name"], "UserPromptSubmit")
+            self.assertEqual(record["payload"]["tool"], "Bash")
+            self.assertTrue(record["payload"]["stop_hook_active"])
+            self.assertNotIn("transcript_available", record["payload"])
+            self.assertNotIn("prompt", record["payload"])
+            self.assertNotIn("api_key", record["payload"])
+            self.assertNotIn("tool_input", record["payload"])
+            self.assertNotIn("tool_result", record["payload"])
+            self.assertNotIn("response", record["payload"])
+            self.assertNotIn("must-not-persist", event_path.read_text(encoding="utf-8"))
+
     def test_logs_allowlisted_metadata_without_prompt_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -349,6 +426,62 @@ class CodexTranscriptImportTest(unittest.TestCase):
             manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["coverage"]["external_transcript"]["redaction_status"], "pending_review")
             self.assertEqual(manifest["missing_sources"], ["codex_hooks"])
+
+
+class RootLoggingCliDelegationTest(unittest.TestCase):
+    def test_root_importer_and_manifest_checker_self_tests(self) -> None:
+        for command in (
+            ["python3", str(ROOT_IMPORTER), "--self-test"],
+            ["python3", str(ROOT_MANIFEST_CHECKER), "--self-test"],
+        ):
+            with self.subTest(command=command[1]):
+                result = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_root_context_compression_records_a_valid_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            scripts = repo / "scripts"
+            scripts.mkdir()
+            shutil.copyfile(ROOT_CONTEXT_COMPRESS, scripts / "context-compress.sh")
+            shutil.copyfile(ROOT_MANIFEST_CHECKER, scripts / "check-agent-log-manifest.py")
+            template_scripts = repo / "template/.project-agent-workflow/scripts"
+            template_scripts.mkdir(parents=True)
+            shutil.copyfile(MANIFEST_HELPER, template_scripts / "agent_log_manifest.py")
+            shutil.copyfile(MANIFEST_CHECKER, template_scripts / "check-agent-log-manifest.py")
+            source = repo / "source.log"
+            source.write_text("root context compression\n", encoding="utf-8")
+            env = os.environ.copy()
+            env["HEADROOM_DISABLED"] = "1"
+            compress = subprocess.run(
+                ["sh", "scripts/context-compress.sh", "source.log", "root-context-run"],
+                cwd=repo,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(compress.returncode, 0, compress.stderr)
+            manifest = repo / ".agent-logs/root-context-run/manifest.json"
+            self.assertTrue(manifest.is_file())
+            check = subprocess.run(
+                ["python3", "scripts/check-agent-log-manifest.py", str(manifest)],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(check.returncode, 0, check.stderr)
 
 
 class ContextCompressionBoundaryTest(unittest.TestCase):

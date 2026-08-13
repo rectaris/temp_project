@@ -1,0 +1,12 @@
+project_name: broad-external-access
+project_slug: broad-external-access
+project_purpose: Exercise task-scoped default external access.
+primary_language: mixed
+human_report_mode: agent_select_local
+codex_hooks_mode: install_templates
+skillspector_mode: disabled
+external_access_profile: task_scoped_default_allow
+mcp_policy_mode: disabled
+linear_sync_mode: disabled
+graph_memory_mode: disabled
+ci_autofix_mode: disabled

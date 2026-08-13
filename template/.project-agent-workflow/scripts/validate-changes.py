@@ -18,6 +18,10 @@ OUTPUT_LIMIT = 4000
 EXCLUDED_CHANGE_PREFIXES = (".project-agent-workflow-migration/",)
 
 
+class GitQueryError(RuntimeError):
+    """A Git command needed to determine changed files failed."""
+
+
 def git(args: list[str]) -> list[str]:
     result = subprocess.run(
         ["git", *args],
@@ -28,7 +32,7 @@ def git(args: list[str]) -> list[str]:
         check=False,
     )
     if result.returncode != 0:
-        return []
+        raise GitQueryError(f"Git query failed ({result.returncode}): {shlex.join(['git', *args])}")
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -74,11 +78,15 @@ def uses_managed_external_service_format() -> bool:
         text = (ROOT / "docs/agent/external-services.yaml").read_text(encoding="utf-8")
     except OSError:
         return False
-    return (
-        "authentication:" in text
-        and "credential_reference:" in text
-        and "credential_env:" not in text
+    if "credential_env:" in text:
+        return False
+    version_1 = "version: 1" in text and "authentication:" in text and "credential_reference:" in text
+    version_2 = (
+        "version: 2" in text
+        and "access_profile: task_scoped_default_allow" in text
+        and "provider_requirement: runtime_configured" in text
     )
+    return version_1 or version_2
 
 
 def add_command(commands: list[list[str]], command: list[str]) -> None:
@@ -160,7 +168,14 @@ def main(argv: list[str]) -> int:
         parser.error("--all and --staged are mutually exclusive")
 
     mode = "staged" if args.staged else "all" if args.all else "auto"
-    paths, diff_mode = changed_files(mode)
+    try:
+        paths, diff_mode = changed_files(mode)
+    except GitQueryError as error:
+        if args.json:
+            print_json({"changed_files": [], "commands": [], "error": str(error), "status": "git_query_failed"})
+        else:
+            print(f"validate-changes: {error}", file=sys.stderr)
+        return 1
     if not paths:
         if args.json:
             print_json({"changed_files": [], "commands": [], "diff_mode": diff_mode, "status": "no_changes"})

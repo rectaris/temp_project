@@ -48,8 +48,13 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/sequential-plan-orchestrator/agents/openai.yaml",
     ".codex/skills/write-for-reader/SKILL.md",
     ".codex/skills/write-for-reader/agents/openai.yaml",
+    ".codex/skills/browser-ops/SKILL.md",
+    ".codex/skills/browser-ops/agents/openai.yaml",
+    ".codex/skills/browser-ops/references/browser-run-policy.md",
     ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
+    "docs/agent/SPEC_EXTERNAL_SERVICES.md",
+    "docs/agent/external-services.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
     "docs/agent/SPEC_CONTEXT_COMPRESSION.md",
     "docs/agent/SPEC_DECISION_AUDIT.md",
@@ -59,11 +64,13 @@ REQUIRED_ROOT_FILES = [
     "docs/agent/SPEC_USER_COMMUNICATION.md",
     "scripts/agent-log-event.py",
     "scripts/check-agent-log-manifest.py",
+    "scripts/check-external-service-policy.py",
     "scripts/check-codex-toml.py",
     "scripts/complete-plan.sh",
     "scripts/context-compress.sh",
     "scripts/plan_validation_commands.py",
     "scripts/referent-contract.py",
+    "scripts/run-sandboxed-plan-worker.py",
     "scripts/sync-plan-to-linear.sh",
     "scripts/validate-changes.py",
     "scripts/update_agent_model_profiles.py",
@@ -215,6 +222,37 @@ def check_agent_model_profiles() -> None:
                 fail(f"{relative} missing fixed agent contract: {marker}")
 
 
+def check_sandboxed_worker_fallback() -> None:
+    runner = read("scripts/run-sandboxed-plan-worker.py")
+    runner_markers = (
+        'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
+        'DEFAULT_CODEX_REASONING = "medium"',
+        'DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"',
+        'DEFAULT_FALLBACK_CODEX_REASONING = "max"',
+        "def classify_codex_unavailability",
+        'label="fallback"',
+        '"attempts"',
+        '"selected_attempt"',
+        '"fallback_reason"',
+        '"--fallback-codex-model"',
+        '"--fallback-codex-reasoning-effort"',
+        '"--no-model-fallback"',
+    )
+    for marker in runner_markers:
+        if marker not in runner:
+            fail(f"sandboxed plan worker missing model fallback marker: {marker}")
+
+    for relative in (
+        "AGENTS.md",
+        "references/orchestration.md",
+        ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        text = read(relative).lower()
+        for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
+            if marker not in text:
+                fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
+
+
 def check_reusable_skill_parity() -> None:
     for skill in REUSABLE_SKILLS:
         for relative in ("SKILL.md", "agents/openai.yaml"):
@@ -229,6 +267,128 @@ def check_reusable_skill_parity() -> None:
             )
             if root_path.read_text(encoding="utf-8") != template_text:
                 fail(f"root/template reusable skill drift: {skill}/{relative}")
+
+
+def check_browser_routing() -> None:
+    index = read("docs/agent/spec-index.yaml")
+    for marker in (
+        "  browser_automation:",
+        ".codex/skills/browser-ops/SKILL.md",
+        ".codex/skills/browser-ops/references/browser-run-policy.md",
+        "docs/agent/SPEC_SECURITY.md",
+    ):
+        if marker not in index:
+            fail(f"root browser route missing: {marker}")
+    skill = read(".codex/skills/browser-ops/SKILL.md")
+    for marker in (
+        "references/browser-run-policy.md",
+        "template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+        "template/docs/agent/external-services.yaml.jinja",
+    ):
+        if marker not in skill:
+            fail(f"root browser skill missing: {marker}")
+    root_skill = skill.replace(
+        "template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+        ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
+    ).replace(
+        "template/docs/agent/external-services.yaml.jinja",
+        "docs/agent/external-services.yaml",
+    )
+    generated_skill = read("template/.project-agent-workflow/skills/browser-ops/SKILL.md")
+    if root_skill != generated_skill:
+        fail("root/template browser SKILL.md drift")
+
+    root_reference = read(".codex/skills/browser-ops/references/browser-run-policy.md").replace(
+        "template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+        ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md",
+    ).replace(
+        "template/docs/agent/external-services.yaml.jinja",
+        "docs/agent/external-services.yaml",
+    )
+    generated_reference = read(
+        "template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
+    )
+    if root_reference != generated_reference:
+        fail("root/template browser backend-reference drift")
+    if read(".codex/skills/browser-ops/agents/openai.yaml") != read(
+        "template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml"
+    ):
+        fail("root/template browser agents/openai.yaml drift")
+
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .agents/skills/browser-ops/SKILL.md" not in ownership:
+        fail("browser discovery bridge is not reserved by Copier ownership")
+
+
+def check_external_service_policy() -> None:
+    index = read("docs/agent/spec-index.yaml")
+    for marker in (
+        "  external_services:",
+        "docs/agent/SPEC_EXTERNAL_SERVICES.md",
+        "docs/agent/SPEC_SECURITY.md",
+    ):
+        if marker not in index:
+            fail(f"root external-service route missing: {marker}")
+
+    policy = read("docs/agent/external-services.yaml")
+    policy_markers = (
+        "version: 2",
+        "access_profile: task_scoped_default_allow",
+        "provider_requirement: runtime_configured",
+        "task_scope_rule: current_user_request",
+        "  - remote_delete",
+        "  - public_communication",
+        "  - financial_commitment",
+        "  - production_change",
+        "  - access_control_change",
+        "  - credential_material_transfer",
+        "  - secret_persistence",
+        "  - write_credentials_to_untrusted_code",
+        "unclassified_write_effect: require_confirmation",
+        "external_services:",
+        "  github:",
+        "unavailable_fallback:",
+    )
+    for marker in policy_markers:
+        if marker not in policy:
+            fail(f"root external-service policy missing marker: {marker}")
+    for forbidden in ("credential_reference:", "access_token:", "private_key:"):
+        if forbidden in policy:
+            fail(f"root external-service policy contains credential material field: {forbidden}")
+
+    specification = read("docs/agent/SPEC_EXTERNAL_SERVICES.md")
+    specification_markers = (
+        "docs/agent/external-services.yaml",
+        "Provider configuration and authorization are separate facts.",
+        "exact provider, operation, target, complete effect set, payload",
+        "immediately before the call",
+        "git.push",
+        "pull_request.publish",
+        "release.publish",
+        "rectaris/temp_project",
+        "git check-ref-format --branch",
+    )
+    for marker in specification_markers:
+        if marker not in specification:
+            fail(f"root external-service specification missing marker: {marker}")
+
+    entrypoint = read("scripts/check-external-service-policy.py")
+    entrypoint_markers = (
+        "template/.project-agent-workflow/scripts/check-external-service-policy.py",
+        '"--policy"',
+        "allow_abbrev=False",
+        "git.push",
+        "pull_request.publish",
+        "release.publish",
+        "rectaris/temp_project",
+        "check-ref-format",
+        "subprocess.run",
+    )
+    for marker in entrypoint_markers:
+        if marker not in entrypoint:
+            fail(f"root external-service entrypoint missing marker: {marker}")
+    if "str(POLICY)" not in entrypoint or "str(MAINTAINED_CHECKER)" not in entrypoint:
+        fail("root external-service entrypoint must delegate with the fixed root policy")
 
 
 def check_user_communication_contract() -> None:
@@ -281,6 +441,8 @@ def check_namespaced_documentation_targets() -> None:
         if marker not in planning:
             fail(f"references/planning.md missing managed path marker: {marker}")
 
+    require_current_plan_manifest_reference(planning)
+
     validation = read("references/validation.md")
     validation_required = (
         "`.project-agent-workflow/scripts/validate-changes.py`: selects validation commands from staged or unstaged paths.",
@@ -294,6 +456,42 @@ def check_namespaced_documentation_targets() -> None:
     stale_validation = "`scripts/validate-changes.py`: selects validation commands from staged or unstaged paths."
     if stale_validation in validation:
         fail(f"references/validation.md still references stale managed path: {stale_validation}")
+
+
+def require_current_plan_manifest_reference(planning: str) -> None:
+    required_fields = (
+        "status",
+        "task_types",
+        "review_class",
+        "human_design_required",
+        "human_approval_status",
+        "write_scope",
+        "context_files",
+        "required_specs",
+        "validation",
+        "acceptance",
+        "checked_summary_ja",
+    )
+    optional_fields = ("target_json", "acceptance_focus", "completion_deferred_reason")
+    legacy_fields = ("task_type", "target_files", "expected_output")
+    try:
+        manifest_reference, _ = planning.split("## Lifecycle Scripts", 1)
+        required_section, optional_section = manifest_reference.split(
+            "Optional fields for new active and backlog plans:", 1
+        )
+    except ValueError:
+        fail("references/planning.md missing current active-plan manifest sections")
+    for field in required_fields:
+        if f"- `{field}`" not in required_section:
+            fail(f"references/planning.md missing required active-plan field: {field}")
+    for field in optional_fields:
+        if f"- `{field}`" not in optional_section:
+            fail(f"references/planning.md missing optional active-plan field: {field}")
+    for field in legacy_fields:
+        if f"- `{field}`" in manifest_reference:
+            fail(f"references/planning.md recommends removed active-plan field: {field}")
+        if f"`{field}`" not in optional_section:
+            fail(f"references/planning.md missing legacy archive note for: {field}")
 
 
 def check_orchestration_policy() -> None:
@@ -417,7 +615,10 @@ def main() -> int:
     check_gitignore()
     check_agents_rules()
     check_agent_model_profiles()
+    check_sandboxed_worker_fallback()
     check_reusable_skill_parity()
+    check_browser_routing()
+    check_external_service_policy()
     check_user_communication_contract()
     check_namespaced_documentation_targets()
     check_orchestration_policy()

@@ -30,6 +30,7 @@ def main() -> int:
         ("human_report_mode", "Human report mode"),
         ("codex_hooks_mode", "Codex hooks mode"),
         ("skillspector_mode", "SkillSpector mode"),
+        ("external_access_profile", "External access profile"),
         ("ci_autofix_mode", "CI autofix mode"),
     )
     for key, label in profile_answers:
@@ -57,27 +58,110 @@ def main() -> int:
 
     policy = yaml.safe_load((root / "docs/agent/external-services.yaml").read_text(encoding="utf-8"))
     services = policy["external_services"]
-    service_modes = (
-        ("mcp", answers["mcp_policy_mode"]),
-        ("linear_sync", answers["linear_sync_mode"]),
-        ("graph_memory", answers["graph_memory_mode"]),
-    )
-    for service_name, mode in service_modes:
-        service = services[service_name]
-        expected_state = MODE_TO_STATE[mode]
-        require(service["state"] == expected_state, f"{service_name} state mismatch")
-        require(service["authentication"] == "none", f"{service_name} authentication default mismatch")
-        require(service["credential_reference"] == "", f"{service_name} credential reference default mismatch")
+    if answers["external_access_profile"] == "restricted":
+        require(policy["version"] == 1, "restricted profile must render policy version 1")
+        service_modes = (
+            ("mcp", answers["mcp_policy_mode"]),
+            ("linear_sync", answers["linear_sync_mode"]),
+            ("graph_memory", answers["graph_memory_mode"]),
+        )
+        for service_name, mode in service_modes:
+            service = services[service_name]
+            expected_state = MODE_TO_STATE[mode]
+            require(service["state"] == expected_state, f"{service_name} state mismatch")
+            require(service["authentication"] == "none", f"{service_name} authentication default mismatch")
+            require(service["credential_reference"] == "", f"{service_name} credential reference default mismatch")
 
-    expected_profile = (
-        f"MCP=`{services['mcp']['state']}`",
-        f"Linear=`{services['linear_sync']['state']}`",
-        f"graph memory=`{services['graph_memory']['state']}`",
+        browser_run = services["browser_run"]
+        require(browser_run["state"] == "disabled", "browser_run must be disabled by default")
+        require(browser_run["connection"] == "", "browser_run fresh default must not contain connection data")
+        require(browser_run["authentication"] == "none", "browser_run authentication default mismatch")
+        require(browser_run["credential_reference"] == "", "browser_run must not contain credentials")
+        require(
+            not browser_run["allowed_reads"] and not browser_run["allowed_writes"],
+            "browser_run must not authorize operations by default",
+        )
+    else:
+        require(policy["version"] == 2, "task-scoped profile must render policy version 2")
+        require(policy["access_profile"] == "task_scoped_default_allow", "version 2 profile mismatch")
+        require(policy["provider_requirement"] == "runtime_configured", "version 2 provider requirement mismatch")
+        require(policy["task_scope_rule"] == "current_user_request", "version 2 task scope mismatch")
+        require(
+            {
+                "remote_delete",
+                "public_communication",
+                "financial_commitment",
+                "production_change",
+                "access_control_change",
+            }.issubset(policy["confirmation_required_effects"]),
+            "version 2 confirmation effects incomplete",
+        )
+        require(
+            {
+                "credential_material_transfer",
+                "secret_persistence",
+                "write_credentials_to_untrusted_code",
+            }.issubset(policy["denied_effects"]),
+            "version 2 denied effects incomplete",
+        )
+        for service_name in ("mcp", "linear_sync", "graph_memory", "browser_run"):
+            require(services[service_name]["unavailable_fallback"], f"{service_name} fallback missing")
+        external_spec = (
+            root / ".project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+        ).read_text(encoding="utf-8")
+        require(
+            "under version 2, confirm the current user request itself requires it"
+            in external_spec,
+            "version 2 documentation permits lifecycle commands to replace active-request authority",
+        )
+        require(
+            "Any denied effect takes precedence, and `ordinary` applies only when no denied effect applies."
+            in external_spec,
+            "version 2 documentation lets ordinary overlap a denied effect",
+        )
+        mcp_skill = (
+            root / ".project-agent-workflow/skills/mcp-ops/SKILL.md"
+        ).read_text(encoding="utf-8")
+        require(
+            "version 2 requires the current user request itself" in mcp_skill,
+            "generated MCP gate permits lifecycle commands to replace version 2 task authority",
+        )
+
+    browser_route = (root / ".project-agent-workflow/docs/agent/spec-index.yaml").read_text(encoding="utf-8")
+    require("browser_automation:" in browser_route, "generated spec index lacks browser route")
+    require(".agents/skills/browser-ops/SKILL.md" in browser_route, "generated browser route lacks discovery bridge")
+    require((root / ".agents/skills/browser-ops/SKILL.md").is_file(), "generated browser bridge missing")
+    require(
+        (root / ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md").is_file(),
+        "generated browser backend policy missing",
+    )
+    browser_policy = (
+        root / ".project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
+    ).read_text(encoding="utf-8")
+    require(
+        "Cloudflare Browser Run as one service" in browser_policy,
+        "generated browser policy does not keep Browser Run engine authority together",
     )
     require(
-        f"- External service policy states: {', '.join(expected_profile)}" in agents,
-        "managed AGENTS.md external-service state summary does not match generated policy",
+        "distinct project-owned external-service record" in browser_policy,
+        "generated browser policy permits Browser Run authority to leak to another Chromium provider",
     )
+
+    if answers["external_access_profile"] == "restricted":
+        expected_profile = (
+            f"MCP=`{services['mcp']['state']}`",
+            f"Linear=`{services['linear_sync']['state']}`",
+            f"graph memory=`{services['graph_memory']['state']}`",
+        )
+        require(
+            f"- External service policy states: {', '.join(expected_profile)}" in agents,
+            "managed AGENTS.md external-service state summary does not match generated policy",
+        )
+    else:
+        require(
+            "- External service policy schema: version 2" in agents,
+            "managed AGENTS.md does not report the task-scoped version 2 profile",
+        )
 
     config = (root / ".codex/config.toml").read_text(encoding="utf-8")
     require(

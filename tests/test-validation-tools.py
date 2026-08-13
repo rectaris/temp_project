@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,7 @@ VALIDATE_CHANGE_MODULES = (
 SECURITY_RULE_MODULE = ROOT / "template/.project-agent-workflow/scripts/security_rules.py"
 SECURITY_CHECK_MODULE = ROOT / "template/.project-agent-workflow/scripts/security-static-check.py"
 LEGACY_MIGRATOR = ROOT / "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py"
+ROOT_EXTERNAL_SERVICE_CHECK = ROOT / "scripts/check-external-service-policy.py"
 
 
 def load_module(path: Path, name: str) -> ModuleType:
@@ -259,6 +261,281 @@ class PlanValidationCommandsTest(unittest.TestCase):
             self.assertIn("run-plan requires a numbered active plan path", result.stderr)
 
 
+class RootExternalServicePolicyTest(unittest.TestCase):
+    @staticmethod
+    def run_check(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-B", str(ROOT_EXTERNAL_SERVICE_CHECK), *args],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def authorize(
+        self,
+        *,
+        service: str = "github",
+        access: str = "write",
+        operation: str = "git.push",
+        target: str = "rectaris/temp_project:refs/heads/release+candidate",
+        effects: tuple[str, ...] = ("ordinary",),
+        confirmed_target: str | None = None,
+        confirmed_effects: tuple[str, ...] = (),
+        provider_configured: bool = True,
+        task_authorized: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        command = ["authorize", service, access, operation]
+        if provider_configured:
+            command.append("--provider-configured")
+        if task_authorized:
+            command.append("--task-authorized")
+        command.extend(["--target", target])
+        for effect in effects:
+            command.extend(["--effect", effect])
+        if confirmed_target is not None:
+            command.extend(["--confirmed-target", confirmed_target])
+        for effect in confirmed_effects:
+            command.extend(["--confirmed-effect", effect])
+        return self.run_check(*command)
+
+    def assert_rejected(self, *args: str) -> None:
+        result = self.run_check(*args)
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+
+    def test_root_policy_check_and_ordinary_github_reads_and_writes(self) -> None:
+        self.assertEqual(self.run_check("check").returncode, 0)
+        self.assertEqual(self.authorize().returncode, 0)
+        self.assertEqual(
+            self.authorize(
+                target="rectaris/temp_project:refs/tags/release+candidate",
+            ).returncode,
+            0,
+        )
+        self.assertEqual(
+            self.authorize(
+                access="read",
+                operation="repository.read",
+                target="rectaris/temp_project",
+            ).returncode,
+            0,
+        )
+
+    def test_github_public_writes_require_exact_effects_and_confirmation(self) -> None:
+        pull_request_target = "rectaris/temp_project:refs/heads/dev+candidate->refs/heads/main"
+        release_target = "rectaris/temp_project:release:v1.2.3"
+        for operation, target in (
+            ("pull_request.publish", pull_request_target),
+            ("release.publish", release_target),
+        ):
+            with self.subTest(operation=operation):
+                result = self.authorize(
+                    operation=operation,
+                    target=target,
+                    effects=("public_communication",),
+                    confirmed_target=target,
+                    confirmed_effects=("public_communication",),
+                )
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+        self.assert_rejected(
+            *self.authorize_command(
+                operation="pull_request.publish",
+                target=pull_request_target,
+                effects=("ordinary",),
+            )
+        )
+        self.assert_rejected(
+            *self.authorize_command(
+                operation="git.push",
+                target="rectaris/temp_project:refs/heads/main",
+                effects=("public_communication",),
+            )
+        )
+        self.assert_rejected(
+            *self.authorize_command(
+                operation="release.publish",
+                target=release_target,
+                effects=("public_communication",),
+            )
+        )
+        self.assert_rejected(
+            *self.authorize_command(
+                operation="release.publish",
+                target=release_target,
+                effects=("public_communication",),
+                confirmed_target=release_target,
+            )
+        )
+        self.assert_rejected(
+            *self.authorize_command(
+                operation="release.publish",
+                target=release_target,
+                effects=("public_communication",),
+                confirmed_target="rectaris/temp_project:release:other",
+                confirmed_effects=("public_communication",),
+            )
+        )
+        for effect in (
+            "remote_delete",
+            "financial_commitment",
+            "production_change",
+            "access_control_change",
+        ):
+            with self.subTest(effect=effect):
+                target = "rectaris/temp_project"
+                result = self.authorize(
+                    operation=f"operation.{effect}",
+                    target=target,
+                    effects=(effect,),
+                    confirmed_target=target,
+                    confirmed_effects=(effect,),
+                )
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def authorize_command(self, **kwargs: object) -> list[str]:
+        service = str(kwargs.get("service", "github"))
+        access = str(kwargs.get("access", "write"))
+        operation = str(kwargs.get("operation", "git.push"))
+        target = str(kwargs.get("target", "rectaris/temp_project:refs/heads/release+candidate"))
+        effects = tuple(kwargs.get("effects", ("ordinary",)))
+        confirmed_target = kwargs.get("confirmed_target")
+        confirmed_effects = tuple(kwargs.get("confirmed_effects", ()))
+        provider_configured = bool(kwargs.get("provider_configured", True))
+        task_authorized = bool(kwargs.get("task_authorized", True))
+        command = ["authorize", service, access, operation]
+        if provider_configured:
+            command.append("--provider-configured")
+        if task_authorized:
+            command.append("--task-authorized")
+        command.extend(["--target", target])
+        for effect in effects:
+            command.extend(["--effect", str(effect)])
+        if confirmed_target is not None:
+            command.extend(["--confirmed-target", str(confirmed_target)])
+        for effect in confirmed_effects:
+            command.extend(["--confirmed-effect", str(effect)])
+        return command
+
+    def test_denied_effects_and_missing_runtime_facts_fail_closed(self) -> None:
+        self.assert_rejected(*self.authorize_command(provider_configured=False))
+        self.assert_rejected(*self.authorize_command(task_authorized=False))
+        for effect in (
+            "credential_material_transfer",
+            "secret_persistence",
+            "write_credentials_to_untrusted_code",
+        ):
+            with self.subTest(effect=effect):
+                self.assert_rejected(
+                    *self.authorize_command(
+                        effects=(effect,),
+                        confirmed_target="rectaris/temp_project:refs/heads/release+candidate",
+                        confirmed_effects=(effect,),
+                    )
+                )
+        self.assert_rejected(
+            *self.authorize_command(
+                effects=("ordinary", "public_communication"),
+                confirmed_target="rectaris/temp_project:refs/heads/release+candidate",
+                confirmed_effects=("ordinary", "public_communication"),
+            )
+        )
+
+    def test_github_targets_use_exact_repository_and_git_ref_validation(self) -> None:
+        for target in (
+            "rectaris/temp_project:refs/heads/release+candidate",
+            "rectaris/temp_project:refs/tags/release+candidate",
+        ):
+            with self.subTest(target=target):
+                self.assertEqual(self.authorize(target=target).returncode, 0)
+        rejected = (
+            "rectaris/temp_project:refs/heads/release.",
+            "rectaris/temp_project:refs/tags/release.",
+            "rectaris/temp_project:refs/branches/release",
+            "rectaris/temp_project:refs/tags/release:extra",
+        )
+        for target in rejected:
+            with self.subTest(target=target):
+                self.assert_rejected(*self.authorize_command(target=target))
+
+        pull_request_targets = (
+            "rectaris/temp_project:refs/heads/HEAD->refs/heads/main",
+            "rectaris/temp_project:refs/heads/-dev->refs/heads/main",
+            "rectaris/temp_project:refs/heads/dev->refs/heads/main.",
+            "rectaris/temp_project:refs/tags/v1.2.3",
+        )
+        for target in pull_request_targets[:3]:
+            with self.subTest(target=target):
+                self.assert_rejected(
+                    *self.authorize_command(
+                        operation="pull_request.publish",
+                        target=target,
+                        effects=("public_communication",),
+                        confirmed_target=target,
+                        confirmed_effects=("public_communication",),
+                    )
+                )
+        self.assert_rejected(
+            *self.authorize_command(
+                operation="pull_request.publish",
+                target=pull_request_targets[3],
+                effects=("public_communication",),
+                confirmed_target=pull_request_targets[3],
+                confirmed_effects=("public_communication",),
+            )
+        )
+        release_invalid_target = "rectaris/temp_project:release:v1.2.3."
+        self.assert_rejected(
+            *self.authorize_command(
+                operation="release.publish",
+                target=release_invalid_target,
+                effects=("public_communication",),
+                confirmed_target=release_invalid_target,
+                confirmed_effects=("public_communication",),
+            )
+        )
+        self.assert_rejected(
+            *self.authorize_command(
+                service="gh",
+                operation="git.push",
+            )
+        )
+        self.assert_rejected(
+            *self.authorize_command(
+                operation="git.push",
+                target="other/repository:refs/heads/main",
+            )
+        )
+
+    def test_root_rejects_empty_and_whitespace_only_operation_and_target(self) -> None:
+        for operation in ("", " \t"):
+            with self.subTest(operation=repr(operation)):
+                self.assert_rejected(*self.authorize_command(operation=operation))
+        for target in ("", " \t"):
+            with self.subTest(target=repr(target)):
+                self.assert_rejected(*self.authorize_command(target=target))
+
+    def test_root_rejects_unknown_options_help_policy_overrides_and_escaped_help(self) -> None:
+        base = self.authorize_command()
+        negative_commands = {
+            "unknown authorize option": [*base, "--unknown"],
+            "exact --policy": [*base, "--policy", "other-policy.yaml"],
+            "--policy abbreviation": [*base, "--pol", "other-policy.yaml"],
+            "authorize --help": ["authorize", "--help"],
+            "authorize -h": ["authorize", "-h"],
+            "option-like service": ["authorize", "--", "--help", "write", "git.push"],
+            "escaped positional --help": ["authorize", "github", "write", "--", "--help"],
+            "escaped positional -h": ["authorize", "github", "write", "--", "-h"],
+        }
+        for label, command in negative_commands.items():
+            with self.subTest(label=label):
+                self.assert_rejected(*command)
+        for prefix_length in range(1, len("--policy")):
+            with self.subTest(prefix=prefix_length):
+                self.assert_rejected(*base, "--policy"[:prefix_length], "other-policy.yaml")
+
+
 class ValidateChangesTest(unittest.TestCase):
     def test_all_mode_checks_staged_and_unstaged_whitespace(self) -> None:
         for index, (plan_path, validate_path) in enumerate(
@@ -304,6 +581,34 @@ class ValidateChangesTest(unittest.TestCase):
                 paths, mode = module.changed_files("all")
                 self.assertEqual(paths, ["docs/current.md", "src/current.py"])
                 self.assertEqual(mode, "all")
+
+    def test_git_query_failure_is_reported_in_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            scripts = repo / "scripts"
+            scripts.mkdir()
+            for source in (ROOT / "scripts").glob("*.py"):
+                shutil.copy2(source, scripts)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+
+            for validate_path in (
+                scripts / "validate-changes.py",
+                ROOT / "template/.project-agent-workflow/scripts/validate-changes.py",
+            ):
+                result = subprocess.run(
+                    [sys.executable, "-B", str(validate_path), "--all", "--json"],
+                    cwd=repo,
+                    env={**os.environ, "GIT_DIR": str(repo / "missing-git-dir")},
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                with self.subTest(validator=validate_path):
+                    self.assertEqual(result.returncode, 1)
+                    payload = json.loads(result.stdout)
+                    self.assertEqual(payload["status"], "git_query_failed")
+                    self.assertIn("git diff --cached --name-only", payload["error"])
 
     def test_managed_plan_validation_requires_managed_index(self) -> None:
         for index, (plan_path, validate_path) in enumerate(
@@ -357,7 +662,7 @@ class ValidateChangesTest(unittest.TestCase):
             )
 
             policy.write_text(
-                "authentication: environment\ncredential_reference: CURRENT_TOKEN\n",
+                "version: 1\nauthentication: environment\ncredential_reference: CURRENT_TOKEN\n",
                 encoding="utf-8",
             )
             self.assertIn(command, module.select_commands(["docs/agent/external-services.yaml"], "all"))
@@ -368,6 +673,14 @@ class ValidateChangesTest(unittest.TestCase):
                 ),
             )
             self.assertIn(command, module.select_commands([managed_script], "all"))
+
+            policy.write_text(
+                "version: 2\n"
+                "access_profile: task_scoped_default_allow\n"
+                "provider_requirement: runtime_configured\n",
+                encoding="utf-8",
+            )
+            self.assertIn(command, module.select_commands(["docs/agent/external-services.yaml"], "all"))
 
     def test_all_mode_runs_both_whitespace_checks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -420,6 +733,49 @@ class ValidateChangesTest(unittest.TestCase):
             )
             self.assertEqual(second_result["results"][0]["returncode"], 0)
             self.assertEqual(second_result["results"][1]["returncode"], 2)
+
+    def test_no_change_fixture_remains_git_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            scripts = repo / "scripts"
+            scripts.mkdir()
+            shutil.copy2(ROOT / "scripts/validate-changes.py", scripts)
+            shutil.copy2(ROOT / "scripts/plan_validation_commands.py", scripts)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Validation Test",
+                    "-c",
+                    "user.email=validation@example.invalid",
+                    "commit",
+                    "-qm",
+                    "initial",
+                ],
+                cwd=repo,
+                check=True,
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-B", "scripts/validate-changes.py", "--all", "--json"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(json.loads(result.stdout)["status"], "no_changes")
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                check=True,
+            )
+            self.assertEqual(status.stdout, "")
 
     @staticmethod
     def run_validate_all(repo: Path) -> subprocess.CompletedProcess[str]:
@@ -530,6 +886,21 @@ class GeneratedCiTest(unittest.TestCase):
 
 
 class SecurityStaticCheckTest(unittest.TestCase):
+    def test_changed_scope_fails_when_git_query_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            result = subprocess.run(
+                [sys.executable, "-B", str(SECURITY_CHECK_MODULE), "--changed"],
+                cwd=repo,
+                env={**os.environ, "GIT_DIR": str(repo / "missing-git-dir")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("static security check failed: Git query failed", result.stderr)
+
     def test_changed_and_managed_scopes_exclude_unchanged_project_fixtures(self) -> None:
         rules = load_module(SECURITY_RULE_MODULE, "security_rules")
         sys.modules["security_rules"] = rules

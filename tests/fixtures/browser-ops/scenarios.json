@@ -1,0 +1,49 @@
+{
+  "requirements": [
+    {"id": "route-rendered-only", "critical": true},
+    {"id": "classify-write-before-backend", "critical": true},
+    {"id": "preserve-older-policy", "critical": true}
+  ],
+  "scenarios": [
+    {
+      "id": "kitesurf-pdf",
+      "class": "median",
+      "used_for_tuning": true,
+      "request": "With a configured Browser Run record that authorizes this read, create one PDF from a state-independent rendered page.",
+      "conditions": {"needs_rendered_browser": true, "access": "read", "browser_run_authorized": true, "provider_available": true, "requires_chromium": false},
+      "expected": "authorized Kitesurf"
+    },
+    {
+      "id": "chromium-webgl",
+      "class": "edge",
+      "used_for_tuning": true,
+      "request": "With a configured Browser Run record that authorizes this session, inspect a WebGL page in a persistent authenticated session.",
+      "conditions": {"needs_rendered_browser": true, "access": "read", "browser_run_authorized": true, "provider_available": true, "requires_chromium": true},
+      "expected": "Chromium fallback"
+    },
+    {
+      "id": "plain-http",
+      "class": "median",
+      "used_for_tuning": true,
+      "request": "Retrieve a plain URL without rendered state.",
+      "conditions": {"needs_rendered_browser": false},
+      "expected": "ordinary HTTP retrieval"
+    },
+    {
+      "id": "provider-unavailable",
+      "class": "edge",
+      "used_for_tuning": true,
+      "request": "Inspect DOM state with an authorized Browser Run service whose provider is unavailable.",
+      "conditions": {"needs_rendered_browser": true, "access": "read", "browser_run_authorized": true, "provider_available": false, "requires_chromium": false},
+      "expected": "documented unavailable fallback"
+    },
+    {
+      "id": "unauthorized-submit",
+      "class": "holdout",
+      "used_for_tuning": false,
+      "request": "Submit an allowlisted form operation with its exact write rule but without current user authorization.",
+      "conditions": {"needs_rendered_browser": true, "access": "write", "browser_run_authorized": true, "provider_available": true, "operation_allowlisted": true, "exact_write_authorization_rule": true, "current_user_authorization": false, "requires_chromium": false},
+      "expected": "deny browser write"
+    }
+  ]
+}

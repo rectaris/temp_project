@@ -5,6 +5,7 @@ primary_language: typescript
 human_report_mode: agent_select_local
 codex_hooks_mode: enable_local_logging
 skillspector_mode: document_optional
+external_access_profile: restricted
 mcp_policy_mode: document_optional
 linear_sync_mode: document_optional
 graph_memory_mode: document_optional

@@ -67,6 +67,13 @@ _migrations:
       - "--destination"
       - "."
     when: "[[ _stage == 'after' ]]"
+  - version: v1.2.2
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/validate-copier-update.py"
+      - "--destination"
+      - "."
+    when: "[[ _stage == 'after' ]]"
 
 project_name:
   type: str
@@ -121,9 +128,17 @@ skillspector_mode:
     任意手順として生成する: document_optional
   default: "[% if use_skillspector is defined and use_skillspector %]document_optional[% else %]disabled[% endif %]"
 
+external_access_profile:
+  type: str
+  help: 外部サービスの読み書きについて、生成先プロジェクトの既定の認可方法を選んでください。
+  choices:
+    サービスごとに操作を許可リストへ登録する: restricted
+    現在の依頼に必要な通常操作を既定で許可する: task_scoped_default_allow
+  default: "restricted"
+
 mcp_policy_mode:
   type: str
-  help: 外部読み書きを許可せず、任意の MCP 連携方針だけを文書化するか選んでください。
+  help: restricted profile で外部読み書きを許可せず、任意の MCP 連携方針だけを文書化するか選んでください。
   choices:
     文書化しない: disabled
     任意方針として文書化する: document_optional
@@ -131,7 +146,7 @@ mcp_policy_mode:
 
 linear_sync_mode:
   type: str
-  help: 外部読み書きを許可せず、任意の Linear 計画同期方針だけを文書化するか選んでください。
+  help: restricted profile で外部読み書きを許可せず、任意の Linear 計画同期方針だけを文書化するか選んでください。
   choices:
     文書化しない: disabled
     任意方針として文書化する: document_optional
@@ -139,7 +154,7 @@ linear_sync_mode:
 
 graph_memory_mode:
   type: str
-  help: 外部読み書きを許可せず、任意の graph memory 連携方針だけを文書化するか選んでください。
+  help: restricted profile で外部読み書きを許可せず、任意の graph memory 連携方針だけを文書化するか選んでください。
   choices:
     文書化しない: disabled
     任意方針として文書化する: document_optional
@@ -147,9 +162,9 @@ graph_memory_mode:
 
 ci_autofix_mode:
   type: str
-  help: Codex CI autofix workflow を生成するかと、生成する patch の扱いを選んでください。
+  help: Codex CI autofix workflow を生成するか選んでください。direct_push は互換性のために保存されますが、現在は外部書き込みを行わず patch artifact だけを生成します。
   choices:
     生成しない: disabled
     patch artifact だけを生成する: patch_only
-    同一リポジトリの PR branch へ直接 push する: direct_push
+    旧設定を保持して patch artifact だけを生成する: direct_push
   default: "disabled"

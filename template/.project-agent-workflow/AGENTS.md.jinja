@@ -28,7 +28,12 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Agent logging policy and local helper scripts: installed by default
 - Automatic hook event capture: enabled only when Codex hooks mode is `enable_local_logging`
 - Context compression helper: optional, Headroom-aware when available
+- External access profile: `[[ external_access_profile ]]`
+[% if external_access_profile == "task_scoped_default_allow" %]
+- External service policy schema: version 2
+[% else %]
 - External service policy states: MCP=`[[ mcp_state ]]`, Linear=`[[ linear_state ]]`, graph memory=`[[ graph_state ]]`
+[% endif %]
 - Delegate repository-wide work proactively, without waiting for per-task user instruction, when independent helper work is available and materially useful, and split cleanly into non-overlapping helper scopes.
 - Keep final ownership of interpretation, integration, validation acceptance, planning updates, commits, and completion reporting in the main session.
 - Do not delegate short deterministic commands, direct user clarification, final policy judgment, authorization decisions, commit/release decisions, secret handling, external writes, destructive changes, or final reporting unless a separate explicit policy grants that authority.
@@ -65,6 +70,9 @@ Agent entrypoint for `[[ project_slug ]]`.
 - When writing or editing Japanese prose, follow `.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
 - Run decision audit before creating or materially updating active plans when meaningful design, storage, validation, lifecycle, security, or artifact-boundary choices remain open; keep the full audit out of `docs/plan/active`.
 - Use repo-local generic Codex skills as auxiliary workflow guidance; keep project-specific values in `docs/agent/PROJECT_*.md`, other project-owned specs, and `docs/agent/external-services.yaml`.
+- Use the `browser-ops` skill only when a task needs rendered browser behavior; a plain URL lookup stays outside that route.
+- Use `.project-agent-workflow/scripts/run-sandboxed-plan-worker.py` for writable sequential-plan implementation; keep `.codex/agents/sequential_plan_worker.toml` read-only and apply only parent-admitted candidate patches.
+- Keep GPT-5.3-Codex-Spark with medium reasoning as that runner's preferred model. Allow exactly one fresh isolated GPT-5.6-Luna max attempt only when the Codex CLI itself reports a bounded usage limit, rate limit, unavailable-model, or denied-model-access error; do not fall back for other failures.
 - Before introducing a new domain or workflow label in design, investigation, remediation, causal-summary, or naming work, fix its concrete referent and preserve unresolved facts according to `.project-agent-workflow/docs/agent/SPEC_REFERENT_FIRST.md`; use the repo-local `define-referents-first` skill for the operational workflow. In chat naming work, show an unnamed referent and uncertainty stage before any candidate or controlled term.
 - Before submitting a substantive progress update, proposal, explanation, blocking report, or final summary, follow `.project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md` and use the repo-local `write-for-reader` skill for its operational workflow.
 - When creating or updating Codex skills, follow `.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md`.

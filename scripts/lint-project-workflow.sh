@@ -36,7 +36,10 @@ if [ -s "$python_list" ]; then
 fi
 
 python3 "$root/scripts/check-copier-template.py"
+python3 "$root/scripts/check-external-service-policy.py" check
 python3 "$root/scripts/check-root-agent-policy.py" --self-test
+python3 "$root/scripts/import-codex-transcript.py" --self-test
+python3 "$root/scripts/check-agent-log-manifest.py" --self-test
 python3 "$root/tests/test-hooks.py"
 python3 "$root/tests/test-human-report.py"
 python3 "$root/tests/test-agent-model-profiles.py"

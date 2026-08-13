@@ -22,5 +22,5 @@ validation:
 fallback:
 ```
 
-The generated `sequential_plan_worker` contract lives in `.codex/agents/sequential_plan_worker.toml` and `.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md`.
+The generated `sequential_plan_worker` contract lives in `.codex/agents/sequential_plan_worker.toml`, routes writable work through `.project-agent-workflow/scripts/run-sandboxed-plan-worker.py`, and is governed by `.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md`.
 Do not redefine it here as a custom candidate.

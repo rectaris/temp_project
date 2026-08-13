@@ -1,6 +1,6 @@
 ---
 name: linear-ops
-description: Use when reading, drafting, syncing, or completing Linear-backed planning tasks. Requires project-local external-service policy for workspace, team, credentials, allowed operations, and write authorization.
+description: Use when reading, drafting, syncing, or completing Linear-backed planning tasks. Requires the versioned project-local external-service gate, concrete Linear targets, and applicable write-effect authorization.
 ---
 
 # Linear Operations
@@ -10,7 +10,7 @@ Use this skill for Linear-backed plan, issue, status, comment, label, or sync wo
 ## Policy Gate
 
 1. Apply `.agents/skills/mcp-ops/SKILL.md` as the common external-service gate.
-2. Use `external_services.linear_sync` and classify the exact Linear operation as a read or write.
+2. Classify the exact Linear operation as a read or write and apply `external_services.linear_sync` under version 1 or the version 2 task-scoped profile and Linear fallback.
 3. If the common gate denies the call, do not read or write Linear. Keep the local plan workflow active and record sync deferral only when it affects completion.
 4. Apply the Linear-specific rules below only after the common gate passes.
 
@@ -25,7 +25,7 @@ Do not assume workspace, team, status, label, or project identifiers. They must 
 
 ## Write Guardrails
 
-- Require the common write-authorization check to pass for the exact issue, project, comment, label, assignee, or status change.
+- Require the common write check to pass for the exact issue, project, comment, label, assignee, or status change and classify public communication or access-control effects when applicable.
 - Preserve human-authored issue content outside managed regions.
 - Use deterministic source markers or unique local plan IDs for duplicate prevention.
 - Fail closed when credentials, target team/status, labels, permissions, managed-region markers, or duplicate-prevention checks cannot be confirmed.

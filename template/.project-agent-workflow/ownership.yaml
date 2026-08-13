@@ -11,6 +11,7 @@ copier_managed:
   - .agents/skills/plan-archive/SKILL.md
   - .agents/skills/sequential-plan-orchestrator/SKILL.md
   - .agents/skills/write-for-reader/SKILL.md
+  - .agents/skills/browser-ops/SKILL.md
   - .codex/hooks/agent_log_event.py
   - .codex/hooks/pre_tool_hardening_gate.py
   - .codex/hooks/semantic_guard_advisory.py

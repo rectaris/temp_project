@@ -1,6 +1,6 @@
 ---
 name: mcp-ops
-description: Use before reading from or writing to MCP servers or other external tool providers. Applies the common project-local external-service gate, keeps context bounded, and preserves repository files, validation output, and Git history as the implementation source of truth.
+description: Use before reading from or writing to MCP servers or other external tool providers. Applies the versioned project-local external-service gate, task authorization, and effect boundaries while preserving repository evidence as the implementation source of truth.
 ---
 
 # MCP Operations
@@ -9,50 +9,33 @@ Use this skill before every MCP or external-provider read or write.
 
 ## Common External-Service Gate
 
-1. Read `docs/agent/SPEC_EXTERNAL_SERVICES.md` when present.
-2. Read `docs/agent/external-services.yaml` when present.
-3. Run `python3 scripts/check-external-service-policy.py check`.
-4. Locate the exact service entry, normally `external_services.mcp`.
-5. Deny the call when policy or the service entry is missing, or when `state` is `disabled` or `documented`.
-6. Require a non-empty `connection`.
-7. Validate `authentication` and `credential_reference` as one pair:
-   - `none` requires an empty `credential_reference`.
-   - `environment` requires a non-empty environment-variable name.
-   - `platform` requires `binding:`, `secret:`, or `vault:` followed by a non-secret platform identifier.
-   - Any other value or credential material stored in `credential_reference` fails the gate.
-8. Classify the exact requested operation as a read or write and require it in `allowed_reads` or `allowed_writes`.
-9. Run `python3 scripts/check-external-service-policy.py authorize <service> read <operation>` before a read.
-10. For a write, run the write-authorization check below and then run `python3 scripts/check-external-service-policy.py authorize <service> write <operation> --authorization-rule "<exact configured rule>"`.
+1. Read `docs/agent/SPEC_EXTERNAL_SERVICES.md` and `docs/agent/external-services.yaml`.
+2. Run `python3 scripts/check-external-service-policy.py check`.
+3. Identify policy schema version 1 or 2 before authorizing the exact provider operation.
+4. Confirm the active environment has configured and authenticated the requested provider; provider availability does not authorize an operation.
+5. Classify the exact operation as a read or write; version 1 requires the current user request or documented lifecycle command to authorize it, while version 2 requires the current user request itself.
+6. For version 1, require the configured service state, operation allowlist, and write-authorization rule.
+7. For version 2, apply the task-scoped default, identify the exact target and every applicable effect for each provider call, require exact target-and-effect confirmation where configured, and give every denied effect precedence before reads as well as writes.
+8. Run the version-appropriate `authorize` command immediately before the provider call.
 
-The external-service gate means this common pre-call procedure.
-If any check is missing, ambiguous, stale, or mismatched, do not call the provider.
-Continue from local files when safe and report the fallback only when it affects scope, confidence, or completion.
+If any fact is missing, ambiguous, stale, or mismatched, do not call the provider.
+Use the configured local fallback and report it only when it affects scope, confidence, validation, or completion.
 
-## Write-Authorization Check
+## Version 2 Provider-Call Check
 
-The write-authorization check passes only when all of these facts are confirmed for the same proposed provider call:
+A version 2 read passes only when the same proposed provider call has a configured provider, current-task authorization, an exact target, no applicable denied effect, and the `ordinary` effect classification.
 
-- `state` is `configured_write_capable`.
-- The exact operation is listed in `allowed_writes`.
-- The authentication pair passes the common gate.
-- `write_authorization_rule` is non-empty.
-- The current user request or the lifecycle command named by `write_authorization_rule` authorizes the exact service, target, and side effect.
-- `dry_run_or_local_validation` is non-empty and its documented check succeeded for the same target and payload.
-- The target identifier, intended state, and unavailable fallback are known.
+A version 2 ordinary write passes only when the same proposed provider call has a configured provider, current-task authorization, an exact target, and the `ordinary` effect classification.
 
-Fail closed when any fact cannot be confirmed.
-Do not treat a previous user request, a broad project goal, read authorization, or a dry-run result as write authorization.
+A confirmation-required or unclassified write additionally requires current-user confirmation whose target and effect exactly match the proposed call.
 
-## Read Strategy
+Credential-material transfer, secret persistence, and exposing write credentials to untrusted code always fail before the provider call. Declare every applicable effect; `ordinary` is invalid whenever any denied effect applies.
 
-- Prefer local repository files, specs, validation output, and Git history when they can answer the question.
-- Start with the narrowest query that can answer the current decision.
-- Prefer summaries, IDs, statuses, labels, timestamps, and small result sets before full bodies or schemas.
-- Stop querying once the retrieved context is enough for the local change or report.
-- Summarize relevant external findings before applying them to plans, code, or docs.
+Re-run the check whenever the provider, operation, target, effect, payload, or user request changes.
 
-## Write Boundary
+## Context Boundary
 
-- Apply specialized service rules only after this common gate passes.
-- Re-run the write-authorization check when the target, payload, operation, user request, or lifecycle state changes.
-- Never send or store secrets, credentials, private config, `.env` contents, raw personal data, generated dependency artifacts, build artifacts, or temporary task logs unless the project policy explicitly permits that data class.
+- Send only context required for the current task.
+- Prefer compact external reads and stop when repository work has enough evidence.
+- Keep repository files, tests, validation output, and Git history as the implementation source of truth.
+- Never send secrets, credentials, private configuration, `.env` contents, unrelated personal data, build artifacts, or temporary task logs as provider payloads.

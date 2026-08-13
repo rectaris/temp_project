@@ -58,6 +58,10 @@ RULES = [
 ]
 
 
+class GitQueryError(RuntimeError):
+    """A Git command needed to determine changed files failed."""
+
+
 def git_paths(args: list[str]) -> list[Path]:
     result = subprocess.run(
         ["git", *args, "-z"],
@@ -67,7 +71,8 @@ def git_paths(args: list[str]) -> list[Path]:
         check=False,
     )
     if result.returncode != 0:
-        return []
+        command = " ".join(["git", *args, "-z"])
+        raise GitQueryError(f"Git query failed ({result.returncode}): {command}")
     return [Path(os.fsdecode(value)) for value in result.stdout.split(b"\0") if value]
 
 
@@ -113,7 +118,12 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     selected_scope = "managed" if args.managed else "changed" if args.changed else "repository"
     findings: list[str] = []
-    for path in iter_files(selected_scope):
+    try:
+        files = iter_files(selected_scope)
+    except GitQueryError as error:
+        print(f"static security check failed: {error}", file=sys.stderr)
+        return 1
+    for path in files:
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
