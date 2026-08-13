@@ -59,7 +59,7 @@ validation:
   - python3 scripts/validate-changes.py --all
   - git diff --check
 acceptance:
-  - Record bounded telemetry in candidate manifests: attempt duration, total runner duration measured after candidate collection and admission checks, model starts, availability failures, skipped known-unavailable starts, candidate generations, parent-review rejections, correction rounds, full-validation counts, and selected implementation risk and ambiguity, without storing prompts, output bodies, environment values, or credentials.
+  - Extend bounded telemetry with parent-review rejection, correction-round, focused-validation, and authoritative-validation events without storing prompts, output bodies, environment values, or credentials.
   - Define focused validation as plan-declared deterministic checks for one admissible implementation slice and authoritative validation as the complete parent-owned acceptance suite.
   - Perform candidate admission and parent diff and critical-invariant review before focused validation, then run authoritative validation only for a candidate that is otherwise acceptable.
   - Keep candidate-controlled dependency, build, test, hook, Git configuration, and validation definitions outside any immutable admission authority; final validation strength and configured fail-closed behavior must not be weakened.
@@ -71,10 +71,11 @@ acceptance:
   - Preserve the prohibition on helper-owned final interpretation, authorization, external writes, destructive operations, validation acceptance, commit, release, and completion reporting.
   - Add deterministic event-count fixtures for historical plan shapes equivalent to 062, 064, and 070; require no more than three implementation generations, one known-unavailable preferred-model start per orchestration run, and one authoritative full-suite execution per accepted candidate.
   - Add executable boundary tests for every telemetry counter and duration, including custom workers and correction lineage, and require schema-bounded numeric values that cannot be supplied by candidate-controlled files.
+  - Use fixed median, edge, negative, and holdout scenario sets; keep the holdout set outside reusable implementation prompts and fail evaluation when any scenario class is absent.
   - Add evaluation criteria requiring at least 30 percent lower median model starts and time-to-accepted-patch against a versioned recorded representative baseline, while keeping p95 time-to-accepted-patch no more than 10 percent worse than that baseline and leaving zero unresolved High or Medium independent-review findings.
   - Keep root and generated plan parsing, validation policy, orchestration policy, Skills, tests, and Copier update behavior aligned.
   - Preserve non-destructive Copier updates and add negative coverage for rejection files, unresolved conflicts, and unclassified tracked-file deletion.
-checked_summary_ja: 候補reviewを全検証より前へ移し、局所検証と最終検証を分離して3世代後の再設計または親実装を義務化した。
+checked_summary_ja: 候補reviewを全検証より前へ移し、局所検証と最終検証を分離し、固定scenarioでtelemetryと速度改善を評価して3世代後の再設計または親実装を義務化した。
 
 ## Context
 
@@ -95,8 +96,8 @@ The current worker prompt runs every validation command, while the parent must s
 
 - [ ] Add focused-validation plan parsing and staged worker/parent guidance.
 - [ ] Add bounded strategy-change and parent-implementation policy with negative coverage.
-- [ ] Add representative event-count and relative-performance fixtures.
-- [ ] Add bounded manifest telemetry and executable counter and duration-boundary tests.
+- [ ] Add fixed median, edge, negative, and holdout event-count fixtures and relative-performance evaluation.
+- [ ] Extend bounded manifest telemetry for correction, review, and validation events and add executable boundary tests.
 - [ ] Run all required validation, archive, and commit.
 
 ## Validation Notes
