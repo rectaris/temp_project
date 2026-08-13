@@ -76,6 +76,8 @@ Earlier candidates showed that routing code, fixed evaluation, and generated upd
 
 ## Decisions
 
+- The user explicitly authorized parent-session implementation for plans 071 through 075; do not start another writable sequential worker for this sequence.
+- Parent implementation remains bounded by this plan's write scope and all declared validation and lifecycle gates.
 - Treat value-gated routing and its fixed evaluation as one independently acceptable invariant.
 - Keep runtime availability fallback state, candidate correction, and validation ordering in later plans.
 - Preserve all established fixture safeguards while extending the routing matrix.

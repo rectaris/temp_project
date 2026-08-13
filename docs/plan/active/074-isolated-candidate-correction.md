@@ -72,6 +72,8 @@ When parent review rejects one part of a candidate, the only available implement
 
 ## Decisions
 
+- The user explicitly authorized parent-session implementation for plans 071 through 075; do not start another writable sequential worker for this sequence.
+- Parent implementation remains bounded by this plan's write scope and all declared validation and lifecycle gates.
 - Define isolated correction as verified prior-patch repair in a fresh clone that emits a new aggregate patch.
 - Use manifest lineage and a parent-authored correction brief instead of editing the active plan after every local rejection.
 - Keep the source repository and prior attempt state outside the correction worker's writable and readable boundaries.

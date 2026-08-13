@@ -47,6 +47,8 @@ The update harness must be committed before plan 072 changes generated orchestra
 
 ## Decisions
 
+- The user explicitly authorized parent-session implementation for plans 071 through 075; do not start another writable sequential worker for this sequence.
+- Parent implementation remains bounded by this plan's write scope and all declared validation and lifecycle gates.
 - Prepare update-source coverage as an independently acceptable prerequisite.
 - Assert current semantics in plan 071; plan 072 updates those assertions together with routing behavior.
 - Do not change routing policy, the runner, generated artifacts, or fixed evaluation fixtures in this slice.

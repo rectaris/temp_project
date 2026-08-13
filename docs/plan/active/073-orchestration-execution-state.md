@@ -68,6 +68,8 @@ Availability state and execution telemetry must exist before correction and stag
 
 ## Decisions
 
+- The user explicitly authorized parent-session implementation for plans 071 through 075; do not start another writable sequential worker for this sequence.
+- Parent implementation remains bounded by this plan's write scope and all declared validation and lifecycle gates.
 - Keep availability memory ephemeral, explicitly run-bound, size-bounded, and independent from semantic candidate acceptance.
 - Produce telemetry in the parent-controlled runner rather than candidate-controlled files.
 - Establish the initial-generation telemetry schema before plans 074 and 075 add correction, review, and validation events.

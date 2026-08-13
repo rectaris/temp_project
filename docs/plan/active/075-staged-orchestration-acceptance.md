@@ -85,6 +85,8 @@ The current worker prompt runs every validation command, while the parent must s
 
 ## Decisions
 
+- The user explicitly authorized parent-session implementation for plans 071 through 075; do not start another writable sequential worker for this sequence.
+- Parent implementation remains bounded by this plan's write scope and all declared validation and lifecycle gates.
 - Review admission, diff, and critical invariants before starting the post-admission review-clone validation operation.
 - Keep focused validation distinct from authoritative validation and keep the complete suite parent-owned.
 - End automatic candidate work after one initial generation and two isolated corrections.
