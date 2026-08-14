@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-from validation_tools_support import ROOT, ROOT_EXTERNAL_SERVICE_CHECK
+from .support import ROOT, ROOT_EXTERNAL_SERVICE_CHECK
 
 
 class RootExternalServicePolicyTest(unittest.TestCase):

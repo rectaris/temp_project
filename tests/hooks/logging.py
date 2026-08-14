@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hook_test_support import (
+from .support import (
     AGENT_LOG,
     IMPORTER,
     MANIFEST_CHECKER,

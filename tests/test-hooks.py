@@ -5,14 +5,14 @@ from __future__ import annotations
 
 import unittest
 
-from hook_tests_context import ContextCompressionBoundaryTest
-from hook_tests_gates import PreToolHardeningGateTest, StopReviewGateTest
-from hook_tests_logging import (
+from hooks.context import ContextCompressionBoundaryTest
+from hooks.gates import PreToolHardeningGateTest, StopReviewGateTest
+from hooks.logging import (
     AgentLogEventTest,
     CodexTranscriptImportTest,
     RootLoggingCliDelegationTest,
 )
-from hook_tests_semantic import SemanticGuardAdvisoryTest
+from hooks.semantic import SemanticGuardAdvisoryTest
 
 
 if __name__ == "__main__":

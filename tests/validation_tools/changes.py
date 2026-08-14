@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from validation_tools_support import PLAN_COMMAND_MODULES, ROOT, VALIDATE_CHANGE_MODULES, load_module
+from .support import PLAN_COMMAND_MODULES, ROOT, VALIDATE_CHANGE_MODULES, load_module
 
 
 class ValidateChangesTest(unittest.TestCase):

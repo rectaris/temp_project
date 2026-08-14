@@ -5,14 +5,14 @@ from __future__ import annotations
 
 import unittest
 
-from validation_tools_changes import ValidateChangesTest
-from validation_tools_external import RootExternalServicePolicyTest
-from validation_tools_generated import (
+from validation_tools.changes import ValidateChangesTest
+from validation_tools.external import RootExternalServicePolicyTest
+from validation_tools.generated import (
     GeneratedCiTest,
     LegacyExternalServiceMigrationTest,
     SecurityStaticCheckTest,
 )
-from validation_tools_plan import PlanValidationCommandsTest
+from validation_tools.plan import PlanValidationCommandsTest
 
 
 if __name__ == "__main__":

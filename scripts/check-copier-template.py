@@ -13,7 +13,7 @@ from typing import Any
 from itertools import combinations, product
 from pathlib import Path
 
-from copier_template_inventory import (
+from project_workflow.copier_inventory import (
     CONDITIONAL_GENERATED,
     EXPECTED_CHOICE_VALUES,
     EXPECTED_DEFAULT_VALUES,

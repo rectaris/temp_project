@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hook_test_support import CONTEXT_COMPRESS, MANIFEST_CHECKER, MANIFEST_HELPER
+from .support import CONTEXT_COMPRESS, MANIFEST_CHECKER, MANIFEST_HELPER
 
 
 class ContextCompressionBoundaryTest(unittest.TestCase):

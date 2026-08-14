@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 AGENT_LOG = ROOT / "template/.project-agent-workflow/hooks/agent_log_event.py"
 ROOT_HOOK_LOG = ROOT / ".project-agent-workflow/hooks/agent_log_event.py"
 IMPORTER = ROOT / "template/.project-agent-workflow/scripts/import-codex-transcript.py"

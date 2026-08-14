@@ -14,7 +14,7 @@ from pathlib import Path
 from types import ModuleType
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PLAN_COMMAND_MODULES = (
     ROOT / "scripts/plan_validation_commands.py",
     ROOT / "template/.project-agent-workflow/scripts/plan_validation_commands.py",

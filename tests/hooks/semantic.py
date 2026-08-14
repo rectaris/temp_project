@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hook_test_support import SEMANTIC_GUARD, run_hook
+from .support import SEMANTIC_GUARD, run_hook
 
 
 class SemanticGuardAdvisoryTest(unittest.TestCase):

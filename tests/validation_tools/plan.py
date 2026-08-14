@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from validation_tools_support import PLANLIB, PLAN_COMMAND_MODULES, ROOT, load_module
+from .support import PLANLIB, PLAN_COMMAND_MODULES, ROOT, load_module
 
 
 class PlanValidationCommandsTest(unittest.TestCase):

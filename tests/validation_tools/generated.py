@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from validation_tools_support import (
+from .support import (
     LEGACY_MIGRATOR,
     ROOT,
     SECURITY_CHECK_MODULE,

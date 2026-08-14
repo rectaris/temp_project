@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hook_test_support import LEGACY_STOP_BRIDGE, PRE_TOOL, ROOT_PRE_TOOL, STOP_REVIEW, run_hook
+from .support import LEGACY_STOP_BRIDGE, PRE_TOOL, ROOT_PRE_TOOL, STOP_REVIEW, run_hook
 
 
 class PreToolHardeningGateTest(unittest.TestCase):
