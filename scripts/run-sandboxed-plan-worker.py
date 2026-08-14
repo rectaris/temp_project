@@ -25,6 +25,8 @@ from typing import Any, Sequence
 
 
 SCHEMA_VERSION = 1
+DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1
+DEPENDENCY_SNAPSHOT_MAX_BYTES = 16_384
 DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
 DEFAULT_CODEX_REASONING = "medium"
 DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"
@@ -398,6 +400,380 @@ def hash_file(path: Path) -> str:
         while chunk := handle.read(SHA256_BUFFER):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def digest_tree(root: Path) -> str:
+    """Hash one dependency tree while rejecting file types and links unsafe to bind."""
+    if root.is_symlink() or not root.is_dir():
+        raise RunnerError(f"dependency tree must be a regular directory: {root}")
+    digest = hashlib.sha256()
+    pending = [root]
+    entries: list[Path] = []
+    while pending:
+        directory = pending.pop()
+        try:
+            children = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError as exc:
+            raise RunnerError(f"could not scan dependency tree: {exc}") from exc
+        for child in children:
+            path = Path(child.path)
+            entries.append(path)
+            if child.is_dir(follow_symlinks=False):
+                pending.append(path)
+    for path in sorted(entries, key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        metadata = path.lstat()
+        if metadata.st_mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX):
+            raise RunnerError(
+                f"dependency snapshot contains unsupported special permission bits: {relative}"
+            )
+        if stat.S_ISDIR(metadata.st_mode):
+            kind = b"d"
+            payload = b""
+        elif stat.S_ISREG(metadata.st_mode):
+            if metadata.st_nlink != 1:
+                raise RunnerError(f"dependency snapshot contains a hard-linked file: {relative}")
+            kind = b"f"
+            payload = bytes.fromhex(hash_file(path))
+        elif stat.S_ISLNK(metadata.st_mode):
+            kind = b"l"
+            target = os.readlink(path)
+            if os.path.isabs(target):
+                raise RunnerError(f"dependency snapshot contains an absolute symlink: {relative}")
+            resolved = (path.parent / target).resolve(strict=False)
+            if not path_is_within(root, resolved):
+                raise RunnerError(f"dependency snapshot symlink escapes node_modules: {relative}")
+            payload = os.fsencode(target)
+        else:
+            raise RunnerError(f"dependency snapshot contains an unsupported file type: {relative}")
+        encoded = relative.encode("utf-8", errors="surrogateescape")
+        digest.update(kind)
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        digest.update((stat.S_IMODE(metadata.st_mode) & 0o777).to_bytes(2, "big"))
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def load_json_object(path: Path, label: str) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise RunnerError(f"{label} must be a regular file: {path}")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunnerError(f"{label} is not valid UTF-8 JSON: {path}") from exc
+    if not isinstance(value, dict):
+        raise RunnerError(f"{label} must contain one JSON object: {path}")
+    return value
+
+
+def validate_npm_dependency_tree(repo_root: Path, dependency_tree: Path) -> None:
+    package_json = load_json_object(repo_root / "package.json", "package.json")
+    root_lock = load_json_object(repo_root / "package-lock.json", "package-lock.json")
+    hidden_lock = load_json_object(
+        dependency_tree / ".package-lock.json", "node_modules hidden lockfile"
+    )
+    root_packages = root_lock.get("packages")
+    installed_packages = hidden_lock.get("packages")
+    if not isinstance(root_packages, dict) or not isinstance(installed_packages, dict):
+        raise RunnerError("npm lockfiles must contain package record objects")
+    root_record = root_packages.get("")
+    if not isinstance(root_record, dict):
+        raise RunnerError("package-lock.json is missing the root package record")
+    for field in (
+        "name",
+        "version",
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ):
+        if package_json.get(field) != root_record.get(field):
+            raise RunnerError(f"package.json does not match package-lock.json root field: {field}")
+    installed_paths: set[str] = set()
+    for raw_path, record in installed_packages.items():
+        if not isinstance(raw_path, str) or not raw_path.startswith("node_modules/"):
+            raise RunnerError(f"unsupported npm dependency record path: {raw_path!r}")
+        if not isinstance(record, dict) or root_packages.get(raw_path) != record:
+            raise RunnerError(f"installed npm package record differs from package-lock.json: {raw_path}")
+        relative = raw_path.removeprefix("node_modules/")
+        package_dir = dependency_tree / relative
+        if package_dir.is_symlink() or not package_dir.is_dir():
+            raise RunnerError(f"installed npm package directory is missing or linked: {raw_path}")
+        installed_manifest = load_json_object(package_dir / "package.json", f"{raw_path}/package.json")
+        if installed_manifest.get("version") != record.get("version"):
+            raise RunnerError(f"installed npm package version differs from its lock record: {raw_path}")
+        installed_paths.add(raw_path)
+    for raw_path, record in root_packages.items():
+        if raw_path == "" or raw_path in installed_paths:
+            continue
+        if not isinstance(raw_path, str) or not raw_path.startswith("node_modules/"):
+            raise RunnerError(f"npm workspaces and non-node_modules lock paths are unsupported: {raw_path!r}")
+        if not isinstance(record, dict) or record.get("optional") is not True:
+            raise RunnerError(f"required npm package is absent from the dependency tree: {raw_path}")
+    module_roots = [dependency_tree]
+    physical_packages: set[str] = set()
+    while module_roots:
+        module_root = module_roots.pop()
+        for child in sorted(module_root.iterdir(), key=lambda item: item.name):
+            if child.name.startswith("."):
+                continue
+            candidates = (
+                sorted(child.iterdir(), key=lambda item: item.name)
+                if child.name.startswith("@") and child.is_dir() and not child.is_symlink()
+                else [child]
+            )
+            for package_dir in candidates:
+                if package_dir.is_symlink() or not package_dir.is_dir():
+                    raise RunnerError(f"dependency tree contains an unsupported package entry: {package_dir}")
+                relative = "node_modules/" + package_dir.relative_to(dependency_tree).as_posix()
+                physical_packages.add(relative)
+                nested = package_dir / "node_modules"
+                if nested.is_dir() and not nested.is_symlink():
+                    module_roots.append(nested)
+    unexpected = sorted(physical_packages - installed_paths)
+    if unexpected:
+        raise RunnerError(
+            "dependency tree contains packages absent from its hidden lockfile: "
+            + ", ".join(unexpected)
+        )
+    digest_tree(dependency_tree)
+
+
+def validate_dependency_snapshot_manifest(payload: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "package_manager",
+        "source_head",
+        "package_json_sha256",
+        "package_lock_sha256",
+        "dependency_path",
+        "tree_sha256",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise RunnerError("dependency snapshot manifest has an invalid exact field shape")
+    if payload["schema_version"] != DEPENDENCY_SNAPSHOT_SCHEMA_VERSION:
+        raise RunnerError("dependency snapshot manifest has an unsupported schema version")
+    if payload["package_manager"] != "npm" or payload["dependency_path"] != "node_modules":
+        raise RunnerError("dependency snapshot manifest must describe npm node_modules")
+    for key in ("package_json_sha256", "package_lock_sha256", "tree_sha256"):
+        if not isinstance(payload[key], str) or re.fullmatch(r"[0-9a-f]{64}", payload[key]) is None:
+            raise RunnerError(f"dependency snapshot manifest has an invalid digest field: {key}")
+    if not isinstance(payload["source_head"], str) or re.fullmatch(
+        r"(?:[0-9a-f]{40}|[0-9a-f]{64})", payload["source_head"]
+    ) is None:
+        raise RunnerError("dependency snapshot source_head must be a full Git object id")
+    return payload
+
+
+def verify_dependency_snapshot(
+    repo_root: Path, manifest_path: Path, git_bin: str | None = None
+) -> dict[str, Any]:
+    manifest_path = manifest_path.expanduser()
+    if not manifest_path.is_absolute():
+        manifest_path = (Path.cwd() / manifest_path).absolute()
+    ensure_no_symlink_components(manifest_path)
+    if path_is_within(repo_root, manifest_path):
+        raise RunnerError("dependency snapshot manifest must be outside the source repository")
+    try:
+        manifest_fd = os.open(
+            manifest_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+    except OSError as exc:
+        raise RunnerError(f"could not open dependency snapshot manifest: {exc}") from exc
+    try:
+        before_read = os.fstat(manifest_fd)
+        if not stat.S_ISREG(before_read.st_mode) or before_read.st_nlink != 1:
+            raise RunnerError("dependency snapshot manifest must be a single-link regular file")
+        if before_read.st_size > DEPENDENCY_SNAPSHOT_MAX_BYTES:
+            raise RunnerError("dependency snapshot manifest exceeds the byte bound")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(
+                manifest_fd,
+                min(4096, DEPENDENCY_SNAPSHOT_MAX_BYTES + 1 - total),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > DEPENDENCY_SNAPSHOT_MAX_BYTES:
+                raise RunnerError("dependency snapshot manifest exceeds the byte bound")
+        after_read = os.fstat(manifest_fd)
+        if (
+            target_identity(before_read) != target_identity(after_read)
+            or before_read.st_ctime_ns != after_read.st_ctime_ns
+            or after_read.st_nlink != 1
+        ):
+            raise RunnerError("dependency snapshot manifest changed while it was read")
+        raw = b"".join(chunks)
+    finally:
+        os.close(manifest_fd)
+    try:
+        payload = validate_dependency_snapshot_manifest(json.loads(raw.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunnerError("dependency snapshot manifest is not valid UTF-8 JSON") from exc
+    if hash_file(repo_root / "package.json") != payload["package_json_sha256"]:
+        raise RunnerError("dependency snapshot package.json digest differs from the source repository")
+    if hash_file(repo_root / "package-lock.json") != payload["package_lock_sha256"]:
+        raise RunnerError("dependency snapshot package-lock.json digest differs from the source repository")
+    if git_bin is None:
+        git_bin = require_executable("git", "git")
+    if git_text(repo_root, git_bin, "rev-parse", "HEAD") != payload["source_head"]:
+        raise RunnerError("dependency snapshot source HEAD differs from the source repository")
+    dependency_tree = manifest_path.parent / payload["dependency_path"]
+    validate_npm_dependency_tree(repo_root, dependency_tree)
+    if digest_tree(dependency_tree) != payload["tree_sha256"]:
+        raise RunnerError("dependency snapshot tree digest does not match its manifest")
+    return {**payload, "manifest_path": manifest_path, "tree_path": dependency_tree}
+
+
+def create_private_dependency_output_dir(repo_root: Path, requested: str) -> tuple[Path, int, tuple[int, int]]:
+    output_dir = Path(requested).expanduser()
+    if not output_dir.is_absolute():
+        output_dir = (Path.cwd() / output_dir).absolute()
+    ensure_no_symlink_components(output_dir.parent)
+    if path_is_within(repo_root, output_dir):
+        raise RunnerError("dependency snapshot output directory must be outside the source repository")
+    if not output_dir.parent.is_dir():
+        raise RunnerError("dependency snapshot output parent must already be a directory")
+    try:
+        output_dir.mkdir(mode=0o700, exist_ok=False)
+        descriptor = os.open(
+            output_dir,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+    except FileExistsError as exc:
+        raise RunnerError("dependency snapshot output directory must not already exist") from exc
+    except OSError as exc:
+        raise RunnerError(f"could not create dependency snapshot output directory: {exc}") from exc
+    metadata = os.fstat(descriptor)
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        os.close(descriptor)
+        raise RunnerError("dependency snapshot output directory must be runner-owned mode 0700")
+    return output_dir, descriptor, (metadata.st_dev, metadata.st_ino)
+
+
+def require_directory_identity(path: Path, identity: tuple[int, int]) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise RunnerError("dependency snapshot output directory was replaced") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or path.is_symlink()
+        or (metadata.st_dev, metadata.st_ino) != identity
+    ):
+        raise RunnerError("dependency snapshot output directory was replaced")
+
+
+def write_private_dependency_manifest(directory_fd: int, payload: dict[str, Any]) -> None:
+    content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            "manifest.json",
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise RunnerError("dependency snapshot manifest write made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise RunnerError("dependency snapshot manifest must have exactly one regular-file link")
+        os.close(descriptor)
+        descriptor = -1
+        os.fsync(directory_fd)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def materialize_verified_dependency_tree(
+    repo_root: Path, snapshot: dict[str, Any], target_tree: Path
+) -> Path:
+    if target_tree.exists() or target_tree.is_symlink():
+        raise RunnerError("private dependency snapshot target must not already exist")
+    try:
+        shutil.copytree(snapshot["tree_path"], target_tree, symlinks=True)
+        validate_npm_dependency_tree(repo_root, target_tree)
+        if digest_tree(target_tree) != snapshot["tree_sha256"]:
+            raise RunnerError("private dependency snapshot differs from its verified tree digest")
+    except BaseException:
+        shutil.rmtree(target_tree, ignore_errors=True)
+        raise
+    return target_tree
+
+
+def cleanup_failed_dependency_output(
+    output_dir: Path, directory_fd: int, identity: tuple[int, int]
+) -> None:
+    def make_removable(function: Any, raw_path: str, _error: Any) -> None:
+        path = Path(raw_path)
+        if not path.is_symlink():
+            path.chmod(stat.S_IMODE(path.lstat().st_mode) | stat.S_IRWXU)
+        function(raw_path)
+
+    require_directory_identity(output_dir, identity)
+    descriptor_root = Path(f"/proc/self/fd/{directory_fd}")
+    target_tree = descriptor_root / "node_modules"
+    if target_tree.is_dir() and not target_tree.is_symlink():
+        shutil.rmtree(target_tree, onerror=make_removable)
+    try:
+        os.unlink("manifest.json", dir_fd=directory_fd)
+    except FileNotFoundError:
+        pass
+    os.fsync(directory_fd)
+    require_directory_identity(output_dir, identity)
+    output_dir.rmdir()
+
+
+def prepare_dependency_snapshot(args: argparse.Namespace) -> int:
+    git_bin = require_executable("git", args.git_bin)
+    repo_root = detect_repo_root(git_bin)
+    ensure_clean_worktree(repo_root, git_bin)
+    source_tree = repo_root / "node_modules"
+    validate_npm_dependency_tree(repo_root, source_tree)
+    source_tree_digest = digest_tree(source_tree)
+    output_dir, output_fd, output_identity = create_private_dependency_output_dir(
+        repo_root, args.output_dir
+    )
+    try:
+        descriptor_root = Path(f"/proc/self/fd/{output_fd}")
+        target_tree = descriptor_root / "node_modules"
+        shutil.copytree(source_tree, target_tree, symlinks=True)
+        validate_npm_dependency_tree(repo_root, target_tree)
+        target_tree_digest = digest_tree(target_tree)
+        if digest_tree(source_tree) != source_tree_digest or target_tree_digest != source_tree_digest:
+            raise RunnerError("npm dependency tree changed while the snapshot was being copied")
+        payload = {
+            "schema_version": DEPENDENCY_SNAPSHOT_SCHEMA_VERSION,
+            "package_manager": "npm",
+            "source_head": git_text(repo_root, git_bin, "rev-parse", "HEAD"),
+            "package_json_sha256": hash_file(repo_root / "package.json"),
+            "package_lock_sha256": hash_file(repo_root / "package-lock.json"),
+            "dependency_path": "node_modules",
+            "tree_sha256": target_tree_digest,
+        }
+        validate_dependency_snapshot_manifest(payload)
+        write_private_dependency_manifest(output_fd, payload)
+        require_directory_identity(output_dir, output_identity)
+    except BaseException:
+        cleanup_failed_dependency_output(output_dir, output_fd, output_identity)
+        raise
+    finally:
+        os.close(output_fd)
+    manifest_path = output_dir / "manifest.json"
+    print(str(manifest_path))
+    return 0
 
 
 def write_bytes(path: Path, content: bytes) -> str:
@@ -1225,6 +1601,7 @@ def build_bwrap_command(
     writable_clone: bool = False,
     hidden_directories: Sequence[Path] = (),
     read_only_inputs: Sequence[Path] = (),
+    read_only_shadows: Sequence[tuple[Path, Path]] = (),
     network_enabled: bool = True,
 ) -> list[str]:
     argv = [
@@ -1260,7 +1637,7 @@ def build_bwrap_command(
         path = Path(raw)
         if path.is_file():
             argv.extend(("--ro-bind", raw, raw))
-    required_paths = [clone_dir, scratch_dir, *read_only_inputs]
+    required_paths = [clone_dir, scratch_dir, *read_only_inputs, *(source for source, _ in read_only_shadows)]
     executable = Path(command[0]) if command else Path()
     runtime_root: Path | None = None
     if executable.is_absolute() and not any(path_is_within(Path(root), executable) for root in SANDBOX_SYSTEM_DIRECTORIES) and not any(
@@ -1317,6 +1694,8 @@ def build_bwrap_command(
     )
     for shadow_path, clone_target in writable_shadows:
         argv.extend(("--bind", str(shadow_path), str(clone_target)))
+    for shadow_path, clone_target in read_only_shadows:
+        argv.extend(("--ro-bind", str(shadow_path), str(clone_target)))
     for read_only_input in read_only_inputs:
         if read_only_input not in external_files:
             argv.extend(("--ro-bind", str(read_only_input), str(read_only_input)))
@@ -2393,6 +2772,17 @@ def validate_candidate(args: argparse.Namespace) -> int:
         raise RunnerError(f"plan {key} contains an invalid command: {exc}") from exc
     if args.suite == "focused" and not commands:
         raise RunnerError("this plan has no focused validation stage")
+    requires_npm_dependencies = any(command.argv[:2] == ("npm", "run") for command in commands)
+    dependency_snapshot: dict[str, Any] | None = None
+    dependency_snapshot_arg = getattr(args, "dependency_snapshot", None)
+    if dependency_snapshot_arg is not None:
+        dependency_snapshot = verify_dependency_snapshot(
+            repo_root, Path(dependency_snapshot_arg), git_bin
+        )
+    if requires_npm_dependencies and dependency_snapshot is None:
+        raise RunnerError(
+            "npm validation requires a lock-bound --dependency-snapshot prepared outside the repository"
+        )
     output_dir = materialize_output_dir(repo_root, args.output_dir)
     reserved = reserve_output_artifacts(output_dir)
     records: list[dict[str, Any]] = []
@@ -2432,6 +2822,11 @@ def validate_candidate(args: argparse.Namespace) -> int:
             }
         )
         workspace = Path(workspace_tmp)
+        private_dependency_tree: Path | None = None
+        if dependency_snapshot is not None:
+            private_dependency_tree = materialize_verified_dependency_tree(
+                repo_root, dependency_snapshot, workspace / "verified-node_modules"
+            )
         suite_error: RunnerError | None = None
         for index, command in enumerate(commands):
             command_root = workspace / f"command-{index}"
@@ -2448,6 +2843,11 @@ def validate_candidate(args: argparse.Namespace) -> int:
             run_subprocess(
                 (git_bin, "apply", "--binary", "-"), cwd=clone_dir, stdin=verified["patch_bytes"]
             )
+            read_only_shadows: list[tuple[Path, Path]] = []
+            if private_dependency_tree is not None:
+                dependency_target = clone_dir / "node_modules"
+                dependency_target.mkdir()
+                read_only_shadows.append((private_dependency_tree, dependency_target))
             env_vars = prepare_worker_environment(
                 source_repo=repo_root,
                 clone_dir=clone_dir,
@@ -2478,6 +2878,7 @@ def validate_candidate(args: argparse.Namespace) -> int:
                         validation_hidden,
                         visible_paths=(clone_dir, scratch_dir),
                     ),
+                    read_only_shadows=read_only_shadows,
                     network_enabled=False,
                 ),
                 cwd=repo_root,
@@ -2497,6 +2898,11 @@ def validate_candidate(args: argparse.Namespace) -> int:
             if result.returncode != 0:
                 failed = True
                 break
+            if dependency_snapshot is not None:
+                if digest_tree(private_dependency_tree) != dependency_snapshot["tree_sha256"]:
+                    failed = True
+                    suite_error = RunnerError("private dependency snapshot changed during validation")
+                    break
             if git_text(clone_dir, git_bin, "rev-parse", "HEAD") != verified["head"]:
                 failed = True
                 suite_error = RunnerError("validation command changed review-clone HEAD")
@@ -2517,6 +2923,16 @@ def validate_candidate(args: argparse.Namespace) -> int:
             "parent_diff_approved": True,
             "critical_invariants_approved": True,
             "commands": records,
+            "dependency_snapshot": (
+                {
+                    "package_manager": dependency_snapshot["package_manager"],
+                    "package_json_sha256": dependency_snapshot["package_json_sha256"],
+                    "package_lock_sha256": dependency_snapshot["package_lock_sha256"],
+                    "tree_sha256": dependency_snapshot["tree_sha256"],
+                }
+                if dependency_snapshot is not None
+                else None
+            ),
             "passed": not failed,
             "telemetry": {
                 "duration_seconds": bounded_duration(validation_started, time.monotonic()),
@@ -3119,6 +3535,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=textwrap.dedent(
             """\
             Commands:
+              prepare-dependencies copy a lock-matched npm tree outside the repository
               run      execute a writable worker inside Bubblewrap and emit a candidate patch manifest
               correct  repair a verified candidate in a fresh isolated clone and emit an aggregate patch
               validate run a parent-authorized suite in a fresh review clone after candidate admission
@@ -3128,6 +3545,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    dependency_parser = subparsers.add_parser(
+        "prepare-dependencies",
+        help="copy a lock-matched npm dependency snapshot outside the repository",
+    )
+    dependency_parser.add_argument("--output-dir", required=True)
+    dependency_parser.add_argument("--git-bin", default="git")
+    dependency_parser.set_defaults(handler=prepare_dependency_snapshot)
 
     run_parser = subparsers.add_parser("run", help="run a sandboxed worker against one active plan")
     run_parser.add_argument("plan", help="repository-relative active plan path")
@@ -3218,6 +3643,10 @@ def build_parser() -> argparse.ArgumentParser:
     validation_parser.add_argument("--plan-execution-state", required=True)
     validation_parser.add_argument("--git-bin", default="git")
     validation_parser.add_argument("--bwrap-bin", default="bwrap")
+    validation_parser.add_argument(
+        "--dependency-snapshot",
+        help="manifest from prepare-dependencies for lock-bound npm validation",
+    )
     validation_parser.set_defaults(handler=validate_candidate)
 
     apply_parser = subparsers.add_parser("apply", help="apply a previously emitted candidate patch manifest")
@@ -3252,7 +3681,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         with plan_execution_lease(args):
-            if args.command != "self-test":
+            if args.command not in {"self-test", "prepare-dependencies"}:
                 plan = args.plan if args.command in {"run", "correct"} else None
                 enforce_plan_execution_gate(args, plan=plan)
             return int(args.handler(args))

@@ -448,6 +448,10 @@ def require_sandboxed_plan_worker_alignment() -> None:
         '"focused_validation_count"',
         '"authoritative_validation_count"',
         "network_enabled=False",
+        '"prepare-dependencies"',
+        '"--dependency-snapshot"',
+        "def verify_dependency_snapshot",
+        "read_only_shadows",
     ):
         if marker not in template_runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")
@@ -698,6 +702,8 @@ def require_update_boundaries(copier_yml: str) -> None:
         "scripts/update_hook_wiring.py",
         "version: v1.2.2",
         "scripts/validate-copier-update.py",
+        "version: v1.4.2",
+        "scripts/migrate-sequential-plan-worker.py",
         'when: "[[ _stage == \'before\' ]]"',
         'when: "[[ _stage == \'after\' ]]"',
     )
@@ -811,12 +817,23 @@ def require_copier_documentation_contract() -> None:
     generated_validator = ROOT / "template/.project-agent-workflow/scripts/validate-copier-update.py"
     if source_validator.read_bytes() != generated_validator.read_bytes():
         fail("source and generated Copier update validators must be byte-identical")
+    source_worker_migration = ROOT / "scripts/migrate-sequential-plan-worker.py"
+    generated_worker_migration = (
+        ROOT / "template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py"
+    )
+    if source_worker_migration.read_bytes() != generated_worker_migration.read_bytes():
+        fail("source and generated sequential worker migrations must be byte-identical")
+    if (source_worker_migration.stat().st_mode & 0o777) != (
+        generated_worker_migration.stat().st_mode & 0o777
+    ):
+        fail("source and generated sequential worker migration modes differ")
 
     wrapper = read("template/.project-agent-workflow/scripts/update-from-copier.sh")
     for marker in (
         '"$script_dir/../.."',
         "copier update --trust",
         "validate-copier-update.py --destination .",
+        "--destination . --before-update",
         "--force|--force=*",
         "-*f*",
     ):

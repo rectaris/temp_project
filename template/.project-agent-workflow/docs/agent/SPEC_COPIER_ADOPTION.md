@@ -20,6 +20,12 @@ The `model` and `model_reasoning_effort` fields are the only exceptions.
 
 The template fixes those two fields after every copy and update while preserving instructions and every unrelated field.
 
+The v1.4.2 migration is one additional bounded exception for `sequential_plan_worker.toml`.
+
+It replaces only the byte-identical v1.2.1 generated workspace-write profile with the current read-only profile.
+
+A customized workspace-write profile is left unchanged and stops the update for manual review.
+
 `.project-agent-workflow/ownership.yaml` is the machine-readable ownership inventory generated into every project.
 
 Its `field_overrides` section records this partial ownership rule.
@@ -35,6 +41,10 @@ Supported update fixtures must finish without unresolved Git conflicts, `*.rej` 
 Copier-managed files and the two template-fixed agent model fields may change as part of the intended update.
 
 Run copy and update operations from a clean repository or a disposable clone so that every resulting change can be attributed and reviewed.
+
+The generated recurring update wrapper enforces that clean starting state and uses committed `HEAD` as the before-update content baseline.
+
+The final validator rejects changes to existing project-owned or unclassified paths except the two fixed model fields and the exact recognized sequential-worker transition.
 
 ## Bridge Files
 
@@ -147,7 +157,7 @@ Review and update those repository-specific assertions with project context inst
 
 After `.copier-answers.yml` records v1.2.2 or newer and `.project-agent-workflow/` exists, use `.project-agent-workflow/scripts/update-from-copier.sh` for later template versions.
 
-The wrapper changes to its owning repository root, rejects Copier force flags, runs `copier update --trust`, and rejects an unsafe final result before reporting success.
+The wrapper changes to its owning repository root, rejects Copier force flags, requires a clean Git worktree, runs `copier update --trust`, and rejects an unsafe final result before reporting success.
 
 When `.copier-answers.yml` already records v1.1.0 or v1.1.1, update to v1.1.2 or newer with `--trust` so the managed core and versioned Hook-wiring migration can be corrected.
 

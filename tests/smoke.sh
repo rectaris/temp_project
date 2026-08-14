@@ -48,6 +48,7 @@ if [ -z "$source_ref" ]; then
   git clone -q "$root" "$render_source"
   for candidate_path in \
     copier.yml \
+    scripts/migrate-sequential-plan-worker.py \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
     template/.github/workflows/project-agent-workflow.yml \
@@ -59,6 +60,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
@@ -87,6 +89,7 @@ if [ -z "$source_ref" ]; then
   done
   git -C "$render_source" add \
     copier.yml \
+    scripts/migrate-sequential-plan-worker.py \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
     template/.github/workflows/project-agent-workflow.yml \
@@ -98,6 +101,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \

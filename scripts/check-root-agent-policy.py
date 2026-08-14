@@ -74,6 +74,7 @@ REQUIRED_ROOT_FILES = [
     "scripts/check-codex-toml.py",
     "scripts/complete-plan.sh",
     "scripts/context-compress.sh",
+    "scripts/migrate-sequential-plan-worker.py",
     "scripts/plan_validation_commands.py",
     "scripts/referent-contract.py",
     "scripts/run-sandboxed-plan-worker.py",
@@ -272,6 +273,10 @@ def check_sandboxed_worker_fallback() -> None:
         '"focused_validation_count"',
         '"authoritative_validation_count"',
         "network_enabled=False",
+        '"prepare-dependencies"',
+        '"--dependency-snapshot"',
+        "def verify_dependency_snapshot",
+        "read_only_shadows",
     )
     for marker in runner_markers:
         if marker not in runner:

@@ -87,3 +87,4 @@ id	path
 085	docs/plan/checked/2026/08/01-15/085-ai-test-modularization.md
 086	docs/plan/checked/2026/08/01-15/086-copier-checker-inventory.md
 087	docs/plan/checked/2026/08/01-15/087-ai-facing-layout.md
+088	docs/plan/checked/2026/08/01-15/088-copier-update-safety-contract.md

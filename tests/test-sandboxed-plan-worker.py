@@ -1688,6 +1688,208 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 self.assertGreaterEqual(report["telemetry"]["duration_seconds"], 0)
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
+    def write_npm_dependency_tree(self, repo: Path) -> None:
+        package_record = {
+            "version": "1.0.0",
+            "dev": True,
+            "bin": {"verify-tool": "bin/verify-tool"},
+        }
+        package_lock = {
+            "name": "dependency-snapshot-fixture",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "requires": True,
+            "packages": {
+                "": {
+                    "name": "dependency-snapshot-fixture",
+                    "version": "1.0.0",
+                    "devDependencies": {"verify-tool": "1.0.0"},
+                },
+                "node_modules/verify-tool": package_record,
+            },
+        }
+        hidden_lock = {
+            "name": "dependency-snapshot-fixture",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "requires": True,
+            "packages": {"node_modules/verify-tool": package_record},
+        }
+        (repo / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "dependency-snapshot-fixture",
+                    "version": "1.0.0",
+                    "private": True,
+                    "scripts": {"verify": "verify-tool"},
+                    "devDependencies": {"verify-tool": "1.0.0"},
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (repo / "package-lock.json").write_text(
+            json.dumps(package_lock, indent=2) + "\n", encoding="utf-8"
+        )
+        git(repo, "add", "package.json", "package-lock.json")
+        git(repo, "commit", "-qm", "add npm validation fixture")
+        dependency = repo / "node_modules/verify-tool"
+        (dependency / "bin").mkdir(parents=True)
+        (repo / "node_modules/.package-lock.json").write_text(
+            json.dumps(hidden_lock, indent=2) + "\n", encoding="utf-8"
+        )
+        (dependency / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "verify-tool",
+                    "version": "1.0.0",
+                    "bin": {"verify-tool": "bin/verify-tool"},
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        executable = dependency / "bin/verify-tool"
+        executable.write_text(
+            '''#!/bin/sh
+if touch "$(dirname "$0")/unexpected-write" 2>/dev/null; then
+  echo "dependency snapshot was writable" >&2
+  exit 9
+fi
+echo dependency-snapshot-verified
+''',
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        binary_dir = repo / "node_modules/.bin"
+        binary_dir.mkdir()
+        (binary_dir / "verify-tool").symlink_to("../verify-tool/bin/verify-tool")
+
+    def test_npm_validation_uses_a_lock_bound_read_only_snapshot_in_a_fresh_clone(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            files={"allowed.txt": "original\n", ".gitignore": "node_modules/\n"},
+            validation=["npm run verify"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.write_npm_dependency_tree(repo)
+        snapshot_dir = root / "dependency-snapshot"
+        prepared = run_cli(repo, "prepare-dependencies", "--output-dir", str(snapshot_dir))
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        snapshot_manifest = Path(prepared.stdout.strip())
+        snapshot = json.loads(snapshot_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["package_manager"], "npm")
+        self.assertRegex(snapshot["tree_sha256"], r"^[0-9a-f]{64}$")
+
+        shutil.rmtree(repo / "node_modules")
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "npm-validation-initial",
+        )
+        worker_detail = root / "npm-validation-initial/worker.stderr"
+        self.assertEqual(
+            initial.returncode,
+            0,
+            initial.stderr
+            + (worker_detail.read_text(encoding="utf-8") if worker_detail.is_file() else ""),
+        )
+        result = run_cli(
+            repo,
+            "validate",
+            initial.stdout.strip(),
+            "--suite",
+            "authoritative",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(root / "npm-validation-output"),
+            "--dependency-snapshot",
+            str(snapshot_manifest),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(report["commands"][0]["argv"], ["npm", "run", "verify"])
+        self.assertEqual(report["dependency_snapshot"]["tree_sha256"], snapshot["tree_sha256"])
+        self.assertFalse((repo / "node_modules").exists())
+
+    def test_dependency_snapshot_rejects_tree_and_lockfile_tampering(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={"allowed.txt": "original\n", ".gitignore": "node_modules/\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.write_npm_dependency_tree(repo)
+        prepared = run_cli(repo, "prepare-dependencies", "--output-dir", str(root / "snapshot"))
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        manifest = Path(prepared.stdout.strip())
+        (manifest.parent / "node_modules/verify-tool/bin/verify-tool").write_text(
+            "#!/bin/sh\necho tampered\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(RUNNER.RunnerError, "tree digest"):
+            RUNNER.verify_dependency_snapshot(repo, manifest)
+
+        shutil.rmtree(manifest.parent)
+        prepared = run_cli(repo, "prepare-dependencies", "--output-dir", str(root / "snapshot-two"))
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        manifest = Path(prepared.stdout.strip())
+        (repo / "package-lock.json").write_text("{}\n", encoding="utf-8")
+        with self.assertRaisesRegex(RUNNER.RunnerError, "package-lock.json digest"):
+            RUNNER.verify_dependency_snapshot(repo, manifest)
+
+    def test_dependency_snapshot_rejects_reused_output_hardlinks_and_path_swap(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={"allowed.txt": "original\n", ".gitignore": "node_modules/\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.write_npm_dependency_tree(repo)
+
+        existing = root / "existing-output"
+        existing.mkdir()
+        rejected = run_cli(repo, "prepare-dependencies", "--output-dir", str(existing))
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("must not already exist", rejected.stderr)
+
+        prepared = run_cli(repo, "prepare-dependencies", "--output-dir", str(root / "snapshot"))
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        manifest = Path(prepared.stdout.strip())
+        manifest_link = root / "manifest-hardlink.json"
+        os.link(manifest, manifest_link)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "regular file"):
+            RUNNER.verify_dependency_snapshot(repo, manifest)
+        manifest_link.unlink()
+
+        snapshot = RUNNER.verify_dependency_snapshot(repo, manifest)
+        original_tree = manifest.parent / "node_modules"
+        moved_tree = manifest.parent / "verified-before-swap"
+        original_tree.rename(moved_tree)
+        shutil.copytree(moved_tree, original_tree, symlinks=True)
+        (original_tree / "verify-tool/bin/verify-tool").write_text(
+            "#!/bin/sh\necho path-swapped\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(RUNNER.RunnerError, "verified tree digest"):
+            RUNNER.materialize_verified_dependency_tree(
+                repo, snapshot, root / "private-dependency-copy"
+            )
+
+    def test_dependency_snapshot_rejects_a_symlink_that_escapes_node_modules(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={"allowed.txt": "original\n", ".gitignore": "node_modules/\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.write_npm_dependency_tree(repo)
+        (repo / "node_modules/.bin/escape").symlink_to("../../outside-node-modules")
+        prepared = run_cli(repo, "prepare-dependencies", "--output-dir", str(root / "snapshot"))
+        self.assertEqual(prepared.returncode, 1)
+        self.assertIn("symlink escapes node_modules", prepared.stderr)
+        self.assertFalse((root / "snapshot").exists())
+
     def test_focused_validation_absence_is_compatible_and_requires_parent_approvals(self) -> None:
         temporary, repo, plan_path = self.make_repo(
             ["allowed.txt"], validation=["git diff --check"]

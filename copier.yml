@@ -74,6 +74,20 @@ _migrations:
       - "--destination"
       - "."
     when: "[[ _stage == 'after' ]]"
+  - version: v1.4.2
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/migrate-sequential-plan-worker.py"
+      - "--destination"
+      - "."
+    when: "[[ _stage == 'after' ]]"
+  - version: v1.4.2
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/validate-copier-update.py"
+      - "--destination"
+      - "."
+    when: "[[ _stage == 'after' ]]"
 
 project_name:
   type: str
