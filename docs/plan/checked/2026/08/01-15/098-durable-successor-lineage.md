@@ -1,6 +1,6 @@
 # Certify durable successor lineage
 
-status: in_progress
+status: checked
 primary_invariant: the Plan 095 implementation satisfies every durable-successor acceptance item inherited from stopped Plan 094
 task_types:
   - planning_docs
@@ -59,10 +59,12 @@ checked_summary_ja: Plan 095 の耐久パス識別実装が継承要件を満た
 
 ## Tasks
 
-- [ ] Confirm Plan 095 covers exact checked/replanned archive identity and accepted contract-name compatibility.
-- [ ] Confirm wrong-ID, renamed-path, duplicate, and cross-state negatives.
-- [ ] Record focused validation evidence and archive without duplicate implementation.
+- [x] Confirm Plan 095 covers exact checked/replanned archive identity and accepted contract-name compatibility.
+- [x] Confirm wrong-ID, renamed-path, duplicate, and cross-state negatives.
+- [x] Record focused validation evidence and archive without duplicate implementation.
 
 ## Validation Notes
 
 - Plan 095 owns the remaining shared implementation because it executes before this lineage-certification plan.
+- Commit `322aed4` binds active, checked, and replanned archive identity while accepting every contract filename allowed by creation.
+- Focused validation passed: 19 plan-restructure tests and the Copier static check, including wrong-ID, renamed-path, duplicate, and cross-state cases.
