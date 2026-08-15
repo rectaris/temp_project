@@ -217,6 +217,26 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertIn("003\tdocs/plan/active/003-integration.md\tin_progress", active)
         self.assertEqual(self.run_verify().returncode, 0)
 
+        successor_path = self.repo / "docs/plan/active/002-data.md"
+        clean_successor = successor_path.read_text(encoding="utf-8")
+        active_index = self.repo / "docs/plan/plan.md"
+        clean_active_index = active_index.read_text(encoding="utf-8")
+        successor_path.write_text(
+            clean_successor.replace("status: in_progress", "status: garbage", 1),
+            encoding="utf-8",
+        )
+        active_index.write_text(
+            clean_active_index.replace(
+                "002\tdocs/plan/active/002-data.md\tin_progress",
+                "002\tdocs/plan/active/002-data.md\tgarbage",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+        successor_path.write_text(clean_successor, encoding="utf-8")
+        active_index.write_text(clean_active_index, encoding="utf-8")
+
     def test_durable_contract_tampering_is_rejected(self) -> None:
         self.assertEqual(self.run_command().returncode, 0)
         contract_path = self.repo / str(self.spec["contract_path"])
@@ -267,15 +287,234 @@ class PlanRestructureTest(unittest.TestCase):
             encoding="utf-8",
         )
         active.unlink()
+        active_index = self.repo / "docs/plan/plan.md"
+        active_index.write_text(
+            active_index.read_text(encoding="utf-8").replace(
+                "002\tdocs/plan/active/002-data.md\tin_progress\n", ""
+            ),
+            encoding="utf-8",
+        )
         (self.repo / "docs/plan/checked.md").write_text(
             "# Checked Plan Index\n\nid\tpath\n002\t" + checked_relative + "\n",
             encoding="utf-8",
         )
         self.assertEqual(self.run_verify().returncode, 0)
+        clean_checked = checked.read_text(encoding="utf-8")
+        checked.write_text(
+            clean_checked.replace("status: checked", "status: in_progress", 1),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+        checked.write_text(clean_checked, encoding="utf-8")
+        checked_index = self.repo / "docs/plan/checked.md"
+        clean_checked_index = checked_index.read_text(encoding="utf-8")
+        checked_index.write_text(
+            clean_checked_index + "999\t" + checked_relative + "\n",
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+        checked_index.write_text(clean_checked_index, encoding="utf-8")
+        renamed_relative = "docs/plan/checked/2026/08/01-15/002-other.md"
+        renamed = self.repo / renamed_relative
+        checked.rename(renamed)
+        checked_index.write_text(
+            clean_checked_index.replace(checked_relative, renamed_relative),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+        renamed.rename(checked)
+        checked_index.write_text(clean_checked_index, encoding="utf-8")
         checked.write_text(
             checked.read_text(encoding="utf-8").replace(
                 "  - Preserve user data.\nchecked_summary_ja:",
                 "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_alternate_contract_filename_executes_and_verifies(self) -> None:
+        alternate = "docs/plan/replanned/contracts/001-contract.json"
+        original = str(self.spec["contract_path"])
+        self.spec["contract_path"] = alternate
+        for successor in [*self.spec["successors"], self.spec["integration"]]:  # type: ignore[index]
+            successor["content"] = str(successor["content"]).replace(original, alternate)
+        self.write_spec()
+        transitioned = self.run_command()
+        self.assertEqual(transitioned.returncode, 0, transitioned.stderr)
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_replanned_successor_preserves_ancestor_contract_evidence(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        source_path = "docs/plan/active/002-data.md"
+        source = self.repo / source_path
+        successor_digest = digest(self.acceptance[0])
+        body_fixture = (
+            "\n```yaml\n"
+            "primary_invariant: this is body content\n"
+            "integration_gates:\n  - preserve this example\n"
+            "successor_plans:\n  - preserve this path\n"
+            "inherited_acceptance_digests:\n  - preserve this digest example\n"
+            "```\n"
+        )
+        nested_source = (
+            source.read_text(encoding="utf-8")
+            .replace("status: in_progress", "status: replan_required", 1)
+            .replace(
+                "primary_invariant: preserve one independently validatable invariant",
+                "primary_invariant : preserve the literal checked_summary_ja: token",
+                1,
+            )
+            .replace(
+                "\nchecked_summary_ja:",
+                "\nreplan_reason_codes:\n  - multiple_independent_invariants\nchecked_summary_ja :",
+                1,
+            )
+            .replace(
+                "integration_gates:\n  - verify the combined source acceptance\n",
+                "integration_gates:\n\n    - verify the combined source acceptance\n\n",
+            )
+            .replace(
+                "successor_plans:\n  - docs/plan/active/002-data.md\n"
+                "  - docs/plan/active/003-integration.md\n",
+                "successor_plans:\n\n    - docs/plan/active/002-data.md\n\n"
+                "    - docs/plan/active/003-integration.md\n\n",
+            )
+            .replace(
+                f"inherited_acceptance_digests:\n  - {successor_digest}\n",
+                f"inherited_acceptance_digests:\n\n    - {successor_digest}\n\n",
+            )
+            + body_fixture
+        )
+        summary_line = "checked_summary_ja : 後続計画。\n"
+        self.assertIn(summary_line, nested_source)
+        nested_source = nested_source.replace(summary_line, "", 1).replace(
+            "primary_invariant : preserve the literal checked_summary_ja: token\n",
+            summary_line
+            + "primary_invariant : preserve the literal checked_summary_ja: token\n",
+            1,
+        )
+        source.write_text(
+            nested_source,
+            encoding="utf-8",
+        )
+        active_index = self.repo / "docs/plan/plan.md"
+        active_index.write_text(
+            active_index.read_text(encoding="utf-8").replace(
+                "002\tdocs/plan/active/002-data.md\tin_progress",
+                "002\tdocs/plan/active/002-data.md\treplan_required",
+            ),
+            encoding="utf-8",
+        )
+        git(self.repo, "add", "docs/plan")
+        git(self.repo, "commit", "-qm", "stop nested successor plan")
+
+        source_text = source.read_text(encoding="utf-8")
+        source_records = [{"text": self.acceptance[0], "digest": digest(self.acceptance[0])}]
+        self.assertEqual(source_records[0]["digest"], successor_digest)
+        replacements = {
+            "docs/plan/replanned/contracts/001-source.json": "docs/plan/replanned/contracts/002-data.json",
+            "docs/plan/active/002-data.md": "docs/plan/active/004-data.md",
+            "docs/plan/active/003-integration.md": "docs/plan/active/005-integration.md",
+        }
+
+        def nested_content(integration: bool) -> str:
+            content = self.plan_content("", [successor_digest], integration=integration).replace(
+                self.source_path, "__NESTED_SOURCE__"
+            )
+            for old, new in replacements.items():
+                content = content.replace(old, new)
+            return content.replace("__NESTED_SOURCE__", source_path).replace(
+                "  - Preserve user data.\n  - Run the integration check.\nchecked_summary_ja:",
+                "  - Preserve user data.\nchecked_summary_ja:",
+            )
+
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        nested_spec = {
+            "schema_version": 1,
+            "source": {
+                "path": source_path,
+                "head": git(self.repo, "rev-parse", "HEAD"),
+                "plan_digest": digest(source_text),
+                "acceptance": source_records,
+            },
+            "reason_codes": ["multiple_independent_invariants"],
+            "dirty_product_paths": [],
+            "contract_path": "docs/plan/replanned/contracts/002-data.json",
+            "archive_path": (
+                f"docs/plan/replanned/{today.year:04d}/{today.month:02d}/{half}/002-data.md"
+            ),
+            "successors": [{
+                "id": "004",
+                "path": "docs/plan/active/004-data.md",
+                "content": nested_content(False),
+                "acceptance_digests": [successor_digest],
+            }],
+            "integration": {
+                "id": "005",
+                "path": "docs/plan/active/005-integration.md",
+                "content": nested_content(True),
+                "acceptance_digests": [successor_digest],
+            },
+        }
+        nested_spec_path = self.base / "nested-restructure.json"
+        nested_spec_path.write_text(
+            json.dumps(nested_spec, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        nested_result = subprocess.run(
+            [sys.executable, "scripts/restructure-plan.py", str(nested_spec_path)],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(nested_result.returncode, 0, nested_result.stderr)
+
+        archive = self.repo / str(nested_spec["archive_path"])
+        archive_text = archive.read_text(encoding="utf-8")
+        source_body = source_text[source_text.index("## Tasks\n"):]
+        archive_body = archive_text[archive_text.index("## Tasks\n"):]
+        archive_manifest = archive_text[:archive_text.index("## Tasks\n")]
+        self.assertEqual(archive_body, source_body)
+        self.assertNotIn("docs/plan/replanned/contracts/001-source.json", archive_manifest)
+        self.assertNotIn("verify the combined source acceptance", archive_manifest)
+        self.assertIn(
+            "replan_contract: docs/plan/replanned/contracts/002-data.json",
+            archive_manifest,
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+        replanned_index = self.repo / "docs/plan/replanned.md"
+        clean_replanned_index = replanned_index.read_text(encoding="utf-8")
+        replanned_index.write_text(
+            clean_replanned_index
+            + "999\t"
+            + str(nested_spec["archive_path"])
+            + "\t"
+            + str(nested_spec["contract_path"])
+            + "\n",
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+        replanned_index.write_text(clean_replanned_index, encoding="utf-8")
+
+        active_index = self.repo / "docs/plan/plan.md"
+        clean_active_index = active_index.read_text(encoding="utf-8")
+        active_index.write_text(
+            clean_active_index
+            + "002\tdocs/plan/active/002-data.md\treplan_required\n",
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+        active_index.write_text(clean_active_index, encoding="utf-8")
+
+        archive.write_text(
+            archive_text.replace(
+                f"  - {successor_digest}", "  - sha256:" + "0" * 64, 1
             ),
             encoding="utf-8",
         )

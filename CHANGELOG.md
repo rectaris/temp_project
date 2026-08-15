@@ -2,6 +2,13 @@
 
 ## 未リリース
 
+## 2026-08-15 v1.4.4
+
+- `npm ci` が生成する Workerd の hardlink を単一 link の私有依存スナップショットへ正規化し、コピー中の source tree 変更を拒否するようにしました。
+- Copier 更新後の未追跡ファイルも所有境界検査へ含め、更新済み ownership inventory を固定 digest と安全な file descriptor 読み取りで検証するようにしました。
+- 隔離 npm 検証で project の Node major、私有 npm runtime、Playwright browser artifact、コマンド単位の Vite cache overlay を検証するようにしました。
+- 再計画された後継を active・checked・replanned の排他的な索引状態から解決し、archive identity、status、継承受入れ条件の不一致を拒否するようにしました。
+
 ## 2026-08-15 v1.4.3
 
 - 公開済みの release tag を含む checkout でも、Copier update fixture の同名 tag を一時 clone 内だけで更新して実更新の検証を継続できるようにしました。

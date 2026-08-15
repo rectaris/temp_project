@@ -88,6 +88,7 @@ CODEX_UNAVAILABLE_PATTERNS = (
 SHA256_BUFFER = 1024 * 1024
 ENV_PREFIX = "SANDBOXED_PLAN_WORKER_"
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+DEPENDENCY_WRITABLE_CACHE_PATHS = (".vite", ".vite-temp")
 VALIDATION_AUTHORITY_SCOPE = (
     ".codex/",
     ".codex/hooks/",
@@ -107,6 +108,7 @@ VALIDATION_AUTHORITY_SCOPE = (
     "go.sum",
     "package.json",
     "package-lock.json",
+    ".node-version",
     "pnpm-lock.yaml",
     "yarn.lock",
     "pyproject.toml",
@@ -402,7 +404,9 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def digest_tree(root: Path, *, allow_hardlinks: bool = False) -> str:
+def digest_tree(
+    root: Path, *, omit_external_symlinks: bool = False, allow_hardlinks: bool = False
+) -> str:
     """Hash one dependency tree while rejecting file types and links unsafe to bind."""
     if root.is_symlink() or not root.is_dir():
         raise RunnerError(f"dependency tree must be a regular directory: {root}")
@@ -439,9 +443,13 @@ def digest_tree(root: Path, *, allow_hardlinks: bool = False) -> str:
             kind = b"l"
             target = os.readlink(path)
             if os.path.isabs(target):
+                if omit_external_symlinks:
+                    continue
                 raise RunnerError(f"dependency snapshot contains an absolute symlink: {relative}")
             resolved = (path.parent / target).resolve(strict=False)
             if not path_is_within(root, resolved):
+                if omit_external_symlinks:
+                    continue
                 raise RunnerError(f"dependency snapshot symlink escapes node_modules: {relative}")
             payload = os.fsencode(target)
         else:
@@ -764,6 +772,55 @@ def materialize_verified_dependency_tree(
     return target_tree
 
 
+def ensure_dependency_cache_mountpoints(dependency_tree: Path) -> list[Path]:
+    created: list[Path] = []
+    for relative in DEPENDENCY_WRITABLE_CACHE_PATHS:
+        target = dependency_tree / relative
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_dir():
+                raise RunnerError(f"dependency cache mountpoint must be a directory: {relative}")
+            continue
+        target.mkdir(mode=0o700)
+        created.append(target)
+    return created
+
+
+def dependency_cache_shadows(
+    dependency_tree: Path, clone_dependency_target: Path, scratch_dir: Path
+) -> list[tuple[Path, Path]]:
+    shadows: list[tuple[Path, Path]] = []
+    cache_root = scratch_dir / "dependency-caches"
+    cache_root.mkdir()
+    for relative in DEPENDENCY_WRITABLE_CACHE_PATHS:
+        mountpoint = dependency_tree / relative
+        if mountpoint.is_symlink() or not mountpoint.is_dir():
+            raise RunnerError(f"dependency cache mountpoint changed shape: {relative}")
+        shadow = cache_root / relative
+        shadow.mkdir()
+        shadows.append((shadow, clone_dependency_target / relative))
+    return shadows
+
+
+def verify_private_dependency_integrity(
+    dependency_tree: Path, expected_digest: str, created_mountpoints: Sequence[Path]
+) -> None:
+    removed: list[Path] = []
+    try:
+        for mountpoint in reversed(created_mountpoints):
+            if mountpoint.is_symlink() or not mountpoint.is_dir():
+                raise RunnerError("private dependency cache mountpoint changed shape")
+            try:
+                mountpoint.rmdir()
+            except OSError as exc:
+                raise RunnerError("private dependency cache mountpoint was modified") from exc
+            removed.append(mountpoint)
+        if digest_tree(dependency_tree) != expected_digest:
+            raise RunnerError("private dependency snapshot changed during validation")
+    finally:
+        for mountpoint in reversed(removed):
+            mountpoint.mkdir(mode=0o700)
+
+
 def cleanup_failed_dependency_output(
     output_dir: Path, directory_fd: int, identity: tuple[int, int]
 ) -> None:
@@ -785,6 +842,38 @@ def cleanup_failed_dependency_output(
     os.fsync(directory_fd)
     require_directory_identity(output_dir, identity)
     output_dir.rmdir()
+
+
+def copy_playwright_browser_artifacts(
+    repo_root: Path, raw_sources: Sequence[str], target_tree: Path
+) -> None:
+    if not raw_sources:
+        return
+    destination_root = target_tree / ".playwright-browsers"
+    if destination_root.exists() or destination_root.is_symlink():
+        raise RunnerError("dependency tree already contains .playwright-browsers")
+    destination_root.mkdir(mode=0o700)
+    seen: set[str] = set()
+    for raw_source in raw_sources:
+        source = Path(raw_source).expanduser()
+        if not source.is_absolute():
+            source = (Path.cwd() / source).absolute()
+        ensure_no_symlink_components(source)
+        if path_is_within(repo_root, source):
+            raise RunnerError("Playwright browser source must be outside the repository")
+        name = source.name
+        if re.fullmatch(
+            r"(?:chromium|chromium_headless_shell|firefox|webkit|ffmpeg)-[0-9]+", name
+        ) is None:
+            raise RunnerError(f"unsupported Playwright browser directory name: {name}")
+        if name in seen:
+            raise RunnerError(f"duplicate Playwright browser directory: {name}")
+        seen.add(name)
+        source_digest = digest_tree(source)
+        destination = destination_root / name
+        shutil.copytree(source, destination, symlinks=True)
+        if digest_tree(source) != source_digest or digest_tree(destination) != source_digest:
+            raise RunnerError(f"Playwright browser directory changed while copying: {name}")
 
 
 def prepare_dependency_snapshot(args: argparse.Namespace) -> int:
@@ -810,6 +899,11 @@ def prepare_dependency_snapshot(args: argparse.Namespace) -> int:
             or target_tree_digest != source_tree_digest
         ):
             raise RunnerError("npm dependency tree changed while the snapshot was being copied")
+        copy_playwright_browser_artifacts(
+            repo_root, args.playwright_browser_dir, target_tree
+        )
+        validate_npm_dependency_tree(repo_root, target_tree)
+        target_tree_digest = digest_tree(target_tree)
         payload = {
             "schema_version": DEPENDENCY_SNAPSHOT_SCHEMA_VERSION,
             "package_manager": "npm",
@@ -925,6 +1019,192 @@ def require_validation_executable(configured: str, clone_dir: Path) -> str:
     ):
         raise RunnerError(f"validation command executable is unavailable on the trusted system path: {configured}")
     return str(Path(resolved).resolve())
+
+
+def resolve_project_node_runtime(
+    repo_root: Path, git_bin: str | None = None
+) -> dict[str, Any]:
+    version_file = repo_root / ".node-version"
+    if version_file.is_symlink() or not version_file.is_file():
+        raise RunnerError("npm validation requires a regular tracked .node-version file")
+    if git_bin is None:
+        git_bin = require_executable("git", "git")
+    index_record = git(
+        repo_root,
+        git_bin,
+        "ls-files",
+        "--stage",
+        "--error-unmatch",
+        "--",
+        ".node-version",
+        check=False,
+    )
+    committed_version = git(
+        repo_root, git_bin, "show", "HEAD:.node-version", check=False
+    )
+    version_bytes = version_file.read_bytes()
+    if (
+        index_record.returncode != 0
+        or not re.fullmatch(
+            rb"100(?:644|755) (?:[0-9a-f]{40}|[0-9a-f]{64}) 0\t\.node-version\n?",
+            index_record.stdout,
+        )
+        or committed_version.returncode != 0
+        or committed_version.stdout != version_bytes
+    ):
+        raise RunnerError("npm validation requires .node-version to be a regular tracked HEAD file")
+    try:
+        requested = version_bytes.decode("utf-8", errors="strict").strip()
+    except UnicodeDecodeError as exc:
+        raise RunnerError(".node-version must be valid UTF-8") from exc
+    requested_match = re.fullmatch(r"v?([1-9][0-9]*)(?:\.[0-9]+\.[0-9]+)?", requested)
+    if requested_match is None:
+        raise RunnerError(".node-version must contain one major or semantic Node version")
+
+    host_path = os.environ.get("PATH", DEFAULT_PATH)
+    raw_node = shutil.which("node", path=host_path)
+    raw_npm = shutil.which("npm", path=host_path)
+    if raw_node is None or raw_npm is None:
+        raise RunnerError("npm validation requires host node and npm executables")
+    node_path = Path(raw_node).resolve()
+    npm_cli_path = Path(raw_npm).resolve()
+    if not node_path.is_file() or not os.access(node_path, os.X_OK):
+        raise RunnerError("project Node executable is unavailable")
+    if not npm_cli_path.is_file():
+        raise RunnerError("project npm executable is unavailable")
+    npm_package_root: Path | None = None
+    for parent in npm_cli_path.parents:
+        package_manifest = parent / "package.json"
+        if package_manifest.is_symlink() or not package_manifest.is_file():
+            continue
+        package = load_json_object(package_manifest, "host npm package.json")
+        if package.get("name") == "npm":
+            npm_package_root = parent
+            break
+    if npm_package_root is None:
+        raise RunnerError("project npm executable must resolve inside an npm package tree")
+    npm_cli_relative = npm_cli_path.relative_to(npm_package_root)
+    npm_tree_sha256 = digest_tree(npm_package_root, omit_external_symlinks=True)
+    result = run_subprocess((str(node_path), "--version"), env=sanitize_process_env())
+    actual = result.stdout.decode("utf-8", errors="strict").strip()
+    actual_match = re.fullmatch(r"v([1-9][0-9]*)\.[0-9]+\.[0-9]+", actual)
+    if actual_match is None or actual_match.group(1) != requested_match.group(1):
+        raise RunnerError(
+            f"host Node {actual or 'unknown'} does not match .node-version major {requested_match.group(1)}"
+        )
+    return {
+        "requested_version": requested,
+        "actual_version": actual,
+        "node_path": node_path,
+        "npm_package_root": npm_package_root,
+        "npm_cli_relative": npm_cli_relative,
+        "node_sha256": hash_file(node_path),
+        "npm_sha256": hash_file(npm_cli_path),
+        "npm_tree_sha256": npm_tree_sha256,
+    }
+
+
+def materialize_project_node_runtime(
+    runtime: dict[str, Any], target_root: Path
+) -> dict[str, Any]:
+    if target_root.exists() or target_root.is_symlink():
+        raise RunnerError("private Node runtime target must not already exist")
+    private_node = target_root / "bin/node"
+    private_npm_root = target_root / "lib/node_modules/npm"
+    private_node.parent.mkdir(parents=True)
+    private_npm_root.parent.mkdir(parents=True)
+    try:
+        shutil.copy2(runtime["node_path"], private_node, follow_symlinks=True)
+        npm_source_root = runtime["npm_package_root"]
+
+        def omit_external_npm_links(directory: str, names: list[str]) -> set[str]:
+            parent = Path(directory)
+            omitted: set[str] = set()
+            for name in names:
+                candidate = parent / name
+                if candidate.is_symlink():
+                    target = os.readlink(candidate)
+                    if os.path.isabs(target) or not path_is_within(
+                        npm_source_root, candidate.parent / target
+                    ):
+                        omitted.add(name)
+            return omitted
+
+        shutil.copytree(
+            npm_source_root,
+            private_npm_root,
+            symlinks=True,
+            ignore=omit_external_npm_links,
+        )
+        private_npm_cli = private_npm_root / runtime["npm_cli_relative"]
+        private_npx_cli = private_npm_root / "bin/npx-cli.js"
+        if not private_npx_cli.is_file() or private_npx_cli.is_symlink():
+            raise RunnerError("host npm package does not contain a regular npx CLI")
+        (target_root / "bin/npm").symlink_to("../lib/node_modules/npm/bin/npm-cli.js")
+        (target_root / "bin/npx").symlink_to("../lib/node_modules/npm/bin/npx-cli.js")
+        if (
+            hash_file(private_node) != runtime["node_sha256"]
+            or digest_tree(private_npm_root) != runtime["npm_tree_sha256"]
+            or hash_file(private_npm_cli) != runtime["npm_sha256"]
+        ):
+            raise RunnerError("private Node/npm runtime differs from its verified host inputs")
+        probe = run_subprocess(
+            (str(private_node), str(private_npm_cli), "--version"),
+            env={
+                **sanitize_process_env(),
+                "HOME": str(target_root / "nonexistent-home"),
+                "PATH": f"{target_root / 'bin'}:{DEFAULT_PATH}",
+            },
+            check=False,
+        )
+        if probe.returncode != 0:
+            raise RunnerError(
+                "host npm package is not self-contained after private staging; "
+                "use a project-approved self-contained Node/npm distribution"
+            )
+        verify_project_node_runtime(runtime)
+    except BaseException:
+        shutil.rmtree(target_root, ignore_errors=True)
+        raise
+    return {
+        "runtime_root": target_root,
+        "node_path": private_node,
+        "npm_cli_path": private_npm_cli,
+        "npm_launcher": target_root / "bin/npm",
+        "npx_launcher": target_root / "bin/npx",
+    }
+
+
+def verify_project_node_runtime(
+    runtime: dict[str, Any], private_runtime: dict[str, Any] | None = None
+) -> None:
+    if hash_file(runtime["node_path"]) != runtime["node_sha256"]:
+        raise RunnerError("project Node executable changed during validation")
+    if (
+        digest_tree(runtime["npm_package_root"], omit_external_symlinks=True)
+        != runtime["npm_tree_sha256"]
+    ):
+        raise RunnerError("project npm package tree changed during validation")
+    host_npm_cli = runtime["npm_package_root"] / runtime["npm_cli_relative"]
+    if hash_file(host_npm_cli) != runtime["npm_sha256"]:
+        raise RunnerError("project npm CLI changed during validation")
+    if private_runtime is not None:
+        if (
+            hash_file(private_runtime["node_path"]) != runtime["node_sha256"]
+            or digest_tree(private_runtime["runtime_root"] / "lib/node_modules/npm")
+            != runtime["npm_tree_sha256"]
+            or hash_file(private_runtime["npm_cli_path"]) != runtime["npm_sha256"]
+        ):
+            raise RunnerError("private Node/npm runtime changed during validation")
+        expected_launchers = {
+            private_runtime["npm_launcher"]: "../lib/node_modules/npm/bin/npm-cli.js",
+            private_runtime["npx_launcher"]: "../lib/node_modules/npm/bin/npx-cli.js",
+        }
+        if any(
+            not launcher.is_symlink() or os.readlink(launcher) != expected
+            for launcher, expected in expected_launchers.items()
+        ):
+            raise RunnerError("private npm launcher changed during validation")
 
 
 def ensure_bwrap_usable(bwrap_bin: str) -> None:
@@ -1748,10 +2028,10 @@ def build_bwrap_command(
         str(clone_dir),
         ]
     )
-    for shadow_path, clone_target in writable_shadows:
-        argv.extend(("--bind", str(shadow_path), str(clone_target)))
     for shadow_path, clone_target in read_only_shadows:
         argv.extend(("--ro-bind", str(shadow_path), str(clone_target)))
+    for shadow_path, clone_target in writable_shadows:
+        argv.extend(("--bind", str(shadow_path), str(clone_target)))
     for read_only_input in read_only_inputs:
         if read_only_input not in external_files:
             argv.extend(("--ro-bind", str(read_only_input), str(read_only_input)))
@@ -2829,6 +3109,11 @@ def validate_candidate(args: argparse.Namespace) -> int:
     if args.suite == "focused" and not commands:
         raise RunnerError("this plan has no focused validation stage")
     requires_npm_dependencies = any(command.argv[:2] == ("npm", "run") for command in commands)
+    node_runtime = (
+        resolve_project_node_runtime(repo_root, git_bin)
+        if requires_npm_dependencies
+        else None
+    )
     dependency_snapshot: dict[str, Any] | None = None
     dependency_snapshot_arg = getattr(args, "dependency_snapshot", None)
     if dependency_snapshot_arg is not None:
@@ -2849,6 +3134,21 @@ def validate_candidate(args: argparse.Namespace) -> int:
     with lifecycle_context as lifecycle_state, tempfile.TemporaryDirectory(
         prefix="sandboxed-plan-worker-validation-"
     ) as workspace_tmp:
+        workspace = Path(workspace_tmp)
+        private_dependency_tree: Path | None = None
+        private_node_runtime: dict[str, Any] | None = None
+        created_dependency_cache_mountpoints: list[Path] = []
+        if dependency_snapshot is not None:
+            private_dependency_tree = materialize_verified_dependency_tree(
+                repo_root, dependency_snapshot, workspace / "verified-node_modules"
+            )
+            created_dependency_cache_mountpoints = ensure_dependency_cache_mountpoints(
+                private_dependency_tree
+            )
+        if node_runtime is not None:
+            private_node_runtime = materialize_project_node_runtime(
+                node_runtime, workspace / "verified-node-runtime"
+            )
         lifecycle = lifecycle_state.require_existing()
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
@@ -2877,12 +3177,6 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 "authoritative_validation_count": int(authoritative_count),
             }
         )
-        workspace = Path(workspace_tmp)
-        private_dependency_tree: Path | None = None
-        if dependency_snapshot is not None:
-            private_dependency_tree = materialize_verified_dependency_tree(
-                repo_root, dependency_snapshot, workspace / "verified-node_modules"
-            )
         suite_error: RunnerError | None = None
         for index, command in enumerate(commands):
             command_root = workspace / f"command-{index}"
@@ -2900,10 +3194,16 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 (git_bin, "apply", "--binary", "-"), cwd=clone_dir, stdin=verified["patch_bytes"]
             )
             read_only_shadows: list[tuple[Path, Path]] = []
+            writable_shadows: list[tuple[Path, Path]] = []
             if private_dependency_tree is not None:
                 dependency_target = clone_dir / "node_modules"
                 dependency_target.mkdir()
                 read_only_shadows.append((private_dependency_tree, dependency_target))
+                writable_shadows.extend(
+                    dependency_cache_shadows(
+                        private_dependency_tree, dependency_target, scratch_dir
+                    )
+                )
             env_vars = prepare_worker_environment(
                 source_repo=repo_root,
                 clone_dir=clone_dir,
@@ -2912,14 +3212,39 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 extra_env=(),
                 include_codex_home=False,
             )
-            env_vars["PATH"] = DEFAULT_PATH
+            env_vars["PATH"] = (
+                f"{private_node_runtime['runtime_root'] / 'bin'}:{DEFAULT_PATH}"
+                if command.argv[0] == "npm" and private_node_runtime is not None
+                else DEFAULT_PATH
+            )
+            playwright_browsers = (
+                private_dependency_tree / ".playwright-browsers"
+                if private_dependency_tree is not None
+                else None
+            )
+            if playwright_browsers is not None and (
+                playwright_browsers.exists() or playwright_browsers.is_symlink()
+            ):
+                if playwright_browsers.is_symlink() or not playwright_browsers.is_dir():
+                    raise RunnerError("private Playwright browser snapshot changed shape")
+                env_vars["PLAYWRIGHT_BROWSERS_PATH"] = str(
+                    dependency_target / ".playwright-browsers"
+                )
             validation_hidden = [output_dir, manifest_path.parent, host_codex_home_path()]
             host_home = Path.home().resolve()
             if host_home.is_dir():
                 validation_hidden.append(host_home)
             command_argv = (
-                require_validation_executable(command.argv[0], clone_dir),
-                *command.argv[1:],
+                (
+                    str(private_node_runtime["node_path"]),
+                    str(private_node_runtime["npm_cli_path"]),
+                    *command.argv[1:],
+                )
+                if command.argv[0] == "npm" and private_node_runtime is not None
+                else (
+                    require_validation_executable(command.argv[0], clone_dir),
+                    *command.argv[1:],
+                )
             )
             started = time.monotonic()
             result = run_subprocess(
@@ -2930,6 +3255,7 @@ def validate_candidate(args: argparse.Namespace) -> int:
                     command=command_argv,
                     env_vars=env_vars,
                     writable_clone=True,
+                    writable_shadows=writable_shadows,
                     hidden_directories=normalize_hidden_directories(
                         validation_hidden,
                         visible_paths=(clone_dir, scratch_dir),
@@ -2955,9 +3281,22 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 failed = True
                 break
             if dependency_snapshot is not None:
-                if digest_tree(private_dependency_tree) != dependency_snapshot["tree_sha256"]:
+                try:
+                    verify_private_dependency_integrity(
+                        private_dependency_tree,
+                        dependency_snapshot["tree_sha256"],
+                        created_dependency_cache_mountpoints,
+                    )
+                except RunnerError as exc:
                     failed = True
-                    suite_error = RunnerError("private dependency snapshot changed during validation")
+                    suite_error = exc
+                    break
+            if node_runtime is not None:
+                try:
+                    verify_project_node_runtime(node_runtime, private_node_runtime)
+                except RunnerError as exc:
+                    failed = True
+                    suite_error = exc
                     break
             if git_text(clone_dir, git_bin, "rev-parse", "HEAD") != verified["head"]:
                 failed = True
@@ -2987,6 +3326,17 @@ def validate_candidate(args: argparse.Namespace) -> int:
                     "tree_sha256": dependency_snapshot["tree_sha256"],
                 }
                 if dependency_snapshot is not None
+                else None
+            ),
+            "node_runtime": (
+                {
+                    "requested_version": node_runtime["requested_version"],
+                    "actual_version": node_runtime["actual_version"],
+                    "node_sha256": node_runtime["node_sha256"],
+                    "npm_sha256": node_runtime["npm_sha256"],
+                    "npm_tree_sha256": node_runtime["npm_tree_sha256"],
+                }
+                if node_runtime is not None
                 else None
             ),
             "passed": not failed,
@@ -3608,6 +3958,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dependency_parser.add_argument("--output-dir", required=True)
     dependency_parser.add_argument("--git-bin", default="git")
+    dependency_parser.add_argument(
+        "--playwright-browser-dir",
+        action="append",
+        default=[],
+        help="copy one allowlisted Playwright browser directory into the digested snapshot",
+    )
     dependency_parser.set_defaults(handler=prepare_dependency_snapshot)
 
     run_parser = subparsers.add_parser("run", help="run a sandboxed worker against one active plan")

@@ -27,6 +27,7 @@ REPLANNED_INDEX = ROOT / "docs/plan/replanned.md"
 LOCK = ROOT / ".agent-artifacts/plan-lifecycle.lock"
 MAX_SPEC_BYTES = 1_048_576
 MAX_PLANS = 8
+ACTIVE_PLAN_STATUSES = {"in_progress", "ready_to_archive", "deferred", "replan_required"}
 REQUIRED_PLAN_FIELDS = {
     "status", "task_types", "review_class", "human_design_required", "human_approval_status",
     "write_scope", "context_files", "required_specs", "validation", "acceptance",
@@ -298,24 +299,171 @@ def render_replanned(rows: list[tuple[str, str, str]]) -> str:
     return f"# Replanned Plan Index\n\nid\tpath\tcontract\n{body}\n"
 
 
-def checked_paths_for_id(plan_id: str) -> list[str]:
+def checked_paths_for_successor(plan_id: str, expected_path: str) -> list[str]:
     index = ROOT / "docs/plan/checked.md"
     if not index.is_file():
         return []
     paths: list[str] = []
     for line in index.read_text(encoding="utf-8").splitlines():
-        if line.startswith(plan_id + "\t"):
-            parts = line.split("\t")
-            if len(parts) != 2:
-                raise RestructureError(f"malformed checked index row for {plan_id}")
-            path = parts[1]
-            expected_name = Path(path).name
-            if not re.fullmatch(r"docs/plan/checked/(?:[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/)?" + re.escape(plan_id) + r"-[a-z0-9][a-z0-9-]*\.md", path):
-                raise RestructureError(f"invalid checked successor path for {plan_id}: {path}")
-            if not expected_name.startswith(plan_id + "-"):
-                raise RestructureError(f"checked successor filename mismatch for {plan_id}")
-            paths.append(path)
+        if not re.match(r"^[0-9]{3}\t", line):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 2:
+            raise RestructureError(f"malformed checked index row for {plan_id}")
+        indexed_id, path = parts
+        filename_matches = Path(path).name == Path(expected_path).name
+        if indexed_id != plan_id and not filename_matches:
+            continue
+        if indexed_id != plan_id or not filename_matches:
+            raise RestructureError(f"checked successor index identity mismatch for {plan_id}")
+        if not re.fullmatch(r"docs/plan/checked/(?:[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/)?" + re.escape(plan_id) + r"-[a-z0-9][a-z0-9-]*\.md", path):
+            raise RestructureError(f"invalid checked successor path for {plan_id}: {path}")
+        paths.append(path)
     return paths
+
+
+def active_records_for_successor(plan_id: str, expected_path: str) -> list[tuple[str, str, str]]:
+    if not ACTIVE_INDEX.is_file():
+        return []
+    related = [
+        row
+        for row in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8"))
+        if row[0] == plan_id or row[1] == expected_path
+    ]
+    if len(related) > 1:
+        raise RestructureError(f"successor has duplicate active index records: {expected_path}")
+    if related and related[0][:2] != (plan_id, expected_path):
+        raise RestructureError(f"successor active index identity mismatch: {expected_path}")
+    return related
+
+
+def replanned_records_for_id(plan_id: str, expected_path: str) -> list[tuple[str, str]]:
+    if not REPLANNED_INDEX.is_file():
+        return []
+    records: list[tuple[str, str]] = []
+    for indexed_id, archive_path, contract_path in replanned_rows(
+        REPLANNED_INDEX.read_text(encoding="utf-8")
+    ):
+        expected_name = Path(expected_path).name
+        archive_matches = Path(archive_path).name == expected_name
+        if indexed_id != plan_id and not archive_matches:
+            continue
+        if indexed_id != plan_id or not archive_matches:
+            raise RestructureError(
+                f"replanned successor index identity mismatch for {expected_path}"
+            )
+        normalized_path(
+            archive_path,
+            ARCHIVE_PATH_RE,
+            f"replanned successor archive path for {plan_id}",
+        )
+        normalized_path(
+            contract_path,
+            CONTRACT_PATH_RE,
+            f"replanned successor contract path for {plan_id}",
+        )
+        records.append((archive_path, contract_path))
+    return records
+
+
+def validate_replanned_successor(
+    plan_id: str,
+    expected_path: str,
+    expected_digests: list[str],
+    expected_acceptance: list[str],
+) -> None:
+    records = replanned_records_for_id(plan_id, expected_path)
+    if len(records) != 1:
+        raise RestructureError(
+            f"successor has missing or ambiguous replanned record: {expected_path}"
+        )
+    archive_path, contract_path = records[0]
+    reject_symlink_ancestors(archive_path, include_target=True)
+    reject_symlink_ancestors(contract_path, include_target=True)
+    archive_file = ROOT / archive_path
+    contract_file = ROOT / contract_path
+    if not archive_file.is_file() or not contract_file.is_file():
+        raise RestructureError(
+            f"missing replanned successor archive or contract: {expected_path}"
+        )
+    try:
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RestructureError(
+            f"invalid replanned successor contract: {expected_path}"
+        ) from exc
+    exact_object(
+        contract,
+        {
+            "schema_version",
+            "created_at",
+            "contract_path",
+            "source",
+            "reason_codes",
+            "dirty_product_paths",
+            "archive_path",
+            "successors",
+        },
+        f"replanned successor contract {plan_id}",
+    )
+    if contract["schema_version"] != 1 or contract["contract_path"] != contract_path:
+        raise RestructureError(
+            f"replanned successor contract identity mismatch: {expected_path}"
+        )
+    if contract["archive_path"] != archive_path:
+        raise RestructureError(
+            f"replanned successor contract archive mismatch: {expected_path}"
+        )
+    source = exact_object(
+        contract["source"],
+        {"path", "head", "plan_digest", "acceptance", "content"},
+        f"replanned successor source {plan_id}",
+    )
+    if source["path"] != expected_path:
+        raise RestructureError(
+            f"replanned successor source path mismatch: {expected_path}"
+        )
+    if (
+        not isinstance(source["content"], str)
+        or sha256(source["content"].encode()) != source["plan_digest"]
+    ):
+        raise RestructureError(
+            f"replanned successor source digest mismatch: {expected_path}"
+        )
+    if acceptance_records(source["content"]) != source["acceptance"]:
+        raise RestructureError(
+            f"replanned successor source acceptance mismatch: {expected_path}"
+        )
+    source_manifest = parse_manifest(source["content"])
+    if items(source_manifest, "inherited_acceptance_digests") != expected_digests:
+        raise RestructureError(
+            f"replanned successor source lineage mismatch: {expected_path}"
+        )
+    if items(source_manifest, "acceptance") != expected_acceptance:
+        raise RestructureError(
+            f"replanned successor source acceptance drift: {expected_path}"
+        )
+    archive_manifest = parse_manifest(archive_file.read_text(encoding="utf-8"))
+    if scalar(archive_manifest, "status") != "replanned":
+        raise RestructureError(
+            f"replanned successor archive status mismatch: {expected_path}"
+        )
+    if scalar(archive_manifest, "replan_source") != expected_path:
+        raise RestructureError(
+            f"replanned successor archive lineage mismatch: {expected_path}"
+        )
+    if scalar(archive_manifest, "replan_contract") != contract_path:
+        raise RestructureError(
+            f"replanned successor archive contract mismatch: {expected_path}"
+        )
+    if items(archive_manifest, "inherited_acceptance_digests") != expected_digests:
+        raise RestructureError(
+            f"replanned successor archive digest mapping mismatch: {expected_path}"
+        )
+    if items(archive_manifest, "acceptance") != expected_acceptance:
+        raise RestructureError(
+            f"replanned successor archive acceptance mismatch: {expected_path}"
+        )
 
 
 def validate_plan_entry(
@@ -398,6 +546,47 @@ def validate_plan_entry(
     return {**obj, "manifest": manifest, "content_digest": sha256(content.encode("utf-8"))}
 
 
+def manifest_field_ranges(text: str) -> list[tuple[str, int, int]]:
+    starts: list[tuple[str, int]] = []
+    offset = 0
+    for raw in text.splitlines(keepends=True):
+        line = raw.rstrip()
+        if line.startswith("## "):
+            break
+        if ":" in line and not line.startswith(" "):
+            starts.append((line.split(":", 1)[0].strip(), offset))
+        offset += len(raw)
+    return [
+        (key, start, starts[index + 1][1] if index + 1 < len(starts) else offset)
+        for index, (key, start) in enumerate(starts)
+    ]
+
+
+def manifest_body_offset(text: str) -> int:
+    offset = 0
+    for raw in text.splitlines(keepends=True):
+        if raw.rstrip().startswith("## "):
+            return offset
+        offset += len(raw)
+    return len(text)
+
+
+def remove_manifest_fields(prefix: str, fields: set[str]) -> str:
+    ranges: list[tuple[int, int]] = []
+    for key, start, end in manifest_field_ranges(prefix):
+        if key in fields:
+            ranges.append((start, end))
+    if not ranges:
+        return prefix
+    chunks: list[str] = []
+    cursor = 0
+    for start, end in ranges:
+        chunks.append(prefix[cursor:start])
+        cursor = end
+    chunks.append(prefix[cursor:])
+    return "".join(chunks)
+
+
 def build_archive(
     source_text: str,
     *,
@@ -406,18 +595,37 @@ def build_archive(
     plan_paths: list[str],
     acceptance_digests: list[str],
 ) -> str:
-    manifest = parse_manifest(source_text)
-    for forbidden in (
-        "primary_invariant", "replan_source", "replan_contract", "integration_gates",
-        "successor_plans", "inherited_acceptance_digests",
-    ):
-        if forbidden in manifest:
-            raise RestructureError(f"source already contains reserved restructuring field: {forbidden}")
-    updated, count = re.subn(
-        r"^status: replan_required$", "status: replanned", source_text, count=1, flags=re.MULTILINE
-    )
-    if count != 1:
+    body_offset = manifest_body_offset(source_text)
+    manifest_prefix = source_text[:body_offset]
+    body_suffix = source_text[body_offset:]
+    status_ranges = [
+        (start, end)
+        for key, start, end in manifest_field_ranges(manifest_prefix)
+        if key == "status"
+    ]
+    if len(status_ranges) != 1:
         raise RestructureError("source plan must have exactly one status: replan_required field")
+    status_start, status_end = status_ranges[0]
+    updated = manifest_prefix[:status_start] + "status: replanned\n" + manifest_prefix[status_end:]
+    updated = remove_manifest_fields(
+        updated,
+        {
+            "primary_invariant",
+            "replan_source",
+            "replan_contract",
+            "integration_gates",
+            "successor_plans",
+            "inherited_acceptance_digests",
+        },
+    )
+    summary_ranges = [
+        (start, end)
+        for key, start, end in manifest_field_ranges(updated)
+        if key == "checked_summary_ja"
+    ]
+    if len(summary_ranges) != 1:
+        raise RestructureError("source plan lacks checked_summary_ja")
+    summary_start = summary_ranges[0][0]
     block = [
         "primary_invariant: preserve the complete source acceptance baseline",
         f"replan_source: {source_path}",
@@ -429,11 +637,13 @@ def build_archive(
         "inherited_acceptance_digests:",
         *[f"  - {digest}" for digest in acceptance_digests],
     ]
-    marker = "checked_summary_ja:"
-    offset = updated.find(marker)
-    if offset < 0:
-        raise RestructureError("source plan lacks checked_summary_ja")
-    return updated[:offset] + "\n".join(block) + "\n" + updated[offset:]
+    return (
+        updated[:summary_start]
+        + "\n".join(block)
+        + "\n"
+        + updated[summary_start:]
+        + body_suffix
+    )
 
 
 def read_spec(path: Path) -> dict[str, Any]:
@@ -737,6 +947,13 @@ def verify_repository_contracts() -> None:
         source = exact_object(
             contract["source"], {"path", "head", "plan_digest", "acceptance", "content"}, f"contract source {plan_id}"
         )
+        source_path = normalized_path(source["path"], PLAN_PATH_RE, "contract source path")
+        source_match = PLAN_PATH_RE.fullmatch(source_path)
+        assert source_match
+        if source_match.group(1) != plan_id:
+            raise RestructureError(f"replanned index and source id mismatch for {plan_id}")
+        if Path(archive_path).name != Path(source_path).name:
+            raise RestructureError(f"replanned archive basename mismatch for {plan_id}")
         if not isinstance(source["content"], str) or sha256(source["content"].encode()) != source["plan_digest"]:
             raise RestructureError(f"contract source content digest mismatch for {plan_id}")
         if acceptance_records(source["content"]) != source["acceptance"]:
@@ -778,26 +995,43 @@ def verify_repository_contracts() -> None:
                 raise RestructureError(f"contract successor acceptance mismatch for {plan_id}")
             reject_symlink_ancestors(path, include_target=True)
             active_file = ROOT / path
-            checked_paths = checked_paths_for_id(successor["id"])
-            active_exists = active_file.is_file()
-            if active_exists and checked_paths:
-                raise RestructureError(f"successor exists in both active and checked indexes: {path}")
+            active_records = active_records_for_successor(successor["id"], path)
+            checked_paths = checked_paths_for_successor(successor["id"], path)
+            replanned_records = replanned_records_for_id(successor["id"], path)
+            if sum((bool(active_records), bool(checked_paths), bool(replanned_records))) > 1:
+                raise RestructureError(f"successor has ambiguous durable records: {path}")
             if len(checked_paths) > 1:
                 raise RestructureError(f"successor has multiple checked index entries: {path}")
-            if active_exists:
+            if active_file.is_file() and not active_records:
+                raise RestructureError(f"successor has an unindexed active file: {path}")
+            if active_records:
+                if not active_file.is_file():
+                    raise RestructureError(f"missing active successor plan: {path}")
+                expected_live_status = active_records[0][2]
+                if expected_live_status not in ACTIVE_PLAN_STATUSES:
+                    raise RestructureError(f"invalid active successor status: {path}")
                 live_successor_file = active_file
             elif checked_paths:
                 reject_symlink_ancestors(checked_paths[0], include_target=True)
                 live_successor_file = ROOT / checked_paths[0]
                 if not live_successor_file.is_file():
                     raise RestructureError(f"missing checked successor plan for {plan_id}: {checked_paths[0]}")
+                expected_live_status = "checked"
+            elif replanned_records:
+                validate_replanned_successor(
+                    successor["id"], path, digests, expected_successor_acceptance
+                )
+                live_successor_file = None
             else:
                 raise RestructureError(f"missing live successor plan for {plan_id}: {path}")
-            live_successor_manifest = parse_manifest(live_successor_file.read_text(encoding="utf-8"))
-            if items(live_successor_manifest, "inherited_acceptance_digests") != digests:
-                raise RestructureError(f"live successor lineage mismatch for {plan_id}: {path}")
-            if items(live_successor_manifest, "acceptance") != expected_successor_acceptance:
-                raise RestructureError(f"live successor acceptance mismatch for {plan_id}: {path}")
+            if live_successor_file is not None:
+                live_successor_manifest = parse_manifest(live_successor_file.read_text(encoding="utf-8"))
+                if scalar(live_successor_manifest, "status") != expected_live_status:
+                    raise RestructureError(f"live successor status mismatch for {plan_id}: {path}")
+                if items(live_successor_manifest, "inherited_acceptance_digests") != digests:
+                    raise RestructureError(f"live successor lineage mismatch for {plan_id}: {path}")
+                if items(live_successor_manifest, "acceptance") != expected_successor_acceptance:
+                    raise RestructureError(f"live successor acceptance mismatch for {plan_id}: {path}")
             mapped.update(digests)
             paths.append(path)
             if successor["integration"] is True:
