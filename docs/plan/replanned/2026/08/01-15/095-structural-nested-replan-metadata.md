@@ -1,7 +1,6 @@
 # Replace nested restructuring metadata structurally
 
-status: replan_required
-primary_invariant: nested restructuring replaces only top-level lineage fields and preserves the Markdown body byte-for-byte
+status: replanned
 task_types:
   - planning_docs
   - template_workflow
@@ -34,15 +33,14 @@ acceptance:
   - Add regression coverage for a two-level restructuring chain.
 replan_reason_codes:
   - parent_remediation_budget_exhausted
-replan_source: docs/plan/active/094-nested-plan-restructuring.md
-replan_contract: docs/plan/replanned/contracts/094-nested-plan-restructuring.json
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/095-structural-nested-replan-metadata.md
+replan_contract: docs/plan/replanned/contracts/095-structural-nested-replan-metadata.json
 integration_gates:
-  - plan 096 must add index-aware durable successor resolution after archive rewriting is stable
-  - plan 097 must prove the combined source acceptance
+  - combined successors must satisfy every source acceptance item
 successor_plans:
-  - docs/plan/active/095-structural-nested-replan-metadata.md
-  - docs/plan/active/096-replanned-successor-resolution.md
-  - docs/plan/active/097-nested-restructuring-integration.md
+  - docs/plan/active/098-complete-nested-manifest-rewrite.md
+  - docs/plan/active/099-nested-manifest-integration.md
 inherited_acceptance_digests:
   - sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698
   - sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1
