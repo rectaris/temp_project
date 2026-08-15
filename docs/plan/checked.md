@@ -84,3 +84,9 @@ id	path
 082	docs/plan/checked/2026/08/01-15/082-release-v140.md
 083	docs/plan/checked/2026/08/01-15/083-pr3-codex-review-remediation.md
 084	docs/plan/checked/2026/08/01-15/084-prepare-release-v141-pr.md
+085	docs/plan/checked/2026/08/01-15/085-ai-test-modularization.md
+086	docs/plan/checked/2026/08/01-15/086-copier-checker-inventory.md
+087	docs/plan/checked/2026/08/01-15/087-ai-facing-layout.md
+088	docs/plan/checked/2026/08/01-15/088-copier-update-safety-contract.md
+089	docs/plan/checked/2026/08/01-15/089-copier-wrapper-self-update.md
+090	docs/plan/checked/2026/08/01-15/090-release-v142.md

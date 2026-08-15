@@ -95,11 +95,14 @@ fixture_git "$update_source" switch -q -c migration-target FETCH_HEAD
 fixture_git "$update_source" merge-base --is-ancestor v1.2.1 HEAD
 for candidate_path in \
   copier.yml \
+  scripts/migrate-sequential-plan-worker.py \
   scripts/validate-copier-update.py \
   template/README.md.jinja \
   template/.github/workflows/codex-ci-autofix.yml.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+  template/.project-agent-workflow/scripts/run-copier-update.sh \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
+  template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
   template/.project-agent-workflow/scripts/validate-copier-update.py \
   template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
   template/.project-agent-workflow/scripts/check-external-service-policy.py \
@@ -127,11 +130,14 @@ do
 done
 fixture_git "$update_source" add \
   copier.yml \
+  scripts/migrate-sequential-plan-worker.py \
   scripts/validate-copier-update.py \
   template/README.md.jinja \
   template/.github/workflows/codex-ci-autofix.yml.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+  template/.project-agent-workflow/scripts/run-copier-update.sh \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
+  template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
   template/.project-agent-workflow/scripts/validate-copier-update.py \
   template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
   template/.project-agent-workflow/scripts/check-external-service-policy.py \
@@ -158,6 +164,9 @@ fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
 fixture_git "$update_source" tag v1.2.2
 target_ref=v1.2.2
 fixture_git "$update_source" tag v1.3.1
+fixture_git "$update_source" -c user.email=ci@example.invalid -c user.name=CI \
+  commit --allow-empty -qm "Create v1.4.2 migration boundary"
+fixture_git "$update_source" tag v1.4.2
 
 direct_push_update_out="$tmp/direct-push-to-patch-only"
 run_copier copy -q -f --trust --vcs-ref v1.2.1 \
@@ -263,13 +272,30 @@ if "$initial_copy/.project-agent-workflow/scripts/update-from-copier.sh" --force
 fi
 
 validator_out="$tmp/validator-fixture"
-mkdir -p "$validator_out/.github/workflows" "$validator_out/scripts"
+mkdir -p \
+  "$validator_out/.github/workflows" \
+  "$validator_out/.project-agent-workflow" \
+  "$validator_out/scripts"
 fixture_git "$validator_out" init -b main >/dev/null
 fixture_git "$validator_out" config user.email "ci@example.invalid"
 fixture_git "$validator_out" config user.name "CI"
 cat >"$validator_out/.gitignore" <<'EOF_VALIDATOR_IGNORE'
 *.rej
 EOF_VALIDATOR_IGNORE
+cat >"$validator_out/.project-agent-workflow/ownership.yaml" <<'EOF_VALIDATOR_OWNERSHIP'
+version: 1
+copier_managed:
+  - .project-agent-workflow/**
+  - .github/workflows/codex-ci-autofix.yml
+seeded_project_owned:
+  - .gitignore
+  - product.txt
+  - scripts/skillspector-scan.sh
+field_overrides: []
+metadata: []
+migration_backup: []
+project_owned_extension_roots: []
+EOF_VALIDATOR_OWNERSHIP
 printf 'baseline\n' >"$validator_out/product.txt"
 printf 'optional workflow\n' >"$validator_out/.github/workflows/codex-ci-autofix.yml"
 printf 'optional helper\n' >"$validator_out/scripts/skillspector-scan.sh"
@@ -376,6 +402,99 @@ if ! fixture_git "$boundary_conflict" ls-files -u | grep -q .; then
   echo "v1.2.1-to-v1.2.2 fixture did not create a real index conflict" >&2
   exit 1
 fi
+
+worker_contract_out="$tmp/v121-to-v142-worker-contract"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.2.1 \
+  --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$worker_contract_out" >/dev/null
+fixture_git "$worker_contract_out" init -b main >/dev/null
+fixture_git "$worker_contract_out" config user.email "ci@example.invalid"
+fixture_git "$worker_contract_out" config user.name "CI"
+printf '\nProject-owned v1.2.1 policy marker.\n' >>"$worker_contract_out/AGENTS.md"
+fixture_git "$worker_contract_out" add -A
+fixture_git "$worker_contract_out" commit -m "Create customized v1.2.1 worker fixture" >/dev/null
+worker_contract_agents_before=$(fixture_git "$worker_contract_out" hash-object AGENTS.md)
+grep -q '^sandbox_mode = "workspace-write"$' \
+  "$worker_contract_out/.codex/agents/sequential_plan_worker.toml"
+run_copier update -q --trust --defaults --vcs-ref v1.4.2 "$worker_contract_out" >/dev/null
+if ! grep -q '^_commit: v1.4.2$' "$worker_contract_out/.copier-answers.yml"; then
+  echo "v1.2.1-to-v1.4.2 fixture recorded an unexpected Copier source revision" >&2
+  sed -n '1,12p' "$worker_contract_out/.copier-answers.yml" >&2
+  exit 1
+fi
+cmp "$root/template/.codex/agents/sequential_plan_worker.toml" \
+  "$worker_contract_out/.codex/agents/sequential_plan_worker.toml"
+test "$worker_contract_agents_before" = "$(fixture_git "$worker_contract_out" hash-object AGENTS.md)"
+printf '\nUnexpected update overwrite.\n' >>"$worker_contract_out/AGENTS.md"
+if python3 "$validator" --destination "$worker_contract_out" >/dev/null 2>&1; then
+  echo "v1.4.2 validator accepted a project-owned AGENTS.md overwrite" >&2
+  exit 1
+fi
+fixture_git "$worker_contract_out" restore AGENTS.md
+
+wrapper_self_update_out="$tmp/v141-to-current-wrapper-self-update"
+wrapper_self_update_cwd="$tmp/v141-wrapper-outside-cwd"
+mkdir -p "$wrapper_self_update_cwd"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.4.1 \
+  --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$wrapper_self_update_out" >/dev/null
+fixture_git "$wrapper_self_update_out" init -b main >/dev/null
+fixture_git "$wrapper_self_update_out" config user.email "ci@example.invalid"
+fixture_git "$wrapper_self_update_out" config user.name "CI"
+fixture_git "$wrapper_self_update_out" add -A
+fixture_git "$wrapper_self_update_out" commit -m "Create v1.4.1 wrapper self-update fixture" >/dev/null
+if ! (cd "$wrapper_self_update_cwd" && \
+  "$wrapper_self_update_out/.project-agent-workflow/scripts/update-from-copier.sh" \
+    --defaults --vcs-ref "$target_commit" >/dev/null); then
+  echo "v1.4.1 wrapper did not survive replacing itself during update" >&2
+  exit 1
+fi
+grep -q -- '--destination . --before-update' \
+  "$wrapper_self_update_out/.project-agent-workflow/scripts/run-copier-update.sh"
+if (cd "$wrapper_self_update_out" && \
+  .project-agent-workflow/scripts/run-copier-update.sh --force >/dev/null 2>&1); then
+  echo "Copier update helper accepted --force" >&2
+  exit 1
+fi
+if (cd "$wrapper_self_update_out" && \
+  .project-agent-workflow/scripts/run-copier-update.sh -f >/dev/null 2>&1); then
+  echo "Copier update helper accepted -f" >&2
+  exit 1
+fi
+fixture_git "$wrapper_self_update_out" add -A
+fixture_git "$wrapper_self_update_out" commit -m "Accept current update wrapper" >/dev/null
+
+sed -i '/main() {/a\  : future-helper-byte-shift' \
+  "$update_source/template/.project-agent-workflow/scripts/run-copier-update.sh"
+fixture_git "$update_source" add template/.project-agent-workflow/scripts/run-copier-update.sh
+fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
+  commit -qm "Create future helper replacement fixture"
+future_helper_ref=$(fixture_git "$update_source" rev-parse HEAD)
+if ! (cd "$wrapper_self_update_cwd" && \
+  "$wrapper_self_update_out/.project-agent-workflow/scripts/update-from-copier.sh" \
+    --defaults --vcs-ref "$future_helper_ref" >/dev/null); then
+  echo "current Copier update helper did not survive replacing itself" >&2
+  exit 1
+fi
+grep -q 'future-helper-byte-shift' \
+  "$wrapper_self_update_out/.project-agent-workflow/scripts/run-copier-update.sh"
+
+custom_worker_out="$tmp/v121-to-v142-custom-worker"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.2.1 \
+  --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$custom_worker_out" >/dev/null
+fixture_git "$custom_worker_out" init -b main >/dev/null
+fixture_git "$custom_worker_out" config user.email "ci@example.invalid"
+fixture_git "$custom_worker_out" config user.name "CI"
+sed -i 's/Read the assigned plan and its required specs before editing\./Preserve this project-owned worker instruction./' \
+  "$custom_worker_out/.codex/agents/sequential_plan_worker.toml"
+fixture_git "$custom_worker_out" add -A
+fixture_git "$custom_worker_out" commit -m "Customize the legacy worker contract" >/dev/null
+if run_copier update -q --trust --defaults --vcs-ref v1.4.2 "$custom_worker_out" >/dev/null 2>&1; then
+  echo "v1.4.2 worker migration overwrote a customized workspace-write profile" >&2
+  exit 1
+fi
+grep -q 'Preserve this project-owned worker instruction.' \
+  "$custom_worker_out/.codex/agents/sequential_plan_worker.toml"
+grep -q '^sandbox_mode = "workspace-write"$' \
+  "$custom_worker_out/.codex/agents/sequential_plan_worker.toml"
 
 legacy_answers="$tmp/legacy-activation.answers.yml"
 cat >"$legacy_answers" <<'EOF'
@@ -1122,7 +1241,7 @@ Keep this project instruction.
 """
 EOF_MATURE_DOCS_RESEARCHER
 cat >"$mature_out/.codex/agents/repo_explorer.toml" <<'EOF_MATURE_REPO_EXPLORER'
-  name = "repo_explorer"
+  name = "project_repository_reader"
   description = "Customized repo_explorer profile."
 sandbox_mode = "workspace-write"
 
@@ -1157,7 +1276,7 @@ if grep -q 'legacy-model' "$mature_out/.codex/agents/docs_researcher.toml" || gr
 fi
 grep -q '^  model = "gpt-5.6-luna"$' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q '^  model_reasoning_effort = "low"$' "$mature_out/.codex/agents/repo_explorer.toml"
-grep -q '^  name = "repo_explorer"$' "$mature_out/.codex/agents/repo_explorer.toml"
+grep -q '^  name = "project_repository_reader"$' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q '^  description = "Customized repo_explorer profile\."' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q 'Project adoption policy marker.' "$mature_out/docs/agent/SPEC_COPIER_ADOPTION.md"
 grep -q 'Project environment policy marker.' "$mature_out/docs/agent/SPEC_ENVIRONMENT.md"
@@ -1280,6 +1399,14 @@ jobs: {}
 EOF_FUTURE_CI
 fixture_git "$future_out" add -A
 fixture_git "$future_out" commit -m "Add project-owned extensions" >/dev/null
+
+printf 'dirty update preflight\n' >"$future_out/untracked-before-update.txt"
+if "$future_out/.project-agent-workflow/scripts/update-from-copier.sh" \
+  --defaults --vcs-ref v1.2.2 >/dev/null 2>&1; then
+  echo "Copier update wrapper accepted a dirty pre-update worktree" >&2
+  exit 1
+fi
+rm -f "$future_out/untracked-before-update.txt"
 
 sed -i 's|Update files here through `copier update` and do not add project-specific policy or runtime facts here\.|Update files here through the generated update wrapper; keep project-specific policy and runtime facts outside this core.|' \
   "$future_source/template/.project-agent-workflow/README.md"

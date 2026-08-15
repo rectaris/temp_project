@@ -48,6 +48,7 @@ if [ -z "$source_ref" ]; then
   git clone -q "$root" "$render_source"
   for candidate_path in \
     copier.yml \
+    scripts/migrate-sequential-plan-worker.py \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
     template/.github/workflows/project-agent-workflow.yml \
@@ -59,10 +60,12 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
     template/docs/plan/replanned.md \
+    template/.project-agent-workflow/scripts/run-copier-update.sh \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
@@ -87,6 +90,7 @@ if [ -z "$source_ref" ]; then
   done
   git -C "$render_source" add \
     copier.yml \
+    scripts/migrate-sequential-plan-worker.py \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
     template/.github/workflows/project-agent-workflow.yml \
@@ -98,10 +102,12 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
     template/docs/plan/replanned.md \
+    template/.project-agent-workflow/scripts/run-copier-update.sh \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
@@ -1152,6 +1158,7 @@ grep -q 'Conflict Handling' "$tmp/typescript/.project-agent-workflow/docs/agent/
 grep -q 'Copier may represent a conflict with inline conflict markers' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md"
 grep -q '.project-agent-workflow/scripts/update-from-copier.sh' "$tmp/typescript/README.md"
 test -x "$tmp/typescript/.project-agent-workflow/scripts/update-from-copier.sh"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/run-copier-update.sh"
 cmp "$root/scripts/validate-copier-update.py" "$tmp/typescript/.project-agent-workflow/scripts/validate-copier-update.py"
 test -f "$tmp/typescript/docs/agent/external-services.yaml"
 grep -q 'external_services:' "$tmp/typescript/docs/agent/external-services.yaml"
