@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import os
 import re
+import stat
 import subprocess
 import sys
 import tomllib
@@ -21,6 +22,8 @@ NON_REPOSITORY_DIAGNOSIS = (
     "fatal: not a git repository (or any of the parent directories): .git"
 )
 OWNERSHIP_PATH = ".project-agent-workflow/ownership.yaml"
+CURRENT_OWNERSHIP_SHA256 = "c5fd19aaafd95589ae5036ab4d50454368b25ff5003c71d67a93b2b1440c230f"
+OWNERSHIP_MAX_BYTES = 64 * 1024
 LEGACY_SEQUENTIAL_WORKER_SHA256 = "744ed4f634e13ec1de27076dfa9f12411a8b01ff56ba27cfbc5151086fbe1ccb"
 READ_ONLY_SEQUENTIAL_WORKER_SHA256 = "6011c848311f59e18a37f511af8620cc025e8cad72a54fc767a83dd8da7837d1"
 FIXED_AGENT_PROFILES = {
@@ -172,6 +175,61 @@ def parse_ownership_inventory(raw: bytes) -> dict[str, tuple[str, ...]]:
     return {key: tuple(entries) for key, entries in values.items()}
 
 
+def load_current_ownership_inventory(repository: Path) -> dict[str, tuple[str, ...]]:
+    parts = Path(OWNERSHIP_PATH).parts
+    directory_fd = os.open(
+        repository, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    )
+    descriptor = -1
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = next_fd
+        descriptor = os.open(
+            parts[-1], os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=directory_fd
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise UpdateValidationError("updated ownership inventory must be a single-link regular file")
+        if before.st_size > OWNERSHIP_MAX_BYTES:
+            raise UpdateValidationError("updated ownership inventory exceeds the byte bound")
+        chunks: list[bytes] = []
+        remaining = OWNERSHIP_MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(4096, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if len(raw) > OWNERSHIP_MAX_BYTES:
+            raise UpdateValidationError("updated ownership inventory exceeds the byte bound")
+        after = os.fstat(descriptor)
+        if (
+            (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+            or before.st_ctime_ns != after.st_ctime_ns
+            or before.st_size != after.st_size
+            or after.st_nlink != 1
+        ):
+            raise UpdateValidationError("updated ownership inventory changed while it was read")
+    except OSError as exc:
+        raise UpdateValidationError(f"could not read updated ownership inventory: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory_fd)
+    if hashlib.sha256(raw).hexdigest() != CURRENT_OWNERSHIP_SHA256:
+        raise UpdateValidationError(
+            "updated ownership inventory differs from the inventory shipped with this validator"
+        )
+    return parse_ownership_inventory(raw)
+
+
 def ownership_pattern_matches(path: str, pattern: str) -> bool:
     if pattern.endswith("/**"):
         prefix = pattern[:-3].rstrip("/")
@@ -290,11 +348,14 @@ def inspect_project_owned_content(repository: Path) -> None:
             + (diagnosis or f"git exited {ownership.returncode}")
         )
     inventory = parse_ownership_inventory(ownership.stdout)
-    changed = require_git_success(
+    tracked_changes = require_git_success(
         repository, "diff", "--name-only", "-z", "HEAD", "--"
     ).stdout
+    untracked_changes = require_git_success(
+        repository, "ls-files", "--others", "--exclude-standard", "-z", "--"
+    ).stdout
     rejected: list[str] = []
-    for raw_path in changed.split(b"\0"):
+    for raw_path in tracked_changes.split(b"\0"):
         if not raw_path:
             continue
         path = raw_path.decode("utf-8", errors="surrogateescape")
@@ -316,6 +377,14 @@ def inspect_project_owned_content(repository: Path) -> None:
             validate_agent_profile_transition(path, before, current.read_bytes())
             continue
         rejected.append(path)
+    untracked_paths = sorted(path for path in untracked_changes.split(b"\0") if path)
+    if untracked_paths:
+        current_inventory = load_current_ownership_inventory(repository)
+        for raw_path in untracked_paths:
+            path = raw_path.decode("utf-8", errors="surrogateescape")
+            if any(matches_any(path, current_inventory[key]) for key in current_inventory):
+                continue
+            rejected.append(path)
     if rejected:
         raise UpdateValidationError(
             "Copier update changed existing project-owned or unclassified paths: "
