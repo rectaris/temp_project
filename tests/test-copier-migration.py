@@ -198,26 +198,8 @@ class CopierOwnedContentValidationTest(unittest.TestCase):
         subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repository, check=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=repository, check=True)
         (repository / ".project-agent-workflow").mkdir()
-        (repository / ".project-agent-workflow/ownership.yaml").write_text(
-            '''version: 1
-copier_managed:
-  - .project-agent-workflow/**
-seeded_project_owned:
-  - AGENTS.md
-  - .codex/agents/*.toml
-field_overrides:
-  - path: .codex/agents/*.toml
-    template_fixed:
-      - model
-      - model_reasoning_effort
-    project_owned_remainder: true
-metadata:
-  - .copier-answers.yml
-migration_backup:
-  - .project-agent-workflow-migration/**
-project_owned_extension_roots: []
-''',
-            encoding="utf-8",
+        (repository / ".project-agent-workflow/ownership.yaml").write_bytes(
+            (ROOT / "template/.project-agent-workflow/ownership.yaml").read_bytes()
         )
         (repository / "AGENTS.md").write_text("project policy\n", encoding="utf-8")
         (repository / ".copier-answers.yml").write_text("_commit: v1.2.1\n", encoding="utf-8")

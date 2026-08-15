@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import re
@@ -451,6 +452,7 @@ def require_sandboxed_plan_worker_alignment() -> None:
         '"prepare-dependencies"',
         '"--dependency-snapshot"',
         "def verify_dependency_snapshot",
+        "def source_tree_metadata_fingerprint",
         "read_only_shadows",
     ):
         if marker not in template_runner:
@@ -817,6 +819,14 @@ def require_copier_documentation_contract() -> None:
     generated_validator = ROOT / "template/.project-agent-workflow/scripts/validate-copier-update.py"
     if source_validator.read_bytes() != generated_validator.read_bytes():
         fail("source and generated Copier update validators must be byte-identical")
+    ownership_digest = hashlib.sha256(
+        (ROOT / "template/.project-agent-workflow/ownership.yaml").read_bytes()
+    ).hexdigest()
+    if (
+        f'CURRENT_OWNERSHIP_SHA256 = "{ownership_digest}"'
+        not in source_validator.read_text(encoding="utf-8")
+    ):
+        fail("Copier update validator ownership digest differs from the current inventory")
     source_worker_migration = ROOT / "scripts/migrate-sequential-plan-worker.py"
     generated_worker_migration = (
         ROOT / "template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py"

@@ -1767,6 +1767,172 @@ echo dependency-snapshot-verified
         binary_dir.mkdir()
         (binary_dir / "verify-tool").symlink_to("../verify-tool/bin/verify-tool")
 
+    def install_npm_workerd_hardlink_tree(self, repo: Path) -> tuple[Path, Path]:
+        platform_package = repo / "fixtures/workerd-linux-64"
+        wrapper_package = repo / "fixtures/workerd"
+        (platform_package / "bin").mkdir(parents=True)
+        (wrapper_package / "bin").mkdir(parents=True)
+        (platform_package / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "@cloudflare/workerd-linux-64",
+                    "version": "1.0.0",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (platform_package / "bin/workerd").write_text(
+            "workerd fixture\n", encoding="utf-8"
+        )
+        (wrapper_package / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "workerd",
+                    "version": "1.0.0",
+                    "scripts": {"postinstall": "node postinstall.js"},
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (wrapper_package / "bin/workerd").write_text(
+            "replaced during npm ci\n", encoding="utf-8"
+        )
+        (wrapper_package / "postinstall.js").write_text(
+            """const fs = require("node:fs");
+const path = require("node:path");
+const source = path.join(__dirname, "..", "@cloudflare", "workerd-linux-64", "bin", "workerd");
+const target = path.join(__dirname, "bin", "workerd");
+fs.rmSync(target, { force: true });
+fs.linkSync(source, target);
+""",
+            encoding="utf-8",
+        )
+        npm_environment = dict(os.environ)
+        npm_environment.update(
+            {
+                "npm_config_audit": "false",
+                "npm_config_cache": str(repo.parent / "npm-cache"),
+                "npm_config_fund": "false",
+                "npm_config_update_notifier": "false",
+            }
+        )
+
+        def pack(source: Path) -> str:
+            packed = subprocess.run(
+                [
+                    "npm",
+                    "pack",
+                    "--ignore-scripts",
+                    "--pack-destination",
+                    str(repo / "fixtures"),
+                ],
+                cwd=source,
+                env=npm_environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(packed.returncode, 0, packed.stderr)
+            return packed.stdout.strip().splitlines()[-1]
+
+        platform_archive = pack(platform_package)
+        wrapper_archive = pack(wrapper_package)
+        (repo / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "workerd-hardlink-fixture",
+                    "version": "1.0.0",
+                    "private": True,
+                    "dependencies": {
+                        "@cloudflare/workerd-linux-64": f"file:fixtures/{platform_archive}",
+                        "workerd": f"file:fixtures/{wrapper_archive}",
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        lock = subprocess.run(
+            ["npm", "install", "--package-lock-only", "--ignore-scripts", "--offline"],
+            cwd=repo,
+            env=npm_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(lock.returncode, 0, lock.stderr)
+        git(repo, "add", "package.json", "package-lock.json", "fixtures")
+        git(repo, "commit", "-qm", "add npm ci Workerd hard-link fixture")
+        installed = subprocess.run(
+            ["npm", "ci", "--offline"],
+            cwd=repo,
+            env=npm_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        return (
+            repo / "node_modules/@cloudflare/workerd-linux-64/bin/workerd",
+            repo / "node_modules/workerd/bin/workerd",
+        )
+
+    def test_prepare_dependencies_breaks_npm_workerd_hardlinks(self) -> None:
+        if shutil.which("npm") is None:
+            if os.environ.get("REQUIRE_NPM") == "1":
+                self.fail("npm is required for the Workerd hard-link regression")
+            self.skipTest("npm is unavailable")
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={".gitignore": "node_modules/\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        platform_binary, wrapper_binary = self.install_npm_workerd_hardlink_tree(repo)
+        self.assertTrue(os.path.samefile(platform_binary, wrapper_binary))
+        self.assertEqual(platform_binary.stat().st_nlink, 2)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "hard-linked file"):
+            RUNNER.digest_tree(repo / "node_modules")
+
+        prepared = run_cli(
+            repo,
+            "prepare-dependencies",
+            "--output-dir",
+            str(root / "dependency-snapshot"),
+        )
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        snapshot_root = Path(prepared.stdout.strip()).parent / "node_modules"
+        copied_platform = snapshot_root / "@cloudflare/workerd-linux-64/bin/workerd"
+        copied_wrapper = snapshot_root / "workerd/bin/workerd"
+        self.assertFalse(os.path.samefile(copied_platform, copied_wrapper))
+        self.assertEqual(copied_platform.stat().st_nlink, 1)
+        self.assertEqual(copied_wrapper.stat().st_nlink, 1)
+        self.assertEqual(copied_platform.read_bytes(), platform_binary.read_bytes())
+        self.assertEqual(copied_wrapper.read_bytes(), wrapper_binary.read_bytes())
+        RUNNER.verify_dependency_snapshot(repo, Path(prepared.stdout.strip()))
+
+    def test_source_tree_metadata_fingerprint_detects_restored_hardlink_count(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={".gitignore": "node_modules/\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        self.write_npm_dependency_tree(repo)
+        dependency_tree = repo / "node_modules"
+        executable = dependency_tree / "verify-tool/bin/verify-tool"
+        before = RUNNER.source_tree_metadata_fingerprint(dependency_tree)
+        external_link = Path(temporary.name) / "temporary-hardlink"
+        os.link(executable, external_link)
+        external_link.unlink()
+        after = RUNNER.source_tree_metadata_fingerprint(dependency_tree)
+        self.assertNotEqual(before, after)
+
     def test_npm_validation_uses_a_lock_bound_read_only_snapshot_in_a_fresh_clone(self) -> None:
         temporary, repo, plan_path = self.make_repo(
             ["allowed.txt"],

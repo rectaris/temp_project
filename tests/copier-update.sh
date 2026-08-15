@@ -282,20 +282,8 @@ fixture_git "$validator_out" config user.name "CI"
 cat >"$validator_out/.gitignore" <<'EOF_VALIDATOR_IGNORE'
 *.rej
 EOF_VALIDATOR_IGNORE
-cat >"$validator_out/.project-agent-workflow/ownership.yaml" <<'EOF_VALIDATOR_OWNERSHIP'
-version: 1
-copier_managed:
-  - .project-agent-workflow/**
-  - .github/workflows/codex-ci-autofix.yml
-seeded_project_owned:
-  - .gitignore
-  - product.txt
-  - scripts/skillspector-scan.sh
-field_overrides: []
-metadata: []
-migration_backup: []
-project_owned_extension_roots: []
-EOF_VALIDATOR_OWNERSHIP
+cp "$root/template/.project-agent-workflow/ownership.yaml" \
+  "$validator_out/.project-agent-workflow/ownership.yaml"
 printf 'baseline\n' >"$validator_out/product.txt"
 printf 'optional workflow\n' >"$validator_out/.github/workflows/codex-ci-autofix.yml"
 printf 'optional helper\n' >"$validator_out/scripts/skillspector-scan.sh"
@@ -324,6 +312,98 @@ rm -f "$validator_out/conflicted.txt"
 printf '<<<<<<< incomplete marker only\n' >"$tmp/symlink-conflict-target"
 ln -s "$tmp/symlink-conflict-target" "$validator_out/linked-result.rej"
 python3 "$validator" --destination "$validator_out" >/dev/null
+
+printf 'unexpected product addition\n' >"$validator_out/untracked-product.txt"
+if python3 "$validator" --destination "$validator_out" >/dev/null 2>&1; then
+  echo "Copier update validator accepted an untracked unclassified path" >&2
+  exit 1
+fi
+rm -f "$validator_out/untracked-product.txt"
+
+mkdir -p "$validator_out/.project-agent-workflow/new-managed"
+printf 'managed addition\n' >"$validator_out/.project-agent-workflow/new-managed/result.txt"
+python3 "$validator" --destination "$validator_out" >/dev/null
+rm -rf "$validator_out/.project-agent-workflow/new-managed"
+
+sed -i '/^seeded_project_owned:/i\  - untracked-product.txt' \
+  "$validator_out/.project-agent-workflow/ownership.yaml"
+printf 'self-authorized addition\n' >"$validator_out/untracked-product.txt"
+if tampered_inventory_error=$(python3 "$validator" --destination "$validator_out" 2>&1); then
+  echo "Copier update validator accepted a broadened current ownership inventory" >&2
+  exit 1
+fi
+case "$tampered_inventory_error" in
+  *"differs from the inventory shipped with this validator"*) ;;
+  *)
+    echo "Copier update validator reported an unexpected inventory failure" >&2
+    printf '%s\n' "$tampered_inventory_error" >&2
+    exit 1
+    ;;
+esac
+fixture_git "$validator_out" restore .project-agent-workflow/ownership.yaml
+rm -f "$validator_out/untracked-product.txt"
+
+mkdir -p "$validator_out/.project-agent-workflow/loader-probe"
+printf 'loader probe\n' >"$validator_out/.project-agent-workflow/loader-probe/result.txt"
+inventory_path="$validator_out/.project-agent-workflow/ownership.yaml"
+inventory_hardlink="$tmp/ownership-hardlink.yaml"
+ln "$inventory_path" "$inventory_hardlink"
+if python3 "$validator" --destination "$validator_out" >/dev/null 2>&1; then
+  echo "Copier update validator accepted a hard-linked current ownership inventory" >&2
+  exit 1
+fi
+rm -f "$inventory_hardlink"
+python3 "$validator" --destination "$validator_out" >/dev/null
+
+inventory_original="$tmp/ownership-original.yaml"
+mv "$inventory_path" "$inventory_original"
+ln -s "$inventory_original" "$inventory_path"
+if python3 "$validator" --destination "$validator_out" >/dev/null 2>&1; then
+  echo "Copier update validator accepted a symlinked current ownership inventory" >&2
+  exit 1
+fi
+rm -f "$inventory_path"
+mv "$inventory_original" "$inventory_path"
+
+VALIDATOR_PATH="$validator" VALIDATOR_DESTINATION="$validator_out" python3 - <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+from unittest import mock
+
+validator_path = Path(os.environ["VALIDATOR_PATH"])
+destination = Path(os.environ["VALIDATOR_DESTINATION"])
+spec = importlib.util.spec_from_file_location("copier_update_validator", validator_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("could not load Copier update validator")
+validator = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(validator)
+inventory = destination / validator.OWNERSHIP_PATH
+original_read = validator.os.read
+changed = False
+
+def read_then_change(descriptor, size):
+    global changed
+    data = original_read(descriptor, size)
+    if data and not changed:
+        changed = True
+        metadata = inventory.stat()
+        os.utime(
+            inventory,
+            ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000_000),
+        )
+    return data
+
+with mock.patch.object(validator.os, "read", side_effect=read_then_change):
+    try:
+        validator.load_current_ownership_inventory(destination)
+    except validator.UpdateValidationError as exc:
+        if "changed while it was read" not in str(exc):
+            raise
+    else:
+        raise SystemExit("Copier update validator accepted inventory changed during reading")
+PY
+rm -rf "$validator_out/.project-agent-workflow/loader-probe"
 
 rm -f "$validator_out/.github/workflows/codex-ci-autofix.yml" "$validator_out/scripts/skillspector-scan.sh"
 python3 "$validator" --destination "$validator_out" >/dev/null

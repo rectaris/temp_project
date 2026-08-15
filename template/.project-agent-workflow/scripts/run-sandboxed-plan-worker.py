@@ -402,7 +402,7 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def digest_tree(root: Path) -> str:
+def digest_tree(root: Path, *, allow_hardlinks: bool = False) -> str:
     """Hash one dependency tree while rejecting file types and links unsafe to bind."""
     if root.is_symlink() or not root.is_dir():
         raise RunnerError(f"dependency tree must be a regular directory: {root}")
@@ -431,7 +431,7 @@ def digest_tree(root: Path) -> str:
             kind = b"d"
             payload = b""
         elif stat.S_ISREG(metadata.st_mode):
-            if metadata.st_nlink != 1:
+            if metadata.st_nlink != 1 and not allow_hardlinks:
                 raise RunnerError(f"dependency snapshot contains a hard-linked file: {relative}")
             kind = b"f"
             payload = bytes.fromhex(hash_file(path))
@@ -456,6 +456,55 @@ def digest_tree(root: Path) -> str:
     return digest.hexdigest()
 
 
+def source_tree_metadata_fingerprint(root: Path) -> str:
+    """source_tree_metadata_fingerprint is the source entry identity and metadata digest."""
+    if root.is_symlink() or not root.is_dir():
+        raise RunnerError(f"dependency tree must be a regular directory: {root}")
+    pending = [root]
+    entries = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            children = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError as exc:
+            raise RunnerError(f"could not scan dependency tree metadata: {exc}") from exc
+        for child in children:
+            path = Path(child.path)
+            entries.append(path)
+            if child.is_dir(follow_symlinks=False):
+                pending.append(path)
+    digest = hashlib.sha256()
+    for path in sorted(entries, key=lambda item: item.relative_to(root).as_posix()):
+        metadata = path.lstat()
+        if stat.S_ISDIR(metadata.st_mode):
+            kind = b"d"
+            link_target = b""
+        elif stat.S_ISREG(metadata.st_mode):
+            kind = b"f"
+            link_target = b""
+        elif stat.S_ISLNK(metadata.st_mode):
+            kind = b"l"
+            link_target = os.fsencode(os.readlink(path))
+        else:
+            raise RunnerError(f"dependency tree metadata contains an unsupported file type: {path}")
+        fields = (
+            path.relative_to(root).as_posix().encode("utf-8", errors="surrogateescape"),
+            kind,
+            str(metadata.st_dev).encode(),
+            str(metadata.st_ino).encode(),
+            str(metadata.st_nlink).encode(),
+            str(metadata.st_mode).encode(),
+            str(metadata.st_size).encode(),
+            str(metadata.st_mtime_ns).encode(),
+            str(metadata.st_ctime_ns).encode(),
+            link_target,
+        )
+        for field in fields:
+            digest.update(len(field).to_bytes(8, "big"))
+            digest.update(field)
+    return digest.hexdigest()
+
+
 def load_json_object(path: Path, label: str) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise RunnerError(f"{label} must be a regular file: {path}")
@@ -468,7 +517,9 @@ def load_json_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def validate_npm_dependency_tree(repo_root: Path, dependency_tree: Path) -> None:
+def validate_npm_dependency_tree(
+    repo_root: Path, dependency_tree: Path, *, allow_hardlinks: bool = False
+) -> None:
     package_json = load_json_object(repo_root / "package.json", "package.json")
     root_lock = load_json_object(repo_root / "package-lock.json", "package-lock.json")
     hidden_lock = load_json_object(
@@ -538,7 +589,7 @@ def validate_npm_dependency_tree(repo_root: Path, dependency_tree: Path) -> None
             "dependency tree contains packages absent from its hidden lockfile: "
             + ", ".join(unexpected)
         )
-    digest_tree(dependency_tree)
+    digest_tree(dependency_tree, allow_hardlinks=allow_hardlinks)
 
 
 def validate_dependency_snapshot_manifest(payload: Any) -> dict[str, Any]:
@@ -741,8 +792,9 @@ def prepare_dependency_snapshot(args: argparse.Namespace) -> int:
     repo_root = detect_repo_root(git_bin)
     ensure_clean_worktree(repo_root, git_bin)
     source_tree = repo_root / "node_modules"
-    validate_npm_dependency_tree(repo_root, source_tree)
-    source_tree_digest = digest_tree(source_tree)
+    validate_npm_dependency_tree(repo_root, source_tree, allow_hardlinks=True)
+    source_tree_digest = digest_tree(source_tree, allow_hardlinks=True)
+    source_metadata_fingerprint = source_tree_metadata_fingerprint(source_tree)
     output_dir, output_fd, output_identity = create_private_dependency_output_dir(
         repo_root, args.output_dir
     )
@@ -752,7 +804,11 @@ def prepare_dependency_snapshot(args: argparse.Namespace) -> int:
         shutil.copytree(source_tree, target_tree, symlinks=True)
         validate_npm_dependency_tree(repo_root, target_tree)
         target_tree_digest = digest_tree(target_tree)
-        if digest_tree(source_tree) != source_tree_digest or target_tree_digest != source_tree_digest:
+        if (
+            source_tree_metadata_fingerprint(source_tree) != source_metadata_fingerprint
+            or digest_tree(source_tree, allow_hardlinks=True) != source_tree_digest
+            or target_tree_digest != source_tree_digest
+        ):
             raise RunnerError("npm dependency tree changed while the snapshot was being copied")
         payload = {
             "schema_version": DEPENDENCY_SNAPSHOT_SCHEMA_VERSION,
