@@ -55,10 +55,10 @@ copier copy --trust https://github.com/rectaris/temp_project.git /path/to/repo
 
 Copier のバージョン選択の詳細は、公式文書の [Templates versions](https://copier.readthedocs.io/en/stable/generating/#templates-versions) を参照してください。
 
-導入する版を現在の最新安定版である `v1.4.2` に固定する場合：
+導入する版を現在の最新安定版である `v1.4.3` に固定する場合：
 
 ```sh
-copier copy --trust --vcs-ref v1.4.2 https://github.com/rectaris/temp_project.git /path/to/repo
+copier copy --trust --vcs-ref v1.4.3 https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
 GitHub 上の**開発版の最新コミット**を導入する場合は、`HEAD` を明示します。
@@ -142,7 +142,7 @@ Copier の競合は、対象ファイル内の `<<<<<<<`、`=======`、`>>>>>>>`
 タグ付きバージョンへ明示的に更新する場合:
 
 ```sh
-copier update --trust --vcs-ref v1.4.2
+copier update --trust --vcs-ref v1.4.3
 ```
 
 リリース時は、テンプレート変更をコミットしたあとにタグを作成して push します。

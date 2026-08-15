@@ -166,7 +166,7 @@ target_ref=v1.2.2
 fixture_git "$update_source" tag v1.3.1
 fixture_git "$update_source" -c user.email=ci@example.invalid -c user.name=CI \
   commit --allow-empty -qm "Create v1.4.2 migration boundary"
-fixture_git "$update_source" tag v1.4.2
+fixture_git "$update_source" tag -f v1.4.2
 
 direct_push_update_out="$tmp/direct-push-to-patch-only"
 run_copier copy -q -f --trust --vcs-ref v1.2.1 \
