@@ -1,6 +1,6 @@
 # Integrate nested manifest rewriting
 
-status: in_progress
+status: checked
 primary_invariant: every accepted manifest ordering produces one canonical lineage block and an unchanged Markdown body
 task_types:
   - planning_docs
@@ -52,11 +52,13 @@ checked_summary_ja: マニフェスト順序の異常系と本文完全一致を
 
 ## Tasks
 
-- [ ] Confirm the accepted field-order and complete-body regression matrix.
-- [ ] Confirm root/template parity and static inventory.
-- [ ] Run independent review and focused validation.
-- [ ] Archive the final Plan 093 lineage record.
+- [x] Confirm the accepted field-order and complete-body regression matrix.
+- [x] Confirm root/template parity and static inventory.
+- [x] Run independent review and focused validation.
+- [x] Archive the final Plan 093 lineage record.
 
 ## Validation Notes
 
 - This integration plan copies both source acceptance items exactly.
+- Independent read-only review found zero High, Medium, or Low findings across the complete manifest rewrite and Plans 092-099 lineage.
+- Focused validation passed: 19 plan-restructure tests, Copier static check, root/template byte parity, and `git diff --check`.
