@@ -95,3 +95,4 @@ id	path
 096	docs/plan/checked/2026/08/01-15/096-complete-nested-manifest-rewrite.md
 097	docs/plan/checked/2026/08/01-15/097-nested-manifest-integration.md
 098	docs/plan/checked/2026/08/01-15/098-durable-successor-lineage.md
+099	docs/plan/checked/2026/08/01-15/099-durable-successor-integration.md

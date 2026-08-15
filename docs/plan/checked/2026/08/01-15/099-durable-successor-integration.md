@@ -1,6 +1,6 @@
 # Integrate durable successor lineage
 
-status: in_progress
+status: checked
 primary_invariant: every durable successor record is selected by exact source identity and remains compatible with contracts accepted at creation
 task_types:
   - planning_docs
@@ -58,11 +58,13 @@ checked_summary_ja: 耐久索引のパス識別と二段階再計画を統合検
 
 ## Tasks
 
-- [ ] Confirm the accepted contract-name and renamed-checked regression cases.
-- [ ] Confirm root/template parity and static inventory.
-- [ ] Run independent review and focused validation.
-- [ ] Archive the final Plan 094 lineage record.
+- [x] Confirm the accepted contract-name and renamed-checked regression cases.
+- [x] Confirm root/template parity and static inventory.
+- [x] Run independent review and focused validation.
+- [x] Archive the final Plan 094 lineage record.
 
 ## Validation Notes
 
 - This integration plan copies every source acceptance item exactly.
+- Independent read-only review found zero High, Medium, or Low findings and separately verified alternate contract filenames accepted by creation.
+- Focused validation passed: 19 plan-restructure tests, Copier static check, durable contract verification, root/template byte parity, and `git diff --check`.
