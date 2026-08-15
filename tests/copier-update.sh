@@ -100,6 +100,7 @@ for candidate_path in \
   template/README.md.jinja \
   template/.github/workflows/codex-ci-autofix.yml.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+  template/.project-agent-workflow/scripts/run-copier-update.sh \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
   template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
   template/.project-agent-workflow/scripts/validate-copier-update.py \
@@ -134,6 +135,7 @@ fixture_git "$update_source" add \
   template/README.md.jinja \
   template/.github/workflows/codex-ci-autofix.yml.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+  template/.project-agent-workflow/scripts/run-copier-update.sh \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
   template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
   template/.project-agent-workflow/scripts/validate-copier-update.py \
@@ -428,6 +430,52 @@ if python3 "$validator" --destination "$worker_contract_out" >/dev/null 2>&1; th
   exit 1
 fi
 fixture_git "$worker_contract_out" restore AGENTS.md
+
+wrapper_self_update_out="$tmp/v141-to-current-wrapper-self-update"
+wrapper_self_update_cwd="$tmp/v141-wrapper-outside-cwd"
+mkdir -p "$wrapper_self_update_cwd"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.4.1 \
+  --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$wrapper_self_update_out" >/dev/null
+fixture_git "$wrapper_self_update_out" init -b main >/dev/null
+fixture_git "$wrapper_self_update_out" config user.email "ci@example.invalid"
+fixture_git "$wrapper_self_update_out" config user.name "CI"
+fixture_git "$wrapper_self_update_out" add -A
+fixture_git "$wrapper_self_update_out" commit -m "Create v1.4.1 wrapper self-update fixture" >/dev/null
+if ! (cd "$wrapper_self_update_cwd" && \
+  "$wrapper_self_update_out/.project-agent-workflow/scripts/update-from-copier.sh" \
+    --defaults --vcs-ref "$target_commit" >/dev/null); then
+  echo "v1.4.1 wrapper did not survive replacing itself during update" >&2
+  exit 1
+fi
+grep -q -- '--destination . --before-update' \
+  "$wrapper_self_update_out/.project-agent-workflow/scripts/run-copier-update.sh"
+if (cd "$wrapper_self_update_out" && \
+  .project-agent-workflow/scripts/run-copier-update.sh --force >/dev/null 2>&1); then
+  echo "Copier update helper accepted --force" >&2
+  exit 1
+fi
+if (cd "$wrapper_self_update_out" && \
+  .project-agent-workflow/scripts/run-copier-update.sh -f >/dev/null 2>&1); then
+  echo "Copier update helper accepted -f" >&2
+  exit 1
+fi
+fixture_git "$wrapper_self_update_out" add -A
+fixture_git "$wrapper_self_update_out" commit -m "Accept current update wrapper" >/dev/null
+
+sed -i '/main() {/a\  : future-helper-byte-shift' \
+  "$update_source/template/.project-agent-workflow/scripts/run-copier-update.sh"
+fixture_git "$update_source" add template/.project-agent-workflow/scripts/run-copier-update.sh
+fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
+  commit -qm "Create future helper replacement fixture"
+future_helper_ref=$(fixture_git "$update_source" rev-parse HEAD)
+if ! (cd "$wrapper_self_update_cwd" && \
+  "$wrapper_self_update_out/.project-agent-workflow/scripts/update-from-copier.sh" \
+    --defaults --vcs-ref "$future_helper_ref" >/dev/null); then
+  echo "current Copier update helper did not survive replacing itself" >&2
+  exit 1
+fi
+grep -q 'future-helper-byte-shift' \
+  "$wrapper_self_update_out/.project-agent-workflow/scripts/run-copier-update.sh"
 
 custom_worker_out="$tmp/v121-to-v142-custom-worker"
 run_copier copy -q -f --trust --defaults --vcs-ref v1.2.1 \

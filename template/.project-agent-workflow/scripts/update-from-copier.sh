@@ -14,12 +14,8 @@ for argument in "$@"; do
       ;;
   esac
 done
-
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repository_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
-cd "$repository_root"
-
-python3 .project-agent-workflow/scripts/validate-copier-update.py \
-  --destination . --before-update
-copier update --trust "$@"
+rootdir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+cd "$rootdir"
+exec "$script_dir/run-copier-update.sh" "$@"
 python3 .project-agent-workflow/scripts/validate-copier-update.py --destination .

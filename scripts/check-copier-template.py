@@ -831,14 +831,35 @@ def require_copier_documentation_contract() -> None:
     wrapper = read("template/.project-agent-workflow/scripts/update-from-copier.sh")
     for marker in (
         '"$script_dir/../.."',
-        "copier update --trust",
+        'exec "$script_dir/run-copier-update.sh" "$@"',
         "validate-copier-update.py --destination .",
-        "--destination . --before-update",
         "--force|--force=*",
         "-*f*",
     ):
         if marker not in wrapper:
             fail(f"generated Copier update wrapper missing marker: {marker}")
+
+    wrapper_bytes = (
+        ROOT / "template/.project-agent-workflow/scripts/update-from-copier.sh"
+    ).read_bytes()
+    legacy_resume_suffix = (
+        b"python3 .project-agent-workflow/scripts/validate-copier-update.py --destination .\n"
+    )
+    if wrapper_bytes[466:] != legacy_resume_suffix:
+        fail("generated Copier update wrapper changed the exact v1.4.1 resume suffix")
+
+    update_helper = read("template/.project-agent-workflow/scripts/run-copier-update.sh")
+    for marker in (
+        "main() {",
+        "--force|--force=*",
+        "-*f*",
+        "--destination . --before-update",
+        'copier update --trust "$@"',
+        "validate-copier-update.py --destination .",
+        'main "$@"; exit',
+    ):
+        if marker not in update_helper:
+            fail(f"generated Copier update helper missing marker: {marker}")
 
 
 def workflow_job(text: str, job_name: str) -> str:
