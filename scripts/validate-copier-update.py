@@ -260,8 +260,8 @@ def validate_agent_profile_transition(path: str, before: bytes, after: bytes) ->
         parsed = tomllib.loads(after_text)
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise UpdateValidationError(f"changed agent profile is not valid UTF-8 TOML: {path}") from exc
-    name = parsed.get("name")
-    expected = FIXED_AGENT_PROFILES.get(name) if isinstance(name, str) else None
+    profile_name = Path(path).stem
+    expected = FIXED_AGENT_PROFILES.get(profile_name)
     if expected is None or (parsed.get("model"), parsed.get("model_reasoning_effort")) != expected:
         raise UpdateValidationError(f"changed agent profile has unexpected fixed model fields: {path}")
     if without_fixed_agent_lines(before_text) != without_fixed_agent_lines(after_text):

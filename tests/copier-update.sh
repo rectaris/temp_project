@@ -1241,7 +1241,7 @@ Keep this project instruction.
 """
 EOF_MATURE_DOCS_RESEARCHER
 cat >"$mature_out/.codex/agents/repo_explorer.toml" <<'EOF_MATURE_REPO_EXPLORER'
-  name = "repo_explorer"
+  name = "project_repository_reader"
   description = "Customized repo_explorer profile."
 sandbox_mode = "workspace-write"
 
@@ -1276,7 +1276,7 @@ if grep -q 'legacy-model' "$mature_out/.codex/agents/docs_researcher.toml" || gr
 fi
 grep -q '^  model = "gpt-5.6-luna"$' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q '^  model_reasoning_effort = "low"$' "$mature_out/.codex/agents/repo_explorer.toml"
-grep -q '^  name = "repo_explorer"$' "$mature_out/.codex/agents/repo_explorer.toml"
+grep -q '^  name = "project_repository_reader"$' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q '^  description = "Customized repo_explorer profile\."' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q 'Project adoption policy marker.' "$mature_out/docs/agent/SPEC_COPIER_ADOPTION.md"
 grep -q 'Project environment policy marker.' "$mature_out/docs/agent/SPEC_ENVIRONMENT.md"
