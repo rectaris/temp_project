@@ -43,6 +43,7 @@ validation:
 acceptance:
   - Keep the verified node_modules snapshot mounted read-only and keep validation network-disabled.
   - Require a project `.node-version`, use only a host Node/npm runtime whose major version matches it, mount that exact runtime root read-only, and record bounded runtime version and executable digests.
+  - Let dependency preparation copy only explicitly selected allowlisted Playwright browser directories into the digested snapshot, and point validation at that read-only private copy without exposing the host browser cache.
   - Give each validation command fresh writable scratch mounts only at node_modules/.vite and node_modules/.vite-temp.
   - Support snapshots whether those two cache directories were present or absent without changing the verified snapshot or its recorded digest.
   - Prove that Vite-style cache writes succeed while package-file writes fail and source, snapshot, and private dependency bytes remain unchanged.
@@ -54,6 +55,7 @@ checked_summary_ja: 隔離npm検証で依存本体を読取専用に保ち、コ
 
 - Mount the verified dependency tree read-only before mounting the two nested writable cache shadows.
 - Treat the `.node-version`-matched host Node/npm installation as a parent-approved read-only toolchain input, separate from the lock-bound dependency snapshot and otherwise-hidden host home.
+- Treat explicitly selected Playwright browser directories as dependency artifacts: copy them under `node_modules/.playwright-browsers`, include them in the complete snapshot digest, and never mount their host source paths into validation.
 - Create missing cache mountpoint directories only in the parent-private dependency copy, remove them before each digest comparison, and never modify the external snapshot.
 - Allocate cache contents below each validation command's scratch directory so commands cannot share cache state.
 
