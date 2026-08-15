@@ -1,0 +1,88 @@
+{
+  "archive_path": "docs/plan/replanned/2026/08/01-15/092-nested-plan-restructuring.md",
+  "contract_path": "docs/plan/replanned/contracts/092-nested-plan-restructuring.json",
+  "created_at": "2026-08-15T11:53:49.705304+00:00",
+  "dirty_product_paths": [
+    "scripts/restructure-plan.py",
+    "template/.project-agent-workflow/scripts/restructure-plan.py",
+    "tests/test-plan-restructure.py"
+  ],
+  "reason_codes": [
+    "parent_remediation_budget_exhausted"
+  ],
+  "schema_version": 1,
+  "source": {
+    "acceptance": [
+      {
+        "digest": "sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176",
+        "text": "Resolve each durable contract successor from active, checked, or replanned history without treating replanned work as completed."
+      },
+      {
+        "digest": "sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977",
+        "text": "Require a replanned successor to retain the expected acceptance and inherited digest mapping."
+      },
+      {
+        "digest": "sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3",
+        "text": "Fail closed on missing, ambiguous, or mismatched replanned successor records."
+      },
+      {
+        "digest": "sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698",
+        "text": "Keep root and generated restructuring scripts byte-identical."
+      },
+      {
+        "digest": "sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1",
+        "text": "Add regression coverage for a two-level restructuring chain."
+      },
+      {
+        "digest": "sha256:d745ca0186995e7c8bdec00d17b5909eac74c09d9bdbadeb9998b8afabd160f4",
+        "text": "Finish with zero unresolved High or Medium independent-review findings."
+      }
+    ],
+    "content": "# Verify nested plan restructuring lineage\n\nstatus: replan_required\nprimary_invariant: a successor that is itself durably replanned remains valid evidence in every ancestor restructuring contract\ntask_types:\n  - planning_docs\n  - template_workflow\nreview_class: B\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: ordinary\nimplementation_ambiguity: low\nwrite_scope:\n  - docs/plan/\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - tests/test-plan-restructure.py\ncontext_files:\n  - AGENTS.md\n  - docs/agent/spec-index.yaml\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\nfocused_validation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\n  - scripts/lint-project-workflow.sh\n  - tests/smoke.sh\n  - python3 scripts/validate-changes.py --all\n  - git diff --check\nacceptance:\n  - Resolve each durable contract successor from active, checked, or replanned history without treating replanned work as completed.\n  - Require a replanned successor to retain the expected acceptance and inherited digest mapping.\n  - Fail closed on missing, ambiguous, or mismatched replanned successor records.\n  - Keep root and generated restructuring scripts byte-identical.\n  - Add regression coverage for a two-level restructuring chain.\n  - Finish with zero unresolved High or Medium independent-review findings.\nreplan_reason_codes:\n  - parent_remediation_budget_exhausted\nchecked_summary_ja: 再計画された後継計画を祖先の契約検証でも正しく追跡できるようにした。\n\n## Decisions\n\n- Resolve replanned successors through `docs/plan/replanned.md`; do not add them to the checked index.\n- Validate the successor's archived lineage and acceptance before accepting it as the live durable record.\n- Keep the original contract content immutable and follow the successor by plan ID.\n\n## Tasks\n\n- [ ] Add a two-level restructuring regression fixture.\n- [ ] Resolve replanned successors in durable contract verification.\n- [ ] Preserve root/template parity and fail-closed ambiguity checks.\n- [ ] Run focused and authoritative validation, archive, and commit.\n\n## Validation Notes\n\n- A generated project successfully restructured Plan 105 into Plans 106 and 107, then `restructure-plan.py --verify` rejected the older Plan 103 contract only because its Plan 105 successor had moved from active to replanned history.\n- Run `temp-project-plan092a-20260815` stopped before authoritative validation after two parent-direct reviews found unsafe Markdown-range deletion and incomplete active-index ambiguity detection. Requirements and acceptance remain unchanged for successor restructuring.\n",
+    "head": "1be2d627666f02e61025485610d9733259176463",
+    "path": "docs/plan/active/092-nested-plan-restructuring.md",
+    "plan_digest": "sha256:3008c2c750568ea936333a6e4ed56f4238e60e0275c67a61ed753b7a4ee7a4fe"
+  },
+  "successors": [
+    {
+      "acceptance_digests": [
+        "sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698",
+        "sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1"
+      ],
+      "content": "# Replace nested restructuring metadata structurally\n\nstatus: in_progress\nprimary_invariant: nested restructuring replaces only top-level lineage fields and preserves the Markdown body byte-for-byte\ntask_types:\n  - planning_docs\n  - template_workflow\nreview_class: B\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: ordinary\nimplementation_ambiguity: low\nwrite_scope:\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - tests/test-plan-restructure.py\ncontext_files:\n  - AGENTS.md\n  - docs/agent/spec-index.yaml\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\nfocused_validation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\n  - git diff --check\nacceptance:\n  - Keep root and generated restructuring scripts byte-identical.\n  - Add regression coverage for a two-level restructuring chain.\nreplan_source: docs/plan/active/092-nested-plan-restructuring.md\nreplan_contract: docs/plan/replanned/contracts/092-nested-plan-restructuring.json\nintegration_gates:\n  - plan 094 must add index-aware durable successor resolution after archive rewriting is stable\n  - plan 095 must prove the combined source acceptance\nsuccessor_plans:\n  - docs/plan/active/093-structural-nested-replan-metadata.md\n  - docs/plan/active/094-replanned-successor-resolution.md\n  - docs/plan/active/095-nested-restructuring-integration.md\ninherited_acceptance_digests:\n  - sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698\n  - sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1\nchecked_summary_ja: 再計画メタデータだけを構造的に置換し、計画本文を保持した。\n\n## Decisions\n\n- Identify the manifest boundary before rewriting prior lineage.\n- Remove prior scalar and list fields by parsed top-level field ranges, not indentation-specific regular expressions.\n- Preserve the body suffix exactly and cover accepted noncanonical list indentation and blank separators.\n\n## Tasks\n\n- [ ] Replace regex lineage cleanup with structural manifest-range rewriting.\n- [ ] Add body-preservation and noncanonical-list regression cases.\n- [ ] Preserve root/template byte parity.\n- [ ] Run focused validation, independent review, archive, and commit.\n\n## Validation Notes\n\n- Plan 092 stopped after two parent-direct Medium review rounds; its dirty script and test paths are wholly covered by this successor.\n\n",
+      "content_digest": "sha256:ddba8487f52372d9b97052c4ae6f2bb4a72e780b57351bae311c36f3c83d3e95",
+      "id": "093",
+      "integration": false,
+      "path": "docs/plan/active/093-structural-nested-replan-metadata.md"
+    },
+    {
+      "acceptance_digests": [
+        "sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176",
+        "sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977",
+        "sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3",
+        "sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698",
+        "sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1"
+      ],
+      "content": "# Resolve replanned successors from durable indexes\n\nstatus: in_progress\nprimary_invariant: durable successor state is resolved from mutually exclusive active, checked, or replanned index records before file content is trusted\ntask_types:\n  - planning_docs\n  - template_workflow\nreview_class: B\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: ordinary\nimplementation_ambiguity: low\nwrite_scope:\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - tests/test-plan-restructure.py\ncontext_files:\n  - AGENTS.md\n  - docs/agent/spec-index.yaml\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\nfocused_validation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\n  - git diff --check\nacceptance:\n  - Resolve each durable contract successor from active, checked, or replanned history without treating replanned work as completed.\n  - Require a replanned successor to retain the expected acceptance and inherited digest mapping.\n  - Fail closed on missing, ambiguous, or mismatched replanned successor records.\n  - Keep root and generated restructuring scripts byte-identical.\n  - Add regression coverage for a two-level restructuring chain.\nreplan_source: docs/plan/active/092-nested-plan-restructuring.md\nreplan_contract: docs/plan/replanned/contracts/092-nested-plan-restructuring.json\nintegration_gates:\n  - plan 093 must be completed and committed first\n  - plan 095 must prove ancestor and nested contract verification together\nsuccessor_plans:\n  - docs/plan/active/093-structural-nested-replan-metadata.md\n  - docs/plan/active/094-replanned-successor-resolution.md\n  - docs/plan/active/095-nested-restructuring-integration.md\ninherited_acceptance_digests:\n  - sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176\n  - sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977\n  - sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3\n  - sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698\n  - sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1\nchecked_summary_ja: active・checked・replanned の索引から後継計画を排他的に解決した。\n\n## Decisions\n\n- Read active, checked, and replanned indexes as the authority for durable state.\n- Reject duplicate, stale, missing, or cross-state records before selecting a file.\n- Validate a replanned successor's source content, archive lineage, acceptance, and inherited digest mapping without classifying it as checked.\n\n## Tasks\n\n- [ ] Add active-index parsing and exact successor record matching.\n- [ ] Add stale, duplicate, missing-file, and cross-state ambiguity tests.\n- [ ] Validate replanned source and archive lineage against ancestor expectations.\n- [ ] Preserve root/template byte parity and run focused validation.\n\n## Validation Notes\n\n- Plan 093 supplies the structural nested-archive rewrite prerequisite.\n\n",
+      "content_digest": "sha256:1585071ccd2149b7733014768a1b78c0ad4f3a0a2e85e9f38a5193b7a4c7f2c1",
+      "id": "094",
+      "integration": false,
+      "path": "docs/plan/active/094-replanned-successor-resolution.md"
+    },
+    {
+      "acceptance_digests": [
+        "sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176",
+        "sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977",
+        "sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3",
+        "sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698",
+        "sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1",
+        "sha256:d745ca0186995e7c8bdec00d17b5909eac74c09d9bdbadeb9998b8afabd160f4"
+      ],
+      "content": "# Integrate nested restructuring verification\n\nstatus: in_progress\nprimary_invariant: a two-level restructuring chain preserves every ancestor acceptance item and fails closed on every durable-state ambiguity\ntask_types:\n  - planning_docs\n  - template_workflow\nreview_class: B\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: ordinary\nimplementation_ambiguity: low\nwrite_scope:\n  - tests/test-plan-restructure.py\ncontext_files:\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - AGENTS.md\n  - docs/agent/spec-index.yaml\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\nfocused_validation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\n  - scripts/lint-project-workflow.sh\n  - tests/smoke.sh\n  - python3 scripts/validate-changes.py --all\n  - git diff --check\nacceptance:\n  - Resolve each durable contract successor from active, checked, or replanned history without treating replanned work as completed.\n  - Require a replanned successor to retain the expected acceptance and inherited digest mapping.\n  - Fail closed on missing, ambiguous, or mismatched replanned successor records.\n  - Keep root and generated restructuring scripts byte-identical.\n  - Add regression coverage for a two-level restructuring chain.\n  - Finish with zero unresolved High or Medium independent-review findings.\nreplan_source: docs/plan/active/092-nested-plan-restructuring.md\nreplan_contract: docs/plan/replanned/contracts/092-nested-plan-restructuring.json\nintegration_gates:\n  - plans 093 and 094 must be completed and committed first\n  - run the full authoritative suite exactly once after independent acceptance\nsuccessor_plans:\n  - docs/plan/active/093-structural-nested-replan-metadata.md\n  - docs/plan/active/094-replanned-successor-resolution.md\n  - docs/plan/active/095-nested-restructuring-integration.md\ninherited_acceptance_digests:\n  - sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176\n  - sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977\n  - sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3\n  - sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698\n  - sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1\n  - sha256:d745ca0186995e7c8bdec00d17b5909eac74c09d9bdbadeb9998b8afabd160f4\nchecked_summary_ja: 二段階の再計画契約と異常系を統合検証した。\n\n## Decisions\n\n- Exercise both ancestor and nested contracts in one disposable repository.\n- Cover body preservation, noncanonical accepted manifest layout, and every index-state ambiguity.\n- Keep the full repository suite as the only authoritative validation attempt.\n\n## Tasks\n\n- [ ] Complete the two-level positive and tampering matrix.\n- [ ] Confirm root/template parity and Copier inventory.\n- [ ] Run independent review and the authoritative full suite.\n- [ ] Archive and commit the integration plan.\n\n## Validation Notes\n\n- This integration successor copies every Plan 092 acceptance item exactly.\n\n",
+      "content_digest": "sha256:09a05e123ac858de2c0a34e77f7f56f6cc1120b164ce42a11062093cbe9f4e92",
+      "id": "095",
+      "integration": true,
+      "path": "docs/plan/active/095-nested-restructuring-integration.md"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "archive_path": "docs/plan/replanned/2026/08/01-15/094-replanned-successor-resolution.md",
+  "contract_path": "docs/plan/replanned/contracts/094-replanned-successor-resolution.json",
+  "created_at": "2026-08-15T12:17:45.814756+00:00",
+  "dirty_product_paths": [
+    "scripts/restructure-plan.py",
+    "template/.project-agent-workflow/scripts/restructure-plan.py",
+    "tests/test-plan-restructure.py"
+  ],
+  "reason_codes": [
+    "parent_remediation_budget_exhausted"
+  ],
+  "schema_version": 1,
+  "source": {
+    "acceptance": [
+      {
+        "digest": "sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176",
+        "text": "Resolve each durable contract successor from active, checked, or replanned history without treating replanned work as completed."
+      },
+      {
+        "digest": "sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977",
+        "text": "Require a replanned successor to retain the expected acceptance and inherited digest mapping."
+      },
+      {
+        "digest": "sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3",
+        "text": "Fail closed on missing, ambiguous, or mismatched replanned successor records."
+      },
+      {
+        "digest": "sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698",
+        "text": "Keep root and generated restructuring scripts byte-identical."
+      },
+      {
+        "digest": "sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1",
+        "text": "Add regression coverage for a two-level restructuring chain."
+      }
+    ],
+    "content": "# Resolve replanned successors from durable indexes\n\nstatus: replan_required\nprimary_invariant: nested archives are structurally valid before mutually exclusive active, checked, or replanned index records are trusted\ntask_types:\n  - planning_docs\n  - template_workflow\nreview_class: B\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: ordinary\nimplementation_ambiguity: low\nwrite_scope:\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - tests/test-plan-restructure.py\ncontext_files:\n  - AGENTS.md\n  - docs/agent/spec-index.yaml\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\nfocused_validation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\n  - git diff --check\nacceptance:\n  - Resolve each durable contract successor from active, checked, or replanned history without treating replanned work as completed.\n  - Require a replanned successor to retain the expected acceptance and inherited digest mapping.\n  - Fail closed on missing, ambiguous, or mismatched replanned successor records.\n  - Keep root and generated restructuring scripts byte-identical.\n  - Add regression coverage for a two-level restructuring chain.\nreplan_source: docs/plan/active/092-nested-plan-restructuring.md\nreplan_contract: docs/plan/replanned/contracts/092-nested-plan-restructuring.json\nintegration_gates:\n  - replace the stopped Plan 093 boundary strategy before adding index resolution\n  - plan 095 must prove structural rewriting and durable resolution together\nsuccessor_plans:\n  - docs/plan/active/093-structural-nested-replan-metadata.md\n  - docs/plan/active/094-replanned-successor-resolution.md\n  - docs/plan/active/095-nested-restructuring-integration.md\ninherited_acceptance_digests:\n  - sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176\n  - sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977\n  - sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3\n  - sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698\n  - sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1\nreplan_reason_codes:\n  - parent_remediation_budget_exhausted\nchecked_summary_ja: active・checked・replanned の索引から後継計画を排他的に解決した。\n\n## Decisions\n\n- Rewrite the complete manifest prefix through the first `## ` heading and preserve the complete body suffix byte-for-byte.\n- Read active, checked, and replanned indexes as the authority for durable state.\n- Reject duplicate, stale, missing, or cross-state records before selecting a file.\n- Validate a replanned successor's source content, archive lineage, acceptance, and inherited digest mapping without classifying it as checked.\n\n## Tasks\n\n- [ ] Finish structural nested-manifest rewriting and complete-body regression coverage.\n- [ ] Add active-index parsing and exact successor record matching.\n- [ ] Add stale, duplicate, missing-file, and cross-state ambiguity tests.\n- [ ] Validate replanned source and archive lineage against ancestor expectations.\n- [ ] Preserve root/template byte parity and run focused validation.\n\n## Validation Notes\n\n- The stopped Plan 093 dirty paths are inside this plan's write scope. This plan replaces its boundary strategy before implementing successor resolution.\n- Two parent-direct remediation reviews still found Medium durable-path identity mismatches. Execution is stopped and the remaining naming rules move to a new integration boundary without changing acceptance.\n",
+    "head": "1be2d627666f02e61025485610d9733259176463",
+    "path": "docs/plan/active/094-replanned-successor-resolution.md",
+    "plan_digest": "sha256:56972c900d23c49d1fab946fb7f0fb309fc29517700e351783755cfa4b2e5a29"
+  },
+  "successors": [
+    {
+      "acceptance_digests": [
+        "sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176",
+        "sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977",
+        "sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3",
+        "sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698",
+        "sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1"
+      ],
+      "content": "# Certify durable successor lineage\n\nstatus: in_progress\nprimary_invariant: the Plan 095 implementation satisfies every durable-successor acceptance item inherited from stopped Plan 094\ntask_types:\n  - planning_docs\n  - template_workflow\nreview_class: B\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: ordinary\nimplementation_ambiguity: low\nwrite_scope:\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - tests/test-plan-restructure.py\ncontext_files:\n  - AGENTS.md\n  - docs/agent/spec-index.yaml\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\nfocused_validation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\n  - git diff --check\nacceptance:\n  - Resolve each durable contract successor from active, checked, or replanned history without treating replanned work as completed.\n  - Require a replanned successor to retain the expected acceptance and inherited digest mapping.\n  - Fail closed on missing, ambiguous, or mismatched replanned successor records.\n  - Keep root and generated restructuring scripts byte-identical.\n  - Add regression coverage for a two-level restructuring chain.\nreplan_source: docs/plan/active/094-replanned-successor-resolution.md\nreplan_contract: docs/plan/replanned/contracts/094-replanned-successor-resolution.json\nintegration_gates:\n  - plan 095 must complete the exact archive and contract naming rules and authoritative validation first\n  - plan 099 must independently confirm the same inherited acceptance\nsuccessor_plans:\n  - docs/plan/active/098-durable-successor-lineage.md\n  - docs/plan/active/099-durable-successor-integration.md\ninherited_acceptance_digests:\n  - sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176\n  - sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977\n  - sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3\n  - sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698\n  - sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1\nchecked_summary_ja: Plan 095 の耐久パス識別実装が継承要件を満たすことを確認した。\n\n## Decisions\n\n- Reuse the accepted Plan 095 implementation and do not add another resolver.\n- Bind checked and replanned archive basenames exactly to the expected active-plan basename.\n- Retain the contract filename grammar accepted by restructuring creation for historical compatibility.\n\n## Tasks\n\n- [ ] Confirm Plan 095 covers exact checked/replanned archive identity and accepted contract-name compatibility.\n- [ ] Confirm wrong-ID, renamed-path, duplicate, and cross-state negatives.\n- [ ] Record focused validation evidence and archive without duplicate implementation.\n\n## Validation Notes\n\n- Plan 095 owns the remaining shared implementation because it executes before this lineage-certification plan.\n",
+      "content_digest": "sha256:841e3d9e507458ef80a1f3ad220de3261a386e81e554597417ec7c89a0f393b2",
+      "id": "098",
+      "integration": false,
+      "path": "docs/plan/active/098-durable-successor-lineage.md"
+    },
+    {
+      "acceptance_digests": [
+        "sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176",
+        "sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977",
+        "sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3",
+        "sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698",
+        "sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1"
+      ],
+      "content": "# Integrate durable successor lineage\n\nstatus: in_progress\nprimary_invariant: every durable successor record is selected by exact source identity and remains compatible with contracts accepted at creation\ntask_types:\n  - planning_docs\n  - template_workflow\nreview_class: B\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: ordinary\nimplementation_ambiguity: low\nwrite_scope:\n  - tests/test-plan-restructure.py\ncontext_files:\n  - scripts/restructure-plan.py\n  - template/.project-agent-workflow/scripts/restructure-plan.py\n  - AGENTS.md\n  - docs/agent/spec-index.yaml\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\n  - docs/agent/SPEC_USER_COMMUNICATION.md\nfocused_validation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\nvalidation:\n  - python3 tests/test-plan-restructure.py\n  - python3 scripts/check-copier-template.py\n  - git diff --check\nacceptance:\n  - Resolve each durable contract successor from active, checked, or replanned history without treating replanned work as completed.\n  - Require a replanned successor to retain the expected acceptance and inherited digest mapping.\n  - Fail closed on missing, ambiguous, or mismatched replanned successor records.\n  - Keep root and generated restructuring scripts byte-identical.\n  - Add regression coverage for a two-level restructuring chain.\nreplan_source: docs/plan/active/094-replanned-successor-resolution.md\nreplan_contract: docs/plan/replanned/contracts/094-replanned-successor-resolution.json\nintegration_gates:\n  - plans 095, 096, 097, and 098 must be completed and committed first\nsuccessor_plans:\n  - docs/plan/active/098-durable-successor-lineage.md\n  - docs/plan/active/099-durable-successor-integration.md\ninherited_acceptance_digests:\n  - sha256:0908ad93990decf1b54c1f77a5be7dd1c0c4901c204cec31541a5c9dffa5d176\n  - sha256:8f60d17735beaa4d9e88df751a9d4794d2c1da8accc9d28443bc1cab5bc9f977\n  - sha256:a846884e1c61fdd2afee0222a064addcb6bfd043b29c2d1f7deb6461d99d63a3\n  - sha256:3ae4971903cb6dec78aa12df5b218a8c8bad002223d7d036c84f559a3f497698\n  - sha256:d2dec1d47d512a1c1ceaf64e2a60467f2b44a517b62a57624372f56303193df1\nchecked_summary_ja: 耐久索引のパス識別と二段階再計画を統合検証した。\n\n## Decisions\n\n- Exercise creation and immediate verification with both canonical and accepted alternate contract filenames.\n- Reject renamed checked archives even when their numeric prefixes still match.\n- Keep the full ancestor acceptance matrix as the final lineage gate.\n\n## Tasks\n\n- [ ] Confirm the accepted contract-name and renamed-checked regression cases.\n- [ ] Confirm root/template parity and static inventory.\n- [ ] Run independent review and focused validation.\n- [ ] Archive the final Plan 094 lineage record.\n\n## Validation Notes\n\n- This integration plan copies every source acceptance item exactly.\n",
+      "content_digest": "sha256:bc9fadb8d234d886610c27095edd882a26aa6d47c99696c2e13639de07352427",
+      "id": "099",
+      "integration": true,
+      "path": "docs/plan/active/099-durable-successor-integration.md"
+    }
+  ]
+}
