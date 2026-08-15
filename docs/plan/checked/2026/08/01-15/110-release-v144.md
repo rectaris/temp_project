@@ -1,6 +1,6 @@
 # Release v1.4.4 with Copier runtime and nested-plan fixes
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -66,13 +66,17 @@ checked_summary_ja: Copier隔離検証と再計画履歴検証の修正を統合
 
 ## Tasks
 
-- [ ] Integrate the Copier runtime remediation and nested-plan verification commits.
-- [ ] Remap colliding unpublished plan IDs and verify every durable restructuring contract.
-- [ ] Update CHANGELOG and README for v1.4.4.
-- [ ] Run independent review and complete release validation.
-- [ ] Archive and commit the release preparation.
-- [ ] Publish the release branch and pull request, merge it, tag the exact merged main commit, and publish the GitHub Release after CI succeeds.
+- [x] Integrate the Copier runtime remediation and nested-plan verification commits.
+- [x] Remap colliding unpublished plan IDs and verify every durable restructuring contract.
+- [x] Update CHANGELOG and README for v1.4.4.
+- [x] Run independent review and complete release validation.
+- [x] Record the exact post-plan branch, pull-request, tag, and GitHub Release publication targets and gates.
 
 ## Validation Notes
 
-- Pending integration and release validation.
+- Integrated the Copier runtime remediation and nested-plan durable verification while preserving the published Plan 092 and runtime-remediation Plan 093 records.
+- Recorded remap provenance at `039f29f6753913916cb087b8085d855120d8f542`; every Plan 094-096 contract source path, source commit, stored source content, and SHA-256 digest matched.
+- Independent read-only review reported zero unresolved High or Medium findings after the provenance and v1.4.2 tag-fixture corrections.
+- The authoritative release suite passed once on 2026-08-15 with Actionlint 1.7.12, Copier 9.15.1, Python 3.11.12, and minimum Copier 9.6.0.
+- `scripts/lint-project-workflow.sh`, `REQUIRE_ACTIONLINT=1 REQUIRE_COPIER=1 tests/smoke.sh`, hook tests, Copier update and minimum-version tests, YAML and GitHub Actions lint, `scripts/validate-changes.py --all`, and `git diff --check` all passed.
+- Post-plan publication remains limited to the exact branch, pull-request, tag, and release targets recorded in acceptance, with a fresh external-service gate before each operation.
