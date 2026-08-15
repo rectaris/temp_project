@@ -281,6 +281,24 @@ developer_instructions = """Preserve this instruction."""
         )
         VALIDATOR.validate(repository)
 
+    def test_allows_model_normalization_when_project_owns_a_custom_profile_name(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        agent = repository / ".codex/agents/repo_explorer.toml"
+        customized = agent.read_text(encoding="utf-8").replace(
+            'name = "repo_explorer"', 'name = "project_repository_reader"'
+        )
+        agent.write_text(customized, encoding="utf-8")
+        subprocess.run(["git", "add", str(agent.relative_to(repository))], cwd=repository, check=True)
+        subprocess.run(["git", "commit", "-qm", "customize profile name"], cwd=repository, check=True)
+
+        normalized = PROFILE_UPDATER.render_profile(
+            customized, *PROFILE_UPDATER.PROFILES["repo_explorer"]
+        )
+        agent.write_text(normalized, encoding="utf-8")
+
+        VALIDATOR.validate(repository)
+
     def test_rejects_agent_instruction_changes_but_allows_exact_worker_transition(self) -> None:
         temporary, repository = self.make_repository()
         self.addCleanup(temporary.cleanup)
