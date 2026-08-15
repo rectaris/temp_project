@@ -89,3 +89,4 @@ id	path
 087	docs/plan/checked/2026/08/01-15/087-ai-facing-layout.md
 088	docs/plan/checked/2026/08/01-15/088-copier-update-safety-contract.md
 089	docs/plan/checked/2026/08/01-15/089-copier-wrapper-self-update.md
+090	docs/plan/checked/2026/08/01-15/090-release-v142.md

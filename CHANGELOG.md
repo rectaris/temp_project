@@ -2,6 +2,14 @@
 
 ## 未リリース
 
+## 2026-08-15 v1.4.2
+
+- Hook と検証ツールの大規模なテストモジュールを責務別 package へ分割し、Copier inventory を専用 module へ整理しました。
+- agent 向けの配置規約を `scripts/AGENTS.md` と `tests/AGENTS.md` に追加しました。
+- v1.2.1 の未変更な逐次 plan worker だけを読み取り専用契約へ移行し、Copier 更新前の clean HEAD を基準にプロジェクト所有ファイルの未許可変更を拒否するようにしました。
+- `package-lock.json` と完全な tree digest に結び付いた npm 依存スナップショットを作成し、隔離検証では親の私有コピーだけを新規 clone へ読み取り専用で提供するようにしました。
+- v1.4.1 の実行中ラッパーが更新後のファイルを途中から読み直す問題を修正し、現行 helper 自身の置換後も最終検証まで完了する回帰テストを追加しました。
+
 ## 2026-08-13 v1.4.1
 
 - plan worker の後続操作を manifest の plan と execution ledger へ結合し、旧 archive の focused validation 互換性、dirty path scope、symlink 適用後の復旧処理を修正しました。
