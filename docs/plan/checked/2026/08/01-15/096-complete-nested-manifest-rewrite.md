@@ -1,6 +1,6 @@
 # Rewrite the complete nested-plan manifest
 
-status: in_progress
+status: checked
 primary_invariant: the Plan 095 implementation satisfies the structural acceptance inherited from stopped Plan 093
 task_types:
   - planning_docs
@@ -52,10 +52,12 @@ checked_summary_ja: 本文見出しより前のマニフェスト全体を構造
 
 ## Tasks
 
-- [ ] Confirm Plan 095 covers reordered fields, key whitespace, literal markers, indentation, and blank lines.
-- [ ] Confirm the complete body suffix and root/template parity.
-- [ ] Record focused validation evidence and archive without duplicate implementation.
+- [x] Confirm Plan 095 covers reordered fields, key whitespace, literal markers, indentation, and blank lines.
+- [x] Confirm the complete body suffix and root/template parity.
+- [x] Record focused validation evidence and archive without duplicate implementation.
 
 ## Validation Notes
 
 - Plan 095 owns the shared implementation because numeric execution order precedes this lineage-certification plan.
+- Commit `322aed4` preserves the complete Markdown body and covers reordered fields, key whitespace, literal markers, indentation, and blank-separated lists.
+- Focused validation passed: 19 plan-restructure tests and the Copier static check; root/template scripts are byte-identical.

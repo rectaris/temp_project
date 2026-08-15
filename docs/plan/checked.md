@@ -92,3 +92,4 @@ id	path
 090	docs/plan/checked/2026/08/01-15/090-release-v142.md
 091	docs/plan/checked/2026/08/01-15/091-vite-validation-cache-overlay.md
 095	docs/plan/checked/2026/08/01-15/095-nested-restructuring-integration.md
+096	docs/plan/checked/2026/08/01-15/096-complete-nested-manifest-rewrite.md
