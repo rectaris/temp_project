@@ -90,3 +90,4 @@ id	path
 088	docs/plan/checked/2026/08/01-15/088-copier-update-safety-contract.md
 089	docs/plan/checked/2026/08/01-15/089-copier-wrapper-self-update.md
 090	docs/plan/checked/2026/08/01-15/090-release-v142.md
+092	docs/plan/checked/2026/08/01-15/092-release-v143-tag-fixture.md

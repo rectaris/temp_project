@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+## 2026-08-15 v1.4.3
+
+- 公開済みの release tag を含む checkout でも、Copier update fixture の同名 tag を一時 clone 内だけで更新して実更新の検証を継続できるようにしました。
+
 ## 2026-08-15 v1.4.2
 
 - Hook と検証ツールの大規模なテストモジュールを責務別 package へ分割し、Copier inventory を専用 module へ整理しました。
