@@ -435,6 +435,10 @@ def validate_replanned_successor(
             f"replanned successor source acceptance mismatch: {expected_path}"
         )
     source_manifest = parse_manifest(source["content"])
+    if scalar(source_manifest, "status") != "replan_required":
+        raise RestructureError(
+            f"replanned successor source status mismatch: {expected_path}"
+        )
     if items(source_manifest, "inherited_acceptance_digests") != expected_digests:
         raise RestructureError(
             f"replanned successor source lineage mismatch: {expected_path}"
@@ -606,7 +610,9 @@ def build_archive(
     if len(status_ranges) != 1:
         raise RestructureError("source plan must have exactly one status: replan_required field")
     status_start, status_end = status_ranges[0]
-    updated = manifest_prefix[:status_start] + "status: replanned\n" + manifest_prefix[status_end:]
+    status_line = manifest_prefix[status_start:status_end].splitlines(keepends=True)[0]
+    status_line_end = status_start + len(status_line)
+    updated = manifest_prefix[:status_start] + "status: replanned\n" + manifest_prefix[status_line_end:]
     updated = remove_manifest_fields(
         updated,
         {
@@ -958,6 +964,9 @@ def verify_repository_contracts() -> None:
             raise RestructureError(f"contract source content digest mismatch for {plan_id}")
         if acceptance_records(source["content"]) != source["acceptance"]:
             raise RestructureError(f"contract source acceptance mismatch for {plan_id}")
+        source_manifest = parse_manifest(source["content"])
+        if scalar(source_manifest, "status") != "replan_required":
+            raise RestructureError(f"contract source status mismatch for {plan_id}")
         source_records = source["acceptance"]
         source_digests = [record["digest"] for record in source_records]
         source_text_by_digest = {record["digest"]: record["text"] for record in source_records}

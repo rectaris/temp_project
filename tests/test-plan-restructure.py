@@ -79,6 +79,7 @@ class PlanRestructureTest(unittest.TestCase):
         return (
             "# Source\n\n"
             "status: replan_required\n"
+            "# Preserve this source annotation.\n"
             "task_types:\n  - planning_docs\n"
             "review_class: C\n"
             "human_design_required: yes\n"
@@ -209,7 +210,9 @@ class PlanRestructureTest(unittest.TestCase):
         )
         self.assertEqual(digest(contract["source"]["content"]), contract["source"]["plan_digest"])
         archive = self.repo / str(self.spec["archive_path"])
-        self.assertIn("status: replanned", archive.read_text(encoding="utf-8"))
+        archive_text = archive.read_text(encoding="utf-8")
+        self.assertIn("status: replanned", archive_text)
+        self.assertIn("# Preserve this source annotation.", archive_text)
         self.assertIn("001\t", (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8"))
         active = (self.repo / "docs/plan/plan.md").read_text(encoding="utf-8")
         self.assertNotIn("001\t", active)
@@ -244,6 +247,18 @@ class PlanRestructureTest(unittest.TestCase):
         contract["successors"][0]["content"] = contract["successors"][0]["content"].replace(
             "Preserve user data.", "Discard user data."
         )
+        contract_path.write_text(json.dumps(contract) + "\n", encoding="utf-8")
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_rehashed_source_status_tampering_is_rejected(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        source = contract["source"]
+        source["content"] = source["content"].replace(
+            "status: replan_required", "status: checked", 1
+        )
+        source["plan_digest"] = digest(source["content"])
         contract_path.write_text(json.dumps(contract) + "\n", encoding="utf-8")
         self.assertNotEqual(self.run_verify().returncode, 0)
 
