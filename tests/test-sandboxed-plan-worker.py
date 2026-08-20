@@ -1732,7 +1732,16 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         (repo / "package-lock.json").write_text(
             json.dumps(package_lock, indent=2) + "\n", encoding="utf-8"
         )
-        git(repo, "add", "package.json", "package-lock.json")
+        node_version = subprocess.run(
+            ["node", "--version"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        (repo / ".node-version").write_text(
+            node_version.removeprefix("v").split(".", 1)[0] + "\n", encoding="utf-8"
+        )
+        git(repo, "add", "package.json", "package-lock.json", ".node-version")
         git(repo, "commit", "-qm", "add npm validation fixture")
         dependency = repo / "node_modules/verify-tool"
         (dependency / "bin").mkdir(parents=True)
@@ -1754,6 +1763,31 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         executable = dependency / "bin/verify-tool"
         executable.write_text(
             '''#!/bin/sh
+module_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+case "$(command -v npm)" in
+  /usr/*|/bin/*) echo "npm fell back to the system runtime" >&2; exit 5 ;;
+esac
+case "$(command -v npx)" in
+  /usr/*|/bin/*) echo "npx fell back to the system runtime" >&2; exit 4 ;;
+esac
+npm --version >/dev/null
+npx --version >/dev/null
+for cache in .vite .vite-temp; do
+  if [ -e "$module_root/$cache/snapshot-cache" ]; then
+    echo "snapshot cache content was exposed" >&2
+    exit 8
+  fi
+  if [ -e "$module_root/$cache/command-cache" ]; then
+    echo "dependency cache was shared between validation commands" >&2
+    exit 6
+  fi
+  echo command-local >"$module_root/$cache/command-cache"
+done
+if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ] && \
+   [ ! -f "$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-1/browser-marker" ]; then
+  echo "Playwright browser snapshot was unavailable" >&2
+  exit 7
+fi
 if touch "$(dirname "$0")/unexpected-write" 2>/dev/null; then
   echo "dependency snapshot was writable" >&2
   exit 9
@@ -1766,23 +1800,235 @@ echo dependency-snapshot-verified
         binary_dir = repo / "node_modules/.bin"
         binary_dir.mkdir()
         (binary_dir / "verify-tool").symlink_to("../verify-tool/bin/verify-tool")
+        cache_dir = repo / "node_modules/.vite"
+        cache_dir.mkdir()
+        (cache_dir / "snapshot-cache").write_text("must remain hidden\n", encoding="utf-8")
+
+    def test_missing_dependency_cache_mountpoints_are_temporary_and_digest_neutral(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dependency_tree = root / "node_modules"
+            dependency_tree.mkdir()
+            (dependency_tree / "package.txt").write_text("locked\n", encoding="utf-8")
+            expected_digest = RUNNER.digest_tree(dependency_tree)
+
+            created = RUNNER.ensure_dependency_cache_mountpoints(dependency_tree)
+            self.assertEqual(
+                [path.name for path in created],
+                list(RUNNER.DEPENDENCY_WRITABLE_CACHE_PATHS),
+            )
+            (root / "scratch").mkdir()
+            shadows = RUNNER.dependency_cache_shadows(
+                dependency_tree, root / "clone/node_modules", root / "scratch"
+            )
+            self.assertEqual(
+                [target.name for _shadow, target in shadows],
+                list(RUNNER.DEPENDENCY_WRITABLE_CACHE_PATHS),
+            )
+            for shadow, _target in shadows:
+                (shadow / "command-cache").write_text("disposable\n", encoding="utf-8")
+
+            RUNNER.verify_private_dependency_integrity(
+                dependency_tree, expected_digest, created
+            )
+            self.assertEqual((dependency_tree / "package.txt").read_text(), "locked\n")
+
+    def install_npm_workerd_hardlink_tree(self, repo: Path) -> tuple[Path, Path]:
+        platform_package = repo / "fixtures/workerd-linux-64"
+        wrapper_package = repo / "fixtures/workerd"
+        (platform_package / "bin").mkdir(parents=True)
+        (wrapper_package / "bin").mkdir(parents=True)
+        (platform_package / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "@cloudflare/workerd-linux-64",
+                    "version": "1.0.0",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (platform_package / "bin/workerd").write_text(
+            "workerd fixture\n", encoding="utf-8"
+        )
+        (wrapper_package / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "workerd",
+                    "version": "1.0.0",
+                    "scripts": {"postinstall": "node postinstall.js"},
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (wrapper_package / "bin/workerd").write_text(
+            "replaced during npm ci\n", encoding="utf-8"
+        )
+        (wrapper_package / "postinstall.js").write_text(
+            """const fs = require("node:fs");
+const path = require("node:path");
+const source = path.join(__dirname, "..", "@cloudflare", "workerd-linux-64", "bin", "workerd");
+const target = path.join(__dirname, "bin", "workerd");
+fs.rmSync(target, { force: true });
+fs.linkSync(source, target);
+""",
+            encoding="utf-8",
+        )
+        npm_environment = dict(os.environ)
+        npm_environment.update(
+            {
+                "npm_config_audit": "false",
+                "npm_config_cache": str(repo.parent / "npm-cache"),
+                "npm_config_fund": "false",
+                "npm_config_update_notifier": "false",
+            }
+        )
+
+        def pack(source: Path) -> str:
+            packed = subprocess.run(
+                [
+                    "npm",
+                    "pack",
+                    "--ignore-scripts",
+                    "--pack-destination",
+                    str(repo / "fixtures"),
+                ],
+                cwd=source,
+                env=npm_environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(packed.returncode, 0, packed.stderr)
+            return packed.stdout.strip().splitlines()[-1]
+
+        platform_archive = pack(platform_package)
+        wrapper_archive = pack(wrapper_package)
+        (repo / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "workerd-hardlink-fixture",
+                    "version": "1.0.0",
+                    "private": True,
+                    "dependencies": {
+                        "@cloudflare/workerd-linux-64": f"file:fixtures/{platform_archive}",
+                        "workerd": f"file:fixtures/{wrapper_archive}",
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        lock = subprocess.run(
+            ["npm", "install", "--package-lock-only", "--ignore-scripts", "--offline"],
+            cwd=repo,
+            env=npm_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(lock.returncode, 0, lock.stderr)
+        git(repo, "add", "package.json", "package-lock.json", "fixtures")
+        git(repo, "commit", "-qm", "add npm ci Workerd hard-link fixture")
+        installed = subprocess.run(
+            ["npm", "ci", "--offline"],
+            cwd=repo,
+            env=npm_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        return (
+            repo / "node_modules/@cloudflare/workerd-linux-64/bin/workerd",
+            repo / "node_modules/workerd/bin/workerd",
+        )
+
+    def test_prepare_dependencies_breaks_npm_workerd_hardlinks(self) -> None:
+        if shutil.which("npm") is None:
+            if os.environ.get("REQUIRE_NPM") == "1":
+                self.fail("npm is required for the Workerd hard-link regression")
+            self.skipTest("npm is unavailable")
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={".gitignore": "node_modules/\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        platform_binary, wrapper_binary = self.install_npm_workerd_hardlink_tree(repo)
+        self.assertTrue(os.path.samefile(platform_binary, wrapper_binary))
+        self.assertEqual(platform_binary.stat().st_nlink, 2)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "hard-linked file"):
+            RUNNER.digest_tree(repo / "node_modules")
+
+        prepared = run_cli(
+            repo,
+            "prepare-dependencies",
+            "--output-dir",
+            str(root / "dependency-snapshot"),
+        )
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        snapshot_root = Path(prepared.stdout.strip()).parent / "node_modules"
+        copied_platform = snapshot_root / "@cloudflare/workerd-linux-64/bin/workerd"
+        copied_wrapper = snapshot_root / "workerd/bin/workerd"
+        self.assertFalse(os.path.samefile(copied_platform, copied_wrapper))
+        self.assertEqual(copied_platform.stat().st_nlink, 1)
+        self.assertEqual(copied_wrapper.stat().st_nlink, 1)
+        self.assertEqual(copied_platform.read_bytes(), platform_binary.read_bytes())
+        self.assertEqual(copied_wrapper.read_bytes(), wrapper_binary.read_bytes())
+        RUNNER.verify_dependency_snapshot(repo, Path(prepared.stdout.strip()))
+
+    def test_source_tree_metadata_fingerprint_detects_restored_hardlink_count(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={".gitignore": "node_modules/\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        self.write_npm_dependency_tree(repo)
+        dependency_tree = repo / "node_modules"
+        executable = dependency_tree / "verify-tool/bin/verify-tool"
+        before = RUNNER.source_tree_metadata_fingerprint(dependency_tree)
+        external_link = Path(temporary.name) / "temporary-hardlink"
+        os.link(executable, external_link)
+        external_link.unlink()
+        after = RUNNER.source_tree_metadata_fingerprint(dependency_tree)
+        self.assertNotEqual(before, after)
 
     def test_npm_validation_uses_a_lock_bound_read_only_snapshot_in_a_fresh_clone(self) -> None:
         temporary, repo, plan_path = self.make_repo(
             ["allowed.txt"],
             files={"allowed.txt": "original\n", ".gitignore": "node_modules/\n"},
-            validation=["npm run verify"],
+            validation=["npm run verify", "npm run verify"],
         )
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         self.write_npm_dependency_tree(repo)
+        browser_dir = root / "chromium_headless_shell-1"
+        browser_dir.mkdir()
+        (browser_dir / "browser-marker").write_text("verified browser\n", encoding="utf-8")
         snapshot_dir = root / "dependency-snapshot"
-        prepared = run_cli(repo, "prepare-dependencies", "--output-dir", str(snapshot_dir))
+        prepared = run_cli(
+            repo,
+            "prepare-dependencies",
+            "--output-dir",
+            str(snapshot_dir),
+            "--playwright-browser-dir",
+            str(browser_dir),
+        )
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
         snapshot_manifest = Path(prepared.stdout.strip())
         snapshot = json.loads(snapshot_manifest.read_text(encoding="utf-8"))
         self.assertEqual(snapshot["package_manager"], "npm")
         self.assertRegex(snapshot["tree_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            (snapshot_dir / "node_modules/.playwright-browsers/chromium_headless_shell-1/browser-marker").read_text(),
+            "verified browser\n",
+        )
 
         shutil.rmtree(repo / "node_modules")
         initial, _output, _worker = self.run_with_worker(
@@ -1813,9 +2059,141 @@ echo dependency-snapshot-verified
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
-        self.assertEqual(report["commands"][0]["argv"], ["npm", "run", "verify"])
+        self.assertEqual(
+            [command["argv"] for command in report["commands"]],
+            [["npm", "run", "verify"], ["npm", "run", "verify"]],
+        )
         self.assertEqual(report["dependency_snapshot"]["tree_sha256"], snapshot["tree_sha256"])
+        self.assertEqual(
+            report["node_runtime"]["requested_version"],
+            subprocess.run(
+                ["node", "--version"], check=True, text=True, stdout=subprocess.PIPE
+            ).stdout.strip().removeprefix("v").split(".", 1)[0],
+        )
+        self.assertRegex(report["node_runtime"]["node_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(report["node_runtime"]["npm_tree_sha256"], r"^[0-9a-f]{64}$")
         self.assertFalse((repo / "node_modules").exists())
+
+    def test_npm_runtime_must_match_the_project_node_major(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={".node-version": "999\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "does not match .node-version"):
+            RUNNER.resolve_project_node_runtime(repo)
+
+    def test_npm_runtime_rejects_an_ignored_untracked_node_version(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"], files={".gitignore": ".node-version\n"}
+        )
+        self.addCleanup(temporary.cleanup)
+        (repo / ".node-version").write_text("24\n", encoding="utf-8")
+        with self.assertRaisesRegex(RUNNER.RunnerError, "tracked HEAD file"):
+            RUNNER.resolve_project_node_runtime(repo)
+
+    @unittest.skipUnless(
+        Path("/usr/bin/node").is_file()
+        and Path("/usr/bin/npm").resolve() == Path("/usr/share/nodejs/npm/bin/npm-cli.js"),
+        "split Debian system npm runtime is unavailable",
+    )
+    def test_split_system_npm_runtime_is_rejected_after_private_staging(self) -> None:
+        system_version = subprocess.run(
+            ["/usr/bin/node", "--version"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        temporary, repo, _plan_path = self.make_repo(
+            ["allowed.txt"],
+            files={
+                ".node-version": system_version.removeprefix("v").split(".", 1)[0] + "\n"
+            },
+        )
+        self.addCleanup(temporary.cleanup)
+        with mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}):
+            runtime = RUNNER.resolve_project_node_runtime(repo)
+        root = Path(temporary.name)
+        with self.assertRaisesRegex(RUNNER.RunnerError, "not self-contained"):
+            RUNNER.materialize_project_node_runtime(
+                runtime, root / "private-node-runtime"
+            )
+
+    @unittest.skipUnless(
+        Path("/usr/bin/node").is_file()
+        and Path("/usr/bin/npm").resolve() == Path("/usr/share/nodejs/npm/bin/npm-cli.js"),
+        "split Debian system npm runtime is unavailable",
+    )
+    def test_runtime_prerequisite_failure_does_not_consume_validation_attempt(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            files={"allowed.txt": "original\n", ".gitignore": "node_modules/\n"},
+            validation=["npm run verify"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.write_npm_dependency_tree(repo)
+        system_version = subprocess.run(
+            ["/usr/bin/node", "--version"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        (repo / ".node-version").write_text(
+            system_version.removeprefix("v").split(".", 1)[0] + "\n",
+            encoding="utf-8",
+        )
+        git(repo, "add", ".node-version")
+        git(repo, "commit", "-qm", "select split system Node fixture")
+        prepared = run_cli(
+            repo,
+            "prepare-dependencies",
+            "--output-dir",
+            str(root / "dependency-snapshot"),
+        )
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        shutil.rmtree(repo / "node_modules")
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "runtime-prerequisite-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        lifecycle_path = Path(manifest["lifecycle_state_path"])
+        for attempt in (1, 2):
+            result = run_cli(
+                repo,
+                "validate",
+                str(manifest_path),
+                "--suite",
+                "authoritative",
+                "--parent-diff-approved",
+                "--critical-invariants-approved",
+                "--output-dir",
+                str(root / f"runtime-prerequisite-validation-{attempt}"),
+                "--dependency-snapshot",
+                prepared.stdout.strip(),
+                env={"PATH": "/usr/bin:/bin"},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("not self-contained", result.stderr)
+            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+            self.assertEqual(lifecycle["phase"], "admitted")
+            self.assertEqual(lifecycle["authoritative_validation_count"], 0)
+
+    def test_playwright_browser_snapshot_rejects_an_unallowlisted_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            target = root / "node_modules"
+            target.mkdir()
+            browser = root / "arbitrary-browser"
+            browser.mkdir()
+            with self.assertRaisesRegex(RUNNER.RunnerError, "unsupported Playwright"):
+                RUNNER.copy_playwright_browser_artifacts(repo, [str(browser)], target)
 
     def test_dependency_snapshot_rejects_tree_and_lockfile_tampering(self) -> None:
         temporary, repo, _plan_path = self.make_repo(

@@ -90,4 +90,12 @@ id	path
 088	docs/plan/checked/2026/08/01-15/088-copier-update-safety-contract.md
 089	docs/plan/checked/2026/08/01-15/089-copier-wrapper-self-update.md
 090	docs/plan/checked/2026/08/01-15/090-release-v142.md
+091	docs/plan/checked/2026/08/01-15/091-vite-validation-cache-overlay.md
 092	docs/plan/checked/2026/08/01-15/092-release-v143-tag-fixture.md
+093	docs/plan/checked/2026/08/01-15/093-copier-update-runtime-remediation.md
+097	docs/plan/checked/2026/08/01-15/097-nested-restructuring-integration.md
+098	docs/plan/checked/2026/08/01-15/098-complete-nested-manifest-rewrite.md
+099	docs/plan/checked/2026/08/01-15/099-nested-manifest-integration.md
+100	docs/plan/checked/2026/08/01-15/100-durable-successor-lineage.md
+101	docs/plan/checked/2026/08/01-15/101-durable-successor-integration.md
+110	docs/plan/checked/2026/08/01-15/110-release-v144.md
