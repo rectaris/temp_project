@@ -1,6 +1,6 @@
 # Integrate retirement Copier preservation
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
   - security
@@ -79,11 +79,16 @@ The generated specification and executable are template-owned, while the generat
 
 ## Tasks
 
-- [ ] Extend Copier inventory and parity checks for the new managed files.
-- [ ] Extend smoke generation assertions for safe-disabled defaults and managed outputs.
-- [ ] Extend update scenarios to preserve customized retirement configuration bytes.
-- [ ] Complete parent diff review, independent review, and focused validation before acceptance.
+- [x] Extend Copier inventory and parity checks for the new managed files.
+- [x] Extend smoke generation assertions for safe-disabled defaults and managed outputs.
+- [x] Extend update scenarios to preserve customized retirement configuration bytes.
+- [x] Complete parent diff review, independent review, and focused validation before acceptance.
 
 ## Validation Notes
 
 - Parent-direct implementation is required because inventory scripts and update tests are validation-authority paths rejected from worker candidates.
+- Independent receipt `.agent-artifacts/reviews/145-copier-preservation.md` reported Accept with High 0, Medium 0, and Low 0.
+- Parent ledger run `145-parent-direct-20260821` used `/home/rectaris/tmp/gakumasu-project/plan-execution-ledgers/145-candidate-lifecycle.json`, recorded one focused validation and exactly one authoritative validation, and remained active without a stop reason.
+- Focused validation passed `python3 scripts/check-copier-template.py`, `tests/copier-update.sh`, and `git diff --check`.
+- The authoritative run passed `python3 scripts/check-copier-template.py`, `tests/smoke.sh`, `tests/copier-update.sh`, and `git diff --check`.
+- Fresh generation produced the managed specification, executable CLI, and exact safe-disabled configuration. The v1.4.1-to-current update preserved a customized project-owned retirement configuration byte-for-byte while adding the managed specification and CLI.

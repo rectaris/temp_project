@@ -527,6 +527,50 @@ def require_user_communication_alignment() -> None:
             fail(f"user-communication root/template files differ: {root_path} != {template_path}")
 
 
+def require_git_retirement_alignment() -> None:
+    root_cli = ROOT / "scripts/retire-merged-worktrees.py"
+    template_cli = ROOT / "template/.project-agent-workflow/scripts/retire-merged-worktrees.py"
+    if root_cli.read_bytes() != template_cli.read_bytes():
+        fail("root and generated Git-retirement CLIs differ")
+    if (root_cli.stat().st_mode & 0o777) != (template_cli.stat().st_mode & 0o777):
+        fail("root and generated Git-retirement CLI modes differ")
+
+    root_spec = read("docs/agent/SPEC_GIT_RETIREMENT.md")
+    template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md")
+    expected_template_spec = root_spec.replace(
+        "`scripts/retire-merged-worktrees.py",
+        "`.project-agent-workflow/scripts/retire-merged-worktrees.py",
+    )
+    if template_spec != expected_template_spec:
+        fail("root and generated Git-retirement specifications differ beyond command paths")
+
+    root_config = read("docs/agent/git-retirement.yaml")
+    if root_config != (
+        "version: 1\n"
+        "enabled: true\n"
+        "merge_target_refs:\n"
+        "  - refs/heads/dev\n"
+        "protected_local_branch_refs:\n"
+        "  - refs/heads/main\n"
+        "  - refs/heads/dev\n"
+    ):
+        fail("root Git-retirement configuration is not the explicit enabled profile")
+    generated_config = read("template/docs/agent/git-retirement.yaml.jinja")
+    if generated_config != (
+        "version: 1\n"
+        "enabled: false\n"
+        "merge_target_refs: []\n"
+        "protected_local_branch_refs: []\n"
+    ):
+        fail("generated Git-retirement configuration is not safe-disabled")
+
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .project-agent-workflow/**" not in ownership:
+        fail("Copier ownership does not cover the generated Git-retirement specification and CLI")
+    if "seeded_project_owned:\n" not in ownership or "  - docs/agent/**" not in ownership:
+        fail("Copier ownership does not preserve generated-project Git-retirement configuration")
+
+
 def require_sandboxed_plan_worker_alignment() -> None:
     root_runner = read("scripts/run-sandboxed-plan-worker.py")
     template_runner = read("template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py")
@@ -1588,6 +1632,7 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_user_communication_alignment()
+    require_git_retirement_alignment()
     require_sandboxed_plan_worker_alignment()
     require_hook_logging_parity()
     require_root_pre_tool_hardening()

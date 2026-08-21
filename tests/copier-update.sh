@@ -102,6 +102,7 @@ for candidate_path in \
   template/README.md.jinja \
   template/.github/workflows/codex-ci-autofix.yml.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+  template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
   template/.project-agent-workflow/scripts/run-copier-update.sh \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
   template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
@@ -118,6 +119,7 @@ for candidate_path in \
   template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
   template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
   template/.project-agent-workflow/scripts/planlib.py \
+  template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
   template/.project-agent-workflow/ownership.yaml \
   template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
@@ -133,7 +135,8 @@ for candidate_path in \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
   template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
-  template/docs/agent/external-services.yaml.jinja
+  template/docs/agent/external-services.yaml.jinja \
+  template/docs/agent/git-retirement.yaml.jinja
 do
   mkdir -p "$(dirname "$update_source/$candidate_path")"
   cp "$root/$candidate_path" "$update_source/$candidate_path"
@@ -145,6 +148,7 @@ fixture_git "$update_source" add \
   template/README.md.jinja \
   template/.github/workflows/codex-ci-autofix.yml.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+  template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
   template/.project-agent-workflow/scripts/run-copier-update.sh \
   template/.project-agent-workflow/scripts/update-from-copier.sh \
   template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
@@ -161,6 +165,7 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
   template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
   template/.project-agent-workflow/scripts/planlib.py \
+  template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
   template/.project-agent-workflow/ownership.yaml \
   template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
@@ -176,7 +181,8 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
   template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
-  template/docs/agent/external-services.yaml.jinja
+  template/docs/agent/external-services.yaml.jinja \
+  template/docs/agent/git-retirement.yaml.jinja
 fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
   commit --allow-empty -qm "Make Copier updates fail closed"
 fixture_git "$update_source" tag v1.2.2
@@ -608,6 +614,17 @@ run_copier copy -q -f --trust --defaults --vcs-ref v1.4.1 \
 fixture_git "$wrapper_self_update_out" init -b main >/dev/null
 fixture_git "$wrapper_self_update_out" config user.email "ci@example.invalid"
 fixture_git "$wrapper_self_update_out" config user.name "CI"
+printf '%s\n' \
+  'version: 1' \
+  'enabled: true' \
+  'merge_target_refs:' \
+  '  - refs/heads/integration' \
+  'protected_local_branch_refs:' \
+  '  - refs/heads/main' \
+  '  - refs/heads/integration' \
+  >"$wrapper_self_update_out/docs/agent/git-retirement.yaml"
+retirement_config_before="$tmp/v141-git-retirement-before.yaml"
+cp "$wrapper_self_update_out/docs/agent/git-retirement.yaml" "$retirement_config_before"
 fixture_git "$wrapper_self_update_out" add -A
 fixture_git "$wrapper_self_update_out" commit -m "Create v1.4.1 wrapper self-update fixture" >/dev/null
 if ! (cd "$wrapper_self_update_cwd" && \
@@ -616,6 +633,12 @@ if ! (cd "$wrapper_self_update_cwd" && \
   echo "v1.4.1 wrapper did not survive replacing itself during update" >&2
   exit 1
 fi
+if ! cmp -s "$retirement_config_before" "$wrapper_self_update_out/docs/agent/git-retirement.yaml"; then
+  echo "Copier update changed project-owned Git-retirement configuration bytes" >&2
+  exit 1
+fi
+test -f "$wrapper_self_update_out/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md"
+test -x "$wrapper_self_update_out/.project-agent-workflow/scripts/retire-merged-worktrees.py"
 grep -q -- '--destination . --before-update' \
   "$wrapper_self_update_out/.project-agent-workflow/scripts/run-copier-update.sh"
 if (cd "$wrapper_self_update_out" && \

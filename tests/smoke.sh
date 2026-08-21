@@ -55,6 +55,7 @@ if [ -z "$source_ref" ]; then
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
@@ -64,6 +65,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
+    template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-copier-update.sh \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
@@ -90,7 +92,8 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
     template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
     template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-    template/docs/agent/external-services.yaml.jinja
+    template/docs/agent/external-services.yaml.jinja \
+    template/docs/agent/git-retirement.yaml.jinja
   do
     mkdir -p "$(dirname "$render_source/$candidate_path")"
     cp "$root/$candidate_path" "$render_source/$candidate_path"
@@ -104,6 +107,7 @@ if [ -z "$source_ref" ]; then
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
@@ -113,6 +117,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
+    template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-copier-update.sh \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
@@ -139,7 +144,8 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
     template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
     template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-    template/docs/agent/external-services.yaml.jinja
+    template/docs/agent/external-services.yaml.jinja \
+    template/docs/agent/git-retirement.yaml.jinja
   git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
     commit --allow-empty -qm "Create isolated smoke candidate"
   git -C "$render_source" tag v1.2.2
@@ -1145,6 +1151,12 @@ grep -q 'stop_review_gate.py' "$tmp/typescript/.codex/hooks.json"
 grep -q '.project-agent-workflow/hooks/stop_review_gate.py' "$tmp/typescript/.codex/hooks.json"
 grep -q '.project-agent-workflow/AGENTS.md' "$tmp/typescript/AGENTS.md"
 test -f "$tmp/typescript/.project-agent-workflow/ownership.yaml"
+test -f "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/retire-merged-worktrees.py"
+test -f "$tmp/typescript/docs/agent/git-retirement.yaml"
+grep -q '^enabled: false$' "$tmp/typescript/docs/agent/git-retirement.yaml"
+grep -q '^merge_target_refs: \[\]$' "$tmp/typescript/docs/agent/git-retirement.yaml"
+grep -q '^protected_local_branch_refs: \[\]$' "$tmp/typescript/docs/agent/git-retirement.yaml"
 grep -q '^copier_managed:' "$tmp/typescript/.project-agent-workflow/ownership.yaml"
 grep -q '^  - .agents/skills/decision-audit/SKILL.md$' "$tmp/typescript/.project-agent-workflow/ownership.yaml"
 if grep -q '^  - .agents/skills/\*\*$' "$tmp/typescript/.project-agent-workflow/ownership.yaml"; then
