@@ -1,6 +1,7 @@
 # Integrate verify-copier-update Skill
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Plan 124 must be checked before this preserved Plan 119 candidate resumes through another fresh execution run.
 primary_invariant: deliver one reusable isolated Copier update verification Skill whose complete source acceptance baseline passes realistic and repository-authoritative validation
 task_types:
   - planning_docs
@@ -108,3 +109,4 @@ checked_summary_ja: 隔離したCopier更新検証スキルをテンプレート
 - The observed defect did not change this plan's acceptance baseline or accepted Copier safety conditions; Plan 120 classified it as a separate repair prerequisite and Plan 122 completed the general resumption workflow.
 - Plan 122 established the repository-wide repair lifecycle, and Plan 123 checked and committed the bounded root validation-command authorization repair at `c5e4c40`.
 - This plan resumes with unchanged acceptance, safety conditions, scope, validation authority outside the checked repair, and external-effect authorization. The resumed execution uses a fresh plan digest, source HEAD, candidate lifecycle, and execution ledger.
+- The fresh authoritative run then exposed one independent real-Copier fixture omission: the v1.2.2 update-source copied `validate-changes.py` without the matching current `plan_validation_commands.py`. The execution ledger classified this as `repair_required`; Plan 124 repairs only that fixture assembly before another fresh run.
