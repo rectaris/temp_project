@@ -9,4 +9,3 @@ id	path	status
 133	docs/plan/active/133-evaluate-resource-bounded-orchestration.md	in_progress
 145	docs/plan/active/145-integrate-retirement-copier-preservation.md	in_progress
 146	docs/plan/active/146-integrate-local-git-retirement.md	in_progress
-150	docs/plan/active/150-certify-exact-ref-local-apply.md	in_progress
