@@ -8,4 +8,5 @@ id	path	status
 115	docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md	in_progress
 116	docs/plan/active/116-evaluate-plan-worker-orchestration.md	in_progress
 119	docs/plan/active/119-integrate-verify-copier-update-skill.md	deferred
-126	docs/plan/active/126-integrate-generated-verify-helper-compilation.md	in_progress
+126	docs/plan/active/126-integrate-generated-verify-helper-compilation.md	deferred
+127	docs/plan/active/127-repair-temporary-copier-cli-shim.md	in_progress

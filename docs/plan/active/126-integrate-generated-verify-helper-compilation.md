@@ -1,6 +1,7 @@
 # Integrate the generated verify-copier-update helper compilation boundary
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Plan 127 must reproduce and repair the temporary uv Copier shim before this unchanged integration plan resumes through a fresh execution run.
 primary_invariant: prove the exact generated-helper authority and preserved Plan 119 candidate through the real Copier direct lane
 replan_source: docs/plan/active/124-forward-current-generated-validation-authority.md
 replan_contract: docs/plan/replanned/contracts/124-forward-current-generated-validation-authority.json
@@ -44,7 +45,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/plan/active/119-integrate-verify-copier-update-skill.md
-  - docs/plan/active/125-authorize-generated-verify-helper-compilation.md
+  - docs/plan/checked/2026/08/16-31/125-authorize-generated-verify-helper-compilation.md
   - docs/plan/replanned/2026/08/16-31/124-forward-current-generated-validation-authority.md
   - template/.project-agent-workflow/scripts/plan_validation_commands.py
   - tests/validation_tools/plan.py
@@ -90,3 +91,8 @@ checked_summary_ja: 生成helperの限定的なコンパイル権限を実Copier
 ## Validation Notes
 
 - Plan 124's authoritative attempt established the exact rejected argv before this user-authorized authority change.
+- Focused validation passed all 32 validation-tool tests, all 33 helper tests, the template checker, shell syntax, and diff checking.
+- Independent pre-authoritative review reported High 0 and Medium 0 and made no file changes.
+- The authoritative run stopped in the first existing Copier copy-to-update fixture after the fresh temporary uv environment reported that the template was not Git-tracked; the new direct helper lane was not reached.
+- Independent classification found one bounded shim invariant with unchanged source scope, validation authority, invariant boundaries, source acceptance, safety conditions, and external-effect authority.
+- The stopped execution evidence is `/tmp/plan126-execution.Z1Rx9N/execution.json`; resume only after Plan 127 is checked and with a fresh run identity.
