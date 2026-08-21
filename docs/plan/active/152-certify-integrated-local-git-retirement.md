@@ -1,4 +1,4 @@
-# Integrate local Git retirement
+# Certify integrated local Git retirement
 
 status: in_progress
 task_types:
@@ -12,19 +12,17 @@ human_approval_status: approved
 implementation_risk: ordinary
 implementation_ambiguity: low
 implementation_mode: parent_direct
-parent_direct_reason: final acceptance validation lifecycle and reporting authority remain parent-owned
-primary_invariant: the checked successor set satisfies every unchanged source acceptance item with no unresolved High or Medium finding
-replan_source: docs/plan/active/112-retire-merged-local-worktrees.md
-replan_contract: docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
+parent_direct_reason: final acceptance mapping, validation lifecycle, archive, commit, and reporting authority remain parent-owned
+primary_invariant: every unchanged Plan 146 acceptance item is satisfied by checked successors with accurate checked and replanned lineage and zero unresolved High or Medium finding
+replan_source: docs/plan/active/146-integrate-local-git-retirement.md
+replan_contract: docs/plan/replanned/contracts/146-integrate-local-git-retirement.json
 integration_gates:
-  - plans 142, 145, 147, 148, 149, and 150 must be checked before combined acceptance starts
+  - plans 142, 145, 147, 148, 149, 150, and 151 must be checked and committed before combined acceptance starts
+  - plans 112, 143, 144, and 146 remain replanned lineage and must not be described as checked
   - the parent must review the combined diff and critical invariants before one authoritative validation run
 successor_plans:
-  - docs/plan/active/142-define-local-git-retirement-policy.md
-  - docs/plan/active/143-implement-read-only-retirement-scan.md
-  - docs/plan/active/144-implement-revalidated-local-apply.md
-  - docs/plan/active/145-integrate-retirement-copier-preservation.md
-  - docs/plan/active/146-integrate-local-git-retirement.md
+  - docs/plan/active/151-complete-effect-adjacent-manifest-revalidation.md
+  - docs/plan/active/152-certify-integrated-local-git-retirement.md
 inherited_acceptance_digests:
   - sha256:6958ab89c494d1adfd48540a046650cf4cfc1672306d43e0c3a8ecd70264a26e
   - sha256:27f9713e8bde723f894fc8c6ebf44f0daf5109f16c4502b16dddf1a9fbd92557
@@ -51,10 +49,14 @@ context_files:
   - docs/plan/replanned/2026/08/16-31/112-retire-merged-local-worktrees.md
   - docs/plan/replanned/2026/08/16-31/143-implement-read-only-retirement-scan.md
   - docs/plan/replanned/2026/08/16-31/144-implement-revalidated-local-apply.md
+  - docs/plan/replanned/2026/08/16-31/146-integrate-local-git-retirement.md
+  - docs/plan/checked/2026/08/16-31/142-define-local-git-retirement-policy.md
+  - docs/plan/checked/2026/08/16-31/145-integrate-retirement-copier-preservation.md
   - docs/plan/checked/2026/08/16-31/147-complete-exact-root-retirement-scan.md
   - docs/plan/checked/2026/08/16-31/148-certify-exact-root-retirement-scan.md
   - docs/plan/checked/2026/08/16-31/149-complete-exact-ref-local-apply.md
   - docs/plan/checked/2026/08/16-31/150-certify-exact-ref-local-apply.md
+  - docs/plan/active/151-complete-effect-adjacent-manifest-revalidation.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/git-retirement.yaml
   - references/validation.md
@@ -73,6 +75,8 @@ focused_validation:
   - python3 scripts/check-root-agent-policy.py
   - python3 scripts/check-copier-template.py
   - git diff --check
+parent_behavior_validation:
+  - python3 tests/test-git-retirement.py
 validation:
   - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
   - python3 scripts/check-root-agent-policy.py
@@ -101,30 +105,34 @@ acceptance:
   - Never run removal tests against the source repository; create every test repository and linked worktree under an isolated temporary directory and assert the source repository's registered worktrees and refs remain unchanged.
   - Route cleanup requests through the new specification in root and generated agent policy, record the behavior under Unreleased, run all validation commands, and finish with zero unresolved High or Medium independent-review findings.
   - Keep provider-assisted squash or rebase integration evidence, remote branch deletion, and actual stale-worktree metadata pruning outside this implementation; require separate active plans and applicable authorization before adding them.
-checked_summary_ja: 分割した実装を統合し、元planの全受入条件と安全条件を変更せずに検証する。
+checked_summary_ja: checked後継だけを元planの全受入条件へ対応付け、manifest再検証を含むlocal Git retirementを最終認証する。
 
 ## Context
 
-This integration successor owns the Unreleased entry and no new executable behavior.
+Certify integrated local Git retirement means accepting only the checked successor set against all eighteen source items with exact replanned lineage and one final authoritative suite.
 
-It verifies the accepted outputs of plans 142 through 145 against the exact source acceptance baseline and retains final validation lifecycle commit and reporting authority in the parent.
+This integration successor owns no new executable behavior.
+
+It certifies checked Plans 142, 145, 147, 148, 149, 150, and 151 against every unchanged Plan 146 acceptance item. Plans 112, 143, 144, and 146 remain replanned lineage.
 
 ## Decisions
 
 - Do not reconstruct or weaken source acceptance text.
-- Do not remediate product defects inside this integration plan; classify an independently repairable defect or require restructuring under the existing policy.
-- Run the authoritative source validation suite exactly once only after the combined diff and critical invariants are otherwise acceptable.
+- Use a fresh independent review that explicitly verifies effect-adjacent manifest revalidation and the checked/replanned index split.
+- Run the authoritative suite exactly once only after the combined diff and critical invariants are otherwise acceptable.
+- Preserve the Unreleased entry only if it accurately describes the accepted effect-adjacent behavior.
 
 ## Tasks
 
-- [ ] Confirm plans 142 through 145 are checked with independent-review evidence.
-- [ ] Record the accepted behavior under Unreleased.
-- [ ] Review combined changes against every source acceptance item and critical safety invariant.
+- [ ] Confirm Plans 142, 145, 147, 148, 149, 150, and 151 are checked with independent-review evidence.
+- [ ] Confirm Plans 112, 143, 144, and 146 remain replanned and are not described as checked.
+- [ ] Review combined changes against all eighteen source acceptance items and critical safety invariants.
+- [ ] Record an accurate Unreleased entry.
 - [ ] Run the authoritative validation suite exactly once.
 - [ ] Confirm zero unresolved High or Medium independent-review findings.
-- [ ] Archive this integration plan and preserve the restructuring lineage.
+- [ ] Archive this integration plan and preserve the complete restructuring lineage.
 
 ## Validation Notes
 
-- The integration plan inherits every source acceptance item in exact source order.
 - Parent behavior validation additionally runs `python3 tests/test-git-retirement.py`; the repository does not depend on pytest.
+- The dedicated prepared-reference-transaction acquisition-failure regression remains a Low coverage opportunity unless Plan 151 adds it; it is not a current correctness or source-acceptance defect.

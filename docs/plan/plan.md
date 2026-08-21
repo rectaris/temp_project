@@ -7,4 +7,5 @@ id	path	status
 131	docs/plan/active/131-require-confirmed-failure-diagnosis.md	in_progress
 132	docs/plan/active/132-checkpoint-plan-session-resources.md	in_progress
 133	docs/plan/active/133-evaluate-resource-bounded-orchestration.md	in_progress
-146	docs/plan/active/146-integrate-local-git-retirement.md	in_progress
+151	docs/plan/active/151-complete-effect-adjacent-manifest-revalidation.md	in_progress
+152	docs/plan/active/152-certify-integrated-local-git-retirement.md	in_progress
