@@ -277,6 +277,14 @@ def check_sandboxed_worker_fallback() -> None:
         '"--dependency-snapshot"',
         "def verify_dependency_snapshot",
         "read_only_shadows",
+        "WORKER_CONTRACT_SCHEMA_VERSION",
+        "def derive_worker_contract",
+        "def verify_worker_contract",
+        "def derive_repository_identity",
+        "worker_attempt_label",
+        "require_safe_delegated_write_scope",
+        "NEW_FILE_ROOT",
+        "SANDBOXED_PLAN_WORKER_CONTRACT first",
     )
     for marker in runner_markers:
         if marker not in runner:
@@ -690,9 +698,16 @@ def validate_paired_runner_evidence(
                     "allowed_write_scope", "changed_paths", "patch_path", "patch_digest",
                     "orchestration_run_id", "lifecycle_state_path", "worker_result", "telemetry",
                 }
-                if not isinstance(manifest, dict) or frozenset(manifest) not in {
-                    frozenset(manifest_fields), frozenset(manifest_fields | {"correction_lineage"})
-                }:
+                contract_fields = {
+                    "worker_contract_path", "worker_contract_digest", "worker_attempt_label",
+                }
+                accepted_manifest_shapes = {
+                    frozenset(manifest_fields),
+                    frozenset(manifest_fields | {"correction_lineage"}),
+                    frozenset(manifest_fields | contract_fields),
+                    frozenset(manifest_fields | contract_fields | {"correction_lineage"}),
+                }
+                if not isinstance(manifest, dict) or frozenset(manifest) not in accepted_manifest_shapes:
                     raise ValueError("captured manifest is not an exact runner candidate manifest")
                 run_id = manifest.get("orchestration_run_id")
                 telemetry = manifest.get("telemetry")

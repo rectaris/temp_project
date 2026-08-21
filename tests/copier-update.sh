@@ -773,6 +773,12 @@ validate_common_lane() {
     grep -q -- '--lifecycle-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q 'VALIDATION_AUTHORITY_SCOPE' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q 'network_enabled=False' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'WORKER_CONTRACT_SCHEMA_VERSION' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def derive_worker_contract' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def verify_worker_contract' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'def derive_repository_identity' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'worker_attempt_label' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+    grep -q 'NEW_FILE_ROOT' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q 'implementation_risk' "$out/.project-agent-workflow/scripts/planlib.py"
     grep -q 'implementation_ambiguity' "$out/.project-agent-workflow/scripts/planlib.py"
     grep -q 'focused_validation' "$out/.project-agent-workflow/scripts/planlib.py"
@@ -782,6 +788,8 @@ validate_common_lane() {
     grep -qi 'state path outside the repository' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
     grep -q 'run-sandboxed-plan-worker.py correct' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
     grep -q 'run-sandboxed-plan-worker.py validate' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'primary_invariant' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+    grep -q 'exact file paths' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
     grep -q 'def has_pre_v1_adoption_provenance()' "$out/.project-agent-workflow/scripts/planlib.py"
   }
 

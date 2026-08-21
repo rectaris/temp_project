@@ -19,12 +19,15 @@ import sys
 import tempfile
 import textwrap
 import time
+from urllib.parse import urlsplit
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, Sequence
 
 
 SCHEMA_VERSION = 1
+WORKER_CONTRACT_SCHEMA_VERSION = 1
+WORKER_CONTRACT_MAX_BYTES = 65_536
 DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1
 DEPENDENCY_SNAPSHOT_MAX_BYTES = 16_384
 DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
@@ -168,6 +171,7 @@ ARTIFACT_NAMES = (
     "worker-fallback.stderr",
     "worker-fallback-last-message.txt",
     "candidate.patch",
+    "worker-contract.json",
     "manifest.json",
     "validation.json",
 )
@@ -188,6 +192,8 @@ RESERVED_WORKER_ENV = frozenset(
         f"{ENV_PREFIX}WORKER_REPO",
         f"{ENV_PREFIX}SCRATCH_DIR",
         f"{ENV_PREFIX}PLAN_PATH",
+        f"{ENV_PREFIX}WORKER_CONTRACT",
+        f"{ENV_PREFIX}NEW_FILE_ROOT",
         f"{ENV_PREFIX}CORRECTION_BRIEF",
     }
 )
@@ -1323,15 +1329,13 @@ def parse_write_scope(entries: Sequence[str]) -> list[str]:
     for raw in entries:
         value, _ = normalize_repo_relpath(raw, allow_prefix=True, label="write_scope entry")
         if value in seen:
-            continue
+            raise RunnerError(f"write_scope must not contain duplicate entries: {value}")
         normalized.append(value)
         seen.add(value)
-    collapsed: list[str] = []
     for entry in normalized:
         if any(parent.endswith("/") and entry.startswith(parent) for parent in normalized if parent != entry):
-            continue
-        collapsed.append(entry)
-    return collapsed
+            raise RunnerError(f"write_scope must not contain overlapping entries: {entry}")
+    return normalized
 
 
 def scope_allows_path(scope_entries: Sequence[str], relative_path: str) -> bool:
@@ -1358,6 +1362,73 @@ def is_validation_authority_path(relative_path: str) -> bool:
     )
 
 
+def scope_entries_overlap(left: str, right: str) -> bool:
+    left_value, left_prefix = normalize_repo_relpath(left, allow_prefix=True, label="scope entry")
+    right_value, right_prefix = normalize_repo_relpath(right, allow_prefix=True, label="protected entry")
+    left_body = left_value[:-1] if left_prefix else left_value
+    right_body = right_value[:-1] if right_prefix else right_value
+    if left_body == right_body:
+        return True
+    if left_prefix and right_body.startswith(left_body + "/"):
+        return True
+    return right_prefix and left_body.startswith(right_body + "/")
+
+
+def normalized_contract_paths(entries: object, *, label: str) -> list[str]:
+    if not isinstance(entries, list):
+        raise RunnerError(f"plan {label} must be a list")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in entries:
+        if not isinstance(raw, str):
+            raise RunnerError(f"plan {label} entry must be text")
+        value, _ = normalize_repo_relpath(raw, label=f"{label} entry")
+        if value in seen:
+            raise RunnerError(f"plan {label} must not contain duplicate entries: {value}")
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def require_safe_delegated_write_scope(
+    repo_root: Path,
+    plan_rel: str,
+    values: dict[str, str | list[str]],
+    normalized_scope: Sequence[str],
+) -> None:
+    context_files = normalized_contract_paths(values.get("context_files"), label="context_files")
+    required_specs = normalized_contract_paths(values.get("required_specs"), label="required_specs")
+    declared_authority = values.get("validation_authority_scope", [])
+    if not isinstance(declared_authority, list):
+        raise RunnerError("plan validation_authority_scope must be a list")
+    normalized_declared_authority = parse_write_scope(declared_authority)
+    protected = [plan_rel, *context_files, *required_specs]
+    try:
+        protected.append(Path(__file__).resolve().relative_to(repo_root.resolve()).as_posix())
+    except ValueError:
+        pass
+    for entry in normalized_scope:
+        if entry.endswith("/"):
+            raise RunnerError(f"writable delegation requires one explicit file path, not a directory prefix: {entry}")
+        if any(scope_entries_overlap(entry, item) for item in protected):
+            raise RunnerError(f"write_scope overlaps a read-only plan, runner, context, or specification input: {entry}")
+        if is_validation_authority_path(entry) or any(
+            scope_entries_overlap(entry, item)
+            for item in (*VALIDATION_AUTHORITY_SCOPE, *normalized_declared_authority)
+        ):
+            raise RunnerError(f"write_scope reaches parent-owned validation authority: {entry}")
+        ensure_no_symlink_path_trick(repo_root, entry)
+        target = repo_root / entry
+        if target.exists() or target.is_symlink():
+            if not target.is_file() or target.is_symlink():
+                raise RunnerError(f"explicit write_scope target must be a regular file: {entry}")
+            continue
+        parent = target.parent
+        ensure_no_symlink_path_trick(repo_root, parent.relative_to(repo_root).as_posix())
+        if not parent.is_dir() or parent.is_symlink():
+            raise RunnerError(f"new explicit write_scope target requires an existing regular parent directory: {entry}")
+
+
 def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path, str, dict[str, str | list[str]], list[str]]:
     plan_rel = normalize_manifest_path(repo_root, plan_arg)
     if not PLAN_PATTERN.fullmatch(plan_rel):
@@ -1375,7 +1446,261 @@ def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path
     if not isinstance(write_scope, list):
         raise RunnerError(f"plan write_scope must be a list: {plan_rel}")
     normalized_scope = parse_write_scope(write_scope)
+    require_safe_delegated_write_scope(repo_root, plan_rel, values, normalized_scope)
+    require_primary_invariant(plan_path, values)
     return plan_path, plan_rel, values, normalized_scope
+
+
+def require_primary_invariant(plan_path: Path, values: dict[str, str | list[str]]) -> str:
+    """Require one explicit delegation boundary without tightening archival parsing."""
+    declarations = re.findall(
+        r"^primary_invariant:\s*(.*)$",
+        plan_path.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if len(declarations) != 1 or not declarations[0].strip():
+        raise RunnerError("writable delegated plan must declare exactly one nonblank primary_invariant")
+    value = values.get("primary_invariant")
+    if not isinstance(value, str) or value.strip() != declarations[0].strip():
+        raise RunnerError("plan primary_invariant is ambiguous")
+    return value.strip()
+
+
+def canonical_repository_origin(raw: str) -> str:
+    """Normalize one credential-free network origin without retaining the raw URL."""
+    if not raw or len(raw.encode("utf-8")) > 4096 or any(ord(char) < 0x20 for char in raw):
+        raise RunnerError("repository origin must be one bounded nonblank URL")
+    if "://" not in raw:
+        match = re.fullmatch(r"(?:[^@/:\s]+@)?([^/:\s]+):(.+)", raw)
+        if match is None:
+            raise RunnerError("repository origin must be a clone-portable network URL")
+        host = match.group(1).lower()
+        path = match.group(2)
+        port = ""
+    else:
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() not in {"https", "ssh", "git"} or parsed.hostname is None:
+            raise RunnerError("repository origin must use https, ssh, or git")
+        if parsed.query or parsed.fragment:
+            raise RunnerError("repository origin must not contain a query or fragment")
+        host = parsed.hostname.lower()
+        try:
+            parsed_port = parsed.port
+        except ValueError as exc:
+            raise RunnerError("repository origin has an invalid port") from exc
+        default_port = {"https": 443, "ssh": 22, "git": 9418}[parsed.scheme.lower()]
+        port = f":{parsed_port}" if parsed_port is not None and parsed_port != default_port else ""
+        path = parsed.path.lstrip("/")
+    path = path.rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if not host or not path or any(part in {"", ".", ".."} for part in PurePosixPath(path).parts):
+        raise RunnerError("repository origin has an invalid repository path")
+    return f"{host}{port}/{path}"
+
+
+def derive_repository_identity(repo_root: Path, git_bin: str) -> str:
+    result = git(repo_root, git_bin, "config", "--get", "remote.origin.url", check=False)
+    if result.returncode != 0:
+        raise RunnerError("worker execution contract requires a canonical remote.origin.url")
+    try:
+        origin = result.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise RunnerError("repository origin is not valid UTF-8") from exc
+    canonical = canonical_repository_origin(origin)
+    return "origin-sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def unique_contract_text_items(entries: object, *, label: str, require_nonempty: bool) -> list[str]:
+    if not isinstance(entries, list) or (require_nonempty and not entries):
+        qualifier = "a nonempty list" if require_nonempty else "a list"
+        raise RunnerError(f"plan {label} must be {qualifier} of nonblank text")
+    seen: set[str] = set()
+    validated: list[str] = []
+    for item in entries:
+        if not isinstance(item, str) or not item.strip():
+            raise RunnerError(f"plan {label} must be a list of nonblank text")
+        key = item.strip()
+        if key in seen:
+            raise RunnerError(f"plan {label} must not contain duplicate entries")
+        seen.add(key)
+        validated.append(item)
+    return validated
+
+
+def validate_contract_lineage(lineage: object) -> dict[str, object]:
+    if not isinstance(lineage, dict):
+        raise RunnerError("worker execution contract lineage must be an object")
+    kind = lineage.get("attempt_kind")
+    expected = {"attempt_kind", "correction_round", "attempt_label"}
+    if kind == "correction":
+        expected.update(
+            {"prior_manifest_digest", "prior_patch_digest", "correction_brief_digest"}
+        )
+    if set(lineage) != expected:
+        raise RunnerError("worker execution contract lineage has an invalid exact field shape")
+    round_value = lineage.get("correction_round")
+    if kind not in {"initial", "correction"} or isinstance(round_value, bool) or not isinstance(round_value, int):
+        raise RunnerError("worker execution contract lineage has invalid values")
+    if (kind == "initial" and round_value != 0) or (kind == "correction" and round_value < 1):
+        raise RunnerError("worker execution contract lineage has an invalid correction round")
+    if lineage.get("attempt_label") not in {"primary", "fallback", "custom"}:
+        raise RunnerError("worker execution contract lineage has an invalid attempt label")
+    if kind == "correction":
+        for key in ("prior_manifest_digest", "prior_patch_digest", "correction_brief_digest"):
+            value = lineage.get(key)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise RunnerError(f"worker execution contract lineage has an invalid digest: {key}")
+    return lineage
+
+
+def load_exact_json_object(content: bytes, *, label: str) -> dict[str, Any]:
+    def exact_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise RunnerError(f"{label} contains a duplicate field: {key}")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(content.decode("utf-8"), object_pairs_hook=exact_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunnerError(f"{label} is not valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise RunnerError(f"{label} must contain one JSON object")
+    return value
+
+
+def derive_worker_contract(
+    *,
+    repo_root: Path,
+    git_bin: str,
+    head: str,
+    plan_path: Path,
+    plan_rel: str,
+    plan_digest: str,
+    values: dict[str, str | list[str]],
+    normalized_scope: Sequence[str],
+    run_id: str,
+    lineage: dict[str, object],
+) -> bytes:
+    """Project authoritative plan fields into one bounded, read-only worker input."""
+    primary_invariant = require_primary_invariant(plan_path, values)
+    context_files = normalized_contract_paths(values.get("context_files"), label="context_files")
+    required_specs = normalized_contract_paths(values.get("required_specs"), label="required_specs")
+    acceptance = unique_contract_text_items(values.get("acceptance"), label="acceptance", require_nonempty=True)
+    focused_validation = unique_contract_text_items(
+        values.get("focused_validation", []), label="focused_validation", require_nonempty=False
+    )
+    validated_lineage = validate_contract_lineage(lineage)
+    require_safe_delegated_write_scope(repo_root, plan_rel, values, normalized_scope)
+    for relative in [*context_files, *required_specs]:
+        ensure_no_symlink_path_trick(repo_root, relative)
+        target = repo_root / relative
+        if not target.is_file() or target.is_symlink():
+            raise RunnerError(f"worker contract input must be an existing regular file: {relative}")
+    if hash_file(plan_path) != plan_digest:
+        raise RunnerError("active plan changed while deriving the worker contract")
+    if git(repo_root, git_bin, "show", f"{head}:{plan_rel}").stdout != plan_path.read_bytes():
+        raise RunnerError("worker execution contract requires the exact committed active-plan bytes")
+    contract = {
+        "schema_version": WORKER_CONTRACT_SCHEMA_VERSION,
+        "repository_identity": derive_repository_identity(repo_root, git_bin),
+        "source_head": head,
+        "plan_path": plan_rel,
+        "plan_digest": plan_digest,
+        "orchestration_run_id": run_id,
+        "attempt_lineage": validated_lineage,
+        "primary_invariant": primary_invariant,
+        "write_scope": list(normalized_scope),
+        "context_files": context_files,
+        "required_specs": required_specs,
+        "acceptance": acceptance,
+        "focused_validation": focused_validation,
+        "explicit_exclusions": [
+            "prompts", "worker_output", "environment_values", "credentials",
+            "absolute_paths", "raw_logs", "undeclared_files",
+        ],
+        "hard_stop_conditions": [
+            "plan_or_contract_mismatch", "unknown_or_duplicate_field",
+            "path_escape_or_symlink", "authority_widening", "out_of_scope_change",
+        ],
+    }
+    content = (
+        json.dumps(contract, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if len(content) > WORKER_CONTRACT_MAX_BYTES:
+        raise RunnerError("worker execution contract exceeds the byte bound")
+    return content
+
+
+def verify_worker_contract(
+    *,
+    repo_root: Path,
+    git_bin: str,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    plan_path: Path,
+    plan_rel: str,
+    values: dict[str, str | list[str]],
+    normalized_scope: Sequence[str],
+) -> None:
+    raw_path = manifest.get("worker_contract_path")
+    digest = manifest.get("worker_contract_digest")
+    if not isinstance(raw_path, str) or not isinstance(digest, str):
+        raise RunnerError("candidate manifest is missing the worker execution contract binding")
+    contract_path = Path(raw_path)
+    if not contract_path.is_absolute() or contract_path.parent != manifest_path.parent:
+        raise RunnerError("worker execution contract must be a sibling of the candidate manifest")
+    content = read_bounded_regular_file(
+        contract_path, WORKER_CONTRACT_MAX_BYTES, "worker execution contract"
+    )
+    if hash_file(contract_path) != digest:
+        raise RunnerError("worker execution contract digest no longer matches the candidate manifest")
+    contract = load_exact_json_object(content, label="worker execution contract")
+    expected_fields = {
+        "schema_version", "repository_identity", "source_head", "plan_path", "plan_digest",
+        "orchestration_run_id", "attempt_lineage", "primary_invariant", "write_scope",
+        "context_files", "required_specs", "acceptance", "focused_validation",
+        "explicit_exclusions", "hard_stop_conditions",
+    }
+    if set(contract) != expected_fields or contract.get("schema_version") != WORKER_CONTRACT_SCHEMA_VERSION:
+        raise RunnerError("worker execution contract has unknown or missing fields")
+    lineage = validate_contract_lineage(contract.get("attempt_lineage"))
+    attempt_label = manifest.get("worker_attempt_label")
+    if attempt_label not in {"primary", "fallback", "custom"}:
+        raise RunnerError("candidate manifest has an invalid worker attempt label")
+    manifest_lineage = manifest.get("correction_lineage")
+    expected_lineage = (
+        {
+            "attempt_kind": "initial",
+            "correction_round": 0,
+            "attempt_label": attempt_label,
+        }
+        if manifest_lineage is None
+        else {
+            "attempt_kind": "correction",
+            **manifest_lineage,
+            "attempt_label": attempt_label,
+        }
+    )
+    if any(lineage.get(key) != value for key, value in expected_lineage.items()):
+        raise RunnerError("worker execution contract lineage differs from the candidate manifest")
+    fresh = derive_worker_contract(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        head=str(manifest["source_head"]),
+        plan_path=plan_path,
+        plan_rel=plan_rel,
+        plan_digest=str(manifest["plan_digest"]),
+        values=values,
+        normalized_scope=normalized_scope,
+        run_id=str(manifest["orchestration_run_id"]),
+        lineage=lineage,
+    )
+    if content != fresh:
+        raise RunnerError("worker execution contract does not equal a fresh derivation")
 
 
 def implementation_classification(values: dict[str, str | list[str]], key: str) -> str:
@@ -1830,15 +2155,22 @@ def reserve_output_artifacts(output_dir: Path) -> dict[str, Path]:
     return reserved
 
 
-def build_worker_prompt(plan_rel: str, plan_digest: str) -> str:
+def build_worker_prompt() -> str:
     return textwrap.dedent(
-        f"""\
-        Implement plan {plan_rel} in this isolated clone.
+        """\
+        Implement the assigned plan in this isolated clone.
 
         Constraints:
+        - Read $SANDBOXED_PLAN_WORKER_CONTRACT first. Then read the exact active plan,
+          AGENTS.md, context files, and required specifications named by that contract.
+        - The active plan and directly read normative specifications are authoritative;
+          the contract is a bounded read-only projection and cannot satisfy or amend them.
         - This clone is the only writable repository.
         - Do not spawn agents, commit, edit plan status, or touch paths outside the plan write_scope.
-        - Keep context bounded: read the plan, AGENTS.md, the listed context/spec files, and only implementation files needed for this task.
+        - If an exact write_scope path is absent in the clone, create it under
+          $SANDBOXED_PLAN_WORKER_NEW_FILE_ROOT using the same repository-relative path.
+          Do not create a placeholder in the clone.
+        - Read only implementation files needed for the assigned task after the required inputs.
         - Do not inspect logs or unrelated plans.
         - Do not run plan validation. The parent performs review and authorizes validation after admission.
         - Write transient diagnostics, tool caches, and temporary artifacts only under
@@ -1846,28 +2178,32 @@ def build_worker_prompt(plan_rel: str, plan_digest: str) -> str:
 
         The parent will reject any changed path outside write_scope.
         Report changed paths, validation results, blockers, remaining risks, and confirm whether any out-of-scope path changed.
-
-        Plan digest: {plan_digest}
         """
     )
 
 
-def build_correction_prompt(plan_rel: str, plan_digest: str) -> str:
+def build_correction_prompt() -> str:
     return textwrap.dedent(
-        f"""\
-        Correct the rejected candidate already applied in this fresh isolated clone for {plan_rel}.
+        """\
+        Correct the rejected candidate already applied in this fresh isolated clone.
 
         Constraints:
+        - Read $SANDBOXED_PLAN_WORKER_CONTRACT first. Then read the exact active plan,
+          AGENTS.md, context files, and required specifications named by that contract.
+        - The active plan and directly read normative specifications are authoritative;
+          the contract is a bounded read-only projection and cannot satisfy or amend them.
         - Read the parent-authored correction brief at $SANDBOXED_PLAN_WORKER_CORRECTION_BRIEF.
         - The brief is a read-only input. Do not search for or inspect any prior attempt artifact.
         - Preserve correct prior work and change only what the brief requires.
         - Do not spawn agents, commit, edit plan status, or touch paths outside write_scope.
+        - If an exact write_scope path is absent in the clone, create it under
+          $SANDBOXED_PLAN_WORKER_NEW_FILE_ROOT using the same repository-relative path.
+          Do not create a placeholder in the clone.
         - Write transient diagnostics, caches, and temporary artifacts only under
           $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
         - Report changed paths and blockers. Do not run broad plan validation.
 
         The parent will admit one aggregate patch against the original source HEAD.
-        Plan digest: {plan_digest}
         """
     )
 
@@ -2061,45 +2397,53 @@ def normalize_hidden_directories(
 def prepare_writable_shadows(
     *, clone_dir: Path, scratch_dir: Path, scope_entries: Sequence[str]
 ) -> list[tuple[Path, Path, bool]]:
-    """Create writable copies for scope entries without resolving repository symlinks."""
+    """Create writable files for exact paths without granting a parent directory."""
     shadows_root = scratch_dir / "writable-shadows"
+    shadows_root.mkdir(exist_ok=False)
     prepared: list[tuple[Path, Path, bool]] = []
     for entry in scope_entries:
         relative, is_prefix = normalize_repo_relpath(entry, allow_prefix=True, label="write_scope entry")
-        body = relative[:-1] if is_prefix else relative
+        if is_prefix:
+            raise RunnerError(f"writable delegation does not allow a directory prefix: {relative}")
+        body = relative
         ensure_no_symlink_path_trick(clone_dir, body)
         target = clone_dir / body
         shadow = shadows_root / body
-        shadow.parent.mkdir(parents=True, exist_ok=True)
-        if is_prefix:
-            if target.exists():
-                if not target.is_dir() or target.is_symlink():
-                    raise RunnerError(f"prefix write_scope target must be a directory: {relative}")
-                shutil.copytree(target, shadow, symlinks=True)
-            else:
-                target.mkdir(parents=True, exist_ok=False)
-                shadow.mkdir()
-        else:
+        target_existed = target.exists() or target.is_symlink()
+        if target_existed:
+            shadow.parent.mkdir(parents=True, exist_ok=True)
             if not target.is_file() or target.is_symlink():
-                raise RunnerError(f"exact write_scope target must be an existing regular file: {relative}")
+                raise RunnerError(f"exact write_scope target must be a regular file: {relative}")
             shutil.copy2(target, shadow, follow_symlinks=False)
-        prepared.append((shadow, target, is_prefix))
+        else:
+            if not target.parent.is_dir() or target.parent.is_symlink():
+                raise RunnerError(f"new exact write_scope target requires an existing parent: {relative}")
+            shadow.parent.mkdir(parents=True, exist_ok=True)
+        prepared.append((shadow, target, target_existed))
     return prepared
 
 
-def materialize_writable_shadows(shadows: Sequence[tuple[Path, Path, bool]]) -> None:
+def materialize_writable_shadows(
+    shadows: Sequence[tuple[Path, Path, bool]], shadows_root: Path
+) -> None:
     """Copy only scope-shadow results back into the disposable candidate clone."""
-    for shadow, target, is_prefix in shadows:
-        if is_prefix:
-            if target.exists() or target.is_symlink():
-                if target.is_symlink() or not target.is_dir():
-                    raise RunnerError(f"prefix write_scope target changed shape: {target}")
-                shutil.rmtree(target)
-            shutil.copytree(shadow, target, symlinks=True)
-        else:
-            if not target.is_file() or target.is_symlink():
-                raise RunnerError(f"exact write_scope target changed shape: {target}")
-            shutil.copy2(shadow, target, follow_symlinks=False)
+    if not shadows_root.is_dir() or shadows_root.is_symlink():
+        raise RunnerError("writable shadow root changed shape")
+    for shadow, target, target_existed in shadows:
+        if not target_existed and not shadow.exists() and not shadow.is_symlink():
+            continue
+        try:
+            shadow_rel = shadow.relative_to(shadows_root).as_posix()
+        except ValueError as exc:
+            raise RunnerError("writable shadow escaped its staging root") from exc
+        ensure_no_symlink_path_trick(shadows_root, shadow_rel)
+        if target_existed and (not target.is_file() or target.is_symlink()):
+            raise RunnerError(f"exact write_scope target changed shape: {target}")
+        if not target_existed and (target.exists() or target.is_symlink()):
+            raise RunnerError(f"new exact write_scope target unexpectedly exists: {target}")
+        if not shadow.is_file() or shadow.is_symlink():
+            raise RunnerError(f"writable shadow changed shape: {shadow}")
+        shutil.copy2(shadow, target, follow_symlinks=False)
 
 def git_c_quote_path(path: Path) -> str:
     """Quote one object path for Git's colon-separated alternate list."""
@@ -2394,6 +2738,9 @@ def execute_isolated_attempt(
     head: str,
     plan_rel: str,
     plan_digest: str,
+    values: dict[str, str | list[str]],
+    run_id: str,
+    attempt_lineage: dict[str, object],
     normalized_scope: Sequence[str],
     bwrap_bin: str,
     git_bin: str,
@@ -2412,6 +2759,21 @@ def execute_isolated_attempt(
     scratch_dir = attempt_root / "scratch"
     scratch_dir.mkdir(parents=True, exist_ok=False)
     clone_at_head(repo_root, git_bin, head, clone_dir)
+    contract_bytes = derive_worker_contract(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        head=head,
+        plan_path=repo_root / plan_rel,
+        plan_rel=plan_rel,
+        plan_digest=plan_digest,
+        values=values,
+        normalized_scope=normalized_scope,
+        run_id=run_id,
+        lineage=attempt_lineage,
+    )
+    contract_path = scratch_dir / "worker-contract.json"
+    contract_path.write_bytes(contract_bytes)
+    contract_path.chmod(0o400)
     initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
     if prior_patch is not None:
         run_subprocess(
@@ -2427,7 +2789,7 @@ def execute_isolated_attempt(
     include_codex_home = custom_command is None
     stdin: bytes | None = None
     last_message_path = scratch_dir / "worker-last-message.txt"
-    read_only_inputs: list[Path] = []
+    read_only_inputs: list[Path] = [contract_path]
     correction_brief_path: Path | None = None
     if correction_brief is not None:
         correction_brief_path = scratch_dir / "correction-brief.txt"
@@ -2458,9 +2820,9 @@ def execute_isolated_attempt(
             reasoning=reasoning,
         )
         stdin = (
-            build_correction_prompt(plan_rel, plan_digest)
+            build_correction_prompt()
             if correction_brief is not None
-            else build_worker_prompt(plan_rel, plan_digest)
+            else build_worker_prompt()
         ).encode("utf-8")
     else:
         command = [custom_command[0]]
@@ -2483,8 +2845,24 @@ def execute_isolated_attempt(
         extra_env=extra_env,
         include_codex_home=include_codex_home,
     )
+    env_vars[f"{ENV_PREFIX}WORKER_CONTRACT"] = str(contract_path)
+    env_vars[f"{ENV_PREFIX}NEW_FILE_ROOT"] = str(scratch_dir / "writable-shadows")
     if correction_brief_path is not None:
         env_vars[f"{ENV_PREFIX}CORRECTION_BRIEF"] = str(correction_brief_path)
+    fresh_contract = derive_worker_contract(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        head=head,
+        plan_path=repo_root / plan_rel,
+        plan_rel=plan_rel,
+        plan_digest=plan_digest,
+        values=values,
+        normalized_scope=normalized_scope,
+        run_id=run_id,
+        lineage=attempt_lineage,
+    )
+    if fresh_contract != contract_bytes or contract_path.read_bytes() != contract_bytes:
+        raise RunnerError("worker execution contract does not equal a fresh derivation")
     attempt_started = time.monotonic()
     result = run_subprocess(
         build_bwrap_command(
@@ -2493,7 +2871,9 @@ def execute_isolated_attempt(
             scratch_dir=scratch_dir,
             command=command,
             env_vars=env_vars,
-            writable_shadows=[(shadow, target) for shadow, target, _is_prefix in shadows],
+            writable_shadows=[
+                (shadow, target) for shadow, target, target_existed in shadows if target_existed
+            ],
             hidden_directories=normalize_hidden_directories(
                 hidden_directories,
                 visible_paths=(clone_dir, scratch_dir),
@@ -2541,6 +2921,7 @@ def execute_isolated_attempt(
         "result": result,
         "record": record,
         "last_message_path": attempt_last_message,
+        "contract_bytes": contract_bytes,
     }
 
 
@@ -2679,6 +3060,9 @@ def run_worker(args: argparse.Namespace) -> int:
                     head=head,
                     plan_rel=plan_rel,
                     plan_digest=plan_digest,
+                    values=values,
+                    run_id=args.orchestration_run_id,
+                    attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "primary"},
                     normalized_scope=normalized_scope,
                     bwrap_bin=bwrap_bin,
                     git_bin=git_bin,
@@ -2730,6 +3114,9 @@ def run_worker(args: argparse.Namespace) -> int:
                     head=head,
                     plan_rel=plan_rel,
                     plan_digest=plan_digest,
+                    values=values,
+                    run_id=args.orchestration_run_id,
+                    attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "fallback"},
                     normalized_scope=normalized_scope,
                     bwrap_bin=bwrap_bin,
                     git_bin=git_bin,
@@ -2762,6 +3149,9 @@ def run_worker(args: argparse.Namespace) -> int:
                 head=head,
                 plan_rel=plan_rel,
                 plan_digest=plan_digest,
+                values=values,
+                run_id=args.orchestration_run_id,
+                attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "custom"},
                 normalized_scope=normalized_scope,
                 bwrap_bin=bwrap_bin,
                 git_bin=git_bin,
@@ -2777,6 +3167,9 @@ def run_worker(args: argparse.Namespace) -> int:
                 )
 
         worker_result = select_attempt_artifacts(selected, reserved_artifacts)
+        contract_path = reserved_artifacts["worker-contract.json"]
+        contract_path.write_bytes(selected["contract_bytes"])
+        contract_digest = hash_file(contract_path)
         worker_result["kind"] = worker_kind
         if attempts:
             worker_result["attempts"] = attempts
@@ -2784,7 +3177,9 @@ def run_worker(args: argparse.Namespace) -> int:
         if fallback_reason is not None:
             worker_result["fallback_reason"] = fallback_reason
 
-        materialize_writable_shadows(selected["shadows"])
+        materialize_writable_shadows(
+            selected["shadows"], selected["scratch_dir"] / "writable-shadows"
+        )
 
         patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
             bwrap_bin=bwrap_bin,
@@ -2838,6 +3233,9 @@ def run_worker(args: argparse.Namespace) -> int:
             "source_head": head,
             "plan_path": plan_rel,
             "plan_digest": plan_digest,
+            "worker_contract_path": str(contract_path),
+            "worker_contract_digest": contract_digest,
+            "worker_attempt_label": selected["record"]["label"],
             "allowed_write_scope": normalized_scope,
             "changed_paths": changed_paths,
             "patch_path": str(patch_path),
@@ -2946,6 +3344,16 @@ def verify_candidate_manifest(
     normalized_manifest_scope = parse_write_scope(manifest_scope)
     if normalized_manifest_scope != normalized_scope:
         raise RunnerError("candidate manifest write scope differs from the current plan")
+    verify_worker_contract(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        plan_path=plan_path,
+        plan_rel=plan_rel,
+        values=values,
+        normalized_scope=normalized_scope,
+    )
     patch_path_raw = manifest.get("patch_path")
     if not isinstance(patch_path_raw, str):
         raise RunnerError("manifest patch_path must be a string")
@@ -3450,6 +3858,8 @@ def correct_worker(args: argparse.Namespace) -> int:
             "head": verified["head"],
             "plan_rel": verified["plan_rel"],
             "plan_digest": verified["plan_digest"],
+            "values": values,
+            "run_id": args.orchestration_run_id,
             "normalized_scope": verified["normalized_scope"],
             "bwrap_bin": bwrap_bin,
             "git_bin": git_bin,
@@ -3463,6 +3873,7 @@ def correct_worker(args: argparse.Namespace) -> int:
             selected = execute_isolated_attempt(
                 **common,
                 label="custom",
+                attempt_lineage={"attempt_kind": "correction", **lineage, "attempt_label": "custom"},
                 hidden_directories=tuple({output_dir.resolve(), *hidden_prior}),
                 custom_command=[worker_binary, *args.worker_arg],
             )
@@ -3497,6 +3908,7 @@ def correct_worker(args: argparse.Namespace) -> int:
                 primary = execute_isolated_attempt(
                     **common,
                     label="primary",
+                    attempt_lineage={"attempt_kind": "correction", **lineage, "attempt_label": "primary"},
                     hidden_directories=tuple({output_dir.resolve(), host_codex_home_path(), *hidden_prior}),
                     codex_bin=codex_bin,
                     model=primary_model,
@@ -3525,6 +3937,7 @@ def correct_worker(args: argparse.Namespace) -> int:
                 fallback = execute_isolated_attempt(
                     **common,
                     label="fallback",
+                    attempt_lineage={"attempt_kind": "correction", **lineage, "attempt_label": "fallback"},
                     hidden_directories=tuple(
                         {
                             output_dir.resolve(),
@@ -3551,13 +3964,18 @@ def correct_worker(args: argparse.Namespace) -> int:
                     )
                 selected = fallback
         worker_result = select_attempt_artifacts(selected, reserved_artifacts)
+        contract_path = reserved_artifacts["worker-contract.json"]
+        contract_path.write_bytes(selected["contract_bytes"])
+        contract_digest = hash_file(contract_path)
         worker_result["kind"] = worker_kind
         if attempts:
             worker_result["attempts"] = attempts
             worker_result["selected_attempt"] = selected["record"]["label"]
         if fallback_reason is not None:
             worker_result["fallback_reason"] = fallback_reason
-        materialize_writable_shadows(selected["shadows"])
+        materialize_writable_shadows(
+            selected["shadows"], selected["scratch_dir"] / "writable-shadows"
+        )
         patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
             bwrap_bin=bwrap_bin,
             git_bin=git_bin,
@@ -3600,6 +4018,9 @@ def correct_worker(args: argparse.Namespace) -> int:
             "source_head": verified["head"],
             "plan_path": verified["plan_rel"],
             "plan_digest": verified["plan_digest"],
+            "worker_contract_path": str(contract_path),
+            "worker_contract_digest": contract_digest,
+            "worker_attempt_label": selected["record"]["label"],
             "allowed_write_scope": verified["normalized_scope"],
             "changed_paths": changed_paths,
             "patch_path": str(patch_path),
@@ -3752,11 +4173,13 @@ def write_self_test_worker(path: Path) -> None:
             worker_repo = Path(os.environ[prefix + "WORKER_REPO"])
             source_repo = Path(os.environ[prefix + "SOURCE_REPO"])
             scratch_dir = Path(os.environ[prefix + "SCRATCH_DIR"])
+            new_file_root = Path(os.environ[prefix + "NEW_FILE_ROOT"])
             outside_probe = Path(os.environ[prefix + "OUTSIDE_PROBE"])
 
             (worker_repo / "allowed.txt").write_text("changed in clone\\n", encoding="utf-8")
-            (worker_repo / "dir" / "new.txt").parent.mkdir(parents=True, exist_ok=True)
-            (worker_repo / "dir" / "new.txt").write_text("new file\\n", encoding="utf-8")
+            new_target = new_file_root / "dir" / "new.txt"
+            new_target.parent.mkdir(parents=True, exist_ok=True)
+            new_target.write_text("new file\\n", encoding="utf-8")
             (scratch_dir / "scratch-ok.txt").write_text("scratch ok\\n", encoding="utf-8")
 
             denied = []
@@ -3783,13 +4206,22 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
     run_subprocess((git_bin, "init", "-q", "-b", "main"), cwd=repo_root)
     run_subprocess((git_bin, "config", "user.email", "self-test@example.invalid"), cwd=repo_root)
     run_subprocess((git_bin, "config", "user.name", "Self Test"), cwd=repo_root)
+    run_subprocess(
+        (git_bin, "remote", "add", "origin", "https://example.invalid/self-test.git"),
+        cwd=repo_root,
+    )
     (repo_root / "AGENTS.md").write_text("sandboxed worker self-test\n", encoding="utf-8")
     (repo_root / "docs/plan/active").mkdir(parents=True, exist_ok=True)
+    (repo_root / "docs/agent").mkdir(parents=True, exist_ok=True)
+    (repo_root / "docs/agent/SPEC_USER_COMMUNICATION.md").write_text("self-test\n", encoding="utf-8")
+    (repo_root / "docs/agent/SPEC_PLAN_WORKFLOW.md").write_text("self-test\n", encoding="utf-8")
     (repo_root / "docs/plan/plan.md").write_text(
         "# Active Plan\n\nid\tpath\tstatus\n001\tdocs/plan/active/001-self-test.md\tin_progress\n",
         encoding="utf-8",
     )
     (repo_root / "allowed.txt").write_text("original\n", encoding="utf-8")
+    (repo_root / "dir").mkdir()
+    (repo_root / "dir/existing.txt").write_text("keep parent\n", encoding="utf-8")
     plan = repo_root / "docs/plan/active/001-self-test.md"
     plan.write_text(
         textwrap.dedent(
@@ -3804,9 +4236,10 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
             human_approval_status: not_required
             implementation_risk: low
             implementation_ambiguity: low
+            primary_invariant: self-test changes remain inside explicit file paths
             write_scope:
               - allowed.txt
-              - dir/
+              - dir/new.txt
             context_files:
               - docs/agent/SPEC_USER_COMMUNICATION.md
             required_specs:
@@ -3832,7 +4265,6 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
 def run_self_test(args: argparse.Namespace) -> int:
     git_bin = require_executable("git", args.git_bin)
     ensure_bwrap_usable(require_executable("bwrap", args.bwrap_bin))
-    normalize_repo_relpath("dir/", allow_prefix=True, label="self-test prefix")
     try:
         normalize_repo_relpath("../bad", label="self-test invalid path")
     except RunnerError:
@@ -3870,7 +4302,9 @@ def run_self_test(args: argparse.Namespace) -> int:
                     "--source-head",
                     source_head,
                     "--primary-invariant-digest",
-                    "sha256:" + hashlib.sha256(b"legacy candidate invariant").hexdigest(),
+                    "sha256:" + hashlib.sha256(
+                        b"self-test changes remain inside explicit file paths"
+                    ).hexdigest(),
                     "--lifecycle-state",
                     str(lifecycle_path),
                     "--implementation-mode",
@@ -3928,6 +4362,8 @@ def run_self_test(args: argparse.Namespace) -> int:
             )
             if (repo_root / "allowed.txt").read_text(encoding="utf-8") != "changed in clone\n":
                 raise RunnerError("self-test apply did not update the source repository")
+            if (repo_root / "dir/new.txt").read_text(encoding="utf-8") != "new file\n":
+                raise RunnerError("self-test apply did not create the declared new file")
         finally:
             os.chdir(original_cwd)
     print("sandboxed plan worker self-test passed")

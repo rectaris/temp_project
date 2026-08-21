@@ -1,6 +1,6 @@
 # Enforce one immutable plan-bound worker contract
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - referent_first
@@ -116,11 +116,11 @@ checked_summary_ja: worker起動前にplan由来の契約と明示的な書込pa
 
 ## Tasks
 
-- [ ] Implement exact-path delegated shadows, safe explicit new-file handling, and pre-start protected/authority rejection.
-- [ ] Implement versioned contract derivation, exact validation, read-only mounting, and initial/correction lineage binding.
-- [ ] Replace duplicated prompt plan details with fixed policy plus the verified contract while retaining direct plan/spec reads.
-- [ ] Align root and generated runner, policy, Skill, checks, and Copier behavior without changing frozen fixtures.
-- [ ] Review the bounded parent diff, run tuned focused validation, obtain independent review, run the authoritative suite once without the holdout, and archive the accepted implementation.
+- [x] Implement exact-path delegated shadows, safe explicit new-file handling, and pre-start protected/authority rejection.
+- [x] Implement versioned contract derivation, exact validation, read-only mounting, and initial/correction lineage binding.
+- [x] Replace duplicated prompt plan details with fixed policy plus the verified contract while retaining direct plan/spec reads.
+- [x] Align root and generated runner, policy, Skill, checks, and Copier behavior without changing frozen fixtures.
+- [x] Review the bounded parent diff, run tuned focused validation, obtain independent review, run the authoritative suite once without the holdout, and archive the accepted implementation.
 
 ## Validation Notes
 
@@ -128,3 +128,8 @@ checked_summary_ja: worker起動前にplan由来の契約と明示的な書込pa
 - The source Plan 113 acceptance text is preserved exactly.
 - The frozen tuned and holdout fixture digests were copied from Plan 134 before implementation.
 - Plan 134 is checked at `docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md`.
+- The tuned fixture remains `sha256:ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf`; the opaque holdout remains `sha256:a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27` and its behavior selector was not executed in this plan.
+- Final focused validation passed: worker tests (82), validation-tool tests (32), both policy checkers, and `git diff --check`.
+- The first independent review reported two Medium findings about missing-file placeholders and tree-derived repository identity. One bounded parent remediation replaced placeholders with absence-preserving staging and bound repository identity to a credential-free canonical network origin; independent rereview reported zero High, Medium, or Low findings.
+- The authoritative validation list ran exactly once and every command passed, including the runner self-test, project lint, smoke test, and required real Copier update lane.
+- Root and generated runners are byte-identical, and no unresolved risk remains in the Plan 135 implementation scope.

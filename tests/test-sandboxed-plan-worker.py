@@ -390,6 +390,7 @@ def write_worker(path: Path, body: str) -> None:
         worker_repo = Path(os.environ[prefix + "WORKER_REPO"])
         source_repo = Path(os.environ[prefix + "SOURCE_REPO"])
         scratch_dir = Path(os.environ[prefix + "SCRATCH_DIR"])
+        new_file_root = Path(os.environ[prefix + "NEW_FILE_ROOT"])
         plan_path = os.environ[prefix + "PLAN_PATH"]
         """
     )
@@ -509,8 +510,12 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         git(repo, "init", "-q", "-b", "main")
         git(repo, "config", "user.email", "test@example.invalid")
         git(repo, "config", "user.name", "Test")
+        git(repo, "remote", "add", "origin", f"https://example.invalid/{repo_name}.git")
         (repo / "AGENTS.md").write_text("sandboxed test repo\n", encoding="utf-8")
         (repo / "docs/plan/active").mkdir(parents=True, exist_ok=True)
+        (repo / "docs/agent").mkdir(parents=True, exist_ok=True)
+        (repo / "docs/agent/SPEC_USER_COMMUNICATION.md").write_text("fixture\n", encoding="utf-8")
+        (repo / "docs/agent/SPEC_PLAN_WORKFLOW.md").write_text("fixture\n", encoding="utf-8")
         (repo / "docs/plan/plan.md").write_text(
             "# Active Plan\n\nid\tpath\tstatus\n001\tdocs/plan/active/001-sandboxed.md\tin_progress\n",
             encoding="utf-8",
@@ -531,6 +536,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             "human_approval_status: not_required",
             "implementation_risk: low",
             "implementation_ambiguity: low",
+            "primary_invariant: mutate only the declared fixture files",
             "write_scope:",
             *(f"  - {entry}" for entry in write_scope),
             "context_files:",
@@ -731,9 +737,210 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertNotIn("--sandbox", command)
         self.assertNotIn("--ask-for-approval", command)
         self.assertNotIn("--dangerously-bypass-hook-trust", command)
-        prompt = RUNNER.build_worker_prompt("docs/plan/active/001-test.md", "0" * 64)
+        prompt = RUNNER.build_worker_prompt()
         self.assertIn("Do not run plan validation", prompt)
         self.assertNotIn("Run every validation command", prompt)
+        self.assertIn("SANDBOXED_PLAN_WORKER_CONTRACT first", prompt)
+        self.assertNotIn("docs/plan/active/001-test.md", prompt)
+
+    def test_repository_identity_is_stable_origin_bound_and_credential_free(self) -> None:
+        self.assertEqual(
+            RUNNER.canonical_repository_origin("git@example.invalid:org/repo.git"),
+            RUNNER.canonical_repository_origin("https://token@example.invalid/org/repo.git"),
+        )
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        first = RUNNER.derive_repository_identity(repo, "git")
+        (repo / "unrelated.txt").write_text("later\n", encoding="utf-8")
+        git(repo, "add", "unrelated.txt")
+        git(repo, "commit", "-qm", "later commit")
+        self.assertEqual(RUNNER.derive_repository_identity(repo, "git"), first)
+        git(repo, "remote", "set-url", "origin", "https://example.invalid/distinct.git")
+        self.assertNotEqual(RUNNER.derive_repository_identity(repo, "git"), first)
+        git(repo, "remote", "remove", "origin")
+        with self.assertRaisesRegex(RUNNER.RunnerError, "canonical remote.origin.url"):
+            RUNNER.derive_repository_identity(repo, "git")
+
+    def evaluate_tuned_worker_contract_case(
+        self, base: dict[str, object], case: dict[str, object]
+    ) -> dict[str, object]:
+        error_fragments = {
+            "source_plan_changed": "changed while deriving",
+            "contract_digest_mismatch": "digest no longer matches",
+            "lineage_mismatch": "lineage differs",
+            "missing_primary_invariant": "primary_invariant",
+            "duplicate_contract_field": "duplicate field",
+            "unknown_contract_field": "unknown or missing fields",
+            "path_traversal": "dot-dot traversal",
+            "symlink_escape": "symlink",
+            "contract_too_large": "byte bound",
+            "read_only_contract": "worker exited with 73",
+            "validation_authority_write": "validation authority",
+            "non_exact_write_path": "explicit file path",
+        }
+        expected = case["expected"]
+        operation = case["operation"]
+        inputs = case["input"]
+        with tempfile.TemporaryDirectory(prefix="worker-contract-fixture-") as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            git(repo, "config", "user.email", "fixture@example.invalid")
+            git(repo, "config", "user.name", "Fixture")
+            git(repo, "remote", "add", "origin", "git@example.invalid:fixtures/worker-contract.git")
+            (repo / "AGENTS.md").write_text("fixture policy\n", encoding="utf-8")
+            for relative, content in base["repository_files"].items():
+                target = repo / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            plan_rel = base["plan_path"]
+            plan = repo / plan_rel
+            plan.parent.mkdir(parents=True, exist_ok=True)
+            plan.write_text(base["plan_bytes"], encoding="utf-8")
+            (repo / "docs/plan/plan.md").write_text(
+                f"# Active Plan\n\nid\tpath\tstatus\n001\t{plan_rel}\tin_progress\n",
+                encoding="utf-8",
+            )
+            git(repo, "add", ".")
+            git(repo, "commit", "-qm", "fixture baseline")
+            values = RUNNER.load_planlib().parse_manifest(plan)
+            head = git(repo, "rev-parse", "HEAD").stdout.strip()
+            plan_digest = RUNNER.hash_file(plan)
+            scope = RUNNER.parse_write_scope(values["write_scope"])
+            lineage = dict(base["attempt_lineage"])
+            if "attempt_lineage" in inputs:
+                lineage = dict(inputs["attempt_lineage"])
+                if "prior_manifest_digest" in lineage:
+                    lineage["prior_manifest_digest"] = lineage["prior_manifest_digest"].removeprefix("sha256:")
+                    lineage.setdefault("prior_patch_digest", "2" * 64)
+                    lineage.setdefault("correction_brief_digest", "3" * 64)
+
+            def derive() -> bytes:
+                return RUNNER.derive_worker_contract(
+                    repo_root=repo,
+                    git_bin="git",
+                    head=head,
+                    plan_path=plan,
+                    plan_rel=plan_rel,
+                    plan_digest=plan_digest,
+                    values=values,
+                    normalized_scope=scope,
+                    run_id=base["orchestration_run_id"],
+                    lineage=lineage,
+                )
+
+            try:
+                if operation == "derive_twice":
+                    first = derive()
+                    if first != derive():
+                        raise AssertionError("worker contract derivation is not exact")
+                elif operation == "validate_write_scope":
+                    candidate_scope = RUNNER.parse_write_scope(inputs["write_scope"])
+                    RUNNER.require_safe_delegated_write_scope(repo, plan_rel, values, candidate_scope)
+                elif operation == "derive_after_plan_mutation":
+                    plan.write_text(
+                        plan.read_text(encoding="utf-8") + inputs["append_to_plan"],
+                        encoding="utf-8",
+                    )
+                    derive()
+                elif operation == "derive_with_plan_replacement":
+                    text = plan.read_text(encoding="utf-8")
+                    if "remove_line_prefix" in inputs:
+                        prefix = inputs["remove_line_prefix"]
+                        text = "\n".join(
+                            line for line in text.splitlines() if not line.startswith(prefix)
+                        ) + "\n"
+                        plan.write_text(text, encoding="utf-8")
+                        values = RUNNER.load_planlib().parse_manifest(plan)
+                        scope = RUNNER.parse_write_scope(values["write_scope"])
+                        plan_digest = RUNNER.hash_file(plan)
+                        derive()
+                    else:
+                        RUNNER.parse_write_scope(inputs["replace_write_scope"])
+                elif operation == "derive_with_repository_mutation":
+                    mutation = inputs["replace_with_symlink"]
+                    target = repo / mutation["path"]
+                    target.unlink()
+                    (repo / "outside-spec.md").write_text("outside\n", encoding="utf-8")
+                    target.symlink_to(mutation["target"])
+                    derive()
+                elif operation == "verify_contract_mutation":
+                    content = derive()
+                    contract = json.loads(content)
+                    manifest = {
+                        "source_head": head,
+                        "plan_path": plan_rel,
+                        "plan_digest": plan_digest,
+                        "orchestration_run_id": base["orchestration_run_id"],
+                        "worker_attempt_label": base["attempt_lineage"]["attempt_label"],
+                    }
+                    mutation = inputs["mutation"]
+                    if mutation["kind"] == "manifest_digest":
+                        pass
+                    elif mutation["kind"] == "attempt_lineage":
+                        contract["attempt_lineage"] = mutation["value"]
+                        content = (json.dumps(contract, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                    else:
+                        contract[mutation["name"]] = mutation["value"]
+                        content = (json.dumps(contract, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                    output = root / "output"
+                    output.mkdir()
+                    contract_path = output / "worker-contract.json"
+                    contract_path.write_bytes(content)
+                    manifest["worker_contract_path"] = str(contract_path)
+                    manifest["worker_contract_digest"] = (
+                        inputs["mutation"]["value"].removeprefix("sha256:")
+                        if mutation["kind"] == "manifest_digest"
+                        else RUNNER.hash_file(contract_path)
+                    )
+                    manifest_path = output / "manifest.json"
+                    manifest_path.write_text("{}\n", encoding="utf-8")
+                    RUNNER.verify_worker_contract(
+                        repo_root=repo, git_bin="git", manifest_path=manifest_path,
+                        manifest=manifest, plan_path=plan, plan_rel=plan_rel,
+                        values=values, normalized_scope=scope,
+                    )
+                elif operation == "verify_serialized_contract":
+                    if "json_prefix" in inputs:
+                        valid = derive().decode("utf-8")
+                        RUNNER.load_exact_json_object(
+                            (inputs["json_prefix"] + valid[1:]).encode("utf-8"),
+                            label="worker execution contract",
+                        )
+                    else:
+                        oversized = root / "oversized.json"
+                        oversized.write_bytes(inputs["fill_byte"].encode() * inputs["byte_count"])
+                        RUNNER.read_bounded_regular_file(
+                            oversized, RUNNER.WORKER_CONTRACT_MAX_BYTES, "worker execution contract"
+                        )
+                elif operation == "attempt_worker_write":
+                    result, _output, _worker = self.run_with_worker(
+                        repo,
+                        plan_rel,
+                        textwrap.dedent(
+                            """\
+                            contract = Path(os.environ[prefix + "WORKER_CONTRACT"])
+                            try:
+                                contract.write_text("mutated\\n", encoding="utf-8")
+                            except OSError:
+                                raise SystemExit(73)
+                            raise SystemExit("contract unexpectedly writable")
+                            """
+                        ),
+                        output_dir=root / "attempt-write",
+                    )
+                    if result.returncode != 0:
+                        raise RUNNER.RunnerError(result.stderr.strip())
+                else:
+                    raise AssertionError(f"unsupported tuned operation: {operation}")
+            except RUNNER.RunnerError as exc:
+                expected_code = expected["error_code"]
+                fragment = error_fragments.get(expected_code)
+                if fragment is None or fragment not in str(exc):
+                    return {"result": "rejected", "error_code": "unexpected_error"}
+                return {"result": "rejected", "error_code": expected_code}
+            return {"result": "accepted", "error_code": None}
 
     def test_tuned_worker_contract_fixture_is_frozen_and_evaluator_is_generic(self) -> None:
         self.assertEqual(
@@ -751,10 +958,9 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             {coverage for case in fixture["cases"] for coverage in case["covers"]},
             WORKER_CONTRACT_COVERAGE,
         )
-        expected_by_id = {case["id"]: case["expected"] for case in fixture["cases"]}
         observations = evaluate_worker_contract_fixture(
             WORKER_CONTRACT_SCENARIOS,
-            lambda _base, case: expected_by_id[case["id"]],
+            self.evaluate_tuned_worker_contract_case,
             used_for_tuning=True,
         )
         self.assertEqual([item["id"] for item in observations], [case["id"] for case in fixture["cases"]])
@@ -973,7 +1179,10 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 self.assertIn("must not override reserved environment variable", result.stderr)
 
     def test_run_and_apply_in_scope_patch(self) -> None:
-        temporary, repo, plan_path = self.make_repo(["allowed.txt", "dir/"])
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt", "dir/nested.txt"],
+            files={"allowed.txt": "original\n", "dir/nested.txt": "before\n"},
+        )
         self.addCleanup(temporary.cleanup)
         output_dir = Path(temporary.name) / "artifacts"
         result, _worker_dir, _worker = self.run_with_worker(
@@ -983,7 +1192,6 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 """\
                 (worker_repo / "allowed.txt").write_text("updated\\n", encoding="utf-8")
                 target = worker_repo / "dir" / "nested.txt"
-                target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("created\\n", encoding="utf-8")
                 (scratch_dir / "note.txt").write_text(plan_path + "\\n", encoding="utf-8")
                 """
@@ -1024,7 +1232,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertGreaterEqual(telemetry["attempt_durations_seconds"][0], 0)
         self.assertGreaterEqual(telemetry["runner_duration_seconds"], telemetry["attempt_durations_seconds"][0])
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
-        self.assertFalse((repo / "dir" / "nested.txt").exists())
+        self.assertEqual((repo / "dir" / "nested.txt").read_text(encoding="utf-8"), "before\n")
         apply = run_cli(repo, "apply", str(manifest_path))
         self.assertEqual(apply.returncode, 0, apply.stderr)
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "updated\n")
@@ -1032,8 +1240,40 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(git(repo, "diff", "--cached", "--name-only").stdout.strip(), "")
         self.assertEqual(
             git(repo, "status", "--porcelain=1", "--untracked-files=all").stdout.splitlines(),
-            [" M allowed.txt", "?? dir/nested.txt"],
+            [" M allowed.txt", " M dir/nested.txt"],
         )
+
+    def test_explicit_missing_file_preserves_absence_until_worker_creation(self) -> None:
+        for action in ("create", "noop"):
+            with self.subTest(action=action):
+                temporary, repo, plan_path = self.make_repo(
+                    ["dir/new.txt"],
+                    files={"dir/existing.txt": "existing\n"},
+                    repo_name=f"missing-{action}",
+                )
+                self.addCleanup(temporary.cleanup)
+                body = textwrap.dedent(
+                    """\
+                    clone_target = worker_repo / "dir/new.txt"
+                    staged_target = new_file_root / "dir/new.txt"
+                    if clone_target.exists() or staged_target.exists():
+                        raise SystemExit("missing path was materialized before worker creation")
+                    """
+                )
+                if action == "create":
+                    body += 'staged_target.write_text("created\\n", encoding="utf-8")\n'
+                result, _output, _worker = self.run_with_worker(repo, plan_path, body)
+                self.assertFalse((repo / "dir/new.txt").exists())
+                if action == "noop":
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("worker produced no candidate changes", result.stderr)
+                    continue
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+                self.assertEqual(manifest["changed_paths"], ["dir/new.txt"])
+                applied = run_cli(repo, "apply", result.stdout.strip())
+                self.assertEqual(applied.returncode, 0, applied.stderr)
+                self.assertEqual((repo / "dir/new.txt").read_text(encoding="utf-8"), "created\n")
 
     def test_changed_path_derivation_keeps_candidate_blobs_out_of_source_objects(self) -> None:
         temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
@@ -1680,7 +1920,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             with self.subTest(case=label):
                 manifest = dict(original_manifest)
                 manifest[key] = value
-                path = root / f"tampered-{label}.json"
+                path = initial_output / f"tampered-{label}.json"
                 path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
                 result = self.run_correction_with_worker(
                     repo,
@@ -1699,7 +1939,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             "correction_round": 0,
             "correction_brief_digest": "0" * 64,
         }
-        lineage_path = root / "bad-lineage.json"
+        lineage_path = initial_output / "bad-lineage.json"
         lineage_path.write_text(json.dumps(lineage_manifest) + "\n", encoding="utf-8")
         lineage = self.run_correction_with_worker(
             repo,
@@ -1710,7 +1950,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             output_dir=root / "bad-lineage-output",
         )
         self.assertEqual(lineage.returncode, 1)
-        self.assertIn("invalid correction round", lineage.stderr)
+        self.assertIn("lineage differs", lineage.stderr)
 
         oversized = root / "oversized-brief.txt"
         oversized.write_bytes(b"x" * (RUNNER.CORRECTION_BRIEF_MAX_BYTES + 1))
@@ -2556,7 +2796,7 @@ fs.linkSync(source, target);
 
     def test_validation_rejects_candidate_modified_plan_and_records_bounded_failure(self) -> None:
         temporary, repo, plan_path = self.make_repo(
-            ["allowed.txt", "docs/plan/"],
+            ["allowed.txt", "docs/plan/active/001-sandboxed.md"],
             validation=["git diff --check"],
             focused_validation=["python3 -m pytest tests/missing-focused.py"],
         )
@@ -2573,20 +2813,18 @@ fs.linkSync(source, target);
             ),
             output_dir=root / "modified-plan-candidate",
         )
-        self.assertEqual(modified_plan.returncode, 0, modified_plan.stderr)
-        rejected = run_cli(
-            repo,
-            "validate",
-            modified_plan.stdout.strip(),
-            "--suite",
-            "focused",
-            "--parent-diff-approved",
-            "--critical-invariants-approved",
-            "--output-dir",
-            str(root / "modified-plan-validation"),
+        self.assertEqual(modified_plan.returncode, 1)
+        self.assertIn("read-only plan", modified_plan.stderr)
+
+        plan = repo / plan_path
+        plan.write_text(
+            plan.read_text(encoding="utf-8").replace(
+                "  - docs/plan/active/001-sandboxed.md\n", ""
+            ),
+            encoding="utf-8",
         )
-        self.assertEqual(rejected.returncode, 1)
-        self.assertIn("must not change the active plan", rejected.stderr)
+        git(repo, "add", plan_path)
+        git(repo, "commit", "-qm", "remove protected plan scope")
 
         failing, _output, _worker = self.run_with_worker(
             repo,
@@ -2932,12 +3170,12 @@ fs.linkSync(source, target);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_prefix_scope_materializes_creates_modifications_and_deletions_only_below_prefix(self) -> None:
+    def test_directory_prefix_scope_is_rejected_before_worker_start(self) -> None:
         temporary, repo, plan_path = self.make_repo(
             ["dir/"], {"allowed.txt": "sibling\n", "dir/keep.txt": "before\n", "dir/remove.txt": "remove\n"}
         )
         self.addCleanup(temporary.cleanup)
-        result, _output, _worker = self.run_with_worker(
+        result, output, _worker = self.run_with_worker(
             repo,
             plan_path,
             textwrap.dedent(
@@ -2954,37 +3192,32 @@ fs.linkSync(source, target);
                 """
             ),
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        manifest = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
-        self.assertEqual(manifest["changed_paths"], ["dir/keep.txt", "dir/new.txt", "dir/remove.txt"])
-        apply = run_cli(repo, "apply", result.stdout.strip())
-        self.assertEqual(apply.returncode, 0, apply.stderr)
-        self.assertEqual((repo / "dir" / "keep.txt").read_text(encoding="utf-8"), "after\n")
-        self.assertEqual((repo / "dir" / "new.txt").read_text(encoding="utf-8"), "new\n")
-        self.assertFalse((repo / "dir" / "remove.txt").exists())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("explicit file path", result.stderr)
+        self.assertFalse((output / "worker.stdout").exists())
 
     def test_shadow_setup_rejects_invalid_exact_targets_and_symlink_ancestors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             clone = root / "clone"
-            scratch = root / "scratch"
             clone.mkdir()
-            scratch.mkdir()
             (clone / "directory").mkdir()
             (clone / "regular.txt").write_text("regular\n", encoding="utf-8")
             (clone / "link.txt").symlink_to("regular.txt")
             (clone / "linked-parent").symlink_to(root)
-            for scope, expected in (
-                (["directory"], "existing regular file"),
+            for index, (scope, expected) in enumerate((
+                (["directory"], "regular file"),
                 (["link.txt"], "path resolves through a symlink"),
-                (["linked-parent/new/"], "path resolves through a symlink"),
-            ):
+                (["linked-parent/new/"], "does not allow a directory prefix"),
+            )):
                 with self.subTest(scope=scope):
+                    scratch = root / f"scratch-{index}"
+                    scratch.mkdir()
                     with self.assertRaisesRegex(RUNNER.RunnerError, expected):
                         RUNNER.prepare_writable_shadows(clone_dir=clone, scratch_dir=scratch, scope_entries=scope)
             self.assertFalse((root / "new").exists())
 
-    def test_prefix_shadow_copy_preserves_contained_symlinks(self) -> None:
+    def test_prefix_shadow_is_rejected_even_when_contents_are_regular(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             clone = root / "clone"
@@ -2993,8 +3226,8 @@ fs.linkSync(source, target);
             scratch.mkdir()
             (clone / "dir" / "target.txt").write_text("target\n", encoding="utf-8")
             (clone / "dir" / "inside-link").symlink_to("target.txt")
-            shadows = RUNNER.prepare_writable_shadows(clone_dir=clone, scratch_dir=scratch, scope_entries=["dir/"])
-            self.assertTrue((shadows[0][0] / "inside-link").is_symlink())
+            with self.assertRaisesRegex(RUNNER.RunnerError, "does not allow a directory prefix"):
+                RUNNER.prepare_writable_shadows(clone_dir=clone, scratch_dir=scratch, scope_entries=["dir/"])
 
     def test_run_rejects_symlinked_or_preexisting_output_artifacts(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
@@ -3090,7 +3323,9 @@ fs.linkSync(source, target);
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_validation_rejects_candidate_owned_authority_paths(self) -> None:
-        temporary, repo, plan_path = self.make_repo(["tests/"], files={"tests/original.py": "pass\n"})
+        temporary, repo, plan_path = self.make_repo(
+            ["tests/original.py"], files={"tests/original.py": "pass\n"}
+        )
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         initial, _output, _worker = self.run_with_worker(
@@ -3099,20 +3334,8 @@ fs.linkSync(source, target);
             '(worker_repo / "tests" / "original.py").write_text("raise SystemExit(0)\\n", encoding="utf-8")',
             output_dir=root / "authority-initial",
         )
-        self.assertEqual(initial.returncode, 0, initial.stderr)
-        rejected = run_cli(
-            repo,
-            "validate",
-            initial.stdout.strip(),
-            "--suite",
-            "authoritative",
-            "--parent-diff-approved",
-            "--critical-invariants-approved",
-            "--output-dir",
-            str(root / "authority-validation"),
-        )
-        self.assertEqual(rejected.returncode, 1)
-        self.assertIn("validation authority", rejected.stderr)
+        self.assertEqual(initial.returncode, 1)
+        self.assertIn("validation authority", initial.stderr)
 
     def test_validation_authority_classifier_covers_indirect_and_generated_paths(self) -> None:
         for path in (
@@ -3135,7 +3358,7 @@ fs.linkSync(source, target);
 
     def test_validation_rejects_nested_workspace_manifest_bypass(self) -> None:
         temporary, repo, plan_path = self.make_repo(
-            ["packages/"],
+            ["packages/app/package.json"],
             files={
                 "package.json": '{"scripts":{"test":"npm --prefix packages/app test"}}\n',
                 "packages/app/package.json": '{"scripts":{"test":"exit 1"}}\n',
@@ -3150,18 +3373,12 @@ fs.linkSync(source, target);
             '(worker_repo / "packages" / "app" / "package.json").write_text(\'{"scripts":{"test":"exit 0"}}\\n\', encoding="utf-8")',
             output_dir=root / "workspace-authority-initial",
         )
-        self.assertEqual(initial.returncode, 0, initial.stderr)
-        rejected = run_cli(
-            repo, "validate", initial.stdout.strip(), "--suite", "authoritative",
-            "--parent-diff-approved", "--critical-invariants-approved",
-            "--output-dir", str(root / "workspace-authority-validation"),
-        )
-        self.assertEqual(rejected.returncode, 1)
-        self.assertIn("validation authority", rejected.stderr)
+        self.assertEqual(initial.returncode, 1)
+        self.assertIn("validation authority", initial.stderr)
 
     def test_plan_declared_validation_authority_rejects_transitive_harness(self) -> None:
         temporary, repo, plan_path = self.make_repo(
-            ["tools/"],
+            ["tools/harness.js"],
             files={
                 "package.json": '{"scripts":{"test":"node tools/harness.js"}}\n',
                 "tools/harness.js": "process.exit(1)\n",
@@ -3177,14 +3394,8 @@ fs.linkSync(source, target);
             '(worker_repo / "tools" / "harness.js").write_text("process.exit(0)\\n", encoding="utf-8")',
             output_dir=root / "declared-authority-initial",
         )
-        self.assertEqual(initial.returncode, 0, initial.stderr)
-        rejected = run_cli(
-            repo, "validate", initial.stdout.strip(), "--suite", "authoritative",
-            "--parent-diff-approved", "--critical-invariants-approved",
-            "--output-dir", str(root / "declared-authority-validation"),
-        )
-        self.assertEqual(rejected.returncode, 1)
-        self.assertIn("validation authority", rejected.stderr)
+        self.assertEqual(initial.returncode, 1)
+        self.assertIn("validation authority", initial.stderr)
 
     def test_manifest_operations_reject_execution_ledger_for_another_plan(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
@@ -3228,7 +3439,7 @@ fs.linkSync(source, target);
                 "--source-head",
                 manifest["source_head"],
                 "--primary-invariant-digest",
-                "sha256:" + hashlib.sha256(b"other invariant").hexdigest(),
+                "sha256:" + hashlib.sha256(b"mutate only the declared fixture files").hexdigest(),
                 "--lifecycle-state",
                 manifest["lifecycle_state_path"],
                 "--implementation-mode",
@@ -3454,85 +3665,23 @@ fs.linkSync(source, target);
         lifecycle = json.loads(Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8"))
         self.assertEqual(lifecycle["phase"], "applied")
 
-    def test_apply_recovery_allows_only_exact_patch_created_symlink_target(self) -> None:
-        for tamper in ("none", "ancestor", "target"):
-            with self.subTest(tamper=tamper):
-                temporary, repo, plan_path = self.make_repo(
-                    ["links/"],
-                    files={"target.txt": "target\n", "other.txt": "other\n"},
-                    repo_name=f"repo-{tamper}",
-                )
-                self.addCleanup(temporary.cleanup)
-                root = Path(temporary.name)
-                initial, _output, _worker = self.run_with_worker(
-                    repo,
-                    plan_path,
-                    '(worker_repo / "links").mkdir(exist_ok=True)\n'
-                    '(worker_repo / "links" / "created").symlink_to("../target.txt")',
-                    output_dir=root / f"symlink-recovery-{tamper}",
-                )
-                self.assertEqual(initial.returncode, 0, initial.stderr)
-                manifest_path = Path(initial.stdout.strip())
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                validated = run_cli(
-                    repo,
-                    "validate",
-                    str(manifest_path),
-                    "--suite",
-                    "authoritative",
-                    "--parent-diff-approved",
-                    "--critical-invariants-approved",
-                    "--output-dir",
-                    str(root / f"symlink-validation-{tamper}"),
-                )
-                self.assertEqual(validated.returncode, 0, validated.stderr)
-                original_persist = RUNNER.LifecycleState.persist
-
-                def fail_finalization(state, data):
-                    if data.get("phase") == "applied":
-                        raise OSError("injected finalization failure")
-                    return original_persist(state, data)
-
-                args = argparse.Namespace(
-                    manifest=str(manifest_path),
-                    git_bin="git",
-                    lifecycle_state=manifest["lifecycle_state_path"],
-                    orchestration_run_id=manifest["orchestration_run_id"],
-                    plan_execution_state=str(execution_state_path(manifest)),
-                )
-                previous_cwd = Path.cwd()
-                try:
-                    os.chdir(repo)
-                    with mock.patch.object(
-                        RUNNER.LifecycleState, "persist", new=fail_finalization
-                    ):
-                        with self.assertRaisesRegex(RUNNER.RunnerError, "source patch was applied"):
-                            RUNNER.apply_worker_result(args)
-                    created = repo / "links/created"
-                    self.assertTrue(created.is_symlink())
-                    if tamper == "ancestor":
-                        outside = root / "outside-links"
-                        (repo / "links").rename(outside)
-                        (repo / "links").symlink_to(outside, target_is_directory=True)
-                    elif tamper == "target":
-                        created.unlink()
-                        created.symlink_to("../other.txt")
-
-                    if tamper == "none":
-                        RUNNER.finalize_apply(args)
-                        lifecycle = json.loads(
-                            Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8")
-                        )
-                        self.assertEqual(lifecycle["phase"], "applied")
-                    elif tamper == "ancestor":
-                        with self.assertRaisesRegex(RUNNER.RunnerError, "symlink"):
-                            RUNNER.finalize_apply(args)
-                    else:
-                        with self.assertRaisesRegex(RUNNER.RunnerError, "does not exactly match"):
-                            RUNNER.finalize_apply(args)
-                finally:
-                    os.chdir(previous_cwd)
-
+    def test_apply_recovery_rejects_directory_prefix_before_symlink_creation(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["links/"],
+            files={"target.txt": "target\n", "other.txt": "other\n"},
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "links").mkdir(exist_ok=True)\n'
+            '(worker_repo / "links" / "created").symlink_to("../target.txt")',
+            output_dir=root / "symlink-recovery",
+        )
+        self.assertEqual(initial.returncode, 1)
+        self.assertIn("explicit file path", initial.stderr)
+        self.assertFalse((output / "worker.stdout").exists())
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,7 +28,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md
-  - docs/plan/active/135-enforce-plan-bound-worker-contract.md
+  - docs/plan/checked/2026/08/16-31/135-enforce-plan-bound-worker-contract.md
   - docs/plan/replanned/2026/08/16-31/113-generate-plan-bound-worker-contract.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
   - references/orchestration.md
@@ -116,4 +116,4 @@ checked_summary_ja: 事前に固定したcaseと全受入条件でworker契約�
 - This integration plan preserves every normalized Plan 113 acceptance item exactly.
 - Any fixture drift or predecessor design change requires replan rather than in-scope repair.
 - The frozen tuned and holdout fixture digests were copied from Plan 134 before implementation.
-- Plan 134 is checked at `docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md`; refresh Plan 135 after its archival.
+- Plans 134 and 135 are checked at `docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md` and `docs/plan/checked/2026/08/16-31/135-enforce-plan-bound-worker-contract.md`.

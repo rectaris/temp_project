@@ -520,6 +520,14 @@ def require_sandboxed_plan_worker_alignment() -> None:
         "def verify_dependency_snapshot",
         "def source_tree_metadata_fingerprint",
         "read_only_shadows",
+        "WORKER_CONTRACT_SCHEMA_VERSION",
+        "def derive_worker_contract",
+        "def verify_worker_contract",
+        "def derive_repository_identity",
+        "worker_attempt_label",
+        "require_safe_delegated_write_scope",
+        "NEW_FILE_ROOT",
+        "SANDBOXED_PLAN_WORKER_CONTRACT first",
     ):
         if marker not in template_runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")
@@ -539,7 +547,10 @@ def require_sandboxed_plan_worker_alignment() -> None:
         "template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md",
     ):
         text = read(relative).lower()
-        for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
+        for marker in (
+            "gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit",
+            "primary_invariant", "exact file", "read-only", "contract",
+        ):
             if marker not in text:
                 fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
 
