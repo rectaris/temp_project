@@ -1,6 +1,8 @@
 # Repair the temporary Copier CLI shim
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - spec_drift
 primary_invariant: keep Copier fixture dependency execution self-contained while preserving Git-tracked local template copy-to-update behavior
 task_types:
   - planning_docs
@@ -58,3 +60,8 @@ checked_summary_ja: 一時uv環境の書込分離を維持したまま、Git管�
 
 - Plan 126's authoritative run stopped before the new direct helper lane and recorded one `independent_repair_required` invariant.
 - Classification review fixed `tests/copier-update.sh` as the only write scope and left all source-plan, authority, invariant, acceptance, safety, and external-effect boundaries unchanged.
+- A minimal local-template A/B reproduction passed with both project contexts and did not isolate the shim hypothesis.
+- A repository-external reproduction of the exact first existing fixture copy-to-update segment also passed with both project contexts.
+- The authoritative failure therefore occurred after that segment; the remaining command order identifies reuse of the helper-specific relative `_src_path` in a later ordinary update as the next concrete referent.
+- Acceptance currently requires changing only the temporary launcher, so fixing the later target-fixture lifecycle would replace an acceptance item. Explicit user authorization is required before atomic restructuring.
+- Stopped execution evidence: `/tmp/plan127-execution.T9Y8UD/execution.json`.
