@@ -10,4 +10,3 @@ id	path	status
 144	docs/plan/active/144-implement-revalidated-local-apply.md	in_progress
 145	docs/plan/active/145-integrate-retirement-copier-preservation.md	in_progress
 146	docs/plan/active/146-integrate-local-git-retirement.md	in_progress
-148	docs/plan/active/148-certify-exact-root-retirement-scan.md	in_progress

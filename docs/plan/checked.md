@@ -117,3 +117,4 @@ id	path
 138	docs/plan/checked/2026/08/16-31/138-integrate-provider-auth-call-context.md
 142	docs/plan/checked/2026/08/16-31/142-define-local-git-retirement-policy.md
 147	docs/plan/checked/2026/08/16-31/147-complete-exact-root-retirement-scan.md
+148	docs/plan/checked/2026/08/16-31/148-certify-exact-root-retirement-scan.md

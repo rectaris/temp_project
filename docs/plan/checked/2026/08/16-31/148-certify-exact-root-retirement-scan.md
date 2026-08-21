@@ -1,6 +1,6 @@
 # Certify read-only retirement scan configuration ownership
 
-status: in_progress
+status: checked
 task_types:
   - template_workflow
   - security
@@ -73,12 +73,14 @@ Plan 147 must be checked and committed before Plan 148 certification starts. Pla
 
 ## Tasks
 
-- [ ] Map the checked Plan 147 behavior to all five inherited acceptance items.
-- [ ] Confirm nested shadowing, symlink ancestry, configured hooks, submodules, upstream ambiguity, path boundaries, and manifest output remain fail-closed.
-- [ ] Complete independent review, focused validation, and authoritative validation without adding new implementation behavior.
-- [ ] Archive and commit this certification before Plan 144 begins.
+- [x] Map the checked Plan 147 behavior to all five inherited acceptance items.
+- [x] Confirm nested shadowing, symlink ancestry, configured hooks, submodules, upstream ambiguity, path boundaries, and manifest output remain fail-closed.
+- [x] Complete independent review, focused validation, and authoritative validation without adding new implementation behavior.
+- [x] Archive and commit this certification before Plan 144 begins.
 
 ## Validation Notes
 
 - This integration plan copies all Plan 143 acceptance items in exact source order.
 - Parent behavior validation additionally runs `python3 tests/test-git-retirement.py`; the repository does not depend on pytest.
+- Independent certification reported High 0, Medium 0, Low 0 and confirmed exact acceptance text, digest, order, commit ancestry, byte parity, and executable downstream gates.
+- Parent ledger run `148-parent-direct-20260821` recorded one focused and one authoritative validation. All 22 behavior tests, Python compilation, and `git diff --check` passed without product changes.
