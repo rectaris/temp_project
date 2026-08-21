@@ -7,4 +7,5 @@ id	path	status
 114	docs/plan/active/114-validate-structured-worker-completion.md	in_progress
 115	docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md	in_progress
 116	docs/plan/active/116-evaluate-plan-worker-orchestration.md	in_progress
-119	docs/plan/active/119-integrate-verify-copier-update-skill.md	in_progress
+120	docs/plan/active/120-allow-generated-copier-verification-helper-compilation.md	in_progress
+121	docs/plan/active/121-complete-verify-copier-update-skill-integration.md	in_progress
