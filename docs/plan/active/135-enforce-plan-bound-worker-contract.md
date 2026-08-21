@@ -39,7 +39,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/134-freeze-worker-contract-scenarios.md
+  - docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md
   - docs/plan/replanned/2026/08/16-31/113-generate-plan-bound-worker-contract.md
   - docs/plan/checked/2026/08/01-15/074-isolated-candidate-correction.md
   - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
@@ -84,7 +84,7 @@ acceptance:
 replan_source: docs/plan/active/113-generate-plan-bound-worker-contract.md
 replan_contract: docs/plan/replanned/contracts/113-generate-plan-bound-worker-contract.json
 integration_gates:
-  - plan 134 must be checked and its exact fixture digests copied into this plan before implementation starts
+  - plan 134 must be checked; tuned scenarios must equal sha256:ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf and the opaque holdout must equal sha256:a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27 before implementation starts
   - directory-prefix write_scope entries must fail before worker start and explicit missing non-authority paths may represent new files
   - plan 136 must run the unchanged holdout only after this implementation is otherwise review-ready
 successor_plans:
@@ -126,3 +126,5 @@ checked_summary_ja: worker起動前にplan由来の契約と明示的な書込pa
 
 - Plan 134 is a hard predecessor; its fixture paths are intentionally absent from this write scope.
 - The source Plan 113 acceptance text is preserved exactly.
+- The frozen tuned and holdout fixture digests were copied from Plan 134 before implementation.
+- Plan 134 is checked at `docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md`.

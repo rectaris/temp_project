@@ -236,6 +236,8 @@ SOURCE_REQUIRED = [
     "tests/fixtures/orchestration/staged-paired-measured-example.json",
     "tests/fixtures/orchestration/plan-restructuring-scenarios.json",
     "tests/fixtures/orchestration/plan-restructuring-holdout.json",
+    "tests/fixtures/orchestration/worker-contract-scenarios.json",
+    "tests/fixtures/orchestration/worker-contract-holdout.json",
     "scripts/init-project-workflow.sh",
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",

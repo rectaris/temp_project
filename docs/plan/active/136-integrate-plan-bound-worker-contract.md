@@ -27,7 +27,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/134-freeze-worker-contract-scenarios.md
+  - docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md
   - docs/plan/active/135-enforce-plan-bound-worker-contract.md
   - docs/plan/replanned/2026/08/16-31/113-generate-plan-bound-worker-contract.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
@@ -73,7 +73,7 @@ replan_source: docs/plan/active/113-generate-plan-bound-worker-contract.md
 replan_contract: docs/plan/replanned/contracts/113-generate-plan-bound-worker-contract.json
 integration_gates:
   - plans 134 and 135 must be checked and their exact archive paths must replace active context paths before evaluation
-  - scenario and holdout bytes must match the committed Plan 134 digests before any evaluation command starts
+  - tuned scenarios must equal sha256:ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf and holdout must equal sha256:a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27 before any evaluation command starts
   - Plan 114 may start only after this integration plan is checked as the accepted Plan 113 successor
 successor_plans:
   - docs/plan/active/134-freeze-worker-contract-scenarios.md
@@ -115,3 +115,5 @@ checked_summary_ja: 事前に固定したcaseと全受入条件でworker契約�
 
 - This integration plan preserves every normalized Plan 113 acceptance item exactly.
 - Any fixture drift or predecessor design change requires replan rather than in-scope repair.
+- The frozen tuned and holdout fixture digests were copied from Plan 134 before implementation.
+- Plan 134 is checked at `docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md`; refresh Plan 135 after its archival.

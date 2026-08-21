@@ -23,6 +23,224 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/run-sandboxed-plan-worker.py"
 ENV_PREFIX = "SANDBOXED_PLAN_WORKER_"
 TEMPLATE_SCRIPT = ROOT / "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+WORKER_CONTRACT_SCENARIOS = ROOT / "tests/fixtures/orchestration/worker-contract-scenarios.json"
+WORKER_CONTRACT_HOLDOUT = ROOT / "tests/fixtures/orchestration/worker-contract-holdout.json"
+WORKER_CONTRACT_SCENARIOS_SHA256 = "ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf"
+WORKER_CONTRACT_HOLDOUT_SHA256 = "a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27"
+WORKER_CONTRACT_COVERAGE = {
+    "exact_derivation",
+    "lineage_binding",
+    "explicit_new_non_authority_path",
+    "source_plan_mutation",
+    "digest_mismatch",
+    "lineage_mismatch",
+    "missing_primary_invariant",
+    "duplicate_field",
+    "unknown_field",
+    "path_traversal",
+    "symlink_escape",
+    "oversized_input",
+    "contract_mutation",
+    "read_only_mount",
+    "authority_widening",
+    "directory_prefix_scope",
+}
+WORKER_CONTRACT_HOLDOUT_COVERAGE = {
+    "authority_widening",
+    "explicit_new_path",
+    "missing_parent_path",
+}
+
+
+def require_fixture_lineage(value: object, *, label: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"worker-contract lineage is not an object: {label}")
+    kind = value.get("attempt_kind")
+    required = {"attempt_kind", "correction_round", "attempt_label"}
+    if kind == "correction":
+        required.add("prior_manifest_digest")
+    if set(value) != required:
+        raise ValueError(f"worker-contract lineage has an invalid exact shape: {label}")
+    if kind not in {"initial", "correction"}:
+        raise ValueError(f"worker-contract lineage kind is invalid: {label}")
+    if isinstance(value["correction_round"], bool) or not isinstance(value["correction_round"], int) or value["correction_round"] < 0:
+        raise ValueError(f"worker-contract correction round is invalid: {label}")
+    if not isinstance(value["attempt_label"], str) or not value["attempt_label"]:
+        raise ValueError(f"worker-contract attempt label is invalid: {label}")
+    if kind == "initial" and value["correction_round"] != 0:
+        raise ValueError(f"worker-contract initial lineage has a correction round: {label}")
+    if kind == "correction":
+        digest = value["prior_manifest_digest"]
+        if not isinstance(digest, str) or len(digest) != 71 or not digest.startswith("sha256:"):
+            raise ValueError(f"worker-contract prior manifest digest is invalid: {label}")
+
+
+def require_fixture_string_map(value: object, *, label: str) -> None:
+    if not isinstance(value, dict) or not value:
+        raise ValueError(f"worker-contract string map is empty: {label}")
+    if any(not isinstance(key, str) or not key or not isinstance(item, str) for key, item in value.items()):
+        raise ValueError(f"worker-contract string map is invalid: {label}")
+
+
+def require_fixture_string_list(value: object, *, label: str) -> None:
+    if not isinstance(value, list) or not value or len(value) != len(set(value)):
+        raise ValueError(f"worker-contract string list is invalid: {label}")
+    if any(not isinstance(item, str) or not item for item in value):
+        raise ValueError(f"worker-contract string list item is invalid: {label}")
+
+
+def require_worker_contract_case_input(operation: str, value: object, *, label: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"worker-contract input is not an object: {label}")
+    if operation == "derive_twice":
+        if set(value) not in (set(), {"attempt_lineage"}):
+            raise ValueError(f"derive_twice input has an invalid exact shape: {label}")
+        if "attempt_lineage" in value:
+            require_fixture_lineage(value["attempt_lineage"], label=label)
+        return
+    if operation == "validate_write_scope":
+        if set(value) != {"write_scope"}:
+            raise ValueError(f"validate_write_scope input has an invalid exact shape: {label}")
+        require_fixture_string_list(value["write_scope"], label=label)
+        return
+    if operation == "derive_after_plan_mutation":
+        if set(value) != {"append_to_plan"} or not isinstance(value["append_to_plan"], str) or not value["append_to_plan"]:
+            raise ValueError(f"plan mutation input has an invalid exact shape: {label}")
+        return
+    if operation == "verify_contract_mutation":
+        if set(value) != {"mutation"} or not isinstance(value["mutation"], dict):
+            raise ValueError(f"contract mutation input has an invalid exact shape: {label}")
+        mutation = value["mutation"]
+        kind = mutation.get("kind")
+        expected_keys = {
+            "manifest_digest": {"kind", "value"},
+            "attempt_lineage": {"kind", "value"},
+            "add_field": {"kind", "name", "value"},
+        }.get(kind)
+        if expected_keys is None or set(mutation) != expected_keys:
+            raise ValueError(f"contract mutation has an invalid exact shape: {label}")
+        if kind == "manifest_digest":
+            digest = mutation["value"]
+            if not isinstance(digest, str) or len(digest) != 71 or not digest.startswith("sha256:"):
+                raise ValueError(f"contract mutation digest is invalid: {label}")
+        elif kind == "attempt_lineage":
+            require_fixture_lineage(mutation["value"], label=label)
+        elif not isinstance(mutation["name"], str) or not mutation["name"]:
+            raise ValueError(f"contract mutation field name is invalid: {label}")
+        return
+    if operation == "derive_with_plan_replacement":
+        if set(value) == {"remove_line_prefix"}:
+            if not isinstance(value["remove_line_prefix"], str) or not value["remove_line_prefix"]:
+                raise ValueError(f"plan replacement prefix is invalid: {label}")
+            return
+        if set(value) == {"replace_write_scope"}:
+            require_fixture_string_list(value["replace_write_scope"], label=label)
+            return
+        raise ValueError(f"plan replacement input has an invalid exact shape: {label}")
+    if operation == "verify_serialized_contract":
+        if set(value) == {"json_prefix"}:
+            if not isinstance(value["json_prefix"], str) or not value["json_prefix"]:
+                raise ValueError(f"serialized contract prefix is invalid: {label}")
+            return
+        if set(value) == {"byte_count", "fill_byte"}:
+            if isinstance(value["byte_count"], bool) or not isinstance(value["byte_count"], int) or value["byte_count"] <= 0:
+                raise ValueError(f"serialized contract byte count is invalid: {label}")
+            if not isinstance(value["fill_byte"], str) or len(value["fill_byte"].encode("utf-8")) != 1:
+                raise ValueError(f"serialized contract fill byte is invalid: {label}")
+            return
+        raise ValueError(f"serialized contract input has an invalid exact shape: {label}")
+    if operation == "derive_with_repository_mutation":
+        if set(value) != {"replace_with_symlink"} or not isinstance(value["replace_with_symlink"], dict):
+            raise ValueError(f"repository mutation input has an invalid exact shape: {label}")
+        symlink = value["replace_with_symlink"]
+        if set(symlink) != {"path", "target"} or any(not isinstance(symlink[key], str) or not symlink[key] for key in symlink):
+            raise ValueError(f"repository symlink mutation is invalid: {label}")
+        return
+    if operation == "attempt_worker_write":
+        if set(value) != {"target", "content"} or any(not isinstance(value[key], str) or not value[key] for key in value):
+            raise ValueError(f"worker write input has an invalid exact shape: {label}")
+        return
+    raise ValueError(f"worker-contract operation is unsupported: {operation}")
+
+
+def load_worker_contract_fixture(path: Path, *, used_for_tuning: bool) -> dict[str, object]:
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+    required_top = {"schema_version", "suite", "used_for_tuning", "base", "cases"}
+    if used_for_tuning:
+        required_top.add("holdout_file")
+    if not isinstance(fixture, dict) or set(fixture) != required_top:
+        raise ValueError(f"worker-contract fixture has an invalid exact shape: {path.name}")
+    if fixture["schema_version"] != 1 or fixture["suite"] != "worker-execution-contract":
+        raise ValueError(f"worker-contract fixture has an unsupported identity: {path.name}")
+    if fixture["used_for_tuning"] is not used_for_tuning:
+        raise ValueError(f"worker-contract fixture tuning flag differs: {path.name}")
+    base = fixture["base"]
+    if not isinstance(base, dict) or set(base) != {
+        "plan_path", "plan_bytes", "repository_files", "orchestration_run_id", "attempt_lineage"
+    }:
+        raise ValueError(f"worker-contract fixture base has an invalid exact shape: {path.name}")
+    if not all(isinstance(base[key], str) and base[key] for key in ("plan_path", "plan_bytes", "orchestration_run_id")):
+        raise ValueError(f"worker-contract fixture base has an invalid scalar: {path.name}")
+    require_fixture_string_map(base["repository_files"], label=path.name)
+    require_fixture_lineage(base["attempt_lineage"], label=path.name)
+    cases = fixture["cases"]
+    if not isinstance(cases, list) or not cases:
+        raise ValueError(f"worker-contract fixture cases are empty: {path.name}")
+    seen: set[str] = set()
+    for case in cases:
+        if not isinstance(case, dict) or set(case) != {
+            "id", "class", "used_for_tuning", "covers", "operation", "input", "expected"
+        }:
+            raise ValueError(f"worker-contract case has an invalid exact shape: {path.name}")
+        case_id = case["id"]
+        if not isinstance(case_id, str) or not case_id or case_id in seen:
+            raise ValueError(f"worker-contract case identifier is invalid: {path.name}")
+        seen.add(case_id)
+        expected_class = "holdout" if not used_for_tuning else case["class"]
+        if expected_class not in {"median", "edge", "negative", "holdout"}:
+            raise ValueError(f"worker-contract case class is invalid: {case_id}")
+        if not used_for_tuning and case["class"] != "holdout":
+            raise ValueError(f"worker-contract holdout class differs: {case_id}")
+        if case["used_for_tuning"] is not used_for_tuning:
+            raise ValueError(f"worker-contract case tuning flag differs: {case_id}")
+        covers = case["covers"]
+        require_fixture_string_list(covers, label=case_id)
+        allowed_coverage = WORKER_CONTRACT_COVERAGE if used_for_tuning else WORKER_CONTRACT_HOLDOUT_COVERAGE
+        if any(marker not in allowed_coverage for marker in covers):
+            raise ValueError(f"worker-contract coverage marker is unknown: {case_id}")
+        operation = case["operation"]
+        if not isinstance(operation, str) or not operation:
+            raise ValueError(f"worker-contract operation is invalid: {case_id}")
+        require_worker_contract_case_input(operation, case["input"], label=case_id)
+        expected = case["expected"]
+        if not isinstance(expected, dict) or set(expected) != {"result", "error_code"}:
+            raise ValueError(f"worker-contract expected outcome is invalid: {case_id}")
+        if expected["result"] not in {"accepted", "rejected"}:
+            raise ValueError(f"worker-contract expected result is invalid: {case_id}")
+        if (expected["result"] == "accepted") != (expected["error_code"] is None):
+            raise ValueError(f"worker-contract error code is inconsistent: {case_id}")
+        if expected["error_code"] is not None and (not isinstance(expected["error_code"], str) or not expected["error_code"]):
+            raise ValueError(f"worker-contract error code is invalid: {case_id}")
+    return fixture
+
+
+def evaluate_worker_contract_fixture(
+    path: Path,
+    evaluator,
+    *,
+    used_for_tuning: bool,
+) -> list[dict[str, object]]:
+    """Evaluate only the caller-selected fixture and compare exact observed outcomes."""
+    fixture = load_worker_contract_fixture(path, used_for_tuning=used_for_tuning)
+    observations: list[dict[str, object]] = []
+    for case in fixture["cases"]:
+        observed = evaluator(fixture["base"], case)
+        if observed != case["expected"]:
+            raise AssertionError(
+                f"worker-contract scenario {case['id']} observed {observed!r}, expected {case['expected']!r}"
+            )
+        observations.append({"id": case["id"], "observed": observed})
+    return observations
 
 
 def load_runner_module():
@@ -516,6 +734,36 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         prompt = RUNNER.build_worker_prompt("docs/plan/active/001-test.md", "0" * 64)
         self.assertIn("Do not run plan validation", prompt)
         self.assertNotIn("Run every validation command", prompt)
+
+    def test_tuned_worker_contract_fixture_is_frozen_and_evaluator_is_generic(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(WORKER_CONTRACT_SCENARIOS.read_bytes()).hexdigest(),
+            WORKER_CONTRACT_SCENARIOS_SHA256,
+        )
+        fixture = load_worker_contract_fixture(WORKER_CONTRACT_SCENARIOS, used_for_tuning=True)
+        self.assertEqual(fixture["holdout_file"], WORKER_CONTRACT_HOLDOUT.name)
+        self.assertEqual(
+            hashlib.sha256(WORKER_CONTRACT_HOLDOUT.read_bytes()).hexdigest(),
+            WORKER_CONTRACT_HOLDOUT_SHA256,
+        )
+        self.assertEqual({case["class"] for case in fixture["cases"]}, {"median", "edge", "negative"})
+        self.assertEqual(
+            {coverage for case in fixture["cases"] for coverage in case["covers"]},
+            WORKER_CONTRACT_COVERAGE,
+        )
+        expected_by_id = {case["id"]: case["expected"] for case in fixture["cases"]}
+        observations = evaluate_worker_contract_fixture(
+            WORKER_CONTRACT_SCENARIOS,
+            lambda _base, case: expected_by_id[case["id"]],
+            used_for_tuning=True,
+        )
+        self.assertEqual([item["id"] for item in observations], [case["id"] for case in fixture["cases"]])
+        with self.assertRaisesRegex(AssertionError, "observed"):
+            evaluate_worker_contract_fixture(
+                WORKER_CONTRACT_SCENARIOS,
+                lambda _base, _case: {"result": "rejected", "error_code": "wrong"},
+                used_for_tuning=True,
+            )
 
     def test_codex_unavailability_classifier_is_bounded_to_cli_error_lines(self) -> None:
         cases = (

@@ -917,8 +917,75 @@ def check_plan_restructuring_scenarios() -> None:
         fail("plan restructuring holdout must remain fixed and outside tuning scenarios")
 
 
+def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
+    scenario_path = ROOT / "tests/fixtures/orchestration/worker-contract-scenarios.json"
+    holdout_path = ROOT / "tests/fixtures/orchestration/worker-contract-holdout.json"
+    try:
+        scenario_bytes = scenario_path.read_bytes()
+        scenarios = json.loads(scenario_bytes.decode("utf-8"))
+        holdout_bytes = holdout_path.read_bytes()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-contract fixture: {exc}")
+    if hashlib.sha256(scenario_bytes).hexdigest() != "ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf":
+        fail("worker-contract tuned scenario bytes differ from the preimplementation seal")
+    if set(scenarios) != {"schema_version", "suite", "used_for_tuning", "holdout_file", "base", "cases"}:
+        fail("worker-contract scenarios have an invalid exact shape")
+    if (
+        scenarios["schema_version"] != 1
+        or scenarios["suite"] != "worker-execution-contract"
+        or scenarios["used_for_tuning"] is not True
+        or scenarios["holdout_file"] != holdout_path.name
+    ):
+        fail("worker-contract scenarios have an unsupported identity or holdout link")
+    cases = scenarios["cases"]
+    if not isinstance(cases, list) or not cases:
+        fail("worker-contract scenarios must not be empty")
+    if {case.get("class") for case in cases if isinstance(case, dict)} != {"median", "edge", "negative"}:
+        fail("worker-contract scenarios must preserve median, edge, and negative classes")
+    if any(not isinstance(case, dict) or case.get("used_for_tuning") is not True for case in cases):
+        fail("worker-contract scenarios must remain tuned inputs")
+    expected_coverage = {
+        "exact_derivation", "lineage_binding", "explicit_new_non_authority_path",
+        "source_plan_mutation", "digest_mismatch", "lineage_mismatch",
+        "missing_primary_invariant", "duplicate_field", "unknown_field",
+        "path_traversal", "symlink_escape", "oversized_input", "contract_mutation",
+        "read_only_mount", "authority_widening", "directory_prefix_scope",
+    }
+    observed_coverage = {
+        marker
+        for case in cases
+        for marker in (case.get("covers", []) if isinstance(case, dict) else [])
+    }
+    if observed_coverage != expected_coverage:
+        fail("worker-contract scenarios do not cover the accepted preimplementation boundary")
+    if hashlib.sha256(holdout_bytes).hexdigest() != "a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27":
+        fail("worker-contract holdout bytes differ from the preimplementation seal")
+    if not include_holdout:
+        return
+    try:
+        holdout = json.loads(holdout_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-contract holdout fixture: {exc}")
+    if set(holdout) != {"schema_version", "suite", "used_for_tuning", "base", "cases"}:
+        fail("worker-contract holdout has an invalid exact shape")
+    if holdout["schema_version"] != 1 or holdout["suite"] != "worker-execution-contract" or holdout["used_for_tuning"] is not False:
+        fail("worker-contract holdout has an unsupported identity")
+    holdout_cases = holdout["cases"]
+    if not isinstance(holdout_cases, list) or len(holdout_cases) != 1:
+        fail("worker-contract holdout must contain one independent case")
+    holdout_case = holdout_cases[0]
+    if (
+        not isinstance(holdout_case, dict)
+        or holdout_case.get("class") != "holdout"
+        or holdout_case.get("used_for_tuning") is not False
+        or holdout_case.get("id") != "holdout-missing-parent-new-package-manifest"
+    ):
+        fail("worker-contract holdout identity differs from the sealed case")
+
+
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     check_plan_restructuring_scenarios()
+    check_worker_contract_scenarios(include_holdout=include_holdout)
     policy = read("references/orchestration.md").lower()
     shared_markers = (
         "per-task user instruction",

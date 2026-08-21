@@ -1,6 +1,6 @@
 # Freeze worker-contract scenarios before implementation
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -55,7 +55,7 @@ acceptance:
 replan_source: docs/plan/active/113-generate-plan-bound-worker-contract.md
 replan_contract: docs/plan/replanned/contracts/113-generate-plan-bound-worker-contract.json
 integration_gates:
-  - record the committed scenario and holdout digests before plan 135 starts
+  - preserve tuned scenarios at sha256:ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf and holdout at sha256:a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27 before plan 135 starts
   - plan 135 must treat the tuned scenarios as read-only context and the holdout as an opaque digest-sealed artifact; plan 136 must reject drift in both files
 successor_plans:
   - docs/plan/active/134-freeze-worker-contract-scenarios.md
@@ -75,13 +75,19 @@ checked_summary_ja: worker実装より前に通常caseと独立holdoutの入力�
 
 ## Tasks
 
-- [ ] Define versioned exact-shape scenario records for median, edge, negative, and holdout classes.
-- [ ] Add a generic executable evaluator that reports observed rejection or acceptance for a caller-selected fixture; keep holdout behavior reachable only through the explicit Plan 136 holdout selector.
-- [ ] Keep the holdout physically separate from reusable prompts and non-holdout tuning data.
-- [ ] Align static inventory and Copier preservation checks for the new fixtures.
-- [ ] Review the bounded parent diff, run focused validation, obtain independent review, run the authoritative suite once, and archive this plan with the committed fixture digests.
+- [x] Define versioned exact-shape scenario records for median, edge, negative, and holdout classes.
+- [x] Add a generic executable evaluator that reports observed rejection or acceptance for a caller-selected fixture; keep holdout behavior reachable only through the explicit Plan 136 holdout selector.
+- [x] Keep the holdout physically separate from reusable prompts and non-holdout tuning data.
+- [x] Align static inventory and Copier preservation checks for the new fixtures.
+- [x] Review the bounded parent diff, run focused validation, obtain independent review, run the authoritative suite once, and archive this plan with the committed fixture digests.
 
 ## Validation Notes
 
 - The user authorized continuation from the Plan 113 replan stop on 2026-08-21.
 - Exact scenario bytes are intentionally created here rather than in the restructuring contract.
+- Frozen tuned-scenario digest: `sha256:ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf`.
+- Frozen holdout digest: `sha256:a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27`.
+- Focused validation passed: `python3 tests/test-sandboxed-plan-worker.py` (80 tests), `python3 scripts/check-copier-template.py`, and `git diff --check`.
+- Independent review closed after two bounded parent remediation rounds; the final fresh review reported zero unresolved High or Medium findings.
+- The authoritative validation list completed once with all commands passing, including project lint, smoke, and the required real Copier update lane.
+- No unresolved risk remains in this fixture-freezing scope. Production worker-contract behavior and explicit holdout execution remain assigned to Plans 135 and 136.

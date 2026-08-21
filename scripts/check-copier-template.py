@@ -360,6 +360,30 @@ def require_orchestration_policy_markers() -> None:
     if restructuring_holdout.get("scenarios") != expected_holdout:
         fail("plan restructuring holdout must remain fixed and outside tuning scenarios")
 
+    worker_scenarios_path = "tests/fixtures/orchestration/worker-contract-scenarios.json"
+    worker_holdout_path = "tests/fixtures/orchestration/worker-contract-holdout.json"
+    worker_scenarios_bytes = (ROOT / worker_scenarios_path).read_bytes()
+    if hashlib.sha256(worker_scenarios_bytes).hexdigest() != "ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf":
+        fail("worker-contract tuned scenario bytes differ from the preimplementation seal")
+    worker_scenarios = json.loads(worker_scenarios_bytes.decode("utf-8"))
+    if set(worker_scenarios) != {"schema_version", "suite", "used_for_tuning", "holdout_file", "base", "cases"}:
+        fail("worker-contract scenarios have an invalid exact shape")
+    if (
+        worker_scenarios.get("schema_version") != 1
+        or worker_scenarios.get("suite") != "worker-execution-contract"
+        or worker_scenarios.get("used_for_tuning") is not True
+        or worker_scenarios.get("holdout_file") != Path(worker_holdout_path).name
+    ):
+        fail("worker-contract scenarios have an unsupported identity or holdout link")
+    scenario_cases = worker_scenarios.get("cases")
+    if not isinstance(scenario_cases, list) or {case.get("class") for case in scenario_cases if isinstance(case, dict)} != {"median", "edge", "negative"}:
+        fail("worker-contract scenarios must preserve median, edge, and negative classes")
+    if any(not isinstance(case, dict) or case.get("used_for_tuning") is not True for case in scenario_cases):
+        fail("worker-contract scenarios must remain tuned inputs")
+    worker_holdout_bytes = (ROOT / worker_holdout_path).read_bytes()
+    if hashlib.sha256(worker_holdout_bytes).hexdigest() != "a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27":
+        fail("worker-contract holdout bytes differ from the preimplementation seal")
+
 
 def template_source_files() -> set[str]:
     result = subprocess.run(
