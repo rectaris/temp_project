@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "suite": "local-git-retirement-scan",
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Scan uses registered worktrees and local Git ancestry without changing refs or worktrees."
+    },
+    {
+      "id": "R2",
+      "text": "Every candidate records exact paths, refs, OIDs, upstream relation, eligibility results, and a content digest."
+    },
+    {
+      "id": "R3",
+      "text": "Allowed-root, cleanliness, protection, ancestry, and upstream uncertainty fail closed."
+    },
+    {
+      "id": "R4",
+      "text": "Age, branch name, and provider absence are never sufficient retirement evidence."
+    },
+    {
+      "id": "R5",
+      "text": "Generated configuration remains disabled until a project configures exact local refs."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "median-eligible-ancestry-merged",
+      "class": "median",
+      "used_for_tuning": true,
+      "conditions": ["registered", "linked", "clean", "inside_allowed_root", "ancestor", "upstream_ahead_zero"],
+      "expected": "eligible"
+    },
+    {
+      "id": "edge-outside-allowed-root",
+      "class": "edge",
+      "used_for_tuning": true,
+      "conditions": ["registered", "clean", "outside_allowed_root"],
+      "expected": "blocked"
+    },
+    {
+      "id": "negative-dirty-worktree",
+      "class": "negative",
+      "used_for_tuning": true,
+      "conditions": ["registered", "dirty"],
+      "expected": "blocked"
+    },
+    {
+      "id": "negative-unconfigured-upstream",
+      "class": "negative",
+      "used_for_tuning": true,
+      "conditions": ["registered", "upstream_missing"],
+      "expected": "blocked"
+    },
+    {
+      "id": "negative-non-ancestor",
+      "class": "negative",
+      "used_for_tuning": true,
+      "conditions": ["registered", "not_ancestor"],
+      "expected": "blocked"
+    },
+    {
+      "id": "negative-age-or-name-only",
+      "class": "negative",
+      "used_for_tuning": true,
+      "conditions": ["old_timestamp", "merged_name", "ancestry_unproven"],
+      "expected": "blocked"
+    },
+    {
+      "id": "holdout-linked-current-invocation",
+      "class": "holdout",
+      "used_for_tuning": false,
+      "conditions": ["invoked_from_linked_worktree", "current", "primary_identity_from_plumbing"],
+      "expected": "blocked"
+    }
+  ]
+}
