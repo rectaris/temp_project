@@ -9,3 +9,4 @@ id	path	contract
 120	docs/plan/replanned/2026/08/16-31/120-limit-plan-stop-scope-and-resume-local-repairs.md	docs/plan/replanned/contracts/120-limit-plan-stop-scope-and-resume-local-repairs.json
 124	docs/plan/replanned/2026/08/16-31/124-forward-current-generated-validation-authority.md	docs/plan/replanned/contracts/124-forward-current-generated-validation-authority.json
 127	docs/plan/replanned/2026/08/16-31/127-repair-temporary-copier-cli-shim.md	docs/plan/replanned/contracts/127-repair-temporary-copier-cli-shim.json
+116	docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md	docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
