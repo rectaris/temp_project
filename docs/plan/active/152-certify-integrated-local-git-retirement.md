@@ -21,7 +21,7 @@ integration_gates:
   - plans 112, 143, 144, and 146 remain replanned lineage and must not be described as checked
   - the parent must review the combined diff and critical invariants before one authoritative validation run
 successor_plans:
-  - docs/plan/active/151-complete-effect-adjacent-manifest-revalidation.md
+  - docs/plan/checked/2026/08/16-31/151-complete-effect-adjacent-manifest-revalidation.md
   - docs/plan/active/152-certify-integrated-local-git-retirement.md
 inherited_acceptance_digests:
   - sha256:6958ab89c494d1adfd48540a046650cf4cfc1672306d43e0c3a8ecd70264a26e
