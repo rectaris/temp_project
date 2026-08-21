@@ -1,7 +1,6 @@
 # Integrate verify-copier-update Skill
 
-status: deferred
-completion_deferred_reason: Plan 123 must be checked before this preserved Plan 119 candidate resumes through a fresh execution run.
+status: in_progress
 primary_invariant: deliver one reusable isolated Copier update verification Skill whose complete source acceptance baseline passes realistic and repository-authoritative validation
 task_types:
   - planning_docs
@@ -106,4 +105,6 @@ checked_summary_ja: 隔離したCopier更新検証スキルをテンプレート
 - Plan 118 is checked and its snapshot implementation is committed.
 - Independent review and focused validation reached zero unresolved High or Medium findings before the authoritative suite started.
 - The authoritative run passed the helper tests, template and root policy checks, full change validation, lint, and smoke checks, then exposed a localized generated validation-command authorization defect in `tests/copier-update.sh`.
-- The observed defect did not change this plan's acceptance baseline or accepted Copier safety conditions. Keep this plan active and deferred until Plan 120 defines the general repair classification and resumption workflow.
+- The observed defect did not change this plan's acceptance baseline or accepted Copier safety conditions; Plan 120 classified it as a separate repair prerequisite and Plan 122 completed the general resumption workflow.
+- Plan 122 established the repository-wide repair lifecycle, and Plan 123 checked and committed the bounded root validation-command authorization repair at `c5e4c40`.
+- This plan resumes with unchanged acceptance, safety conditions, scope, validation authority outside the checked repair, and external-effect authorization. The resumed execution uses a fresh plan digest, source HEAD, candidate lifecycle, and execution ledger.
