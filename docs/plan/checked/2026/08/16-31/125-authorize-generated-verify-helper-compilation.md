@@ -1,6 +1,6 @@
 # Authorize the generated verify-copier-update helper for compilation
 
-status: in_progress
+status: checked
 primary_invariant: accept only the exact generated verify-copier-update helper path in Python compilation validation
 replan_source: docs/plan/active/124-forward-current-generated-validation-authority.md
 replan_contract: docs/plan/replanned/contracts/124-forward-current-generated-validation-authority.json
@@ -55,11 +55,15 @@ checked_summary_ja: 生成projectの検証コマンドで、Copier更新検証he
 
 ## Tasks
 
-- [ ] Add a failing regression for the exact helper path and neighboring unauthorized paths.
-- [ ] Implement the path-exact generated compilation allowance without broadening root authority.
-- [ ] Run focused validation and obtain zero unresolved High or Medium review findings.
-- [ ] Archive and commit this authority change before Plan 126 integration.
+- [x] Add a failing regression for the exact helper path and neighboring unauthorized paths.
+- [x] Implement the path-exact generated compilation allowance without broadening root authority.
+- [x] Run focused validation and obtain zero unresolved High or Medium review findings.
+- [x] Archive and commit this authority change before Plan 126 integration.
 
 ## Validation Notes
 
 - The user explicitly authorized this exact generated validation-authority expansion on 2026-08-21.
+- The reproduce-first test failed on the exact helper path before implementation, then all 32 validation-tool tests passed after the path-exact allowance was added.
+- Independent read-only review reported High 0 and Medium 0; the reviewer made no file changes.
+- Authoritative validation passed: `python3 tests/test-validation-tools.py` and `git diff --check`.
+- Parent execution evidence: `/tmp/plan125-execution.YDtlQ0/execution.json`.

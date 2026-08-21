@@ -192,6 +192,23 @@ class PlanValidationCommandsTest(unittest.TestCase):
             "python3 .project-agent-workflow/scripts/security-static-check.py --managed"
         )
 
+    def test_template_compiles_only_the_exact_generated_copier_verification_helper(self) -> None:
+        template_module = load_module(PLAN_COMMAND_MODULES[1], "template_copier_helper_compile")
+        helper = (
+            ".project-agent-workflow/skills/verify-copier-update/"
+            "scripts/verify-copier-update.py"
+        )
+
+        template_module.parse_validation_command(f"python3 -m py_compile {helper}")
+
+        for path in (
+            ".project-agent-workflow/skills/other/scripts/verify-copier-update.py",
+            ".project-agent-workflow/skills/verify-copier-update/scripts/other.py",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaises(template_module.ValidationCommandError):
+                    template_module.parse_validation_command(f"python3 -m py_compile {path}")
+
     def test_root_accepts_namespaced_template_shell_syntax_check(self) -> None:
         root_module = load_module(PLAN_COMMAND_MODULES[0], "root_namespaced_shell")
         root_module.parse_validation_command(
