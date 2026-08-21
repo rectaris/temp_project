@@ -125,6 +125,9 @@ Lifecycle states:
 - Use `status: in_progress` for ongoing work and `status: deferred` for intentionally postponed work.
 - Use `status: replan_required` when the current plan must stop before further implementation, candidate generation or correction, validation, apply, completion, or archival.
 - A deferred plan remains open and cannot transition to `ready_to_archive`; return it to `in_progress` only after its deferred condition is resolved.
+- When one independently repairable defect has bounded write and validation scope and leaves unchanged source-plan scope, unchanged validation authority, unchanged invariant boundaries, unchanged source acceptance, unchanged safety conditions, and unchanged external-effect authority, record `repair_required` in the execution ledger, stop that run, keep the source plan `deferred`, and create a separate bounded repair plan.
+- Never reopen a `repair_required` execution run. After the repair plan is checked, revalidate the unchanged inputs, return the source plan and index to `in_progress`, and initialize a fresh plan digest, source HEAD, candidate lifecycle, and execution ledger.
+- Do not use independent repair for requirement, authority, scope, specification, security-boundary, or acceptance-mapping change. Route those changes through explicit user authorization or `replan_required` as applicable.
 - Use `status: ready_to_archive` only after acceptance and validation evidence are recorded.
 - `ready_to_archive` records that the completion gate passed and is the only active state eligible for checked finalization.
 - `replan_required` cannot transition to `ready_to_archive`; it must be replaced through the restructuring lifecycle or returned to execution only after the trigger is disproved and the reversal is recorded.

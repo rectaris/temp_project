@@ -834,13 +834,14 @@ def check_plan_restructuring_scenarios() -> None:
     if fixture["schema_version"] != 1 or fixture["holdout_file"] != holdout_path.name:
         fail("plan restructuring fixture has an unsupported schema or holdout")
     requirements = fixture["requirements"]
-    if not isinstance(requirements, list) or len(requirements) != 4:
-        fail("plan restructuring fixture must preserve four critical requirements")
+    if not isinstance(requirements, list) or len(requirements) != 5:
+        fail("plan restructuring fixture must preserve five critical requirements")
     requirement_markers = {
         "P1": ("hard trigger", "stops", "implementation", "validation", "apply", "finalize"),
         "P2": ("atomic restructuring", "every source acceptance", "integration plan"),
         "P3": ("requirement replacement", "explicit user authorization", "clarification", "acceptance mapping"),
         "P4": ("elapsed time is telemetry only", "scope", "specification", "security", "correction", "review"),
+        "P5": ("independently repairable defect", "source-plan scope", "validation authority", "invariant boundaries", "current execution run", "source plan as deferred", "without rewriting acceptance", "separate bounded repair plan", "fresh execution run"),
     }
     observed_requirements: set[str] = set()
     for requirement in requirements:
@@ -866,6 +867,13 @@ def check_plan_restructuring_scenarios() -> None:
         "negative-specification-drift": ("negative", ["P1", "P2", "P4"], {"event": "spec_drift"}, "spec_drift", "atomic_restructure", "replan_required"),
         "negative-security-boundary-drift": ("negative", ["P1", "P2", "P4"], {"event": "security_boundary_drift"}, "security_boundary_drift", "atomic_restructure", "replan_required"),
         "negative-post-authoritative-design-change": ("negative", ["P1", "P2", "P4"], {"event": "post_authoritative_design_change", "authoritative_validation_count": 1}, "post_authoritative_design_change", "atomic_restructure", "replan_required"),
+        "median-plan119-independent-validation-authorization-repair": ("median", ["P1", "P4", "P5"], {"event": "repair_classification", "affected_invariant_count": 1, "bounded_write_and_validation_scope": True, "source_scope_changed": False, "validation_authority_changed": False, "invariant_boundaries_changed": False, "source_acceptance_changed": False, "safety_boundary_changed": False, "external_authority_changed": False}, "independent_repair_required", "defer_source_and_create_bounded_repair_plan", "repair_required"),
+        "edge-repair-required-run-cannot-continue": ("edge", ["P1", "P5"], {"operation": "continue_same_execution_run", "execution_state": "repair_required"}, "independent_repair_required", "reject_transition", "repair_required"),
+        "edge-checked-repair-resumes-source-with-fresh-run": ("edge", ["P5"], {"repair_plan_status": "checked", "source_plan_status": "deferred", "source_scope_changed": False, "validation_authority_changed": False, "invariant_boundaries_changed": False, "requirements_changed": False, "safety_boundary_changed": False, "external_authority_changed": False, "execution_run": "fresh"}, "repair_prerequisite_satisfied", "resume_source_with_fresh_execution", "in_progress"),
+        "negative-independent-repair-with-source-scope-drift": ("negative", ["P1", "P2", "P5"], {"event": "repair_classification", "source_scope_changed": True}, "scope_drift", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-validation-authority-drift": ("negative", ["P1", "P2", "P5"], {"event": "repair_classification", "validation_authority_changed": True}, "spec_drift", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-invariant-boundary-drift": ("negative", ["P1", "P2", "P5"], {"event": "repair_classification", "invariant_boundaries_changed": True}, "multiple_independent_invariants", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-altered-authority": ("negative", ["P1", "P2", "P3", "P5"], {"event": "repair_classification", "external_authority_changed": True}, "security_boundary_drift", "reject_repair_and_atomic_restructure", "replan_required"),
         "negative-unauthorized-requirement-replacement": ("negative", ["P3"], {"operation": "replace_source_acceptance_text", "explicit_user_authorization": False}, "requirement_change_not_authorized", "reject_transition", "pending_user_authorization"),
     }
     scenarios = fixture["scenarios"]
@@ -888,17 +896,24 @@ def check_plan_restructuring_scenarios() -> None:
     if observed_cases != set(expected_cases):
         fail("plan restructuring scenario set differs from the accepted contract")
 
-    expected_holdout = {
+    expected_holdout = [{
         "id": "holdout-security-drift-with-dirty-product-path",
         "class": "holdout",
         "used_for_tuning": False,
         "requirements": ["P1", "P2", "P4"],
         "input": {"event": "security_boundary_drift", "dirty_product_path": "config/project-owned.yaml"},
         "expected": {"state": "replan_required", "reason_code": "security_boundary_drift", "next_action": "atomic_restructure_preserving_dirty_path"},
-    }
+    }, {
+        "id": "holdout-independent-repair-rejects-stopped-run-reuse",
+        "class": "holdout",
+        "used_for_tuning": False,
+        "requirements": ["P1", "P5"],
+        "input": {"source_plan_status": "deferred", "repair_plan_status": "checked", "execution_run": "stopped_repair_required_run"},
+        "expected": {"state": "repair_required", "reason_code": "independent_repair_required", "next_action": "reject_transition_and_initialize_fresh_run"},
+    }]
     if set(holdout) != {"schema_version", "scenarios"} or holdout.get("schema_version") != 1:
         fail("plan restructuring holdout has an invalid exact shape")
-    if holdout.get("scenarios") != [expected_holdout]:
+    if holdout.get("scenarios") != expected_holdout:
         fail("plan restructuring holdout must remain fixed and outside tuning scenarios")
 
 
@@ -954,6 +969,9 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "authoritative",
         "bounded parent implementation",
         "independent change review",
+        "repair_required",
+        "repair-evidence",
+        "fresh plan digest",
         "replan_required",
         "requirement change needs separate explicit user authorization",
         "elapsed time is telemetry",
@@ -983,9 +1001,35 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "per-task user instruction",
         "main session",
         "advisory",
+        "repair_required",
+        "source-plan scope",
+        "validation authority",
+        "invariant boundaries",
+        "source plan `deferred`",
+        "fresh run",
+        "never reopen a stopped ledger run",
+        "never relabel requirement, authority, or security-boundary drift",
     ):
         if marker not in agents:
             fail(f"AGENTS.md missing orchestration ownership marker: {marker}")
+
+    plan_workflow = read("docs/agent/SPEC_PLAN_WORKFLOW.md").lower()
+    for marker in (
+        "independent repair prerequisite",
+        "repair_required",
+        "one observed defect",
+        "source-plan scope",
+        "validation authority",
+        "invariant boundaries",
+        "unchanged source acceptance",
+        "external-effect authority",
+        "separate numbered active repair plan",
+        "do not create a replan contract",
+        "fresh source-plan digest",
+        "security-boundary change is not an independent repair",
+    ):
+        if marker not in plan_workflow:
+            fail(f"SPEC_PLAN_WORKFLOW.md missing independent-repair marker: {marker}")
 
     try:
         fixture = json.loads((ROOT / "tests/fixtures/orchestration/proactive-bounded-subagents.json").read_text(encoding="utf-8"))

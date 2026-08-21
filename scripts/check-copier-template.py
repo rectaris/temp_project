@@ -121,6 +121,7 @@ def require_evidence_synthesizer() -> None:
 def require_orchestration_policy_markers() -> None:
     template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md").lower()
     template_agents = read("template/.project-agent-workflow/AGENTS.md.jinja").lower()
+    template_plan_workflow = read("template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md").lower()
     root_orchestration = read("references/orchestration.md").lower()
     shared_markers = (
         "per-task user instruction",
@@ -171,6 +172,9 @@ def require_orchestration_policy_markers() -> None:
         "authoritative",
         "bounded parent implementation",
         "independent change review",
+        "repair_required",
+        "repair-evidence",
+        "fresh plan digest",
         "replan_required",
         "requirement change needs separate explicit user authorization",
         "elapsed time is telemetry",
@@ -200,9 +204,33 @@ def require_orchestration_policy_markers() -> None:
         "acceptance",
         "run-sandboxed-plan-worker.py",
         "read-only",
+        "repair_required",
+        "source-plan scope",
+        "validation authority",
+        "invariant boundaries",
+        "source plan `deferred`",
+        "fresh run",
+        "never reopen a stopped ledger run",
+        "never relabel requirement, authority, or security-boundary drift",
     ):
         if marker not in template_agents:
             fail(f"template managed AGENTS missing marker: {marker}")
+    for marker in (
+        "repair_required",
+        "independently repairable defect",
+        "bounded write and validation scope",
+        "source-plan scope",
+        "validation authority",
+        "invariant boundaries",
+        "source acceptance",
+        "external-effect authority",
+        "separate bounded repair plan",
+        "never reopen a `repair_required` execution run",
+        "fresh plan digest",
+        "security-boundary",
+    ):
+        if marker not in template_plan_workflow:
+            fail(f"template SPEC_PLAN_WORKFLOW missing independent-repair marker: {marker}")
     for marker in (
         "per-task user instruction",
         "without waiting for a per-task user instruction",
@@ -273,7 +301,7 @@ def require_orchestration_policy_markers() -> None:
     if restructuring.get("schema_version") != 1 or restructuring.get("holdout_file") != "plan-restructuring-holdout.json":
         fail("plan restructuring fixture has an unsupported schema or holdout")
     requirements = restructuring.get("requirements")
-    if not isinstance(requirements, list) or {item.get("id") for item in requirements if isinstance(item, dict)} != {"P1", "P2", "P3", "P4"}:
+    if not isinstance(requirements, list) or {item.get("id") for item in requirements if isinstance(item, dict)} != {"P1", "P2", "P3", "P4", "P5"}:
         fail("plan restructuring fixture lost a critical requirement")
     if any(not isinstance(item, dict) or item.get("critical") is not True for item in requirements):
         fail("plan restructuring requirements must remain critical")
@@ -285,6 +313,13 @@ def require_orchestration_policy_markers() -> None:
         "negative-specification-drift": ("negative", ["P1", "P2", "P4"], "spec_drift", "atomic_restructure", "replan_required"),
         "negative-security-boundary-drift": ("negative", ["P1", "P2", "P4"], "security_boundary_drift", "atomic_restructure", "replan_required"),
         "negative-post-authoritative-design-change": ("negative", ["P1", "P2", "P4"], "post_authoritative_design_change", "atomic_restructure", "replan_required"),
+        "median-plan119-independent-validation-authorization-repair": ("median", ["P1", "P4", "P5"], "independent_repair_required", "defer_source_and_create_bounded_repair_plan", "repair_required"),
+        "edge-repair-required-run-cannot-continue": ("edge", ["P1", "P5"], "independent_repair_required", "reject_transition", "repair_required"),
+        "edge-checked-repair-resumes-source-with-fresh-run": ("edge", ["P5"], "repair_prerequisite_satisfied", "resume_source_with_fresh_execution", "in_progress"),
+        "negative-independent-repair-with-source-scope-drift": ("negative", ["P1", "P2", "P5"], "scope_drift", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-validation-authority-drift": ("negative", ["P1", "P2", "P5"], "spec_drift", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-invariant-boundary-drift": ("negative", ["P1", "P2", "P5"], "multiple_independent_invariants", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-altered-authority": ("negative", ["P1", "P2", "P3", "P5"], "security_boundary_drift", "reject_repair_and_atomic_restructure", "replan_required"),
         "negative-unauthorized-requirement-replacement": ("negative", ["P3"], "requirement_change_not_authorized", "reject_transition", "pending_user_authorization"),
     }
     scenarios = restructuring.get("scenarios")
@@ -312,6 +347,13 @@ def require_orchestration_policy_markers() -> None:
         "requirements": ["P1", "P2", "P4"],
         "input": {"event": "security_boundary_drift", "dirty_product_path": "config/project-owned.yaml"},
         "expected": {"state": "replan_required", "reason_code": "security_boundary_drift", "next_action": "atomic_restructure_preserving_dirty_path"},
+    }, {
+        "id": "holdout-independent-repair-rejects-stopped-run-reuse",
+        "class": "holdout",
+        "used_for_tuning": False,
+        "requirements": ["P1", "P5"],
+        "input": {"source_plan_status": "deferred", "repair_plan_status": "checked", "execution_run": "stopped_repair_required_run"},
+        "expected": {"state": "repair_required", "reason_code": "independent_repair_required", "next_action": "reject_transition_and_initialize_fresh_run"},
     }]
     if set(restructuring_holdout) != {"schema_version", "scenarios"} or restructuring_holdout.get("schema_version") != 1:
         fail("plan restructuring holdout has an invalid exact shape")

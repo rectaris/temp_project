@@ -58,7 +58,7 @@ This repository root is a template development repository. It is not a Copier-ge
 Plan restructuring changes execution boundaries, ordering, implementation methods, or validation methods. It does not change the user requirement baseline. The baseline consists of the user requirements, accepted safety conditions, and every normalized `acceptance` item in the source plan.
 
 - Use `status: replan_required` when the current plan must stop before further implementation, candidate generation or correction, validation, apply, completion, or archival.
-- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a design change after authoritative validation has started; exhaustion of the initial candidate plus two correction rounds; or two parent-direct remediation rounds that still leave a High or Medium independent-review finding.
+- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a discovery after authoritative validation that requires changing source-plan boundaries, implementation or validation methods, validation authority, or acceptance mapping; exhaustion of the initial candidate plus two correction rounds; or two parent-direct remediation rounds that still leave a High or Medium independent-review finding.
 - Elapsed time is telemetry and a checkpoint signal only. It can prompt review of the plan boundary, but it cannot prove semantic failure or authorize requirement changes.
 - Preserve the exact source plan path, source HEAD, source-plan digest, and digest of every normalized source acceptance item in the parent-owned replan contract.
 - Map every source acceptance digest to at least one successor plan or integration gate. The integration plan must retain the source acceptance text exactly and prove the combined successors against it.
@@ -66,3 +66,11 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - Preserve committed work. Do not reset, stash, delete, commit, or apply product changes as part of restructuring. Record dirty paths and cover each one with a successor write scope before implementation resumes.
 - After an atomic restructuring transition, archive the source with terminal `status: replanned`. This state means “replaced while preserving requirements”; it is distinct from successful `checked` completion and prerequisite-based `deferred` work.
 - Keep full option analysis and decision matrices outside active plans. Active successors contain only accepted decisions, bounded lineage fields, executable scope, validation, and acceptance.
+
+## Independent Repair Prerequisite
+
+- Use the execution-ledger state `repair_required` only for one observed defect whose write and validation scope is bounded, whose repair can be accepted independently, and whose classification evidence proves unchanged source-plan scope, unchanged validation authority, unchanged invariant boundaries, unchanged source acceptance, unchanged safety conditions, and unchanged external-effect authority.
+- `repair_required` stops candidate generation, correction, validation, apply, completion, and archival for that execution run. It never authorizes reuse or reopening of the stopped run.
+- Keep the source plan and active index at `status: deferred` with a concrete prerequisite. Create a separate numbered active repair plan without copying or rewriting source acceptance, and do not create a replan contract.
+- After the repair plan is checked, revalidate the unchanged requirements, safety conditions, scope, validation authority, and external-effect authorization. Return the source plan and index to `in_progress` and initialize a fresh source-plan digest, source HEAD, candidate lifecycle, and execution ledger.
+- Requirement, authority, or security-boundary change is not an independent repair and requires the applicable hard replan or explicit user-authorization path.

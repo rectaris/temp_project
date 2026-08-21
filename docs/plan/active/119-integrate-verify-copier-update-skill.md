@@ -1,7 +1,7 @@
 # Integrate verify-copier-update Skill
 
 status: deferred
-completion_deferred_reason: Plan 120 must first define and validate the repository-wide boundary between a localized repair prerequisite and mandatory plan restructuring.
+completion_deferred_reason: Plan 123 must be checked before this preserved Plan 119 candidate resumes through a fresh execution run.
 primary_invariant: deliver one reusable isolated Copier update verification Skill whose complete source acceptance baseline passes realistic and repository-authoritative validation
 task_types:
   - planning_docs
@@ -69,7 +69,7 @@ replan_source: docs/plan/active/117-verify-copier-update-skill.md
 replan_contract: docs/plan/replanned/contracts/117-verify-copier-update-skill.json
 integration_gates:
   - plan 118 must complete and commit the original-repository snapshot invariant first
-  - plan 120 must be checked before this plan is reclassified under the corrected stop and resume policy
+  - plan 123 must complete and commit the bounded root validation-command authorization repair before this plan resumes
   - the final independent review must report zero unresolved High or Medium findings across both successor slices
 successor_plans:
   - docs/plan/active/118-harden-original-repository-snapshot.md

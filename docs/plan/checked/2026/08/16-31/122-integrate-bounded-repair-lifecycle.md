@@ -1,7 +1,6 @@
 # Integrate bounded repair lifecycle and resume preserved plans
 
-status: deferred
-deferred_prerequisite: plan 121 must be checked and committed with zero unresolved High or Medium findings
+status: checked
 primary_invariant: integrate the accepted independent-repair classifier across root and generated policy while preserving every Plan 120 acceptance item and the hard-replan boundary
 task_types:
   - planning_docs
@@ -113,12 +112,17 @@ checked_summary_ja: 局所修復と強制再構成を区別する規則をroot�
 
 ## Tasks
 
-- [ ] Admit Plan 121 and align root and generated policy, Skill, fixtures, and deterministic marker checks.
-- [ ] Prove median, edge, negative, and untuned holdout outcomes without weakening hard-replan scenarios.
-- [ ] Record Plan 119's bounded repair prerequisite without creating a successor or replan contract for Plan 119.
-- [ ] Complete independent review, focused validation, and the authoritative suite exactly once.
-- [ ] Archive this integration plan and leave Plan 119 in the state required by its repair gate.
+- [x] Admit Plan 121 and align root and generated policy, Skill, fixtures, and deterministic marker checks.
+- [x] Prove median, edge, negative, and untuned holdout outcomes without weakening hard-replan scenarios.
+- [x] Define the post-check transition that records Plan 119's bounded repair prerequisite without creating a successor or replan contract for Plan 119.
+- [x] Complete independent review, focused validation, and the authoritative suite exactly once.
+- [x] Archive this integration plan and leave Plan 119 in the state required by its repair gate.
 
 ## Validation Notes
 
 - This integration successor copies every source acceptance item exactly.
+- Plan 121 is checked and committed at `383279c`; its root/template ledger scripts are byte-identical.
+- Independent read-only review reported High 0 and Medium 0 across all inherited acceptance, unchanged-boundary predicates, hard-replan paths, fixtures, and Plan 119 lifecycle handling.
+- Focused validation passed the ledger tests (19 tests), root policy normal and holdout checks, Copier template checker, and `git diff --check`.
+- The authoritative suite was consumed and run exactly once. It passed ledger (19), restructuring (20), sandboxed worker (79), root policy normal/holdout, Copier template, full change validation, workflow lint, smoke, and `git diff --check`.
+- Plan 119 remains `deferred` without a Plan 119 replan contract. Per the accepted ordering, the parent creates its separate bounded repair prerequisite immediately after this plan reaches `checked`.
