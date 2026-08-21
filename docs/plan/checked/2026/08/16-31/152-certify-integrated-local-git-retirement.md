@@ -1,6 +1,6 @@
 # Certify integrated local Git retirement
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -21,7 +21,7 @@ integration_gates:
   - plans 112, 143, 144, and 146 remain replanned lineage and must not be described as checked
   - the parent must review the combined diff and critical invariants before one authoritative validation run
 successor_plans:
-  - docs/plan/checked/2026/08/16-31/151-complete-effect-adjacent-manifest-revalidation.md
+  - docs/plan/active/151-complete-effect-adjacent-manifest-revalidation.md
   - docs/plan/active/152-certify-integrated-local-git-retirement.md
 inherited_acceptance_digests:
   - sha256:6958ab89c494d1adfd48540a046650cf4cfc1672306d43e0c3a8ecd70264a26e
@@ -56,7 +56,7 @@ context_files:
   - docs/plan/checked/2026/08/16-31/148-certify-exact-root-retirement-scan.md
   - docs/plan/checked/2026/08/16-31/149-complete-exact-ref-local-apply.md
   - docs/plan/checked/2026/08/16-31/150-certify-exact-ref-local-apply.md
-  - docs/plan/active/151-complete-effect-adjacent-manifest-revalidation.md
+  - docs/plan/checked/2026/08/16-31/151-complete-effect-adjacent-manifest-revalidation.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/git-retirement.yaml
   - references/validation.md
@@ -124,15 +124,22 @@ It certifies checked Plans 142, 145, 147, 148, 149, 150, and 151 against every u
 
 ## Tasks
 
-- [ ] Confirm Plans 142, 145, 147, 148, 149, 150, and 151 are checked with independent-review evidence.
-- [ ] Confirm Plans 112, 143, 144, and 146 remain replanned and are not described as checked.
-- [ ] Review combined changes against all eighteen source acceptance items and critical safety invariants.
-- [ ] Record an accurate Unreleased entry.
-- [ ] Run the authoritative validation suite exactly once.
-- [ ] Confirm zero unresolved High or Medium independent-review findings.
-- [ ] Archive this integration plan and preserve the complete restructuring lineage.
+- [x] Confirm Plans 142, 145, 147, 148, 149, 150, and 151 are checked with independent-review evidence.
+- [x] Confirm Plans 112, 143, 144, and 146 remain replanned and are not described as checked.
+- [x] Review combined changes against all eighteen source acceptance items and critical safety invariants.
+- [x] Record an accurate Unreleased entry.
+- [x] Run the authoritative validation suite exactly once.
+- [x] Confirm zero unresolved High or Medium independent-review findings.
+- [x] Archive this integration plan and preserve the complete restructuring lineage.
 
 ## Validation Notes
 
 - Parent behavior validation additionally runs `python3 tests/test-git-retirement.py`; the repository does not depend on pytest.
 - The dedicated prepared-reference-transaction acquisition-failure regression remains a Low coverage opportunity unless Plan 151 adds it; it is not a current correctness or source-acceptance defect.
+- Checked predecessor evidence exists for Plans 142, 145, 147, 148, 149, 150, and 151. Replanned indexes and contracts retain Plans 112, 143, 144, and 146 without describing them as checked.
+- Fresh independent review round 1 mapped all eighteen source acceptance items and reported High 0, Medium 1, and Low 2. The bounded correction restored Plan 151's historical active `successor_plans` identity and changed the executable `context_files` entry to the exact checked archive.
+- Fresh bounded rereview reported Accept with High 0, Medium 0, and Low 2. The remaining Low findings are descriptor-defense coverage precision and prepared reference-transaction acquisition-failure coverage, not current correctness or source-acceptance defects.
+- Parent ledger run `152-parent-direct-20260821` used `/home/rectaris/tmp/gakumasu-project/plan-execution-ledgers/152-candidate-lifecycle.json`, recorded one focused validation and exactly one authoritative validation, and remained active without a stop reason.
+- Focused validation passed Python compilation, root policy and Copier static checks, and `git diff --check`.
+- The authoritative run passed all 39 disposable-repository retirement tests, Python compilation, root policy and Copier static checks, `python3 scripts/validate-changes.py --all`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `tests/copier-update.sh`, and `git diff --check`.
+- The lint and smoke scripts reported that optional `actionlint` was unavailable and skipped its GitHub Actions subcheck; both authoritative commands completed successfully, and smoke used its supported fallback backend.

@@ -122,3 +122,4 @@ id	path
 150	docs/plan/checked/2026/08/16-31/150-certify-exact-ref-local-apply.md
 145	docs/plan/checked/2026/08/16-31/145-integrate-retirement-copier-preservation.md
 151	docs/plan/checked/2026/08/16-31/151-complete-effect-adjacent-manifest-revalidation.md
+152	docs/plan/checked/2026/08/16-31/152-certify-integrated-local-git-retirement.md
