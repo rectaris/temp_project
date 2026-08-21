@@ -1248,6 +1248,71 @@ def require_browser_automation_contract() -> None:
             fail(f"{scenario_id} request lacks configured Browser Run authorization premise")
 
 
+def require_verify_copier_update_skill() -> None:
+    root = ROOT / ".codex/skills/verify-copier-update"
+    generated = ROOT / "template/.project-agent-workflow/skills/verify-copier-update"
+    relative_files = (
+        "SKILL.md",
+        "agents/openai.yaml",
+        "references/verification-contract.md",
+        "scripts/verify-copier-update.py",
+    )
+    for relative in relative_files:
+        if (root / relative).read_bytes() != (generated / relative).read_bytes():
+            fail(f"verify-copier-update root/template file differs: {relative}")
+    root_helper = root / "scripts/verify-copier-update.py"
+    generated_helper = generated / "scripts/verify-copier-update.py"
+    if (root_helper.stat().st_mode & 0o777) != (generated_helper.stat().st_mode & 0o777):
+        fail("verify-copier-update helper modes differ")
+    if root_helper.stat().st_mode & 0o111 == 0:
+        fail("verify-copier-update helpers must be executable")
+
+    bridge = read("template/.agents/skills/verify-copier-update/SKILL.md")
+    if ".project-agent-workflow/skills/verify-copier-update/SKILL.md" not in bridge:
+        fail("verify-copier-update discovery bridge does not point at the managed Skill")
+    skill = read("template/.project-agent-workflow/skills/verify-copier-update/SKILL.md")
+    require_markers(
+        "verify-copier-update Skill",
+        "isolation and result boundary",
+        skill,
+        (
+            "references/verification-contract.md",
+            "disposable clone",
+            "target-specific validation command",
+            "`verified`",
+            "`rejected`",
+            "`blocked`",
+            "not for applying or committing a live update",
+        ),
+    )
+    helper = read(
+        "template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
+    )
+    require_markers(
+        "verify-copier-update helper",
+        "fail-closed execution boundary",
+        helper,
+        (
+            '"--trust-template-tasks"',
+            '"--validation-command-json"',
+            '"--no-hardlinks"',
+            "UPDATE_WRAPPER",
+            "UPDATE_VALIDATOR",
+            "CHANGE_VALIDATOR",
+            '"GIT_OPTIONAL_LOCKS"',
+            "tracked_worktree_identity",
+            "external_filter_unsupported",
+            "submodule_unsupported",
+            '"original_target_changed"',
+            '"not_idempotent"',
+            '"output_inside_repository"',
+        ),
+    )
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .agents/skills/verify-copier-update/SKILL.md" not in ownership:
+        fail("verify-copier-update discovery bridge is not reserved by Copier ownership")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -1287,6 +1352,7 @@ def main() -> int:
     require_generated_whitespace_range()
     require_namespaced_reference_paths()
     require_browser_automation_contract()
+    require_verify_copier_update_skill()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Copier Update"
+  short_description: "Check a downstream update in isolation"
+  default_prompt: "Use $verify-copier-update to test an exact downstream Git baseline against an exact trusted Copier template ref without changing the original repositories."

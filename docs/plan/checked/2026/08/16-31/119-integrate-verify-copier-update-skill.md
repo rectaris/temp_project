@@ -1,6 +1,6 @@
 # Integrate verify-copier-update Skill
 
-status: in_progress
+status: checked
 primary_invariant: deliver one reusable isolated Copier update verification Skill whose complete source acceptance baseline passes realistic and repository-authoritative validation
 task_types:
   - planning_docs
@@ -95,10 +95,10 @@ checked_summary_ja: 隔離したCopier更新検証スキルをテンプレート
 
 ## Tasks
 
-- [ ] Admit the committed Plan 118 snapshot implementation and review the combined diff.
-- [ ] Finish Skill, template inventory, ownership, smoke, real-Copier, and changelog integration.
-- [ ] Complete independent review and focused validation.
-- [ ] Run the authoritative suite exactly once, archive both successors, and commit the integration.
+- [x] Admit the committed Plan 118 snapshot implementation and review the combined diff.
+- [x] Finish Skill, template inventory, ownership, smoke, real-Copier, and changelog integration.
+- [x] Complete independent review and focused validation.
+- [x] Run the authoritative suite exactly once, archive both successors, and commit the integration.
 
 ## Validation Notes
 
@@ -113,3 +113,7 @@ checked_summary_ja: 隔離したCopier更新検証スキルをテンプレート
 - Plan 124 was replanned after copying that file proved insufficient; Plan 125 checked the user-authorized exact generated-helper compilation allowance, and Plan 126 now owns the unchanged real-Copier integration gate.
 - Plans 125, 128, 129, and 126 are checked; the generated authority, dedicated helper target, dependency-environment isolation, and complete real-Copier fixture now pass without changing this plan's acceptance or safety boundary.
 - This final resumed execution uses a fresh source HEAD, plan digest, lifecycle state, and execution ledger.
+- Final focused validation passed 33 helper tests, the Copier template static check, and `git diff --check`.
+- Final read-only independent review mapped all eight acceptance items to the current candidate and reported High 0 and Medium 0 without changing files.
+- The authoritative suite ran exactly once for the final candidate and passed all eight recorded commands, including smoke generation and the real Copier update fixture; `actionlint` was unavailable and the existing lint scripts reported that optional check as skipped.
+- The final execution ledger is `/tmp/plan119-final.bvrRso/execution.json`; it records one focused-validation event, one parent-review event, and one authoritative-validation event for `plan119-final-v1`.

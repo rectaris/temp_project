@@ -72,6 +72,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py \
     template/.agents/skills/browser-ops/SKILL.md \
+    template/.agents/skills/verify-copier-update/SKILL.md \
     template/.project-agent-workflow/AGENTS.md.jinja \
     template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
     template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
@@ -79,6 +80,10 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/browser-ops/SKILL.md \
     template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
     template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
+    template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
+    template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
+    template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
@@ -114,6 +119,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py \
     template/.agents/skills/browser-ops/SKILL.md \
+    template/.agents/skills/verify-copier-update/SKILL.md \
     template/.project-agent-workflow/AGENTS.md.jinja \
     template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
     template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
@@ -121,6 +127,10 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/browser-ops/SKILL.md \
     template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
     template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
+    template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
+    template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
+    template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
@@ -1243,6 +1253,16 @@ test -f "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestr
 test -f "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/agents/openai.yaml"
 test -f "$tmp/typescript/.agents/skills/write-for-reader/SKILL.md"
+test -f "$tmp/typescript/.agents/skills/verify-copier-update/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml"
+test -f "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md"
+test -x "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
+grep -q '.project-agent-workflow/skills/verify-copier-update/SKILL.md' "$tmp/typescript/.agents/skills/verify-copier-update/SKILL.md"
+grep -q 'name: verify-copier-update' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
+grep -q 'not for applying or committing a live update' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
+grep -q 'verification-manifest.json' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md"
+grep -q '"--no-hardlinks"' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
 grep -q '.project-agent-workflow/skills/write-for-reader/SKILL.md' "$tmp/typescript/.agents/skills/write-for-reader/SKILL.md"
 grep -q 'name: mcp-ops' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/SKILL.md"
 grep -q 'name: linear-ops' "$tmp/typescript/.project-agent-workflow/skills/linear-ops/SKILL.md"
