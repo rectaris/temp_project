@@ -1,6 +1,7 @@
 # Integrate verify-copier-update Skill
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Plan 120 must first define and validate the repository-wide boundary between a localized repair prerequisite and mandatory plan restructuring.
 primary_invariant: deliver one reusable isolated Copier update verification Skill whose complete source acceptance baseline passes realistic and repository-authoritative validation
 task_types:
   - planning_docs
@@ -68,6 +69,7 @@ replan_source: docs/plan/active/117-verify-copier-update-skill.md
 replan_contract: docs/plan/replanned/contracts/117-verify-copier-update-skill.json
 integration_gates:
   - plan 118 must complete and commit the original-repository snapshot invariant first
+  - plan 120 must be checked before this plan is reclassified under the corrected stop and resume policy
   - the final independent review must report zero unresolved High or Medium findings across both successor slices
 successor_plans:
   - docs/plan/active/118-harden-original-repository-snapshot.md
@@ -101,3 +103,7 @@ checked_summary_ja: 隔離したCopier更新検証スキルをテンプレート
 ## Validation Notes
 
 - This integration successor copies every source acceptance item exactly.
+- Plan 118 is checked and its snapshot implementation is committed.
+- Independent review and focused validation reached zero unresolved High or Medium findings before the authoritative suite started.
+- The authoritative run passed the helper tests, template and root policy checks, full change validation, lint, and smoke checks, then exposed a localized generated validation-command authorization defect in `tests/copier-update.sh`.
+- The observed defect did not change this plan's acceptance baseline or accepted Copier safety conditions. Keep this plan active and deferred until Plan 120 defines the general repair classification and resumption workflow.
