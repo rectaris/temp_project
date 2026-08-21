@@ -10,7 +10,7 @@ human_design_required: yes
 human_approval_status: approved
 implementation_risk: high
 implementation_ambiguity: ordinary
-primary_invariant: continue another numbered plan or reviewer context only from a verified bounded checkpoint with directly observed resource evidence
+primary_invariant: continue another numbered plan only in a different verified root session and start each reviewer with zero inherited turns from one bounded checkpoint with directly observed resource evidence
 write_scope:
   - AGENTS.md
   - CHANGELOG.md
@@ -91,6 +91,12 @@ replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
   - plan 136 as the accepted successor for plan 113, plus plans 114 and 115, must be checked before implementation starts
+  - Do not implement this plan in the session that creates or materially updates it.
+  - Start the next numbered plan only in a root session whose directly observed runtime session identity differs from the session that emitted the prior terminal checkpoint.
+  - Treat compaction or a summary injected into the same conversation as continued context, not a fresh root session.
+  - When either session identity is unavailable, record freshness as `not_observed` and stop before staged execution without blocking the current default path.
+  - Start each independent reviewer with zero inherited conversation turns and an explicit bounded packet containing only the unchanged plan, admitted diff, bounded receipts, and applicable specifications.
+  - Use compaction, helper-turn, and tool-call counts only as diagnostic proxies; require directly comparable provider-observed token values for a token-reduction claim.
   - plan 133 must compare the checkpointed path with the unchanged baseline under the same provider observations
 successor_plans:
   - docs/plan/active/130-map-acceptance-validation-witnesses.md
@@ -106,22 +112,28 @@ checked_summary_ja: plan境界で限定的な引継記録を作り、利用量�
 ## Decisions
 
 - Define `session_checkpoint` as a bounded record that transfers plan and execution identity, not raw conversation content or new authority.
-- Require a verified checkpoint after terminal, deferred, replan, repair, or authoritative-failure boundaries before another numbered plan or reviewer context continues.
+- Require a verified checkpoint after terminal, deferred, replan, repair, or authoritative-failure boundaries, then stop the root session before another numbered plan starts.
+- Require different directly observed root-session identities across numbered-plan boundaries; a compaction, summary, new orchestration run id, or elapsed-time gap cannot satisfy this condition.
+- Keep missing root-session identity as `not_observed`; do not infer freshness or promote the staged path from a manual claim.
 - Store only provider-observed numeric usage with explicit observed or not_observed provenance; keep deterministic proxy counters separate and never estimate tokens.
-- Start each independent review from bounded plan, diff, receipt, and specification inputs; permit one initial review and one bounded rereview per candidate.
+- Start each independent review from zero inherited turns and bounded plan, diff, receipt, and specification inputs; permit one initial review and one bounded rereview per candidate.
+- Verify reviewer inheritance from outer transcript evidence when available; keep it `not_observed` and block staged promotion when the runtime does not expose the spawn configuration.
 - Treat resource thresholds as session-rollover conditions only; determine numeric promotion thresholds through Plan 133 paired evidence.
 - Use bounded parent implementation and independent review because this plan changes logging, ledger, runner, and reviewer scheduling boundaries.
 
 ## Tasks
 
-- [ ] Define and validate the checkpoint schema, identity, lifecycle boundaries, and replay protections.
+- [ ] Define and validate the checkpoint schema, root-session identity, lifecycle boundaries, and replay protections without treating an orchestration run id as proof of a fresh model context.
 - [ ] Preserve bounded provider usage and deterministic proxy counts through transcript manifests and execution telemetry.
-- [ ] Gate subsequent numbered-plan and reviewer starts on a verified checkpoint without changing semantic plan states.
-- [ ] Enforce fresh bounded reviewer context and the one-review-plus-one-rereview budget.
+- [ ] End the current root session at every numbered-plan terminal boundary and gate the next numbered-plan start on a verified checkpoint plus a different directly observed root-session identity without changing semantic plan states.
+- [ ] Enforce zero-inheritance reviewer starts, exact bounded review packets, transcript-backed fork-mode evidence when available, and the one-review-plus-one-rereview budget.
+- [ ] Add deterministic rejection cases for same-session successor starts, compaction presented as freshness, full-history reviewer forks, reused general-purpose reviewers, missing required identity evidence, and proxy counts presented as token savings.
 - [ ] Align root and generated policy, logging, runner, ledger, Skill, fixtures, and Copier behavior.
 - [ ] Review the bounded parent diff, run focused validation, obtain independent review, run the authoritative suite once, and archive the accepted plan.
 
 ## Validation Notes
 
 - The user approved the session-resource checkpoint boundary on 2026-08-21.
+- On 2026-08-21, the user requested this plan-only refinement after a second implementation sequence remained in one root session, compacted four times, and started three reviewers with full inherited history.
+- This plan update intentionally ends without implementation; continuing implementation in this root session violates its bootstrap gate.
 - The source Plan 116 acceptance text is preserved exactly.

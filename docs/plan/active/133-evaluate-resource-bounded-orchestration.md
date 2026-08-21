@@ -95,6 +95,9 @@ replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestr
 integration_gates:
   - plan 136 as the accepted successor for plan 113, plus plans 114 and 115, must be checked and their context paths refreshed before paired evaluation
   - plans 130 through 132 must be checked and their exact checked archive paths must replace active context paths
+  - add a second fixed regression workload structurally equivalent to one root session carrying diagnosis, proposal, an initial rejected implementation, replanning, three successor plans, context compactions, and full-history reviewer starts; keep product paths and conversation bodies out of the fixture
+  - reject the staged side when it reuses a root-session identity across a numbered-plan boundary, substitutes compaction for a fresh session, starts a reviewer with inherited turns, or claims token improvement from proxy counts; keep the result `measurement_pending` when required outer-runtime identity or fork-mode evidence is unavailable
+  - plan 132 evidence must show different observed root-session identities across numbered-plan boundaries and zero-inheritance reviewer starts before the staged side is eligible for promotion
   - the combined staged path must satisfy every source acceptance item with zero unresolved High or Medium findings
 successor_plans:
   - docs/plan/active/130-map-acceptance-validation-witnesses.md
@@ -128,6 +131,8 @@ checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、�
 
 - Preserve every source acceptance item and interpret references to Plan 113 as its accepted Plan 136 successor when evaluating the combined outputs with plans 114, 115, and 130 through 132.
 - Add one fixed generic workload that reproduces late integration coverage, speculative repair planning, repeated reviewer context, and multi-plan parent accumulation without product-specific paths.
+- Add a distinct fixed regression workload for the observed bootstrap failure: same-session analysis and implementation, a stopped initial plan, successor-plan accumulation, compaction, and full-history review.
+- Treat outer-runtime session identity and reviewer inheritance mode as required comparability evidence for this regression workload; use `measurement_pending` rather than inference when either is unavailable.
 - Require directly comparable token improvement only when both paired sides expose provider-observed usage; otherwise retain not_observed and make no token-reduction claim.
 - Keep the current path as default on missing, noncomparable, unsafe, or below-threshold evidence.
 - Stop for replanning instead of repairing predecessor design inside this integration scope.
@@ -136,6 +141,7 @@ checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、�
 
 - [ ] Refresh every predecessor context path to its exact checked archive and revalidate unchanged lineage.
 - [ ] Freeze versioned paired workloads, schemas, raw evidence, thresholds, and physically separated holdout cases.
+- [ ] Freeze the separate session-reuse regression workload and negative cases for compaction-as-freshness, full-history review, unavailable identity, and proxy-based token claims.
 - [ ] Execute or ingest comparable baseline and staged runs and generate digest-linked orchestration comparison evidence.
 - [ ] Extend deterministic comparability, token-observation, safety, tampering, rollback, and default-selection checks.
 - [ ] Align root and generated policy, Skill, inventories, changelog, and Copier behavior for the measured outcome.
@@ -144,4 +150,5 @@ checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、�
 ## Validation Notes
 
 - The user approved the expanded resource-efficiency evaluation on 2026-08-21.
+- The 2026-08-21 plan-only refinement adds the second observed high-usage sequence as a regression workload without treating its unavailable token values as measured evidence.
 - The source Plan 116 acceptance text is preserved exactly and no predecessor implementation is absorbed into this plan.
