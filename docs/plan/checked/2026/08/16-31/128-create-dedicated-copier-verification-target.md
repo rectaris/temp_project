@@ -1,6 +1,6 @@
 # Create a dedicated Copier verification target
 
-status: in_progress
+status: checked
 primary_invariant: keep the helper-specific relative source path confined to one committed disposable target fixture
 replan_source: docs/plan/active/127-repair-temporary-copier-cli-shim.md
 replan_contract: docs/plan/replanned/contracts/127-repair-temporary-copier-cli-shim.json
@@ -54,11 +54,14 @@ checked_summary_ja: helper専用のcommitted target cloneだけに相対Copier s
 
 ## Tasks
 
-- [ ] Add one helper-specific target clone and commit only its relative source answer.
-- [ ] Point the verification helper at the dedicated clone and leave the existing target unchanged.
-- [ ] Complete syntax, diff, and independent scope review.
-- [ ] Archive and commit the bounded fixture change before Plan 129 integration.
+- [x] Add one helper-specific target clone and commit only its relative source answer.
+- [x] Point the verification helper at the dedicated clone and leave the existing target unchanged.
+- [x] Complete syntax, diff, and independent scope review.
+- [x] Archive and commit the bounded fixture change before Plan 129 integration.
 
 ## Validation Notes
 
 - The user explicitly authorized this exact target-fixture separation on 2026-08-21.
+- Independent read-only review reported High 0 and Medium 0 and made no file changes.
+- Authoritative validation passed: `sh -n tests/copier-update.sh` and `git diff --check`.
+- Parent execution evidence: `/tmp/plan128-execution.9NsWkb/execution.json`.

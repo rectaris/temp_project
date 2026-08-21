@@ -72,15 +72,17 @@ fi
 
 mkdir -p "$tmp"
 if ! command -v copier >/dev/null 2>&1; then
-  mkdir -p "$tmp/bin"
+  mkdir -p "$tmp/bin" "$tmp/copier-project"
+  cp "$root/pyproject.toml" "$root/uv.lock" "$tmp/copier-project/"
   cat >"$tmp/bin/copier" <<'EOF_COPIER_SHIM'
 #!/bin/sh
-exec env UV_CACHE_DIR="$COPIER_TEST_CACHE" uv run --project "$COPIER_TEST_ROOT" copier "$@"
+shim_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+exec env \
+  UV_CACHE_DIR="$shim_root/uv-cache" \
+  UV_PROJECT_ENVIRONMENT="$shim_root/uv-venv" \
+  uv run --locked --project "$shim_root/copier-project" copier "$@"
 EOF_COPIER_SHIM
   chmod +x "$tmp/bin/copier"
-  COPIER_TEST_CACHE="$tmp/uv-cache"
-  COPIER_TEST_ROOT="$root"
-  export COPIER_TEST_CACHE COPIER_TEST_ROOT
   PATH="$tmp/bin:$PATH"
   export PATH
 fi
@@ -107,8 +109,10 @@ for candidate_path in \
   template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
   template/.project-agent-workflow/scripts/check-external-service-policy.py \
   template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
+  template/.project-agent-workflow/scripts/plan_validation_commands.py \
   template/.project-agent-workflow/scripts/validate-changes.py \
   template/.agents/skills/browser-ops/SKILL.md \
+  template/.agents/skills/verify-copier-update/SKILL.md \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
@@ -119,6 +123,10 @@ for candidate_path in \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
+  template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
+  template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
+  template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
   template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
   template/.project-agent-workflow/skills/graph-memory/SKILL.md \
   template/.project-agent-workflow/skills/linear-ops/SKILL.md \
@@ -142,8 +150,10 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
   template/.project-agent-workflow/scripts/check-external-service-policy.py \
   template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
+  template/.project-agent-workflow/scripts/plan_validation_commands.py \
   template/.project-agent-workflow/scripts/validate-changes.py \
   template/.agents/skills/browser-ops/SKILL.md \
+  template/.agents/skills/verify-copier-update/SKILL.md \
   template/.project-agent-workflow/AGENTS.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
   template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
@@ -154,6 +164,10 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/skills/browser-ops/SKILL.md \
   template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
   template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+  template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
+  template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
+  template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
+  template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
   template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
   template/.project-agent-workflow/skills/graph-memory/SKILL.md \
   template/.project-agent-workflow/skills/linear-ops/SKILL.md \
@@ -220,6 +234,40 @@ if grep -q '^  browser_run:$' "$browser_legacy_out/docs/agent/external-services.
   echo "older Browser Run fixture unexpectedly contains browser_run" >&2
   exit 1
 fi
+if grep -q '^_src_path: ../update-source$' "$browser_legacy_out/.copier-answers.yml"; then
+  echo "ordinary update fixture unexpectedly uses the helper-only source relationship" >&2
+  exit 1
+fi
+direct_verification_target="$tmp/direct-v1-target"
+fixture_clone "$browser_legacy_out" "$direct_verification_target"
+fixture_git "$direct_verification_target" config user.email "ci@example.invalid"
+fixture_git "$direct_verification_target" config user.name "CI"
+sed -i 's|^_src_path:.*$|_src_path: ../update-source|' \
+  "$direct_verification_target/.copier-answers.yml"
+grep -q '^_src_path: ../update-source$' \
+  "$direct_verification_target/.copier-answers.yml"
+fixture_git "$direct_verification_target" add .copier-answers.yml
+fixture_git "$direct_verification_target" commit -m "Use isolated verification source" >/dev/null
+direct_verification_out="$tmp/direct-v1-verification"
+if ! python3 "$root/.codex/skills/verify-copier-update/scripts/verify-copier-update.py" \
+    --target "$direct_verification_target" \
+    --source "$update_source" \
+    --source-ref "$target_ref" \
+    --output-dir "$direct_verification_out" \
+    --trust-template-tasks \
+    --validation-command-json \
+    '["python3","-c","from pathlib import Path; assert Path(\"README.md\").is_file(); assert Path(\".agents/skills/verify-copier-update/SKILL.md\").is_file()"]' \
+    >/dev/null; then
+  cat "$direct_verification_out/verification-manifest.json" >&2
+  for diagnostic_log in "$direct_verification_out"/logs/*.stderr; do
+    [ -s "$diagnostic_log" ] || continue
+    printf '%s\n' "--- $(basename -- "$diagnostic_log")" >&2
+    cat "$diagnostic_log" >&2
+  done
+  exit 1
+fi
+grep -q '"result": "verified"' "$direct_verification_out/verification-manifest.json"
+grep -q '"update_path": "direct_supported_v1"' "$direct_verification_out/verification-manifest.json"
 browser_legacy_policy_before="$tmp/browser-run-legacy-policy-before.yaml"
 cp "$browser_legacy_out/docs/agent/external-services.yaml" "$browser_legacy_policy_before"
 run_copier update -q --trust --defaults --vcs-ref "$target_ref" "$browser_legacy_out" >/dev/null
@@ -234,6 +282,9 @@ fi
 (cd "$browser_legacy_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
 test -f "$browser_legacy_out/.agents/skills/browser-ops/SKILL.md"
 test -f "$browser_legacy_out/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
+test -f "$browser_legacy_out/.agents/skills/verify-copier-update/SKILL.md"
+test -f "$browser_legacy_out/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
+test -x "$browser_legacy_out/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
 fixture_git "$browser_legacy_out" diff --check
 
 validator="$root/scripts/validate-copier-update.py"

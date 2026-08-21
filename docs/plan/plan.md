@@ -9,5 +9,4 @@ id	path	status
 116	docs/plan/active/116-evaluate-plan-worker-orchestration.md	in_progress
 119	docs/plan/active/119-integrate-verify-copier-update-skill.md	deferred
 126	docs/plan/active/126-integrate-generated-verify-helper-compilation.md	deferred
-128	docs/plan/active/128-create-dedicated-copier-verification-target.md	in_progress
 129	docs/plan/active/129-integrate-dedicated-copier-verification-target.md	in_progress

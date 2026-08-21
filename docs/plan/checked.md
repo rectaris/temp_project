@@ -104,3 +104,4 @@ id	path
 122	docs/plan/checked/2026/08/16-31/122-integrate-bounded-repair-lifecycle.md
 123	docs/plan/checked/2026/08/16-31/123-authorize-verify-copier-update-plan-validation.md
 125	docs/plan/checked/2026/08/16-31/125-authorize-generated-verify-helper-compilation.md
+128	docs/plan/checked/2026/08/16-31/128-create-dedicated-copier-verification-target.md
