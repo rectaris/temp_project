@@ -102,3 +102,4 @@ id	path
 118	docs/plan/checked/2026/08/16-31/118-harden-original-repository-snapshot.md
 121	docs/plan/checked/2026/08/16-31/121-bind-repair-classification-to-unchanged-boundaries.md
 122	docs/plan/checked/2026/08/16-31/122-integrate-bounded-repair-lifecycle.md
+123	docs/plan/checked/2026/08/16-31/123-authorize-verify-copier-update-plan-validation.md

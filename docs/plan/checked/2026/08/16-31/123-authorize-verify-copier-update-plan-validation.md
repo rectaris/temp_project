@@ -1,6 +1,6 @@
 # Authorize verify-copier-update plan validation
 
-status: in_progress
+status: checked
 primary_invariant: admit exactly the root repository verify-copier-update test command required by Plan 119 without widening generated-project validation authority
 task_types:
   - planning_docs
@@ -26,10 +26,10 @@ required_specs:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
 focused_validation:
-  - python3 tests/validation_tools/plan.py
+  - python3 tests/test-validation-tools.py
   - git diff --check
 validation:
-  - python3 tests/validation_tools/plan.py
+  - python3 tests/test-validation-tools.py
   - python3 scripts/check-root-agent-policy.py
   - python3 scripts/validate-changes.py --all
   - git diff --check
@@ -50,12 +50,16 @@ checked_summary_ja: Plan 119で必要なroot専用Copier検証テストだけを
 
 ## Tasks
 
-- [ ] Add the generated-validator rejection assertion for the root-only command.
-- [ ] Confirm the preserved allowlist entry has no alternate arguments or prefixes.
-- [ ] Complete independent review and focused validation with zero unresolved High or Medium findings.
-- [ ] Archive and commit this repair before returning Plan 119 to `in_progress` with a fresh execution identity.
+- [x] Add the generated-validator rejection assertion for the root-only command.
+- [x] Confirm the preserved allowlist entry has no alternate arguments or prefixes.
+- [x] Complete independent review and focused validation with zero unresolved High or Medium findings.
+- [x] Archive and commit this repair before returning Plan 119 to `in_progress` with a fresh execution identity.
 
 ## Validation Notes
 
 - Plan 122 is checked; Plan 119 remains deferred and has no replan contract.
 - The repair bytes were preserved in stash `56d8f1766287e87a9f19a997318996c1f9dc8dc6` and restored without dropping that recovery point.
+- The initial plan command attempted to execute a package module directly and failed before testing; the plan now uses the repository's existing `tests/test-validation-tools.py` entrypoint and a fresh execution identity.
+- Independent read-only review reported High 0 and Medium 0; probes accepted only the exact root argv and rejected additional arguments, alternate launchers, shell forms, and every generated-validator form.
+- Focused validation passed `python3 tests/test-validation-tools.py` (31 tests) and the scoped diff check.
+- Final validation passed the same 31 tests, root policy check, full change validation, and `git diff --check`.

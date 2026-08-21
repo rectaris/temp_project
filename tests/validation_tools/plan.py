@@ -150,12 +150,17 @@ class PlanValidationCommandsTest(unittest.TestCase):
             "python3 tests/test-plan-execution-state.py",
             "python3 tests/test-sandboxed-plan-worker.py",
             "python3 tests/test-validation-tools.py",
+            "python3 tests/test-verify-copier-update.py",
             "python3 scripts/run-sandboxed-plan-worker.py self-test",
             "python3 scripts/check-copier-template.py",
             "tests/copier-update.sh --require-copier",
         ):
             with self.subTest(command=command):
                 root_module.parse_validation_command(command)
+
+        template_module = load_module(PLAN_COMMAND_MODULES[1], "template_root_only_behavior_test")
+        with self.assertRaises(template_module.ValidationCommandError):
+            template_module.parse_validation_command("python3 tests/test-verify-copier-update.py")
 
     def test_copier_update_required_mode_rejects_an_unavailable_cli(self) -> None:
         environment = os.environ.copy()
