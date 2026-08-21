@@ -106,3 +106,4 @@ id	path
 125	docs/plan/checked/2026/08/16-31/125-authorize-generated-verify-helper-compilation.md
 128	docs/plan/checked/2026/08/16-31/128-create-dedicated-copier-verification-target.md
 129	docs/plan/checked/2026/08/16-31/129-integrate-dedicated-copier-verification-target.md
+126	docs/plan/checked/2026/08/16-31/126-integrate-generated-verify-helper-compilation.md

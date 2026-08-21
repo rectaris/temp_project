@@ -1,6 +1,6 @@
 # Integrate the generated verify-copier-update helper compilation boundary
 
-status: in_progress
+status: checked
 primary_invariant: prove the exact generated-helper authority and preserved Plan 119 candidate through the real Copier direct lane
 replan_source: docs/plan/active/124-forward-current-generated-validation-authority.md
 replan_contract: docs/plan/replanned/contracts/124-forward-current-generated-validation-authority.json
@@ -81,11 +81,11 @@ checked_summary_ja: 生成helperの限定的なコンパイル権限を実Copier
 
 ## Tasks
 
-- [ ] Confirm Plan 125 is checked and the deterministic authority regression passes.
-- [ ] Confirm the fixture copies and stages the matching generated validation-command module.
-- [ ] Review the combined preserved candidate for scope, authority, original-repository preservation, and exact generated parity.
-- [ ] Run the real Copier lane once and require verified through direct_supported_v1.
-- [ ] Archive and commit this integration, then resume Plan 119 with a fresh ledger.
+- [x] Confirm Plan 125 is checked and the deterministic authority regression passes.
+- [x] Confirm the fixture copies and stages the matching generated validation-command module.
+- [x] Review the combined preserved candidate for scope, authority, original-repository preservation, and exact generated parity.
+- [x] Run the real Copier lane once and require verified through direct_supported_v1.
+- [x] Archive and commit this integration, then resume Plan 119 with a fresh ledger.
 
 ## Validation Notes
 
@@ -97,3 +97,7 @@ checked_summary_ja: 生成helperの限定的なコンパイル権限を実Copier
 - The stopped execution evidence is `/tmp/plan126-execution.Z1Rx9N/execution.json`; resume only after Plan 127 is checked and with a fresh run identity.
 - Plans 128 and 129 are checked; their dedicated target fixture and dependency-environment repair preserved this plan's acceptance, validation authority, safety conditions, and external-effect authorization.
 - This resumed execution uses a fresh source HEAD, plan digest, lifecycle state, and execution ledger.
+- Resumed focused validation passed all 32 validation-tool tests, all 33 helper tests, the template checker, shell syntax, and diff checking.
+- Resumed independent review reported High 0 and Medium 0 and made no file changes.
+- Resumed authoritative validation passed the complete required-Copier fixture and `git diff --check`; the direct lane reached `verified` through `direct_supported_v1`.
+- Fresh resumed execution evidence: `/tmp/plan126-resumed.Rx40Ex/execution.json`.
