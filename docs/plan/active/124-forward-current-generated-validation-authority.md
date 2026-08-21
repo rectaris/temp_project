@@ -1,6 +1,8 @@
 # Forward current generated validation authority in the Copier fixture
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - post_authoritative_design_change
 primary_invariant: make the real Copier direct lane emit the current generated validation toolchain without changing validation authority
 task_types:
   - planning_docs
@@ -55,3 +57,5 @@ checked_summary_ja: 実Copier fixtureへ現在の生成検証コマンド定義�
 
 - The stopped Plan 119 ledger recorded `repair_required` with all unchanged-boundary predicates true and one affected invariant.
 - Independent classification review reported High 0 and Medium 0 for this one-file repair.
+- The one permitted real-Copier validation run proved that copying the current generated authority file is insufficient: its `is_python_compile` rule rejects Python files below `.project-agent-workflow/skills/`.
+- Continuing requires an explicit generated validation-authority expansion or a different user-approved validation design. The execution ledger is `replan_required`; do not run another worker, validation, completion, or archive operation for this plan.
