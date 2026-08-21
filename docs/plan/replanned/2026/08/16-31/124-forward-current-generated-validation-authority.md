@@ -1,9 +1,8 @@
 # Forward current generated validation authority in the Copier fixture
 
-status: replan_required
+status: replanned
 replan_reason_codes:
   - post_authoritative_design_change
-primary_invariant: make the real Copier direct lane emit the current generated validation toolchain without changing validation authority
 task_types:
   - planning_docs
   - template_workflow
@@ -33,16 +32,31 @@ validation:
   - git diff --check
 acceptance:
   - Add the existing `template/.project-agent-workflow/scripts/plan_validation_commands.py` to both the fixture copy list and its exact Git staging list.
-  - Do not modify either root or generated validation-command allowlist, Plan 119 acceptance, Copier safety conditions, or external-effect authorization.
+  - Modify the generated validation-command allowlist only to accept `.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py` as a `python3 -m py_compile` argument; do not modify the root allowlist, Plan 119 acceptance, Copier safety conditions, or external-effect authorization.
   - Prove the wrapperless v1 real-Copier lane reaches `verified` through `direct_supported_v1` with the current generated validator and preserves the original repositories.
   - Finish with zero unresolved High or Medium independent-review findings before returning Plan 119 to a fresh execution run.
 repair_source: docs/plan/active/119-integrate-verify-copier-update-skill.md
 repair_reason: the real-Copier fixture copied validate-changes.py without its matching current plan_validation_commands.py
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/124-forward-current-generated-validation-authority.md
+replan_contract: docs/plan/replanned/contracts/124-forward-current-generated-validation-authority.json
+integration_gates:
+  - combined successors must satisfy every source acceptance item
+successor_plans:
+  - docs/plan/active/125-authorize-generated-verify-helper-compilation.md
+  - docs/plan/active/126-integrate-generated-verify-helper-compilation.md
+inherited_acceptance_digests:
+  - sha256:bd9dfaf6c8e20384e5d251985bad4c4e7444b353b01bc56c490329b5f94ff138
+  - sha256:e26ad0ca7604e5feccfc97c2adae918a14371df6dd63ce243166bb3e218285dc
+  - sha256:91fd9de002f93bf994927a87c2337b016347ebe6560adfa4c30fb943ff9a2101
+  - sha256:460a6d4c213598f409b07f96cf991d0969845996c01e3526430add6463c08431
 checked_summary_ja: 実Copier fixtureへ現在の生成検証コマンド定義を欠落なく含める。
 
 ## Decisions
 
-- Change only the two exact fixture lists in `tests/copier-update.sh`; do not edit validation authority.
+- The user explicitly authorized replacing the prior no-authority-change acceptance item with one exact generated-helper compilation path on 2026-08-21.
+- Keep the generated authority expansion path-exact; do not authorize arbitrary files below `.project-agent-workflow/skills/` and do not change the root allowlist.
+- Reproduce the rejected helper argv in a deterministic parser test before rerunning the real Copier lane.
 - Use bounded parent implementation because the repair applies inside the preserved uncommitted Plan 119 fixture, then require independent read-only review.
 - Run the real Copier lane once for this repair; Plan 119 will use a separate fresh authoritative run after the repair is checked.
 
