@@ -1,7 +1,6 @@
 # Integrate the generated verify-copier-update helper compilation boundary
 
-status: deferred
-completion_deferred_reason: Plan 127 must reproduce and repair the temporary uv Copier shim before this unchanged integration plan resumes through a fresh execution run.
+status: in_progress
 primary_invariant: prove the exact generated-helper authority and preserved Plan 119 candidate through the real Copier direct lane
 replan_source: docs/plan/active/124-forward-current-generated-validation-authority.md
 replan_contract: docs/plan/replanned/contracts/124-forward-current-generated-validation-authority.json
@@ -96,3 +95,5 @@ checked_summary_ja: 生成helperの限定的なコンパイル権限を実Copier
 - The authoritative run stopped in the first existing Copier copy-to-update fixture after the fresh temporary uv environment reported that the template was not Git-tracked; the new direct helper lane was not reached.
 - Independent classification found one bounded shim invariant with unchanged source scope, validation authority, invariant boundaries, source acceptance, safety conditions, and external-effect authority.
 - The stopped execution evidence is `/tmp/plan126-execution.Z1Rx9N/execution.json`; resume only after Plan 127 is checked and with a fresh run identity.
+- Plans 128 and 129 are checked; their dedicated target fixture and dependency-environment repair preserved this plan's acceptance, validation authority, safety conditions, and external-effect authorization.
+- This resumed execution uses a fresh source HEAD, plan digest, lifecycle state, and execution ledger.
