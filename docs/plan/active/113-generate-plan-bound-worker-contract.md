@@ -1,6 +1,8 @@
 # Generate a plan-bound worker execution contract
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 task_types:
   - planning_docs
   - referent_first
@@ -118,3 +120,6 @@ Reducing worker context is useful only when the omitted material is irrelevant. 
 - Decision audit selected a plan-derived record instead of a manually duplicated contract and retained the source plan as authority.
 - The advisory referent contract sealed the worker execution contract as a supplemental record for one worker attempt, not as a replacement plan or a new authorization source.
 - Plan 114 must not start until this plan is accepted and archived.
+- Execution run `plan113-20260821-a` stopped before authoritative validation after two parent-direct remediation rounds; the independent rereview reported High 0 and Medium 2.
+- The remaining independent invariants are prevention of newly created validation-authority files under writable prefixes and a genuinely separate executable holdout boundary. Preserve all source acceptance items when restructuring.
+- The rejected parent candidate is retained locally under `.agent-artifacts/plan113-rejected/`; no rejected implementation remains in the worktree.
