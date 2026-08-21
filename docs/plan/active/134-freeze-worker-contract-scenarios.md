@@ -15,6 +15,7 @@ write_scope:
   - docs/plan/
   - scripts/check-copier-template.py
   - scripts/check-root-agent-policy.py
+  - scripts/project_workflow/copier_inventory.py
   - tests/copier-update.sh
   - tests/fixtures/orchestration/worker-contract-scenarios.json
   - tests/fixtures/orchestration/worker-contract-holdout.json
