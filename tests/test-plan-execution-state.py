@@ -69,6 +69,39 @@ class PlanExecutionStateTest(unittest.TestCase):
     def payload(self) -> dict[str, object]:
         return json.loads(self.state.read_text(encoding="utf-8"))
 
+    def write_repair_evidence(
+        self,
+        event_id: str,
+        receipt: str,
+        invariant: str,
+        **overrides: object,
+    ) -> Path:
+        state = self.payload()
+        value: dict[str, object] = {
+            "schema_version": 1,
+            "plan_path": state["plan_path"],
+            "plan_digest": state["plan_digest"],
+            "source_head": state["source_head"],
+            "primary_invariant_digest": state["primary_invariant_digest"],
+            "affected_invariant_digests": [invariant],
+            "candidate_lifecycle_identity_digest": state["candidate_lifecycle_identity_digest"],
+            "candidate_lifecycle_digest": digest(event_id + "\n"),
+            "independent_review_receipt_digest": receipt,
+            "bounded_write_scope": True,
+            "bounded_validation_scope": True,
+            "source_scope_unchanged": True,
+            "validation_authority_unchanged": True,
+            "invariant_boundaries_unchanged": True,
+            "source_acceptance_unchanged": True,
+            "safety_conditions_unchanged": True,
+            "external_effect_authority_unchanged": True,
+            "independent_invariant_count": 1,
+        }
+        value.update(overrides)
+        evidence = self.base / f"{event_id}-repair-evidence.json"
+        evidence.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        return evidence
+
     def test_two_rejected_corrections_stop_and_replay_is_rejected(self) -> None:
         self.assertEqual(self.record("generation-1", "candidate_generation").returncode, 0)
         self.assertEqual(self.record("correction-1", "correction_rejected").returncode, 0)
@@ -158,6 +191,253 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(self.record("authoritative-1", "authoritative_validation").returncode, 0)
         self.assertEqual(self.record("design-1", "post_authoritative_design_change", *affected).returncode, 0)
         self.assertEqual(self.payload()["state"], "replan_required")
+
+    def test_independent_repair_requires_bounded_evidence_and_stops_only_current_run(self) -> None:
+        invariant_digest = digest("one invariant")
+        invariant = ("--invariant-digest", invariant_digest)
+        receipt_digest = digest("repair-review")
+        receipt = ("--independent-review-receipt-digest", receipt_digest)
+        self.assertNotEqual(self.record("repair-missing", "repair_classification", *invariant).returncode, 0)
+        coupled_evidence = self.write_repair_evidence(
+            "repair-coupled", receipt_digest, invariant_digest,
+        )
+        self.assertNotEqual(
+            self.record(
+                "repair-coupled", "repair_classification", *invariant,
+                "--invariant-digest", digest("second invariant"), *receipt,
+                "--repair-evidence-file", str(coupled_evidence),
+            ).returncode,
+            0,
+        )
+        stale_lifecycle = self.write_repair_evidence(
+            "repair-stale-lifecycle", receipt_digest, invariant_digest,
+        )
+        self.lifecycle.write_text("different lifecycle\n", encoding="utf-8")
+        stale = self.run_cli(
+            "record", str(self.state), "--run-id", "run-1",
+            "--event-id", "repair-stale-lifecycle", "--event-type", "repair_classification",
+            "--implementation-mode", "candidate", *invariant, *receipt,
+            "--candidate-lifecycle-digest", digest("repair-stale-lifecycle\n"),
+            "--repair-evidence-file", str(stale_lifecycle),
+            "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(stale.returncode, 0)
+        evidence = self.write_repair_evidence("repair-1", receipt_digest, invariant_digest)
+        accepted = self.record(
+            "repair-1", "repair_classification", *invariant, *receipt,
+            "--repair-evidence-file", str(evidence),
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        payload = self.payload()
+        self.assertEqual(payload["state"], "repair_required")
+        self.assertEqual(payload["repair_reason_codes"], ["independent_repair_required"])
+        self.assertEqual(payload["replan_reason_codes"], [])
+        denied = self.run_cli(
+            "check", str(self.state), "--run-id", "run-1", "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("stopped for an independent repair", denied.stderr)
+        self.assertNotEqual(self.record("repair-continued", "elapsed_checkpoint").returncode, 0)
+
+        fresh_state = self.base / "fresh-execution.json"
+        fresh_lifecycle = self.base / "fresh-lifecycle.json"
+        initialized = self.run_cli(
+            "init", str(fresh_state), "--run-id", "run-2",
+            "--plan", "docs/plan/active/001-test.md",
+            "--plan-digest", digest(self.plan.read_text()), "--source-head", self.head,
+            "--primary-invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(fresh_lifecycle), "--implementation-mode", "candidate",
+        )
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        self.assertEqual(json.loads(fresh_state.read_text(encoding="utf-8"))["state"], "active")
+
+    def test_independent_repair_blocks_runner_before_prerequisites(self) -> None:
+        invariant = digest("one invariant")
+        receipt = digest("repair-review")
+        evidence = self.write_repair_evidence("repair-runner", receipt, invariant)
+        accepted = self.record(
+            "repair-runner", "repair_classification",
+            "--invariant-digest", invariant,
+            "--independent-review-receipt-digest", receipt,
+            "--repair-evidence-file", str(evidence),
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        common = [
+            "--orchestration-run-id", "run-1", "--lifecycle-state", str(self.lifecycle),
+            "--plan-execution-state", str(self.state),
+        ]
+        commands = (
+            ["run", self.source_path_for_runner(), *common, "--bwrap-bin", "definitely-missing-bwrap"],
+            ["correct", self.source_path_for_runner(), "missing-manifest", "missing-brief", *common],
+            ["validate", "missing-manifest", "--suite", "focused", "--output-dir", str(self.base / "validation"), *common],
+            ["apply", "missing-manifest", *common],
+            ["finalize-apply", "missing-manifest", *common],
+        )
+        for command in commands:
+            denied = subprocess.run(
+                [sys.executable, str(RUNNER), *command], cwd=self.repo,
+                check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("stopped for an independent repair", denied.stderr)
+            self.assertNotIn("missing-manifest", denied.stderr)
+            self.assertNotIn("definitely-missing-bwrap", denied.stderr)
+
+    def test_altered_authority_rejects_repair_classification_and_uses_hard_replan(self) -> None:
+        scenarios = json.loads(SCENARIOS.read_text(encoding="utf-8"))["scenarios"]
+        scenario = next(
+            item for item in scenarios
+            if item["id"] == "negative-independent-repair-with-altered-authority"
+        )
+        invariant = digest("one invariant")
+        receipt = digest("repair-review")
+        evidence = self.write_repair_evidence(
+            "repair-altered-authority", receipt, invariant,
+            external_effect_authority_unchanged=False,
+        )
+        classified = self.record(
+            "repair-altered-authority", "repair_classification",
+            "--invariant-digest", invariant,
+            "--independent-review-receipt-digest", receipt,
+            "--repair-evidence-file", str(evidence),
+        )
+        self.assertEqual(classified.returncode, 0, classified.stderr)
+        self.assertEqual(self.payload()["state"], scenario["expected"]["state"])
+        self.assertIn(scenario["expected"]["reason_code"], self.payload()["replan_reason_codes"])
+
+    def test_changed_plan_boundaries_atomically_select_hard_replan(self) -> None:
+        cases = (
+            ("source-scope", "source_scope_unchanged", "scope_drift"),
+            ("validation-authority", "validation_authority_unchanged", "spec_drift"),
+            ("invariant-boundaries", "invariant_boundaries_unchanged", "multiple_independent_invariants"),
+        )
+        for index, (label, predicate, reason) in enumerate(cases, start=1):
+            with self.subTest(predicate=predicate):
+                run_id = f"changed-boundary-{index}"
+                state_path = self.base / f"{run_id}.json"
+                lifecycle_path = self.base / f"{run_id}-lifecycle.json"
+                initialized = self.run_cli(
+                    "init", str(state_path), "--run-id", run_id,
+                    "--plan", "docs/plan/active/001-test.md",
+                    "--plan-digest", digest(self.plan.read_text()),
+                    "--source-head", self.head,
+                    "--primary-invariant-digest", digest("one invariant"),
+                    "--lifecycle-state", str(lifecycle_path),
+                    "--implementation-mode", "candidate",
+                )
+                self.assertEqual(initialized.returncode, 0, initialized.stderr)
+                event_id = f"repair-{label}"
+                invariant = digest("one invariant")
+                receipt = digest(f"review-{label}")
+                lifecycle_path.write_text(event_id + "\n", encoding="utf-8")
+                original_state = self.state
+                self.state = state_path
+                try:
+                    evidence = self.write_repair_evidence(
+                        event_id, receipt, invariant, **{predicate: False},
+                    )
+                finally:
+                    self.state = original_state
+                classified = self.run_cli(
+                    "record", str(state_path), "--run-id", run_id,
+                    "--event-id", event_id, "--event-type", "repair_classification",
+                    "--implementation-mode", "candidate",
+                    "--invariant-digest", invariant,
+                    "--independent-review-receipt-digest", receipt,
+                    "--candidate-lifecycle-digest", digest(event_id + "\n"),
+                    "--repair-evidence-file", str(evidence),
+                    "--lifecycle-state", str(lifecycle_path),
+                )
+                self.assertEqual(classified.returncode, 0, classified.stderr)
+                payload = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["state"], "replan_required")
+                self.assertEqual(payload["replan_reason_codes"], [reason])
+                self.assertEqual(payload["repair_reason_codes"], [])
+
+    def test_recomputed_history_after_terminal_repair_event_is_rejected(self) -> None:
+        invariant = digest("one invariant")
+        receipt = digest("repair-review")
+        evidence = self.write_repair_evidence("repair-terminal", receipt, invariant)
+        accepted = self.record(
+            "repair-terminal", "repair_classification",
+            "--invariant-digest", invariant,
+            "--independent-review-receipt-digest", receipt,
+            "--repair-evidence-file", str(evidence),
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        value = self.payload()
+        event: dict[str, object] = {
+            "sequence": 2,
+            "event_id": "forged-after-terminal",
+            "event_type": "elapsed_checkpoint",
+            "implementation_mode": "candidate",
+            "invariant_digests": [],
+            "finding_severities": [],
+            "independent_review_receipt_digest": "",
+            "repair_classification": {},
+            "repair_evidence_digest": "",
+            "candidate_lifecycle_digest": "",
+            "elapsed_seconds": 1.0,
+            "monotonic_ns": int(value["last_monotonic_ns"]) + 1,
+            "previous_event_digest": value["event_chain_digest"],
+        }
+        event["event_digest"] = digest(json.dumps(event, sort_keys=True, separators=(",", ":")))
+        value["events"].append(event)  # type: ignore[union-attr]
+        value["last_monotonic_ns"] = event["monotonic_ns"]
+        value["event_chain_digest"] = event["event_digest"]
+        self.state.write_text(json.dumps(value), encoding="utf-8")
+        denied = self.run_cli("check", str(self.state), "--run-id", "run-1")
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("continues after a terminal execution state", denied.stderr)
+
+    def test_recomputed_repair_evidence_digest_tamper_is_rejected(self) -> None:
+        invariant = digest("one invariant")
+        receipt = digest("repair-review")
+        evidence = self.write_repair_evidence("repair-digest", receipt, invariant)
+        accepted = self.record(
+            "repair-digest", "repair_classification",
+            "--invariant-digest", invariant,
+            "--independent-review-receipt-digest", receipt,
+            "--repair-evidence-file", str(evidence),
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        value = self.payload()
+        event = value["events"][0]  # type: ignore[index]
+        event["repair_evidence_digest"] = digest("different evidence")
+        unsigned = {key: event[key] for key in event if key != "event_digest"}
+        event["event_digest"] = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")))
+        value["event_chain_digest"] = event["event_digest"]
+        self.state.write_text(json.dumps(value), encoding="utf-8")
+        denied = self.run_cli("check", str(self.state), "--run-id", "run-1")
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("does not match embedded classification", denied.stderr)
+
+    def test_plan119_scenario_and_fresh_run_holdout_keep_distinct_outcomes(self) -> None:
+        scenarios = json.loads(SCENARIOS.read_text(encoding="utf-8"))["scenarios"]
+        plan119 = next(
+            scenario for scenario in scenarios
+            if scenario["id"] == "median-plan119-independent-validation-authorization-repair"
+        )
+        self.assertEqual(plan119["input"]["affected_invariant_count"], 1)
+        self.assertIs(plan119["input"]["bounded_write_and_validation_scope"], True)
+        self.assertIs(plan119["input"]["source_acceptance_changed"], False)
+        self.assertIs(plan119["input"]["safety_boundary_changed"], False)
+        self.assertIs(plan119["input"]["external_authority_changed"], False)
+        self.assertEqual(plan119["expected"]["state"], "repair_required")
+        self.assertEqual(plan119["expected"]["next_action"], "defer_source_and_create_bounded_repair_plan")
+
+        holdouts = json.loads(HOLDOUT.read_text(encoding="utf-8"))["scenarios"]
+        fresh_run = next(
+            scenario for scenario in holdouts
+            if scenario["id"] == "holdout-independent-repair-rejects-stopped-run-reuse"
+        )
+        self.assertIs(fresh_run["used_for_tuning"], False)
+        self.assertEqual(fresh_run["input"]["execution_run"], "stopped_repair_required_run")
+        self.assertEqual(fresh_run["expected"]["state"], "repair_required")
+        self.assertEqual(
+            fresh_run["expected"]["next_action"],
+            "reject_transition_and_initialize_fresh_run",
+        )
 
     def test_elapsed_checkpoint_is_telemetry_only_and_tampering_fails(self) -> None:
         self.assertEqual(self.record("elapsed-1", "elapsed_checkpoint", "--elapsed-seconds", "999999").returncode, 0)

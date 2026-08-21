@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_BYTES = 65_536
 MAX_EVENTS = 64
 MAX_CORRECTIONS = 2
@@ -35,6 +35,7 @@ REASON_CODES = {
     "candidate_correction_budget_exhausted",
     "parent_remediation_budget_exhausted",
 }
+REPAIR_REASON_CODES = {"independent_repair_required"}
 MODES = {"candidate", "parent_direct"}
 EVENT_TYPES = {
     "candidate_generation",
@@ -46,6 +47,7 @@ EVENT_TYPES = {
     "spec_drift",
     "security_boundary_drift",
     "post_authoritative_design_change",
+    "repair_classification",
     "elapsed_checkpoint",
 }
 EXACT_KEYS = {
@@ -53,12 +55,24 @@ EXACT_KEYS = {
     "primary_invariant_digest", "candidate_lifecycle_identity_digest", "state",
     "implementation_mode", "candidate_generations", "correction_rounds",
     "parent_direct_remediation_rounds", "focused_validation_events",
-    "authoritative_validation_events", "replan_reason_codes", "last_monotonic_ns", "event_chain_digest", "events",
+    "authoritative_validation_events", "repair_reason_codes", "replan_reason_codes",
+    "last_monotonic_ns", "event_chain_digest", "events",
 }
 EVENT_KEYS = {
     "sequence", "event_id", "event_type", "implementation_mode", "invariant_digests",
-    "finding_severities", "independent_review_receipt_digest", "candidate_lifecycle_digest",
+    "finding_severities", "independent_review_receipt_digest", "repair_classification",
+    "repair_evidence_digest",
+    "candidate_lifecycle_digest",
     "elapsed_seconds", "monotonic_ns", "previous_event_digest", "event_digest",
+}
+REPAIR_CLASSIFICATION_KEYS = {
+    "schema_version", "plan_path", "plan_digest", "source_head", "primary_invariant_digest",
+    "affected_invariant_digests", "candidate_lifecycle_identity_digest", "candidate_lifecycle_digest",
+    "independent_review_receipt_digest", "bounded_write_scope", "bounded_validation_scope",
+    "source_scope_unchanged", "validation_authority_unchanged",
+    "invariant_boundaries_unchanged", "source_acceptance_unchanged",
+    "safety_conditions_unchanged", "external_effect_authority_unchanged",
+    "independent_invariant_count",
 }
 EMPTY_CHAIN_DIGEST = digest(b"") if "digest" in globals() else "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -144,6 +158,94 @@ def open_read(path: Path) -> tuple[int, bytes]:
         os.close(descriptor)
 
 
+def read_external_artifact(path: Path, label: str) -> bytes:
+    require_outside_repository(path, label)
+    reject_symlink_ancestors(path, include_target=True)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise StateError(f"{label} must be a regular file")
+        data = os.read(descriptor, MAX_BYTES + 1)
+        if len(data) > MAX_BYTES:
+            raise StateError(f"{label} exceeds size limit")
+        return data
+    finally:
+        os.close(descriptor)
+
+
+def classify_repair(value: dict[str, Any]) -> str:
+    if not value["source_scope_unchanged"] or not value["bounded_write_scope"]:
+        return "scope_drift"
+    if (
+        not value["validation_authority_unchanged"]
+        or not value["source_acceptance_unchanged"]
+        or not value["bounded_validation_scope"]
+    ):
+        return "spec_drift"
+    if not value["safety_conditions_unchanged"] or not value["external_effect_authority_unchanged"]:
+        return "security_boundary_drift"
+    if not value["invariant_boundaries_unchanged"] or value["independent_invariant_count"] != 1:
+        return "multiple_independent_invariants"
+    return "independent_repair_required"
+
+
+def validate_repair_classification(
+    value: Any,
+    state: dict[str, Any],
+    invariants: list[str],
+    receipt: str,
+    lifecycle_digest: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != REPAIR_CLASSIFICATION_KEYS:
+        raise StateError("repair classification evidence has an invalid exact schema")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise StateError("repair classification evidence has an invalid schema version")
+    if type(value["independent_invariant_count"]) is not int or value["independent_invariant_count"] < 1:
+        raise StateError("repair classification evidence has an invalid invariant count")
+    boolean_keys = {
+        "bounded_write_scope", "bounded_validation_scope", "source_acceptance_unchanged",
+        "source_scope_unchanged", "validation_authority_unchanged",
+        "invariant_boundaries_unchanged", "safety_conditions_unchanged",
+        "external_effect_authority_unchanged",
+    }
+    if any(type(value[key]) is not bool for key in boolean_keys):
+        raise StateError("repair classification evidence has a non-boolean condition")
+    expected_identity = {
+        "plan_path": state["plan_path"],
+        "plan_digest": state["plan_digest"],
+        "source_head": state["source_head"],
+        "primary_invariant_digest": state["primary_invariant_digest"],
+        "affected_invariant_digests": invariants,
+        "candidate_lifecycle_identity_digest": state["candidate_lifecycle_identity_digest"],
+        "candidate_lifecycle_digest": lifecycle_digest,
+        "independent_review_receipt_digest": receipt,
+    }
+    if any(value[key] != expected for key, expected in expected_identity.items()):
+        raise StateError("repair classification evidence does not match the execution baseline")
+    if value["independent_invariant_count"] != len(invariants):
+        raise StateError("repair classification invariant count does not match affected invariants")
+    return value
+
+
+def load_repair_classification(
+    path: Path,
+    state: dict[str, Any],
+    invariants: list[str],
+    receipt: str,
+    lifecycle_digest: str,
+) -> tuple[dict[str, Any], str]:
+    data = read_external_artifact(path, "repair classification evidence")
+    try:
+        value = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError("repair classification evidence is invalid JSON") from exc
+    classification = validate_repair_classification(value, state, invariants, receipt, lifecycle_digest)
+    canonical = (json.dumps(classification, sort_keys=True, indent=2) + "\n").encode()
+    if data != canonical:
+        raise StateError("repair classification evidence is not canonical JSON")
+    return classification, digest(data)
+
+
 def validate_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != EXACT_KEYS:
         raise StateError("execution state has an invalid exact schema")
@@ -158,7 +260,7 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("invalid source_head")
     require_digest(value["primary_invariant_digest"], "primary_invariant_digest")
     require_digest(value["candidate_lifecycle_identity_digest"], "candidate_lifecycle_identity_digest")
-    if value["state"] not in {"active", "replan_required"}:
+    if value["state"] not in {"active", "repair_required", "replan_required"}:
         raise StateError("invalid state")
     if value["implementation_mode"] not in MODES:
         raise StateError("invalid implementation_mode")
@@ -177,13 +279,29 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("invalid replan_reason_codes")
     if value["state"] == "replan_required" and not reasons:
         raise StateError("replan_required state needs a reason")
+    repair_reasons = value["repair_reason_codes"]
+    if not isinstance(repair_reasons, list) or len(repair_reasons) != len(set(repair_reasons)) or any(
+        not isinstance(reason, str) or reason not in REPAIR_REASON_CODES for reason in repair_reasons
+    ):
+        raise StateError("invalid repair_reason_codes")
+    if value["state"] == "repair_required" and not repair_reasons:
+        raise StateError("repair_required state needs a reason")
+    if value["state"] == "active" and (reasons or repair_reasons):
+        raise StateError("active state cannot have stop reasons")
+    if reasons and repair_reasons:
+        raise StateError("repair and replan reasons cannot be combined")
     events = value["events"]
     if not isinstance(events, list) or len(events) > MAX_EVENTS:
         raise StateError("invalid event list")
     seen_ids: set[str] = set()
+    seen_review_receipts: set[str] = set()
+    validated_events: list[dict[str, Any]] = []
+    terminal_event_seen = False
     previous_ns = 0
     previous_digest = EMPTY_CHAIN_DIGEST
     for index, event in enumerate(events, start=1):
+        if terminal_event_seen:
+            raise StateError("event history continues after a terminal execution state")
         if not isinstance(event, dict) or set(event) != EVENT_KEYS:
             raise StateError("event has an invalid exact schema")
         if event["sequence"] != index or isinstance(event["sequence"], bool):
@@ -210,7 +328,42 @@ def validate_state(value: Any) -> dict[str, Any]:
             "independent_review_receipt_digest",
             allow_empty=True,
         )
+        receipt_digest = event["independent_review_receipt_digest"]
+        receipt_required = event["event_type"] == "repair_classification" or (
+            event["event_type"] == "parent_review" and event["implementation_mode"] == "parent_direct"
+        )
+        if receipt_required:
+            if not receipt_digest:
+                raise StateError("event is missing an independent review receipt")
+            if receipt_digest in seen_review_receipts:
+                raise StateError("independent review receipt replay is not allowed")
+            seen_review_receipts.add(receipt_digest)
+        require_digest(event["repair_evidence_digest"], "repair_evidence_digest", allow_empty=True)
+        classification = event["repair_classification"]
+        if not isinstance(classification, dict):
+            raise StateError("invalid repair classification")
         require_digest(event["candidate_lifecycle_digest"], "candidate_lifecycle_digest", allow_empty=True)
+        if event["event_type"] == "repair_classification":
+            if not invariants:
+                raise StateError("repair classification event must affect at least one invariant")
+            if not event["independent_review_receipt_digest"] or not event["repair_evidence_digest"]:
+                raise StateError("repair classification event is missing evidence")
+            if not event["candidate_lifecycle_digest"]:
+                raise StateError("repair classification event is missing candidate lifecycle evidence")
+            if severities:
+                raise StateError("repair classification event cannot contain unresolved findings")
+            validate_repair_classification(
+                classification,
+                value,
+                invariants,
+                event["independent_review_receipt_digest"],
+                event["candidate_lifecycle_digest"],
+            )
+            canonical_classification = (json.dumps(classification, sort_keys=True, indent=2) + "\n").encode()
+            if event["repair_evidence_digest"] != digest(canonical_classification):
+                raise StateError("repair evidence digest does not match embedded classification")
+        elif event["repair_evidence_digest"] or classification:
+            raise StateError("non-repair event contains repair classification evidence")
         elapsed = event["elapsed_seconds"]
         if isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)) or not math.isfinite(elapsed) or elapsed < 0:
             raise StateError("elapsed_seconds must be finite and nonnegative")
@@ -226,6 +379,8 @@ def validate_state(value: Any) -> dict[str, Any]:
         if event["event_digest"] != expected_event_digest:
             raise StateError("event hash-chain digest mismatch")
         previous_digest = event["event_digest"]
+        validated_events.append(event)
+        terminal_event_seen = derive_summary(validated_events)["state"] != "active"
     if events and value["last_monotonic_ns"] != events[-1]["monotonic_ns"]:
         raise StateError("last_monotonic_ns mismatch")
     if value["event_chain_digest"] != previous_digest:
@@ -244,6 +399,7 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     focused_events = 0
     authoritative_events = 0
     reasons: list[str] = []
+    repair_reasons: list[str] = []
 
     def add_reason(reason: str) -> None:
         if reason not in reasons:
@@ -275,13 +431,21 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             "scope_drift", "spec_drift", "security_boundary_drift", "post_authoritative_design_change"
         }:
             add_reason(event_type)
+        elif event_type == "repair_classification":
+            classification_result = classify_repair(event["repair_classification"])
+            if classification_result == "independent_repair_required":
+                repair_reasons.append(classification_result)
+            else:
+                add_reason(classification_result)
+    state = "replan_required" if reasons else "repair_required" if repair_reasons else "active"
     return {
-        "state": "replan_required" if reasons else "active",
+        "state": state,
         "candidate_generations": candidate_generations,
         "correction_rounds": correction_rounds,
         "parent_direct_remediation_rounds": parent_rounds,
         "focused_validation_events": focused_events,
         "authoritative_validation_events": authoritative_events,
+        "repair_reason_codes": repair_reasons,
         "replan_reason_codes": reasons,
     }
 
@@ -344,7 +508,7 @@ def init_state(args: argparse.Namespace) -> None:
     if actual_head != args.source_head:
         raise StateError("source HEAD mismatch")
     state = {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "run_id": args.run_id,
         "plan_path": args.plan,
         "plan_digest": args.plan_digest,
@@ -358,6 +522,7 @@ def init_state(args: argparse.Namespace) -> None:
         "parent_direct_remediation_rounds": 0,
         "focused_validation_events": 0,
         "authoritative_validation_events": 0,
+        "repair_reason_codes": [],
         "replan_reason_codes": [],
         "last_monotonic_ns": 0,
         "event_chain_digest": EMPTY_CHAIN_DIGEST,
@@ -377,6 +542,18 @@ def trigger(state: dict[str, Any], reason: str) -> None:
         state["replan_reason_codes"].append(reason)
 
 
+def require_independent_repair(state: dict[str, Any]) -> None:
+    state["state"] = "repair_required"
+    if "independent_repair_required" not in state["repair_reason_codes"]:
+        state["repair_reason_codes"].append("independent_repair_required")
+
+
+def stopped_message(state: dict[str, Any]) -> str:
+    if state["state"] == "replan_required":
+        return "plan execution is stopped for restructuring"
+    return "plan execution is stopped for an independent repair"
+
+
 def record_event(args: argparse.Namespace) -> None:
     path = Path(args.state)
     with with_lock(path) as lock:
@@ -385,7 +562,7 @@ def record_event(args: argparse.Namespace) -> None:
         if state["run_id"] != args.run_id:
             raise StateError("run_id mismatch")
         if state["state"] != "active":
-            raise StateError("plan execution is stopped for restructuring")
+            raise StateError(stopped_message(state))
         if any(event["event_id"] == args.event_id for event in state["events"]):
             raise StateError("event replay is not allowed")
         if len(state["events"]) >= MAX_EVENTS:
@@ -397,20 +574,38 @@ def record_event(args: argparse.Namespace) -> None:
             require_digest(invariant, "invariant_digest")
         severities = args.finding_severity or []
         receipt = args.independent_review_receipt_digest or ""
+        repair_classification: dict[str, Any] = {}
+        repair_evidence = ""
         lifecycle = args.candidate_lifecycle_digest or ""
         if args.implementation_mode == "parent_direct" and args.event_type == "parent_review":
             require_digest(receipt, "independent_review_receipt_digest")
             if any(event["independent_review_receipt_digest"] == receipt for event in state["events"]):
                 raise StateError("independent review receipt replay is not allowed")
+        if args.event_type == "repair_classification":
+            if not invariants:
+                raise StateError("repair classification requires at least one affected invariant")
+            require_digest(receipt, "independent_review_receipt_digest")
+            if not args.repair_evidence_file:
+                raise StateError("repair classification requires an evidence file")
+            if any(event["independent_review_receipt_digest"] == receipt for event in state["events"]):
+                raise StateError("independent review receipt replay is not allowed")
+            if severities:
+                raise StateError("repair classification cannot carry unresolved findings")
+        elif args.repair_evidence_file:
+            raise StateError("repair evidence is only valid for independent repair")
         if args.event_type in {
             "parent_review", "scope_drift", "spec_drift", "security_boundary_drift",
             "post_authoritative_design_change",
         } and not invariants:
             raise StateError("this event requires at least one affected invariant digest")
-        if args.event_type in {"candidate_generation", "correction_rejected", "focused_validation", "authoritative_validation"}:
+        if args.event_type in {"candidate_generation", "correction_rejected", "focused_validation", "authoritative_validation", "repair_classification"}:
             require_digest(lifecycle, "candidate_lifecycle_digest")
             if lifecycle != file_digest(Path(args.lifecycle_state)):
                 raise StateError("candidate lifecycle content digest mismatch")
+        if args.event_type == "repair_classification":
+            repair_classification, repair_evidence = load_repair_classification(
+                Path(args.repair_evidence_file), state, invariants, receipt, lifecycle,
+            )
         monotonic_ns = time.monotonic_ns()
         if monotonic_ns <= state["last_monotonic_ns"]:
             monotonic_ns = state["last_monotonic_ns"] + 1
@@ -422,6 +617,8 @@ def record_event(args: argparse.Namespace) -> None:
             "invariant_digests": invariants,
             "finding_severities": severities,
             "independent_review_receipt_digest": receipt,
+            "repair_classification": repair_classification,
+            "repair_evidence_digest": repair_evidence,
             "candidate_lifecycle_digest": lifecycle,
             "elapsed_seconds": args.elapsed_seconds,
             "monotonic_ns": monotonic_ns,
@@ -462,6 +659,12 @@ def record_event(args: argparse.Namespace) -> None:
             if args.event_type == "post_authoritative_design_change" and not state["authoritative_validation_events"]:
                 raise StateError("post-authoritative design change requires an authoritative event")
             trigger(state, args.event_type)
+        elif args.event_type == "repair_classification":
+            classification_result = classify_repair(repair_classification)
+            if classification_result == "independent_repair_required":
+                require_independent_repair(state)
+            else:
+                trigger(state, classification_result)
         validate_state(state)
         atomic_write(path, state)
 
@@ -471,7 +674,7 @@ def check_gate(args: argparse.Namespace) -> None:
     if state["run_id"] != args.run_id:
         raise StateError("run_id mismatch")
     if state["state"] != "active":
-        raise StateError("plan execution is stopped for restructuring")
+        raise StateError(stopped_message(state))
     if args.plan and state["plan_path"] != args.plan:
         raise StateError("plan path mismatch")
     if args.lifecycle_state and state["candidate_lifecycle_identity_digest"] != lifecycle_identity_digest(
@@ -508,6 +711,7 @@ def parser() -> argparse.ArgumentParser:
     record.add_argument("--invariant-digest", action="append")
     record.add_argument("--finding-severity", action="append", choices=("High", "Medium", "Low"))
     record.add_argument("--independent-review-receipt-digest")
+    record.add_argument("--repair-evidence-file")
     record.add_argument("--candidate-lifecycle-digest")
     record.add_argument("--lifecycle-state", required=True)
     record.add_argument("--elapsed-seconds", type=float, default=0.0)

@@ -1,6 +1,6 @@
 # Bind repair classification to unchanged plan boundaries
 
-status: in_progress
+status: checked
 primary_invariant: classify one observed defect as independently repairable only when canonical evidence proves every source-plan and execution boundary remains unchanged
 task_types:
   - planning_docs
@@ -70,12 +70,15 @@ checked_summary_ja: 修復分類を元planのscope、検証権限、不変条件
 
 ## Tasks
 
-- [ ] Add failing tests for each missing unchanged predicate and its atomic hard-stop reason.
-- [ ] Complete the exact evidence schema and root/template byte-identical ledger implementation.
-- [ ] Obtain zero unresolved High or Medium independent-review findings and run the focused validation once.
-- [ ] Archive and commit this slice before Plan 122 begins.
+- [x] Add failing tests for each missing unchanged predicate and its atomic hard-stop reason.
+- [x] Complete the exact evidence schema and root/template byte-identical ledger implementation.
+- [x] Obtain zero unresolved High or Medium independent-review findings and run the focused validation once.
+- [x] Archive and commit this slice before Plan 122 begins.
 
 ## Validation Notes
 
 - This successor preserves the mapped source acceptance text exactly.
 - The source plan stopped after two independently reviewed parent-direct remediation rounds still left one Medium classification gap.
+- Independent read-only review reported High 0 and Medium 0 after checking the canonical predicates, atomic transition, digest binding, and history replay boundary.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` (19 tests), root/template script byte comparison, and `git diff --check` for the Plan 121 write scope.
+- The parent-owned external execution ledger ended active after the accepted review and focused-validation events; no unresolved risks remain in this slice.
