@@ -111,3 +111,7 @@ id	path
 134	docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md
 135	docs/plan/checked/2026/08/16-31/135-enforce-plan-bound-worker-contract.md
 136	docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
+139	docs/plan/checked/2026/08/16-31/139-reject-blank-provider-context-bindings.md
+140	docs/plan/checked/2026/08/16-31/140-integrate-concrete-provider-context-bindings.md
+141	docs/plan/checked/2026/08/16-31/141-separate-synthetic-copier-version-tags.md
+138	docs/plan/checked/2026/08/16-31/138-integrate-provider-auth-call-context.md

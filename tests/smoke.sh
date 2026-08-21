@@ -87,6 +87,8 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
+    template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
     template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
     template/docs/agent/external-services.yaml.jinja
   do
@@ -134,6 +136,8 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
+    template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
     template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
     template/docs/agent/external-services.yaml.jinja
   git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
@@ -1254,6 +1258,7 @@ grep -q 'without candidate labels or controlled terms' "$tmp/typescript/.project
 grep -q 'show an unnamed referent and uncertainty stage before any candidate or controlled term' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'name: decision-audit' "$tmp/typescript/.project-agent-workflow/skills/decision-audit/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/linear-ops/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/graph-memory/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/plan-archive/SKILL.md"
@@ -1275,6 +1280,8 @@ grep -q 'verification-manifest.json' "$tmp/typescript/.project-agent-workflow/sk
 grep -q '"--no-hardlinks"' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
 grep -q '.project-agent-workflow/skills/write-for-reader/SKILL.md' "$tmp/typescript/.agents/skills/write-for-reader/SKILL.md"
 grep -q 'name: mcp-ops' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/SKILL.md"
+grep -q 'Bind provider authentication to each exact call' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml"
+grep -q 'provider, command execution boundary, and credential source' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
 grep -q 'name: linear-ops' "$tmp/typescript/.project-agent-workflow/skills/linear-ops/SKILL.md"
 grep -q 'name: graph-memory' "$tmp/typescript/.project-agent-workflow/skills/graph-memory/SKILL.md"
 grep -q 'name: plan-archive' "$tmp/typescript/.project-agent-workflow/skills/plan-archive/SKILL.md"
@@ -1302,6 +1309,7 @@ grep -q 'Union the `required` docs from every matching route' "$tmp/typescript/.
 grep -q 'Union their `required` docs, add matching `conditional` docs' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_FLOW.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/README.md"
 grep -q 'docs/agent/external-services.yaml' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/SKILL.md"
+grep -q 'provider-call execution context' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'external_services.linear_sync' "$tmp/typescript/.project-agent-workflow/skills/linear-ops/SKILL.md"
 grep -q 'external_services.graph_memory' "$tmp/typescript/.project-agent-workflow/skills/graph-memory/SKILL.md"
 if grep -R 'supportcard-status' "$tmp/typescript/.project-agent-workflow/skills" >/dev/null; then

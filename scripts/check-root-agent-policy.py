@@ -22,6 +22,23 @@ MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[
 APPROACH_MARKERS = {"A", "B", "C"}
 RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
 MATRIX_WINDOW_LINES = 20
+MCP_SCENARIO_IDS = {
+    "same-context-success",
+    "sandbox-credential-failure-host-success",
+    "authenticated-provider-permission-denial",
+    "provider-change-after-preflight",
+    "command-boundary-change-after-preflight",
+    "account-change-after-preflight",
+    "credential-source-change-after-preflight",
+    "saved-prefix-without-task-authorization",
+    "host-preflight-without-project-authorization",
+    "identity-read-with-authenticated-premise",
+    "identity-read-prerequisite-write-reuse",
+    "identity-read-exact-source-mismatch",
+    "unavailable-fallback",
+    "duplicate-write-prevention",
+    "credential-persistence-attempt",
+}
 
 REQUIRED_ROOT_FILES = [
     ".codex/config.toml",
@@ -49,6 +66,7 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/linear-ops/agents/openai.yaml",
     ".codex/skills/mcp-ops/SKILL.md",
     ".codex/skills/mcp-ops/agents/openai.yaml",
+    ".codex/skills/mcp-ops/references/provider-call-execution-context.md",
     ".codex/skills/plan-archive/SKILL.md",
     ".codex/skills/plan-archive/agents/openai.yaml",
     ".codex/skills/sequential-plan-orchestrator/SKILL.md",
@@ -89,6 +107,7 @@ REQUIRED_ROOT_FILES = [
     "tests/test-plan-execution-state.py",
     "tests/test-agent-model-profiles.py",
     "tests/fixtures/write-for-reader/scenarios.json",
+    "tests/fixtures/mcp-ops/scenarios.json",
 ]
 
 REUSABLE_SKILLS = (
@@ -304,7 +323,10 @@ def check_sandboxed_worker_fallback() -> None:
 
 def check_reusable_skill_parity() -> None:
     for skill in REUSABLE_SKILLS:
-        for relative in ("SKILL.md", "agents/openai.yaml"):
+        relative_files = ["SKILL.md", "agents/openai.yaml"]
+        if skill == "mcp-ops":
+            relative_files.append("references/provider-call-execution-context.md")
+        for relative in relative_files:
             root_path = ROOT / ".codex" / "skills" / skill / relative
             template_path = ROOT / "template" / ".project-agent-workflow" / "skills" / skill / relative
             if not root_path.is_file() or not template_path.is_file():
@@ -316,6 +338,394 @@ def check_reusable_skill_parity() -> None:
             )
             if root_path.read_text(encoding="utf-8") != template_text:
                 fail(f"root/template reusable skill drift: {skill}/{relative}")
+
+
+def _mcp_exact_mapping(value: object, keys: set[str], label: str) -> dict:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError(f"{label} must contain exactly: {', '.join(sorted(keys))}")
+    return value
+
+
+def _mcp_nonblank(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _mcp_identity_project_authorized(value: object) -> tuple[bool, dict]:
+    authorization = _mcp_exact_mapping(
+        value,
+        {
+            "provider", "access", "operation", "target", "payload", "effects",
+            "current_task_requires", "authenticated_result_required", "prerequisite_scope",
+        },
+        "identity_read_project_authorization",
+    )
+    authorized = (
+        _mcp_nonblank(authorization["provider"])
+        and authorization["access"] == "read"
+        and authorization["operation"] == "identity.read"
+        and _mcp_nonblank(authorization["target"])
+        and _mcp_nonblank(authorization["payload"])
+        and authorization["effects"] == ["ordinary"]
+        and authorization["current_task_requires"] is True
+        and authorization["authenticated_result_required"] is False
+        and authorization["prerequisite_scope"] == "identity-read-only"
+    )
+    return authorized, authorization
+
+
+def _mcp_host_execution_approved(value: object) -> bool:
+    approval = _mcp_exact_mapping(
+        value,
+        {"required", "approved", "authorizes_provider_effects"},
+        "identity_read_host_execution_approval",
+    )
+    return (
+        approval["authorizes_provider_effects"] is False
+        and (approval["required"] is False or approval["approved"] is True)
+    )
+
+
+def _evaluate_mcp_identity_read(conditions: dict) -> str:
+    host_variant = "sandbox_local_credential_source" in conditions
+    expected_keys = {
+        "identity_read_project_authorization",
+        "identity_read_host_execution_approval",
+        "identity_read_result",
+        "intended_call_authorization_request",
+    }
+    if host_variant:
+        expected_keys.update({
+            "sandbox_local_credential_source", "user_reports_login_elsewhere",
+            "host_credential_source",
+        })
+    else:
+        expected_keys.add("local_credential_source")
+    _mcp_exact_mapping(conditions, expected_keys, "identity-read scenario conditions")
+
+    project_authorized, authorization = _mcp_identity_project_authorized(
+        conditions["identity_read_project_authorization"]
+    )
+    if not project_authorized or not _mcp_host_execution_approved(
+        conditions["identity_read_host_execution_approval"]
+    ):
+        return "deny_provider_preflight"
+
+    source_keys = {"exact_binding", "class", "available", "credential_material_read"}
+    if host_variant:
+        sandbox_source = _mcp_exact_mapping(
+            conditions["sandbox_local_credential_source"], source_keys, "sandbox credential source"
+        )
+        if (
+            sandbox_source["available"] is not False
+            or sandbox_source["credential_material_read"] is not False
+            or conditions["user_reports_login_elsewhere"] is not True
+        ):
+            return "fail_closed_report_credential_unavailable"
+        selected_source = _mcp_exact_mapping(
+            conditions["host_credential_source"], source_keys, "host credential source"
+        )
+    else:
+        selected_source = _mcp_exact_mapping(
+            conditions["local_credential_source"], source_keys, "local credential source"
+        )
+    if selected_source["credential_material_read"] is not False:
+        return "deny_credential_persistence"
+    if selected_source["available"] is not True:
+        return "fail_closed_report_credential_unavailable"
+    if not _mcp_nonblank(selected_source["exact_binding"]) or not _mcp_nonblank(selected_source["class"]):
+        return "fail_closed_report_context_binding_missing"
+
+    result = _mcp_exact_mapping(
+        conditions["identity_read_result"],
+        {"provider_authenticated", "account", "evidence_context"},
+        "identity_read_result",
+    )
+    if result["provider_authenticated"] is not True:
+        return "fail_closed_report_authentication_inconclusive"
+    if not _mcp_nonblank(result["account"]):
+        return "fail_closed_report_context_binding_missing"
+    evidence = _mcp_exact_mapping(
+        result["evidence_context"],
+        {"provider", "command_boundary", "exact_credential_source", "credential_source_class"},
+        "identity read evidence context",
+    )
+    intended = _mcp_exact_mapping(
+        conditions["intended_call_authorization_request"],
+        {
+            "provider", "operation", "target", "payload", "effects", "current_task_requires",
+            "command_boundary", "exact_credential_source",
+        },
+        "intended_call_authorization_request",
+    )
+    concrete_bindings = (
+        evidence["provider"],
+        evidence["command_boundary"],
+        evidence["exact_credential_source"],
+        evidence["credential_source_class"],
+        intended["provider"],
+        intended["command_boundary"],
+        intended["exact_credential_source"],
+    )
+    if any(not _mcp_nonblank(value) for value in concrete_bindings):
+        return "fail_closed_report_context_binding_missing"
+    context_matches = (
+        evidence["provider"] == authorization["provider"] == intended["provider"]
+        and evidence["command_boundary"] == intended["command_boundary"]
+        and evidence["exact_credential_source"]
+        == selected_source["exact_binding"]
+        == intended["exact_credential_source"]
+        and evidence["credential_source_class"] == selected_source["class"]
+    )
+    if not context_matches:
+        return "repeat_preflight_and_fresh_authorization"
+    if (
+        not _mcp_nonblank(intended["operation"])
+        or not _mcp_nonblank(intended["target"])
+        or not _mcp_nonblank(intended["payload"])
+        or intended["effects"] != ["ordinary"]
+        or intended["current_task_requires"] is not True
+    ):
+        return "deny_intended_call"
+    return "run_fresh_authorization_then_call"
+
+
+def evaluate_mcp_scenario(scenario: object) -> str:
+    item = _mcp_exact_mapping(
+        scenario,
+        {"id", "class", "used_for_tuning", "conditions", "expected"},
+        "mcp scenario",
+    )
+    scenario_id = item["id"]
+    conditions = item["conditions"]
+    if not isinstance(conditions, dict):
+        raise ValueError("mcp scenario conditions must be a mapping")
+    if scenario_id in {
+        "same-context-success",
+        "sandbox-credential-failure-host-success",
+        "identity-read-exact-source-mismatch",
+    }:
+        return _evaluate_mcp_identity_read(conditions)
+    if scenario_id in {
+        "host-preflight-without-project-authorization",
+        "identity-read-with-authenticated-premise",
+        "identity-read-prerequisite-write-reuse",
+    }:
+        _mcp_exact_mapping(
+            conditions,
+            {"identity_read_project_authorization", "identity_read_host_execution_approval"},
+            f"{scenario_id} conditions",
+        )
+        authorized, _ = _mcp_identity_project_authorized(
+            conditions["identity_read_project_authorization"]
+        )
+        host_approved = _mcp_host_execution_approved(
+            conditions["identity_read_host_execution_approval"]
+        )
+        return "run_provider_identity_read" if authorized and host_approved else "deny_provider_preflight"
+    if scenario_id == "authenticated-provider-permission-denial":
+        _mcp_exact_mapping(
+            conditions,
+            {"credential_available", "provider_authenticated", "provider_permission", "fallback_evidence_available"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "report_provider_permission_denial"
+            if conditions["credential_available"] is True
+            and conditions["provider_authenticated"] is True
+            and conditions["provider_permission"] == "denied"
+            else "classify_authentication_failure"
+        )
+    if scenario_id == "provider-change-after-preflight":
+        _mcp_exact_mapping(
+            conditions,
+            {"preflight_provider", "call_provider", "account_changed", "exact_credential_source_changed", "command_boundary_changed"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "repeat_preflight_and_fresh_authorization"
+            if conditions.get("preflight_provider") != conditions.get("call_provider")
+            else "continue_context_check"
+        )
+    if scenario_id == "command-boundary-change-after-preflight":
+        _mcp_exact_mapping(
+            conditions,
+            {"provider_changed", "account_changed", "exact_credential_source_changed", "preflight_command_boundary", "call_command_boundary"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "repeat_preflight_and_fresh_authorization"
+            if conditions.get("preflight_command_boundary") != conditions.get("call_command_boundary")
+            else "continue_context_check"
+        )
+    if scenario_id == "account-change-after-preflight":
+        _mcp_exact_mapping(
+            conditions,
+            {"provider_changed", "preflight_account", "call_account", "exact_credential_source_changed", "command_boundary_changed"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "repeat_preflight_and_fresh_authorization"
+            if conditions.get("preflight_account") != conditions.get("call_account")
+            else "continue_context_check"
+        )
+    if scenario_id == "credential-source-change-after-preflight":
+        _mcp_exact_mapping(
+            conditions,
+            {"provider_changed", "account_changed", "preflight_exact_credential_source", "call_exact_credential_source", "credential_source_class", "command_boundary_changed"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "repeat_preflight_and_fresh_authorization"
+            if conditions.get("preflight_exact_credential_source")
+            != conditions.get("call_exact_credential_source")
+            else "continue_context_check"
+        )
+    if scenario_id == "saved-prefix-without-task-authorization":
+        _mcp_exact_mapping(
+            conditions,
+            {"host_execution_approved", "saved_command_prefix_approved", "task_authorized", "access"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "deny_external_write"
+            if conditions == {
+                "host_execution_approved": True,
+                "saved_command_prefix_approved": True,
+                "task_authorized": False,
+                "access": "write",
+            }
+            else "evaluate_exact_external_call"
+        )
+    if scenario_id == "unavailable-fallback":
+        _mcp_exact_mapping(
+            conditions,
+            {"provider_backend_configured", "configured_fallback_available"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "fail_closed_report_backend_unavailable"
+            if conditions.get("provider_backend_configured") is False
+            and conditions.get("configured_fallback_available") is False
+            else "use_configured_fallback"
+        )
+    if scenario_id == "duplicate-write-prevention":
+        _mcp_exact_mapping(
+            conditions,
+            {"prior_write_result", "exact_remote_state_read_supported", "intended_state_already_exists"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "skip_duplicate_write"
+            if conditions.get("prior_write_result") == "uncertain"
+            and conditions.get("exact_remote_state_read_supported") is True
+            and conditions.get("intended_state_already_exists") is True
+            else "do_not_retry_write"
+        )
+    if scenario_id == "credential-persistence-attempt":
+        _mcp_exact_mapping(
+            conditions,
+            {"diagnostic_contains_credential_material", "persist_to_fixture_or_log", "task_authorized"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "deny_credential_persistence"
+            if conditions.get("diagnostic_contains_credential_material") is True
+            or conditions.get("persist_to_fixture_or_log") is True
+            else "continue_sanitized_diagnostic"
+        )
+    raise ValueError(f"unknown mcp scenario: {scenario_id}")
+
+
+def validate_mcp_blank_binding_mutations(scenarios: list[object]) -> None:
+    median = next(
+        (item for item in scenarios if isinstance(item, dict) and item.get("id") == "same-context-success"),
+        None,
+    )
+    if median is None:
+        raise ValueError("same-context-success is required for blank-binding mutations")
+    paths = (
+        ("local_credential_source", "exact_binding"),
+        ("local_credential_source", "class"),
+        ("identity_read_result", "account"),
+        ("identity_read_result", "evidence_context", "provider"),
+        ("identity_read_result", "evidence_context", "command_boundary"),
+        ("identity_read_result", "evidence_context", "exact_credential_source"),
+        ("identity_read_result", "evidence_context", "credential_source_class"),
+        ("intended_call_authorization_request", "provider"),
+        ("intended_call_authorization_request", "command_boundary"),
+        ("intended_call_authorization_request", "exact_credential_source"),
+    )
+    for path in paths:
+        mutated = copy.deepcopy(median)
+        cursor = mutated["conditions"]
+        for part in path[:-1]:
+            cursor = cursor[part]
+        cursor[path[-1]] = ""
+        action = evaluate_mcp_scenario(mutated)
+        if action != "fail_closed_report_context_binding_missing":
+            raise ValueError(f"blank binding did not fail closed: {'.'.join(path)} -> {action}")
+
+
+def check_mcp_execution_context() -> None:
+    skill = read(".codex/skills/mcp-ops/SKILL.md")
+    reference = read(".codex/skills/mcp-ops/references/provider-call-execution-context.md")
+    specification = read("docs/agent/SPEC_EXTERNAL_SERVICES.md")
+    for marker in (
+        "references/provider-call-execution-context.md",
+        "Do not claim `runtime_configured`",
+        "exact provider, account, command boundary, and credential source",
+    ):
+        if marker not in skill:
+            fail(f"root mcp-ops Skill missing execution-context marker: {marker}")
+    for marker in (
+        "provider, command execution boundary, and credential source",
+        "This decision excludes host execution approval",
+        "cannot pass the normal `authorize` command",
+        "exact selected credential source",
+        "saved command-prefix approval",
+        "credential-source unavailability",
+        "provider-permission denial",
+        "provider unavailability",
+        "read the exact remote state",
+        "Never read, print, persist, fixture, log, or send token values",
+    ):
+        if marker not in reference:
+            fail(f"root mcp-ops execution-context reference missing marker: {marker}")
+    for marker in (
+        "provider-call execution context",
+        "would make that check circular",
+        "this approval grants no provider operation, target, payload, or effect",
+        "must not expose the exact credential-source binding",
+        "saved command-prefix approval is never external-write authorization",
+        "Distinguish a process that cannot obtain credentials",
+        "read the exact remote state before retrying",
+        "Schema version 2 and project-owned schema version 1 policies remain unchanged",
+    ):
+        if marker not in specification:
+            fail(f"root external-service specification missing execution-context marker: {marker}")
+
+    fixture = json.loads(read("tests/fixtures/mcp-ops/scenarios.json"))
+    requirements = fixture.get("requirements", [])
+    scenarios = fixture.get("scenarios", [])
+    if not requirements or any(item.get("critical") is not True for item in requirements):
+        fail("mcp-ops scenarios must keep every declared requirement critical")
+    try:
+        observed_ids = [item["id"] for item in scenarios]
+        if len(observed_ids) != len(set(observed_ids)) or set(observed_ids) != MCP_SCENARIO_IDS:
+            raise ValueError("mcp scenario identifiers differ from the accepted set")
+        for item in scenarios:
+            if evaluate_mcp_scenario(item) != item["expected"]:
+                raise ValueError(f"incorrect condition-to-action mapping: {item['id']}")
+        validate_mcp_blank_binding_mutations(scenarios)
+    except (KeyError, TypeError, ValueError) as exc:
+        fail(f"mcp-ops scenario evaluation failed: {exc}")
+    if {item.get("class") for item in scenarios} != {"median", "edge", "negative", "holdout"}:
+        fail("mcp-ops scenarios must cover median, edge, negative, and holdout classes")
+    holdouts = [item for item in scenarios if item.get("class") == "holdout"]
+    if len(holdouts) != 1 or holdouts[0].get("used_for_tuning") is not False:
+        fail("mcp-ops holdout scenario must remain outside tuning")
+    if any(item.get("used_for_tuning") is not True for item in scenarios if item.get("class") != "holdout"):
+        fail("mcp-ops non-holdout scenarios must remain tuned inputs")
 
 
 def check_browser_routing() -> None:
@@ -1848,6 +2258,7 @@ def main() -> int:
     check_agent_model_profiles()
     check_sandboxed_worker_fallback()
     check_reusable_skill_parity()
+    check_mcp_execution_context()
     check_browser_routing()
     check_external_service_policy()
     check_user_communication_contract()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import tempfile
 import re
@@ -1254,6 +1255,112 @@ def require_current_plan_manifest_reference(planning: str) -> None:
             fail(f"references/planning.md missing legacy archive note for: {field}")
 
 
+def require_mcp_execution_context_contract() -> None:
+    bridge = read("template/.agents/skills/mcp-ops/SKILL.md")
+    if bridge != """---
+name: mcp-ops
+description: Apply the project external-service gate before MCP operations.
+---
+
+# MCP Operations Bridge
+
+Read `.project-agent-workflow/skills/mcp-ops/SKILL.md` completely and follow it.
+""":
+        fail("mcp-ops discovery bridge trigger or routing changed")
+
+    skill = read("template/.project-agent-workflow/skills/mcp-ops/SKILL.md")
+    reference = read(
+        "template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
+    )
+    specification = read("template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja")
+    metadata = read("template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml")
+    require_markers(
+        "managed mcp-ops Skill",
+        "same-context authentication routing",
+        skill,
+        (
+            "references/provider-call-execution-context.md",
+            "Do not claim `runtime_configured`",
+            "exact provider, account, command boundary, and credential source",
+            ".project-agent-workflow/scripts/check-external-service-policy.py check",
+        ),
+    )
+    require_markers(
+        "mcp-ops execution-context reference",
+        "authentication, failure, and retry boundaries",
+        reference,
+        (
+            "provider, command execution boundary, and credential source",
+            "This decision excludes host execution approval",
+            "cannot pass the normal `authorize` command",
+            "exact selected credential source",
+            "saved command-prefix approval",
+            "credential-source unavailability",
+            "provider-permission denial",
+            "provider unavailability",
+            "read the exact remote state",
+            "Never read, print, persist, fixture, log, or send token values",
+        ),
+    )
+    require_markers(
+        "generated external-service specification",
+        "provider-call execution context",
+        specification,
+        (
+            "provider-call execution context",
+            "would be circular",
+            "this approval grants no provider operation, target, payload, or effect",
+            "must not expose the exact credential-source binding",
+            "saved command-prefix approval does not authorize an external write",
+            "process-local credential-source unavailability",
+            "read exact remote state before retrying",
+            "preserve an existing project-owned version 2 policy byte-for-byte",
+        ),
+    )
+    require_markers(
+        "mcp-ops UI metadata",
+        "same-context preflight",
+        metadata,
+        (
+            "Bind provider authentication to each exact call",
+            "without presuming authentication",
+        ),
+    )
+
+    fixture = json.loads(read("tests/fixtures/mcp-ops/scenarios.json"))
+    requirements = fixture.get("requirements", [])
+    scenarios = fixture.get("scenarios", [])
+    if not requirements or any(item.get("critical") is not True for item in requirements):
+        fail("mcp-ops scenarios must keep every declared requirement critical")
+    evaluator_spec = importlib.util.spec_from_file_location(
+        "mcp_root_policy_evaluator", ROOT / "scripts/check-root-agent-policy.py"
+    )
+    if evaluator_spec is None or evaluator_spec.loader is None:
+        fail("could not load the independent mcp scenario evaluator")
+    evaluator = importlib.util.module_from_spec(evaluator_spec)
+    evaluator_spec.loader.exec_module(evaluator)
+    try:
+        observed_ids = [item["id"] for item in scenarios]
+        if (
+            len(observed_ids) != len(set(observed_ids))
+            or set(observed_ids) != evaluator.MCP_SCENARIO_IDS
+        ):
+            raise ValueError("mcp scenario identifiers differ from the accepted set")
+        for item in scenarios:
+            if evaluator.evaluate_mcp_scenario(item) != item["expected"]:
+                raise ValueError(f"incorrect condition-to-action mapping: {item['id']}")
+        evaluator.validate_mcp_blank_binding_mutations(scenarios)
+    except (KeyError, TypeError, ValueError) as exc:
+        fail(f"mcp-ops scenario evaluation failed: {exc}")
+    if {item.get("class") for item in scenarios} != {"median", "edge", "negative", "holdout"}:
+        fail("mcp-ops scenarios must cover median, edge, negative, and holdout classes")
+    holdouts = [item for item in scenarios if item.get("class") == "holdout"]
+    if len(holdouts) != 1 or holdouts[0].get("used_for_tuning") is not False:
+        fail("mcp-ops holdout scenario must remain outside tuning")
+    if any(item.get("used_for_tuning") is not True for item in scenarios if item.get("class") != "holdout"):
+        fail("mcp-ops non-holdout scenarios must remain tuned inputs")
+
+
 def require_browser_automation_contract() -> None:
     index = read("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja")
     required_route = (
@@ -1458,6 +1565,7 @@ def main() -> int:
     require_ci_autofix_root_boundaries()
     require_generated_whitespace_range()
     require_namespaced_reference_paths()
+    require_mcp_execution_context_contract()
     require_browser_automation_contract()
     require_verify_copier_update_skill()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:

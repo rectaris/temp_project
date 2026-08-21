@@ -11,3 +11,5 @@ id	path	contract
 127	docs/plan/replanned/2026/08/16-31/127-repair-temporary-copier-cli-shim.md	docs/plan/replanned/contracts/127-repair-temporary-copier-cli-shim.json
 116	docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md	docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 113	docs/plan/replanned/2026/08/16-31/113-generate-plan-bound-worker-contract.md	docs/plan/replanned/contracts/113-generate-plan-bound-worker-contract.json
+111	docs/plan/replanned/2026/08/16-31/111-bind-provider-auth-to-call-context.md	docs/plan/replanned/contracts/111-bind-provider-auth-to-call-context.json
+137	docs/plan/replanned/2026/08/16-31/137-define-noncircular-provider-auth-preflight.md	docs/plan/replanned/contracts/137-define-noncircular-provider-auth-preflight.json

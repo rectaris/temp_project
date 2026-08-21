@@ -131,6 +131,8 @@ for candidate_path in \
   template/.project-agent-workflow/skills/graph-memory/SKILL.md \
   template/.project-agent-workflow/skills/linear-ops/SKILL.md \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+  template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
+  template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
   template/docs/agent/external-services.yaml.jinja
 do
   mkdir -p "$(dirname "$update_source/$candidate_path")"
@@ -172,12 +174,16 @@ fixture_git "$update_source" add \
   template/.project-agent-workflow/skills/graph-memory/SKILL.md \
   template/.project-agent-workflow/skills/linear-ops/SKILL.md \
   template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+  template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
+  template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
   template/docs/agent/external-services.yaml.jinja
 fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
   commit --allow-empty -qm "Make Copier updates fail closed"
 fixture_git "$update_source" tag v1.2.2
-target_ref=v1.2.2
+fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
+  commit --allow-empty -qm "Create v1.3.1 template identity"
 fixture_git "$update_source" tag v1.3.1
+target_ref=v1.3.1
 fixture_git "$update_source" -c user.email=ci@example.invalid -c user.name=CI \
   commit --allow-empty -qm "Create v1.4.2 migration boundary"
 fixture_git "$update_source" tag -f v1.4.2
@@ -216,11 +222,42 @@ fi
 fixture_git "$direct_push_update_out" diff --check
 
 broad_out="$tmp/task-scoped-default-policy"
-run_copier copy -q -f --trust --defaults --vcs-ref "$target_ref" \
+run_copier copy -q -f --trust --defaults --vcs-ref v1.3.0 \
   --data-file "$root/tests/fixtures/broad.answers.yml" "$update_source" "$broad_out" >/dev/null
 grep -q '^version: 2$' "$broad_out/docs/agent/external-services.yaml"
 grep -q '^access_profile: task_scoped_default_allow$' "$broad_out/docs/agent/external-services.yaml"
+fixture_git "$broad_out" init -b main >/dev/null
+fixture_git "$broad_out" config user.email "ci@example.invalid"
+fixture_git "$broad_out" config user.name "CI"
+printf '\n# project-owned version 2 policy marker\n' >>"$broad_out/docs/agent/external-services.yaml"
+printf 'project-owned version 2 marker\n' >"$broad_out/project-owned-v2.txt"
+fixture_git "$broad_out" add -A
+fixture_git "$broad_out" commit -m "Initial version 2 generated workflow" >/dev/null
+broad_policy_before="$tmp/task-scoped-default-policy-before.yaml"
+cp "$broad_out/docs/agent/external-services.yaml" "$broad_policy_before"
+run_copier update -q --trust --defaults --vcs-ref v1.3.1 "$broad_out" >/dev/null
+if ! cmp -s "$broad_policy_before" "$broad_out/docs/agent/external-services.yaml"; then
+  echo "Copier update changed project-owned version 2 external-service policy bytes" >&2
+  exit 1
+fi
 (cd "$broad_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
+test -f "$broad_out/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
+grep -q 'Bind provider authentication to each exact call' "$broad_out/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml"
+grep -q 'project-owned version 2 marker' "$broad_out/project-owned-v2.txt"
+if find "$broad_out" -name '*.rej' -print -quit | grep -q .; then
+  echo "version 2 Copier update produced rejection files" >&2
+  exit 1
+fi
+if grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' "$broad_out" --exclude-dir=.git >/dev/null; then
+  echo "version 2 Copier update produced inline conflict markers" >&2
+  exit 1
+fi
+broad_deletions=$(fixture_git "$broad_out" diff --diff-filter=D --name-only)
+if [ -n "$broad_deletions" ]; then
+  echo "version 2 Copier update produced unrelated tracked deletions: $broad_deletions" >&2
+  exit 1
+fi
+fixture_git "$broad_out" diff --check
 
 browser_legacy_out="$tmp/browser-run-legacy-policy"
 run_copier copy -q -f --trust --defaults --vcs-ref v1.2.1 \
@@ -282,6 +319,7 @@ fi
 (cd "$browser_legacy_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
 test -f "$browser_legacy_out/.agents/skills/browser-ops/SKILL.md"
 test -f "$browser_legacy_out/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
+test -f "$browser_legacy_out/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
 test -f "$browser_legacy_out/.agents/skills/verify-copier-update/SKILL.md"
 test -f "$browser_legacy_out/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
 test -x "$browser_legacy_out/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
@@ -1263,7 +1301,7 @@ fixture_git "$pre_v1_plan_out" diff --check
 v100_out=$(prepare_lane v100-repair v1.0.0 "$root/tests/fixtures/python.answers.yml")
 (cd "$v100_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
 validate_common_lane "$v100_out" 0 patch_only
-grep -q '^_commit: v1.2.2$' "$v100_out/.copier-answers.yml"
+grep -q '^_commit: v1.3.1$' "$v100_out/.copier-answers.yml"
 
 legacy_disabled_out=$(prepare_lane oldest-disabled "$oldest_ref" "$legacy_disabled_answers")
 (cd "$legacy_disabled_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
