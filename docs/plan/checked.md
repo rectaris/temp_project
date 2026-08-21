@@ -118,3 +118,4 @@ id	path
 142	docs/plan/checked/2026/08/16-31/142-define-local-git-retirement-policy.md
 147	docs/plan/checked/2026/08/16-31/147-complete-exact-root-retirement-scan.md
 148	docs/plan/checked/2026/08/16-31/148-certify-exact-root-retirement-scan.md
+149	docs/plan/checked/2026/08/16-31/149-complete-exact-ref-local-apply.md

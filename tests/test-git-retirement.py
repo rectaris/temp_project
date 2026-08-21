@@ -17,6 +17,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_CLI = ROOT / "scripts/retire-merged-worktrees.py"
 SCENARIOS = ROOT / "tests/fixtures/git-retirement/scenarios.json"
+HOLDOUT = ROOT / "tests/fixtures/git-retirement/holdout.json"
 
 
 def run(
@@ -145,6 +146,36 @@ def scan(
     return completed, manifest
 
 
+def apply_local(
+    repository: Path,
+    allowed_root: Path,
+    worktree: Path,
+    manifest: Path,
+    *,
+    confirm: bool = True,
+    command_environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    arguments = [
+        sys.executable,
+        str(repository / "scripts/retire-merged-worktrees.py"),
+        "apply-local",
+        "--allowed-root",
+        str(allowed_root),
+        "--manifest",
+        str(manifest),
+        "--worktree",
+        str(worktree),
+    ]
+    if confirm:
+        arguments.append("--confirm-local-effects")
+    return run(
+        *arguments,
+        cwd=repository,
+        check=False,
+        environment=command_environment,
+    )
+
+
 def load_manifest(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -194,6 +225,18 @@ class GitRetirementScanTests(unittest.TestCase):
             all(item["used_for_tuning"] is True for item in scenarios if item not in holdout)
         )
         self.assertIn("negative-age-or-name-only", {item["id"] for item in scenarios})
+
+    def test_untuned_apply_holdout_covers_effect_boundaries(self) -> None:
+        fixture = json.loads(HOLDOUT.read_text(encoding="utf-8"))
+        self.assertEqual(fixture["schema_version"], 1)
+        self.assertEqual(fixture["suite"], "local-git-retirement-apply-holdout")
+        self.assertFalse(fixture["used_for_tuning"])
+        self.assertEqual(
+            {item["class"] for item in fixture["scenarios"]},
+            {"accepted", "state-change", "path-boundary", "unsupported-operation", "idempotency"},
+        )
+        for scenario in fixture["scenarios"]:
+            self.assertTrue(hasattr(type(self), scenario["test"]), scenario["id"])
 
     def test_eligible_scan_is_deterministic_and_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -553,6 +596,393 @@ class GitRetirementScanTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn(".agent-artifacts/git-retirement", completed.stderr.decode())
             self.assertFalse(escaped.exists())
+
+    def test_apply_removes_exact_pair_and_repeated_apply_reports_absence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository, allowed_root, worktree = initialize_repository(Path(raw))
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            applied = apply_local(repository, allowed_root, worktree, manifest_path)
+            self.assertEqual(applied.returncode, 0, applied.stderr.decode())
+            self.assertIn("removed exact worktree and local branch", applied.stdout.decode())
+            self.assertFalse(worktree.exists())
+            self.assertNotEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+            repeated = apply_local(repository, allowed_root, worktree, manifest_path)
+            self.assertEqual(repeated.returncode, 0, repeated.stderr.decode())
+            self.assertIn("already absent exact worktree and branch pair", repeated.stdout.decode())
+
+    def test_apply_requires_current_confirmation_and_exact_manifest_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository, allowed_root, worktree = initialize_repository(Path(raw))
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            unconfirmed = apply_local(
+                repository, allowed_root, worktree, manifest_path, confirm=False
+            )
+            self.assertNotEqual(unconfirmed.returncode, 0)
+            self.assertIn("requires --confirm-local-effects", unconfirmed.stderr.decode())
+            manifest = load_manifest(manifest_path)
+            candidate_for(manifest, "refs/heads/feature")["branch_tip_oid"] = "0" * 40
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            tampered = apply_local(repository, allowed_root, worktree, manifest_path)
+            self.assertNotEqual(tampered.returncode, 0)
+            self.assertIn("digest does not match", tampered.stderr.decode())
+            self.assertTrue(worktree.is_dir())
+            self.assertEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+
+    def test_apply_rejects_changed_worktree_branch_and_target_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository, allowed_root, worktree = initialize_repository(Path(raw))
+            scanned, dirty_manifest = scan(repository, allowed_root, name="dirty-change.json")
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            (worktree / "untracked-after-scan.txt").write_text("dirty\n", encoding="utf-8")
+            dirty = apply_local(repository, allowed_root, worktree, dirty_manifest)
+            self.assertNotEqual(dirty.returncode, 0)
+            self.assertIn("changed since", dirty.stderr.decode())
+            (worktree / "untracked-after-scan.txt").unlink()
+
+            scanned, branch_manifest = scan(repository, allowed_root, name="branch-change.json")
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            (worktree / "feature-change.txt").write_text("change\n", encoding="utf-8")
+            git(worktree, "add", "feature-change.txt")
+            git(worktree, "commit", "-m", "change branch after scan")
+            branch_changed = apply_local(repository, allowed_root, worktree, branch_manifest)
+            self.assertNotEqual(branch_changed.returncode, 0)
+            self.assertIn("changed since", branch_changed.stderr.decode())
+
+        with tempfile.TemporaryDirectory() as raw:
+            repository, allowed_root, worktree = initialize_repository(Path(raw))
+            scanned, target_manifest = scan(repository, allowed_root, name="target-change.json")
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            git(repository, "commit", "--allow-empty", "-m", "change target after scan")
+            target_changed = apply_local(repository, allowed_root, worktree, target_manifest)
+            self.assertNotEqual(target_changed.returncode, 0)
+            self.assertIn("changed since", target_changed.stderr.decode())
+            self.assertTrue(worktree.is_dir())
+
+    def test_apply_rejects_symlink_target_and_unsupported_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            alias = base / "feature-alias"
+            alias.symlink_to(worktree, target_is_directory=True)
+            symlinked = apply_local(repository, allowed_root, alias, manifest_path)
+            self.assertNotEqual(symlinked.returncode, 0)
+            self.assertIn("symlink component", symlinked.stderr.decode())
+            for unsupported in ("delete-remote", "prune", "force-delete"):
+                completed = run(
+                    sys.executable,
+                    str(repository / "scripts/retire-merged-worktrees.py"),
+                    unsupported,
+                    cwd=repository,
+                    check=False,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+            forced = run(
+                sys.executable,
+                str(repository / "scripts/retire-merged-worktrees.py"),
+                "apply-local",
+                "--allowed-root",
+                str(allowed_root),
+                "--manifest",
+                str(manifest_path),
+                "--worktree",
+                str(worktree),
+                "--confirm-local-effects",
+                "--force",
+                cwd=repository,
+                check=False,
+            )
+            self.assertNotEqual(forced.returncode, 0)
+            self.assertTrue(worktree.is_dir())
+
+    def test_worktree_removal_failure_never_attempts_branch_deletion(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            log = base / "git-effects.log"
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$*\" >> {log}\n"
+                "case \" $* \" in *\" worktree remove \"*) exit 91;; esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            failed = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+            )
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("branch deletion was not attempted", failed.stderr.decode())
+            effects = log.read_text(encoding="utf-8")
+            self.assertNotIn(" branch -d ", f" {effects} ")
+            self.assertTrue(worktree.is_dir())
+            self.assertEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+
+    def test_state_change_between_effects_stops_branch_deletion(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                "case \" $* \" in\n"
+                "  *\" worktree remove \"*)\n"
+                f"    {real_git} \"$@\" || exit $?\n"
+                f"    {real_git} -C {repository} commit --allow-empty -m inter-effect-change >/dev/null || exit $?\n"
+                "    exit 0;;\n"
+                "esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            stopped = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+            )
+            self.assertNotEqual(stopped.returncode, 0)
+            self.assertIn("merge target changed", stopped.stderr.decode())
+            self.assertFalse(worktree.exists())
+            self.assertEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+
+    def test_git_trace_and_repository_hooks_cannot_escape_effect_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            trace = base / "git-trace.json"
+            scanned, manifest_path = scan(
+                repository,
+                allowed_root,
+                command_environment={"GIT_TRACE2_EVENT": str(trace)},
+            )
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            self.assertFalse(trace.exists())
+            hooks = base / "repository-hooks"
+            hooks.mkdir()
+            marker = base / "repository-hook-ran"
+            hook = hooks / "reference-transaction"
+            hook.write_text(
+                "#!/bin/sh\n"
+                f"printf hook > {marker}\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            hook.chmod(0o755)
+            git(repository, "config", "core.hooksPath", str(hooks))
+            applied = apply_local(repository, allowed_root, worktree, manifest_path)
+            self.assertEqual(applied.returncode, 0, applied.stderr.decode())
+            self.assertFalse(marker.exists())
+
+    def test_worktree_head_lock_rejects_branch_switch_race(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            marker = base / "switch-status"
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                "case \" $* \" in\n"
+                "  *\" worktree remove \"*)\n"
+                f"    {real_git} -C {worktree} switch -c changed-race >/dev/null 2>&1\n"
+                f"    printf '%s' \"$?\" > {marker}\n"
+                f"    exec {real_git} \"$@\";;\n"
+                "esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            applied = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+            )
+            self.assertEqual(applied.returncode, 0, applied.stderr.decode())
+            self.assertNotEqual(marker.read_text(encoding="utf-8"), "0")
+            self.assertFalse(worktree.exists())
+
+    def test_branch_ref_lock_rejects_worktree_removal_race(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            feature_oid = git(repository, "rev-parse", "refs/heads/feature").stdout.decode().strip()
+            feature_tree = git(repository, "rev-parse", f"{feature_oid}^{{tree}}").stdout.decode().strip()
+            replacement_oid = git(
+                repository,
+                "commit-tree",
+                feature_tree,
+                "-p",
+                feature_oid,
+                "-m",
+                "same-tree branch-ref race",
+            ).stdout.decode().strip()
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            marker = base / "update-ref-status"
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                "case \" $* \" in\n"
+                "  *\" worktree remove \"*)\n"
+                f"    {real_git} -C {repository} update-ref refs/heads/feature {replacement_oid} >/dev/null 2>&1\n"
+                f"    printf '%s' \"$?\" > {marker}\n"
+                f"    exec {real_git} \"$@\";;\n"
+                "esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            applied = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+            )
+            self.assertEqual(applied.returncode, 0, applied.stderr.decode())
+            self.assertNotEqual(marker.read_text(encoding="utf-8"), "0")
+            self.assertFalse(worktree.exists())
+            self.assertNotEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+
+    def test_reference_transaction_guard_rejects_branch_oid_race(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            replacement_oid = git(repository, "rev-parse", "refs/heads/dev").stdout.decode().strip()
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                "case \" $* \" in\n"
+                "  *\" branch -d \"*)\n"
+                f"    {real_git} -C {repository} update-ref refs/heads/feature {replacement_oid} || exit $?\n"
+                f"    exec {real_git} \"$@\";;\n"
+                "esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            stopped = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+            )
+            self.assertNotEqual(stopped.returncode, 0)
+            self.assertIn("branch deletion failed", stopped.stderr.decode())
+            self.assertFalse(worktree.exists())
+            self.assertEqual(
+                git(repository, "rev-parse", "refs/heads/feature").stdout.decode().strip(),
+                replacement_oid,
+            )
+
+    def test_existing_unresolvable_branch_is_not_reported_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository, allowed_root, worktree = initialize_repository(Path(raw))
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            git(repository, "worktree", "remove", str(worktree))
+            ref = repository / ".git/refs/heads/feature"
+            ref.write_text("f" * 40 + "\n", encoding="ascii")
+            stopped = apply_local(repository, allowed_root, worktree, manifest_path)
+            self.assertNotEqual(stopped.returncode, 0)
+            self.assertNotIn("already absent exact worktree", stopped.stdout.decode())
+            self.assertTrue(ref.is_file())
+
+    def test_manifest_schema_symlink_and_partial_absence_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repository, allowed_root, worktree = initialize_repository(Path(raw))
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            original = manifest_path.read_text(encoding="utf-8")
+            duplicate = original.replace(
+                '  "schema_version": 1\n}',
+                '  "schema_version": 1,\n  "schema_version": 1\n}',
+                1,
+            )
+            self.assertNotEqual(duplicate, original)
+            manifest_path.write_text(duplicate, encoding="utf-8")
+            duplicate_result = apply_local(repository, allowed_root, worktree, manifest_path)
+            self.assertNotEqual(duplicate_result.returncode, 0)
+            self.assertIn("duplicate JSON key", duplicate_result.stderr.decode())
+
+            value = json.loads(original)
+            value["unknown"] = "recomputed"
+            unsigned = dict(value)
+            unsigned.pop("content_digest")
+            payload = json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+            value["content_digest"] = f"sha256:{hashlib.sha256(payload).hexdigest()}"
+            manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            unknown = apply_local(repository, allowed_root, worktree, manifest_path)
+            self.assertNotEqual(unknown.returncode, 0)
+            self.assertIn("top-level schema", unknown.stderr.decode())
+
+            manifest_path.write_text(original, encoding="utf-8")
+            alias = manifest_path.with_name("manifest-alias.json")
+            alias.symlink_to(manifest_path)
+            symlinked = apply_local(repository, allowed_root, worktree, alias)
+            self.assertNotEqual(symlinked.returncode, 0)
+            self.assertIn("symlink component", symlinked.stderr.decode())
+            alias.unlink()
+
+            git(repository, "worktree", "remove", str(worktree))
+            partial = apply_local(repository, allowed_root, worktree, manifest_path)
+            self.assertNotEqual(partial.returncode, 0)
+            self.assertIn("partially absent", partial.stderr.decode())
 
 
 if __name__ == "__main__":
