@@ -383,6 +383,78 @@ def require_orchestration_policy_markers() -> None:
     worker_holdout_bytes = (ROOT / worker_holdout_path).read_bytes()
     if hashlib.sha256(worker_holdout_bytes).hexdigest() != "a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27":
         fail("worker-contract holdout bytes differ from the preimplementation seal")
+    evidence = json.loads(
+        (ROOT / "tests/fixtures/orchestration/worker-contract-evidence.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if set(evidence) != {
+        "schema_version", "suite", "implementation_commit", "tuned_fixture",
+        "holdout_fixture", "runner_sha256", "template_runner_sha256",
+        "observations", "source_acceptance",
+    }:
+        fail("worker-contract integration evidence has an invalid exact shape")
+    if (
+        evidence.get("schema_version") != 1
+        or evidence.get("suite") != "worker-execution-contract-integration"
+        or evidence.get("tuned_fixture") != {
+            "path": worker_scenarios_path,
+            "sha256": hashlib.sha256(worker_scenarios_bytes).hexdigest(),
+        }
+        or evidence.get("holdout_fixture") != {
+            "path": worker_holdout_path,
+            "sha256": hashlib.sha256(worker_holdout_bytes).hexdigest(),
+        }
+    ):
+        fail("worker-contract integration evidence fixture bindings differ")
+    current_runner_digest = hashlib.sha256(
+        (ROOT / "scripts/run-sandboxed-plan-worker.py").read_bytes()
+    ).hexdigest()
+    current_template_runner_digest = hashlib.sha256(
+        (ROOT / "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py").read_bytes()
+    ).hexdigest()
+    implementation_commit = evidence.get("implementation_commit")
+    if not isinstance(implementation_commit, str) or re.fullmatch(r"[0-9a-f]{40}", implementation_commit) is None:
+        fail("worker-contract integration evidence implementation commit is invalid")
+    committed_digests = []
+    for relative in (
+        "scripts/run-sandboxed-plan-worker.py",
+        "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
+    ):
+        result = subprocess.run(
+            ["git", "show", f"{implementation_commit}:{relative}"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            fail("worker-contract integration evidence implementation commit is unavailable")
+        committed_digests.append(hashlib.sha256(result.stdout).hexdigest())
+    if (
+        evidence.get("runner_sha256") != committed_digests[0]
+        or evidence.get("template_runner_sha256") != committed_digests[1]
+        or committed_digests[0] != committed_digests[1]
+        or current_runner_digest != current_template_runner_digest
+    ):
+        fail("worker-contract integration evidence runner bindings differ")
+    expected_ids = [case["id"] for case in scenario_cases] + [
+        "holdout-missing-parent-new-package-manifest"
+    ]
+    observations = evidence.get("observations")
+    if not isinstance(observations, list) or [item.get("id") for item in observations] != expected_ids:
+        fail("worker-contract integration evidence observations differ")
+    replan_contract = json.loads(
+        (ROOT / "docs/plan/replanned/contracts/113-generate-plan-bound-worker-contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_acceptance = [
+        {"digest": item["digest"].removeprefix("sha256:"), "result": "passed"}
+        for item in replan_contract["source"]["acceptance"]
+    ]
+    if evidence.get("source_acceptance") != expected_acceptance:
+        fail("worker-contract integration evidence acceptance bindings differ")
 
 
 def template_source_files() -> set[str]:

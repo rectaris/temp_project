@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -935,6 +936,7 @@ def check_plan_restructuring_scenarios() -> None:
 def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
     scenario_path = ROOT / "tests/fixtures/orchestration/worker-contract-scenarios.json"
     holdout_path = ROOT / "tests/fixtures/orchestration/worker-contract-holdout.json"
+    evidence_path = ROOT / "tests/fixtures/orchestration/worker-contract-evidence.json"
     try:
         scenario_bytes = scenario_path.read_bytes()
         scenarios = json.loads(scenario_bytes.decode("utf-8"))
@@ -975,6 +977,90 @@ def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
         fail("worker-contract scenarios do not cover the accepted preimplementation boundary")
     if hashlib.sha256(holdout_bytes).hexdigest() != "a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27":
         fail("worker-contract holdout bytes differ from the preimplementation seal")
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-contract integration evidence: {exc}")
+    evidence_fields = {
+        "schema_version", "suite", "implementation_commit", "tuned_fixture",
+        "holdout_fixture", "runner_sha256", "template_runner_sha256",
+        "observations", "source_acceptance",
+    }
+    if not isinstance(evidence, dict) or set(evidence) != evidence_fields:
+        fail("worker-contract evidence has an invalid exact shape")
+    if evidence["schema_version"] != 1 or evidence["suite"] != "worker-execution-contract-integration":
+        fail("worker-contract evidence has an unsupported identity")
+    expected_fixture_records = (
+        evidence.get("tuned_fixture") == {
+            "path": "tests/fixtures/orchestration/worker-contract-scenarios.json",
+            "sha256": hashlib.sha256(scenario_bytes).hexdigest(),
+        }
+        and evidence.get("holdout_fixture") == {
+            "path": "tests/fixtures/orchestration/worker-contract-holdout.json",
+            "sha256": hashlib.sha256(holdout_bytes).hexdigest(),
+        }
+    )
+    if not expected_fixture_records:
+        fail("worker-contract evidence fixture bindings differ")
+    implementation_commit = evidence.get("implementation_commit")
+    if not isinstance(implementation_commit, str) or re.fullmatch(r"[0-9a-f]{40}", implementation_commit) is None:
+        fail("worker-contract evidence implementation commit is invalid")
+    committed_runner = subprocess.run(
+        ["git", "show", f"{implementation_commit}:scripts/run-sandboxed-plan-worker.py"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if committed_runner.returncode != 0:
+        fail("worker-contract evidence implementation commit is unavailable")
+    committed_template_runner = subprocess.run(
+        [
+            "git", "show",
+            f"{implementation_commit}:template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if committed_template_runner.returncode != 0:
+        fail("worker-contract evidence template implementation commit is unavailable")
+    root_runner_digest = hashlib.sha256((ROOT / "scripts/run-sandboxed-plan-worker.py").read_bytes()).hexdigest()
+    template_runner_digest = hashlib.sha256(
+        (ROOT / "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py").read_bytes()
+    ).hexdigest()
+    if (
+        hashlib.sha256(committed_runner.stdout).hexdigest() != evidence.get("runner_sha256")
+        or hashlib.sha256(committed_template_runner.stdout).hexdigest()
+        != evidence.get("template_runner_sha256")
+        or evidence.get("runner_sha256") != evidence.get("template_runner_sha256")
+        or root_runner_digest != template_runner_digest
+    ):
+        fail("worker-contract evidence runner bindings differ")
+    expected_observations = [
+        {
+            "id": case["id"],
+            "class": case["class"],
+            "used_for_tuning": case["used_for_tuning"],
+            **case["expected"],
+        }
+        for fixture in (scenarios, json.loads(holdout_bytes.decode("utf-8")))
+        for case in fixture["cases"]
+    ]
+    if evidence.get("observations") != expected_observations:
+        fail("worker-contract evidence observations differ from the sealed expectations")
+    replan_contract = json.loads(
+        (ROOT / "docs/plan/replanned/contracts/113-generate-plan-bound-worker-contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_acceptance = [
+        {"digest": item["digest"].removeprefix("sha256:"), "result": "passed"}
+        for item in replan_contract["source"]["acceptance"]
+    ]
+    if evidence.get("source_acceptance") != expected_acceptance:
+        fail("worker-contract evidence source acceptance bindings differ")
     if not include_holdout:
         return
     try:
@@ -996,6 +1082,43 @@ def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
         or holdout_case.get("id") != "holdout-missing-parent-new-package-manifest"
     ):
         fail("worker-contract holdout identity differs from the sealed case")
+    test_path = ROOT / "tests/test-sandboxed-plan-worker.py"
+    spec = importlib.util.spec_from_file_location("worker_contract_behavior_evaluator", test_path)
+    if spec is None or spec.loader is None:
+        fail("could not load the generic worker-contract evaluator")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        tuned_observations = module.evaluate_selected_worker_contract_fixture(
+            scenario_path, used_for_tuning=True
+        )
+        holdout_observations = module.evaluate_selected_worker_contract_fixture(
+            holdout_path, used_for_tuning=False
+        )
+    except Exception as exc:
+        fail(f"worker-contract behavior evaluation failed: {exc}")
+    if len(tuned_observations) != len(cases) or holdout_observations != [{
+        "id": "holdout-missing-parent-new-package-manifest",
+        "observed": {"result": "rejected", "error_code": "validation_authority_write"},
+    }]:
+        fail("worker-contract behavior observations differ from the sealed scenarios")
+    actual_observations = []
+    for fixture, observations in (
+        (scenarios, tuned_observations),
+        (holdout, holdout_observations),
+    ):
+        observed_by_id = {item["id"]: item["observed"] for item in observations}
+        actual_observations.extend(
+            {
+                "id": case["id"],
+                "class": case["class"],
+                "used_for_tuning": case["used_for_tuning"],
+                **observed_by_id[case["id"]],
+            }
+            for case in fixture["cases"]
+        )
+    if actual_observations != evidence["observations"]:
+        fail("worker-contract execution differs from the recorded integration evidence")
 
 
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:

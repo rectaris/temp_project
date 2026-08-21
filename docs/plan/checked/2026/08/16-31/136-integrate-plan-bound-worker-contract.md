@@ -1,6 +1,6 @@
 # Integrate and evaluate the plan-bound worker contract
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -76,9 +76,9 @@ integration_gates:
   - tuned scenarios must equal sha256:ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf and holdout must equal sha256:a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27 before any evaluation command starts
   - Plan 114 may start only after this integration plan is checked as the accepted Plan 113 successor
 successor_plans:
-  - docs/plan/active/134-freeze-worker-contract-scenarios.md
-  - docs/plan/active/135-enforce-plan-bound-worker-contract.md
-  - docs/plan/active/136-integrate-plan-bound-worker-contract.md
+  - docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md
+  - docs/plan/checked/2026/08/16-31/135-enforce-plan-bound-worker-contract.md
+  - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
 inherited_acceptance_digests:
   - sha256:018029e6bdbccfad54ba0fbff30086b4b44b66a7aaf6f5594bd83888f5001774
   - sha256:4c502f3bd90348bdc59aac577a337138d2aa6cf0271e3ec48031d2065005cf25
@@ -105,11 +105,11 @@ checked_summary_ja: 事前に固定したcaseと全受入条件でworker契約�
 
 ## Tasks
 
-- [ ] Refresh predecessor context paths to their exact checked archives and verify frozen fixture digests.
-- [ ] Execute the generic evaluator across every unchanged scenario class and record bounded digest-linked outcomes.
-- [ ] Verify all twelve source acceptance items, root/template parity, non-destructive Copier behavior, and unchanged safety gates.
-- [ ] Record the accepted behavior under Unreleased without overstating evidence.
-- [ ] Review the complete diff, obtain independent review, run the authoritative suite exactly once, and archive this plan before Plan 114 starts.
+- [x] Refresh predecessor context paths to their exact checked archives and verify frozen fixture digests.
+- [x] Execute the generic evaluator across every unchanged scenario class and record bounded digest-linked outcomes.
+- [x] Verify all twelve source acceptance items, root/template parity, non-destructive Copier behavior, and unchanged safety gates.
+- [x] Record the accepted behavior under Unreleased without overstating evidence.
+- [x] Review the complete diff, obtain independent review, run the authoritative suite exactly once, and archive this plan before Plan 114 starts.
 
 ## Validation Notes
 
@@ -117,3 +117,9 @@ checked_summary_ja: 事前に固定したcaseと全受入条件でworker契約�
 - Any fixture drift or predecessor design change requires replan rather than in-scope repair.
 - The frozen tuned and holdout fixture digests were copied from Plan 134 before implementation.
 - Plans 134 and 135 are checked at `docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md` and `docs/plan/checked/2026/08/16-31/135-enforce-plan-bound-worker-contract.md`.
+- The tuned fixture remained `sha256:ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf`; the sealed holdout remained `sha256:a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27` until its sole explicit execution after tuned checks and parent review.
+- `tests/fixtures/orchestration/worker-contract-evidence.json` records all 15 tuned cases, the one holdout case, and all 12 inherited acceptance digests as passed; its digest is `sha256:4f0cdcf2c109b5515c2c526b9027034f5bbf7ea9f2f7e00296f6cad72b9dea42`.
+- Focused validation passed with 82 worker-runner tests, the Copier-template policy check, and `git diff --check`.
+- Independent read-only review reported zero High, Medium, or Low findings.
+- The authoritative suite ran exactly once for the accepted candidate and passed every declared command, including the explicit holdout selector, lint, smoke, and real Copier update checks.
+- No unresolved risk or deferred work remains in this plan.

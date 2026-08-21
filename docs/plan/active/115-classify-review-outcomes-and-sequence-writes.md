@@ -42,7 +42,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/136-integrate-plan-bound-worker-contract.md
+  - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
   - docs/plan/active/114-validate-structured-worker-completion.md
   - docs/plan/checked/2026/08/01-15/074-isolated-candidate-correction.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
@@ -77,7 +77,7 @@ validation:
   - git diff --check
 acceptance:
   - Require plan 136, the accepted successor for plan 113, and plan 114 to be checked and archived before implementation starts; bind scheduling and review records to their verified worker execution contract and worker completion receipt digests.
-  - After plans 136 and 114 are archived, replace their active `context_files` entries with the exact checked archive paths before implementation; treat these as dependency-path refreshes only, rerun plan checks, and do not change accepted requirements or broaden scope.
+  - Keep plan 136's checked `context_files` entry and, after plan 114 is archived, replace plan 114's active entry with its exact checked archive path before implementation; treat these as dependency-path refreshes only, rerun plan checks, and do not change accepted requirements or broaden scope.
   - Route this high-risk lifecycle change to bounded parent implementation with the declared write scope, clean-worktree checks, no external or destructive authority expansion, an independent change review, and unchanged candidate and authoritative-validation acceptance gates; do not start a writable sequential-plan worker for this plan.
   - Assign one accepted active plan with one primary invariant to one fresh isolated writable worker attempt, admit or reject that candidate before starting the next dependent writable plan, and prevent two writable attempts in the same dependency chain from overlapping.
   - Permit concurrent helper work only when it is independent, read-only, bounded, and admitted by the existing delegation value gate; do not introduce a global task lock, shared writable branch, shared mutable worker checkout, or permission for helpers to integrate one another's work.
@@ -121,4 +121,4 @@ The review outcome reason is a parent-authored bounded reason value attached to 
 - Decision audit selected sequential writable execution and bounded read-only parallelism instead of shared-branch writable parallelism.
 - The advisory referent contract kept the scheduling condition concrete and sealed the review outcome reason as a parent-authored value, not an event, finding, or worker decision.
 - High implementation risk makes this plan ineligible for the writable runner under current routing policy.
-- The parent must refresh Plan 136 and Plan 114 context paths after archival before bounded parent implementation begins.
+- Plan 136's context path now names its exact checked archive; the parent must refresh Plan 114's context path after archival before bounded parent implementation begins.

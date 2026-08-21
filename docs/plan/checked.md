@@ -110,3 +110,4 @@ id	path
 119	docs/plan/checked/2026/08/16-31/119-integrate-verify-copier-update-skill.md
 134	docs/plan/checked/2026/08/16-31/134-freeze-worker-contract-scenarios.md
 135	docs/plan/checked/2026/08/16-31/135-enforce-plan-bound-worker-contract.md
+136	docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md

@@ -50,7 +50,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/136-integrate-plan-bound-worker-contract.md
+  - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
   - docs/plan/active/114-validate-structured-worker-completion.md
   - docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md

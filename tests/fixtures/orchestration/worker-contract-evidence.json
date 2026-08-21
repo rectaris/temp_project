@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "suite": "worker-execution-contract-integration",
+  "implementation_commit": "80ee34855bed10672d9cdd19428662a22b856216",
+  "tuned_fixture": {
+    "path": "tests/fixtures/orchestration/worker-contract-scenarios.json",
+    "sha256": "ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf"
+  },
+  "holdout_fixture": {
+    "path": "tests/fixtures/orchestration/worker-contract-holdout.json",
+    "sha256": "a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27"
+  },
+  "runner_sha256": "02f90e451f52e1bf4452e1b6a145ec1a63593d5f9790faa43aa2f6a1e658b936",
+  "template_runner_sha256": "02f90e451f52e1bf4452e1b6a145ec1a63593d5f9790faa43aa2f6a1e658b936",
+  "observations": [
+    {"id": "median-exact-initial-derivation", "class": "median", "used_for_tuning": true, "result": "accepted", "error_code": null},
+    {"id": "edge-correction-lineage-derivation", "class": "edge", "used_for_tuning": true, "result": "accepted", "error_code": null},
+    {"id": "edge-explicit-new-product-file", "class": "edge", "used_for_tuning": true, "result": "accepted", "error_code": null},
+    {"id": "negative-source-plan-mutation", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "source_plan_changed"},
+    {"id": "negative-contract-digest-mismatch", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "contract_digest_mismatch"},
+    {"id": "negative-lineage-mismatch", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "lineage_mismatch"},
+    {"id": "negative-missing-primary-invariant", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "missing_primary_invariant"},
+    {"id": "negative-duplicate-contract-field", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "duplicate_contract_field"},
+    {"id": "negative-unknown-contract-field", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "unknown_contract_field"},
+    {"id": "negative-path-traversal", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "path_traversal"},
+    {"id": "negative-symlink-context-escape", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "symlink_escape"},
+    {"id": "negative-oversized-contract", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "contract_too_large"},
+    {"id": "negative-attempted-contract-mutation", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "read_only_contract"},
+    {"id": "negative-attempted-authority-widening", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "validation_authority_write"},
+    {"id": "negative-directory-prefix-write-scope", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "non_exact_write_path"},
+    {"id": "holdout-missing-parent-new-package-manifest", "class": "holdout", "used_for_tuning": false, "result": "rejected", "error_code": "validation_authority_write"}
+  ],
+  "source_acceptance": [
+    {"digest": "018029e6bdbccfad54ba0fbff30086b4b44b66a7aaf6f5594bd83888f5001774", "result": "passed"},
+    {"digest": "4c502f3bd90348bdc59aac577a337138d2aa6cf0271e3ec48031d2065005cf25", "result": "passed"},
+    {"digest": "4a6fac9ef3c6aab2d6bae45781039ac3ebda91510a3bcd90d5bfd5154bef50d9", "result": "passed"},
+    {"digest": "8906a81c8ab0aef8c31d4302d17f9123c291d2c70a9514dbae13046985bce018", "result": "passed"},
+    {"digest": "7f7246745d04b98585178c14b1e9ba9a8f34ef100d1dbdb517ef008472467313", "result": "passed"},
+    {"digest": "eafceb41a6a90a1ec5824d8e199e4dcccbf080384ef9d322459f66e8f5ec14f8", "result": "passed"},
+    {"digest": "3f7161430933f10ffcd7c9cc644455f883cbeb0a0dc4048bbba8538f0e05a6bc", "result": "passed"},
+    {"digest": "fbd0c6713ded62fe841a3bf84241e307f5a5c294838c784c2c1ba8b04a95646e", "result": "passed"},
+    {"digest": "9b5f72cb26b3b91826edda511243eecc9f0e5c62034524576d94dda1e28f16ec", "result": "passed"},
+    {"digest": "ba6dde8e1485e27de30d5dafbf57d39b619e63557aea73ef8fe29d65700515a7", "result": "passed"},
+    {"digest": "bfa8cb8b800056e0282e4d34f739d40f36cd5957f884d7638c9bc8fe03435473", "result": "passed"},
+    {"digest": "12d75a4567202438fa26035648ffeb23ead6ce2b0cd83483d63833776f706a3f", "result": "passed"}
+  ]
+}

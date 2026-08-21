@@ -795,6 +795,9 @@ validate_common_lane() {
 
   assert_managed_orchestration_reports
 
+  test -f "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
+  grep -q '"suite": "worker-execution-contract-integration"' "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
+
   test -f "$out/.copier-answers.yml"
   test -f "$out/.project-agent-workflow/AGENTS.md"
   test -f "$out/.project-agent-workflow/docs/agent/spec-index.yaml"

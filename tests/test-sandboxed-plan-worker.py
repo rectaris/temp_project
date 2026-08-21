@@ -761,7 +761,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(RUNNER.RunnerError, "canonical remote.origin.url"):
             RUNNER.derive_repository_identity(repo, "git")
 
-    def evaluate_tuned_worker_contract_case(
+    def evaluate_worker_contract_case(
         self, base: dict[str, object], case: dict[str, object]
     ) -> dict[str, object]:
         error_fragments = {
@@ -960,7 +960,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         )
         observations = evaluate_worker_contract_fixture(
             WORKER_CONTRACT_SCENARIOS,
-            self.evaluate_tuned_worker_contract_case,
+            self.evaluate_worker_contract_case,
             used_for_tuning=True,
         )
         self.assertEqual([item["id"] for item in observations], [case["id"] for case in fixture["cases"]])
@@ -3682,6 +3682,21 @@ fs.linkSync(source, target);
         self.assertEqual(initial.returncode, 1)
         self.assertIn("explicit file path", initial.stderr)
         self.assertFalse((output / "worker.stdout").exists())
+
+def evaluate_selected_worker_contract_fixture(
+    path: Path, *, used_for_tuning: bool
+) -> list[dict[str, object]]:
+    """Run one explicitly selected sealed fixture through the production runner behavior."""
+    SandboxedPlanWorkerTests.setUpClass()
+    evaluator = SandboxedPlanWorkerTests(
+        methodName="test_default_worker_command_uses_supported_external_sandbox_flags"
+    )
+    return evaluate_worker_contract_fixture(
+        path,
+        evaluator.evaluate_worker_contract_case,
+        used_for_tuning=used_for_tuning,
+    )
+
 
 if __name__ == "__main__":
     unittest.main()
