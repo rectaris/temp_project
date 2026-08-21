@@ -1,6 +1,6 @@
 # Implement revalidated local retirement apply
 
-status: in_progress
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -12,35 +12,8 @@ implementation_risk: ordinary
 implementation_ambiguity: ordinary
 implementation_mode: parent_direct
 parent_direct_reason: the local-effect executable and its safety tests are parent-owned validation authority under the current runner
-primary_invariant: apply-local revalidates one unchanged pinned eligible target before non-force worktree removal and exact branch deletion
-replan_source: docs/plan/active/112-retire-merged-local-worktrees.md
-replan_contract: docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
-integration_gates:
-  - plans 142, 147, and 148 must be checked before local apply implementation starts
-  - every removal test must stay inside a disposable repository and preserve the source repository worktrees and refs
-  - plan 146 must verify the combined successors against every source acceptance item
-successor_plans:
-  - docs/plan/active/142-define-local-git-retirement-policy.md
-  - docs/plan/active/143-implement-read-only-retirement-scan.md
-  - docs/plan/active/144-implement-revalidated-local-apply.md
-  - docs/plan/active/145-integrate-retirement-copier-preservation.md
-  - docs/plan/active/146-integrate-local-git-retirement.md
-inherited_acceptance_digests:
-  - sha256:6958ab89c494d1adfd48540a046650cf4cfc1672306d43e0c3a8ecd70264a26e
-  - sha256:3005d6bd08511b36771d0469514d61f43c928fc57fffa9733d294dbac0e7e035
-  - sha256:053494f2046950d1749673055c4e3d840b1991b2a51edac4b32e77b6f274b5ea
-  - sha256:6b9408c8ebd718b6da2954363ee6624ada7af9791ff5e87981b92254f96ce759
-  - sha256:3bf52a9421d768236116af7d7ad8e5a9d3d4c3339dd93dffd5992ded03dd477d
-  - sha256:afc2af96b43affbae68ebf3ab4926a7e18429e9e6cb50e08c8351c958950965b
-  - sha256:945e37cf14543bb37e02cafb153b2d8c528eb174970a10995e7647ced980d35e
-  - sha256:5d9b1cae94a56d755c5dd22deab898f8776227ffd1fa908adb706c5890afa72b
-  - sha256:fb5c41fc615e6e548dee36f7eadd970cd746570e8e97507c8bdbbf2db2d2b5bf
-  - sha256:4d44ce23a04fa81fd22ea1684cdfa307ccb916558b04ff2f936fa8e9f0d19177
-  - sha256:31b60f932bf07f6ee1589f786f849e78eebbddec7625a95690026e5aa29f7bce
-  - sha256:dab3be427e961b4584d9e634104eba538cd644eaf9e8657f25558acda39895cf
-  - sha256:a2b23ff25475494004da91dd894d47a90e42ef06c9de39a3b3a4b7a70573a433
-  - sha256:ac0c3d8d8604109b7a1cde9b1e4d553fbeada2fa2c29362b11f04ebf3971bf4f
-  - sha256:3688d2080c082315da128caac3e8acf11b8dab8aa552a4490a66c34d0c2277aa
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 write_scope:
   - scripts/retire-merged-worktrees.py
   - template/.project-agent-workflow/scripts/retire-merged-worktrees.py
@@ -83,6 +56,30 @@ acceptance:
   - Add disposable-repository median, edge, negative, and untuned holdout scenarios for an eligible merged pair; current, primary, dirty, untracked, locked, outside-root, symlink-escaping, protected, upstream-ahead, untracked-upstream, and non-ancestor cases; changed branch or target OIDs and changed worktree state between scan and apply; rejected force and remote operations; and age- or name-only evidence.
   - Never run removal tests against the source repository; create every test repository and linked worktree under an isolated temporary directory and assert the source repository's registered worktrees and refs remain unchanged.
   - Keep provider-assisted squash or rebase integration evidence, remote branch deletion, and actual stale-worktree metadata pruning outside this implementation; require separate active plans and applicable authorization before adding them.
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/144-implement-revalidated-local-apply.md
+replan_contract: docs/plan/replanned/contracts/144-implement-revalidated-local-apply.json
+integration_gates:
+  - combined successors must satisfy every source acceptance item
+successor_plans:
+  - docs/plan/active/149-complete-exact-ref-local-apply.md
+  - docs/plan/active/150-certify-exact-ref-local-apply.md
+inherited_acceptance_digests:
+  - sha256:6958ab89c494d1adfd48540a046650cf4cfc1672306d43e0c3a8ecd70264a26e
+  - sha256:3005d6bd08511b36771d0469514d61f43c928fc57fffa9733d294dbac0e7e035
+  - sha256:053494f2046950d1749673055c4e3d840b1991b2a51edac4b32e77b6f274b5ea
+  - sha256:6b9408c8ebd718b6da2954363ee6624ada7af9791ff5e87981b92254f96ce759
+  - sha256:3bf52a9421d768236116af7d7ad8e5a9d3d4c3339dd93dffd5992ded03dd477d
+  - sha256:afc2af96b43affbae68ebf3ab4926a7e18429e9e6cb50e08c8351c958950965b
+  - sha256:945e37cf14543bb37e02cafb153b2d8c528eb174970a10995e7647ced980d35e
+  - sha256:5d9b1cae94a56d755c5dd22deab898f8776227ffd1fa908adb706c5890afa72b
+  - sha256:fb5c41fc615e6e548dee36f7eadd970cd746570e8e97507c8bdbbf2db2d2b5bf
+  - sha256:4d44ce23a04fa81fd22ea1684cdfa307ccb916558b04ff2f936fa8e9f0d19177
+  - sha256:31b60f932bf07f6ee1589f786f849e78eebbddec7625a95690026e5aa29f7bce
+  - sha256:dab3be427e961b4584d9e634104eba538cd644eaf9e8657f25558acda39895cf
+  - sha256:a2b23ff25475494004da91dd894d47a90e42ef06c9de39a3b3a4b7a70573a433
+  - sha256:ac0c3d8d8604109b7a1cde9b1e4d553fbeada2fa2c29362b11f04ebf3971bf4f
+  - sha256:3688d2080c082315da128caac3e8acf11b8dab8aa552a4490a66c34d0c2277aa
 checked_summary_ja: 固定manifestの全条件をeffect直前に再検証し、一時repository内の対象だけを通常のGit commandで削除する。
 
 ## Context
@@ -109,3 +106,6 @@ It must reject every manifest, path, ref, OID, upstream, registration, lock, cle
 
 - Parent-direct implementation is required because the executable and tests are validation-authority paths rejected from worker candidates.
 - Parent behavior validation additionally runs `python3 tests/test-git-retirement.py`; the plan command allowlist does not accept a newly introduced direct test path, and the repository does not depend on pytest.
+- Parent execution ledger run `144-parent-direct-20260821` stopped with `replan_required` after two independently reviewed parent-direct remediation rounds.
+- The final independent review reported High 1 and Medium 0: the checked-out branch ref can change after candidate revalidation and before worktree removal, so the worktree can be removed after its pinned branch tip changes.
+- Preserve the current CLI, template, holdout fixture, and test changes as unaccepted candidate work. Do not continue implementation or validation under this source plan.

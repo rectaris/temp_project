@@ -15,7 +15,7 @@ primary_invariant: supported Copier updates preserve project-owned retirement co
 replan_source: docs/plan/active/112-retire-merged-local-worktrees.md
 replan_contract: docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
 integration_gates:
-  - plans 142, 144, 147, and 148 must be checked before Copier preservation integration starts
+  - plans 142, 147, 148, 149, and 150 must be checked before Copier preservation integration starts
   - plan 146 must verify the combined successors against every source acceptance item
 successor_plans:
   - docs/plan/active/142-define-local-git-retirement-policy.md
@@ -35,8 +35,11 @@ write_scope:
 context_files:
   - docs/plan/replanned/2026/08/16-31/112-retire-merged-local-worktrees.md
   - docs/plan/replanned/2026/08/16-31/143-implement-read-only-retirement-scan.md
+  - docs/plan/replanned/2026/08/16-31/144-implement-revalidated-local-apply.md
   - docs/plan/checked/2026/08/16-31/147-complete-exact-root-retirement-scan.md
   - docs/plan/checked/2026/08/16-31/148-certify-exact-root-retirement-scan.md
+  - docs/plan/checked/2026/08/16-31/149-complete-exact-ref-local-apply.md
+  - docs/plan/checked/2026/08/16-31/150-certify-exact-ref-local-apply.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/git-retirement.yaml
   - references/validation.md

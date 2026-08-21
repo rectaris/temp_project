@@ -15,3 +15,4 @@ id	path	contract
 137	docs/plan/replanned/2026/08/16-31/137-define-noncircular-provider-auth-preflight.md	docs/plan/replanned/contracts/137-define-noncircular-provider-auth-preflight.json
 112	docs/plan/replanned/2026/08/16-31/112-retire-merged-local-worktrees.md	docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
 143	docs/plan/replanned/2026/08/16-31/143-implement-read-only-retirement-scan.md	docs/plan/replanned/contracts/143-implement-read-only-retirement-scan.json
+144	docs/plan/replanned/2026/08/16-31/144-implement-revalidated-local-apply.md	docs/plan/replanned/contracts/144-implement-revalidated-local-apply.json

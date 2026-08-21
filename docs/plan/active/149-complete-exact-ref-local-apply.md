@@ -1,8 +1,7 @@
-# Integrate local Git retirement
+# Complete exact-ref local apply
 
 status: in_progress
 task_types:
-  - planning_docs
   - template_workflow
   - security
   - referent_first
@@ -10,24 +9,22 @@ review_class: C
 human_design_required: yes
 human_approval_status: approved
 implementation_risk: ordinary
-implementation_ambiguity: low
+implementation_ambiguity: ordinary
 implementation_mode: parent_direct
-parent_direct_reason: final acceptance validation lifecycle and reporting authority remain parent-owned
-primary_invariant: the checked successor set satisfies every unchanged source acceptance item with no unresolved High or Medium finding
-replan_source: docs/plan/active/112-retire-merged-local-worktrees.md
-replan_contract: docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
+parent_direct_reason: the local-effect executable and its deterministic safety tests are parent-owned validation authority under the current runner
+primary_invariant: the exact local branch ref remains at the manifest OID from final candidate revalidation through completed ordinary worktree removal
+replan_source: docs/plan/active/144-implement-revalidated-local-apply.md
+replan_contract: docs/plan/replanned/contracts/144-implement-revalidated-local-apply.json
 integration_gates:
-  - plans 142, 145, 147, 148, 149, and 150 must be checked before combined acceptance starts
-  - the parent must review the combined diff and critical invariants before one authoritative validation run
+  - plans 142, 147, and 148 must remain checked before replacement apply implementation resumes
+  - every removal and race test must stay inside a disposable repository and preserve the source repository worktrees and refs
+  - plan 150 must independently certify this checked implementation before plan 145 starts
+  - plan 146 must start only after plan 145 is checked and must verify the combined successors against every source acceptance item
 successor_plans:
-  - docs/plan/active/142-define-local-git-retirement-policy.md
-  - docs/plan/active/143-implement-read-only-retirement-scan.md
-  - docs/plan/active/144-implement-revalidated-local-apply.md
-  - docs/plan/active/145-integrate-retirement-copier-preservation.md
-  - docs/plan/active/146-integrate-local-git-retirement.md
+  - docs/plan/active/149-complete-exact-ref-local-apply.md
+  - docs/plan/active/150-certify-exact-ref-local-apply.md
 inherited_acceptance_digests:
   - sha256:6958ab89c494d1adfd48540a046650cf4cfc1672306d43e0c3a8ecd70264a26e
-  - sha256:27f9713e8bde723f894fc8c6ebf44f0daf5109f16c4502b16dddf1a9fbd92557
   - sha256:3005d6bd08511b36771d0469514d61f43c928fc57fffa9733d294dbac0e7e035
   - sha256:053494f2046950d1749673055c4e3d840b1991b2a51edac4b32e77b6f274b5ea
   - sha256:6b9408c8ebd718b6da2954363ee6624ada7af9791ff5e87981b92254f96ce759
@@ -39,30 +36,24 @@ inherited_acceptance_digests:
   - sha256:4d44ce23a04fa81fd22ea1684cdfa307ccb916558b04ff2f936fa8e9f0d19177
   - sha256:31b60f932bf07f6ee1589f786f849e78eebbddec7625a95690026e5aa29f7bce
   - sha256:dab3be427e961b4584d9e634104eba538cd644eaf9e8657f25558acda39895cf
-  - sha256:a24659ceb636d526e4ad01d26f86c6a0ba7a74cea99d59481fdd36229d35816f
   - sha256:a2b23ff25475494004da91dd894d47a90e42ef06c9de39a3b3a4b7a70573a433
   - sha256:ac0c3d8d8604109b7a1cde9b1e4d553fbeada2fa2c29362b11f04ebf3971bf4f
-  - sha256:e68c131cb92d4f444edaa9257ee5f16e677e808ba07c64b631a7b8410a842695
   - sha256:3688d2080c082315da128caac3e8acf11b8dab8aa552a4490a66c34d0c2277aa
 write_scope:
-  - CHANGELOG.md
-  - docs/plan/
+  - scripts/retire-merged-worktrees.py
+  - template/.project-agent-workflow/scripts/retire-merged-worktrees.py
+  - tests/fixtures/git-retirement/holdout.json
+  - tests/fixtures/git-retirement/scenarios.json
+  - tests/test-git-retirement.py
 context_files:
   - docs/plan/replanned/2026/08/16-31/112-retire-merged-local-worktrees.md
-  - docs/plan/replanned/2026/08/16-31/143-implement-read-only-retirement-scan.md
   - docs/plan/replanned/2026/08/16-31/144-implement-revalidated-local-apply.md
   - docs/plan/checked/2026/08/16-31/147-complete-exact-root-retirement-scan.md
   - docs/plan/checked/2026/08/16-31/148-certify-exact-root-retirement-scan.md
-  - docs/plan/checked/2026/08/16-31/149-complete-exact-ref-local-apply.md
-  - docs/plan/checked/2026/08/16-31/150-certify-exact-ref-local-apply.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/git-retirement.yaml
   - references/validation.md
-  - scripts/retire-merged-worktrees.py
-  - template/.project-agent-workflow/ownership.yaml
-  - tests/test-git-retirement.py
 required_specs:
-  - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_REFERENT_FIRST.md
@@ -70,21 +61,14 @@ required_specs:
   - docs/agent/SPEC_USER_COMMUNICATION.md
 focused_validation:
   - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
-  - python3 scripts/check-root-agent-policy.py
-  - python3 scripts/check-copier-template.py
   - git diff --check
+parent_behavior_validation:
+  - python3 tests/test-git-retirement.py
 validation:
   - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
-  - python3 scripts/check-root-agent-policy.py
-  - python3 scripts/check-copier-template.py
-  - python3 scripts/validate-changes.py --all
-  - scripts/lint-project-workflow.sh
-  - tests/smoke.sh
-  - tests/copier-update.sh
   - git diff --check
 acceptance:
   - Provide one root and generated CLI with separate read-only `scan` and explicit `apply-local` subcommands that share one manifest schema and eligibility implementation.
-  - Make generated project configuration safe-disabled by default; require each project to configure merge-target refs and protected local branches before scanning or applying, while the root repository explicitly protects `main` and `dev` and selects its local merge target.
   - Require `--allowed-root` at runtime, reject the repository root, home directory, filesystem root, unresolved paths, and paths outside the exact allowed root, and never persist host-specific absolute worktree roots in reusable files.
   - Enumerate registered worktrees with Git plumbing and admit only a non-primary, non-current, unlocked, clean linked worktree on an exact local branch that is not protected and whose tip is an ancestor of one configured local merge-target ref.
   - Require an upstream for the local branch and block it when the upstream comparison has any ahead commits, is unavailable, or is ambiguous; do not fetch or claim remote freshness.
@@ -96,35 +80,36 @@ acceptance:
   - Expose no remote-delete, force-delete, or destructive-prune command; `git worktree prune --dry-run --verbose` findings may be reported without applying them.
   - Keep scheduled automation read-only by permitting scan and report generation only; require a current explicit operator action for every local apply.
   - Keep root and generated CLI files byte-identical, keep the root and generated specifications semantically aligned, and document the intentional difference between enabled root policy and safe-disabled generated project configuration.
-  - Add the new managed files to Copier ownership and inventory checks while preserving project-owned retirement configuration byte-for-byte through supported Copier updates.
   - Add disposable-repository median, edge, negative, and untuned holdout scenarios for an eligible merged pair; current, primary, dirty, untracked, locked, outside-root, symlink-escaping, protected, upstream-ahead, untracked-upstream, and non-ancestor cases; changed branch or target OIDs and changed worktree state between scan and apply; rejected force and remote operations; and age- or name-only evidence.
   - Never run removal tests against the source repository; create every test repository and linked worktree under an isolated temporary directory and assert the source repository's registered worktrees and refs remain unchanged.
-  - Route cleanup requests through the new specification in root and generated agent policy, record the behavior under Unreleased, run all validation commands, and finish with zero unresolved High or Medium independent-review findings.
   - Keep provider-assisted squash or rebase integration evidence, remote branch deletion, and actual stale-worktree metadata pruning outside this implementation; require separate active plans and applicable authorization before adding them.
-checked_summary_ja: 分割した実装を統合し、元planの全受入条件と安全条件を変更せずに検証する。
+checked_summary_ja: manifestが固定したbranch refをworktree削除完了まで保持し、競合時にも別OIDの対象を削除しない。
 
 ## Context
 
-This integration successor owns the Unreleased entry and no new executable behavior.
+Complete exact-ref local apply means the action of finishing the preserved apply candidate by holding the expected local branch ref through final revalidation and ordinary worktree removal.
 
-It verifies the accepted outputs of plans 142 through 145 against the exact source acceptance baseline and retains final validation lifecycle commit and reporting authority in the parent.
+This successor owns the preserved unaccepted Plan 144 candidate and the one remaining High finding.
+
+A concurrent direct update of the checked-out local branch ref can currently occur after final candidate revalidation and before ordinary worktree removal. The replacement must exclude that update across the entire removal interval without changing the branch ref itself.
 
 ## Decisions
 
-- Do not reconstruct or weaken source acceptance text.
-- Do not remediate product defects inside this integration plan; classify an independently repairable defect or require restructuring under the existing policy.
-- Run the authoritative source validation suite exactly once only after the combined diff and critical invariants are otherwise acceptable.
+- Use a Git-owned prepared reference transaction to verify and hold the exact expected local branch ref across final revalidation and ordinary worktree removal.
+- Abort the no-change transaction after worktree removal to release the ref lock.
+- Keep the existing worktree HEAD lock, sanitized Git environment, disabled repository hooks, guarded ordinary branch deletion, strict manifest validation, exact-pair absence handling, and unsupported-operation boundaries.
+- Preserve the stopped candidate and add a deterministic same-tree different-commit branch-update race scenario.
 
 ## Tasks
 
-- [ ] Confirm plans 142 through 145 are checked with independent-review evidence.
-- [ ] Record the accepted behavior under Unreleased.
-- [ ] Review combined changes against every source acceptance item and critical safety invariant.
-- [ ] Run the authoritative validation suite exactly once.
-- [ ] Confirm zero unresolved High or Medium independent-review findings.
-- [ ] Archive this integration plan and preserve the restructuring lineage.
+- [ ] Hold the exact local branch ref at the manifest OID through final revalidation and completed ordinary worktree removal.
+- [ ] Fail closed without removing the worktree when the ref cannot be verified or held.
+- [ ] Add the direct branch-update race regression and keep root/generated executables byte-identical.
+- [ ] Review the preserved candidate against every inherited safety condition.
+- [ ] Complete independent security review, focused validation, and one authoritative validation run before acceptance.
 
 ## Validation Notes
 
-- The integration plan inherits every source acceptance item in exact source order.
-- Parent behavior validation additionally runs `python3 tests/test-git-retirement.py`; the repository does not depend on pytest.
+- The stopped Plan 144 ledger run 144-parent-direct-20260821 ended in replan_required; do not reuse or reopen it.
+- Initialize a fresh parent-owned execution ledger and candidate lifecycle for this plan before product effects resume.
+- Parent behavior validation additionally runs python3 tests/test-git-retirement.py; the plan command allowlist does not accept a newly introduced direct test path, and the repository does not depend on pytest.
