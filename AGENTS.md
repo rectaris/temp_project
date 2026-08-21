@@ -18,6 +18,7 @@ This repository packages reusable coding-agent project management, file routing,
 - When writing or editing Japanese prose in this repository, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
 - When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
 - Use `docs/agent/spec-index.yaml` to route root-level agent policy when the task concerns planning, logging, compression, decision audit, user-facing communication, or Japanese prose.
+- Route requests to inspect or remove local linked worktrees or their local branches through `docs/agent/SPEC_GIT_RETIREMENT.md` and the project-owned `docs/agent/git-retirement.yaml` configuration.
 - Keep raw agent logs and large agent artifacts local under `.agent-logs/` and `.agent-artifacts/`; do not commit them.
 - Treat external transcript logs as primary full-turn evidence when available, and repo-local hook event logs as best-effort corroborating evidence.
 - Record missing transcript or hook sources explicitly in run manifests.

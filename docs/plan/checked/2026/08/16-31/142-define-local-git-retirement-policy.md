@@ -1,6 +1,6 @@
 # Define local Git retirement policy and configuration
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - template_workflow
@@ -80,12 +80,18 @@ The root configuration is enabled for the repository's local refs, while generat
 
 ## Tasks
 
-- [ ] Add root and generated specifications with aligned behavior and the intentional root/generated configuration difference.
-- [ ] Add root and generated project-owned configuration with safe generated defaults.
-- [ ] Route cleanup requests through the specification and classify new files in ownership policy.
-- [ ] Add deterministic root-policy routing checks for the new specification.
-- [ ] Complete parent diff review, independent review, and focused validation before acceptance.
+- [x] Add root and generated specifications with aligned behavior and the intentional root/generated configuration difference.
+- [x] Add root and generated project-owned configuration with safe generated defaults.
+- [x] Route cleanup requests through the specification and classify new files in ownership policy.
+- [x] Add deterministic root-policy routing checks for the new specification.
+- [x] Complete parent diff review, independent review, and focused validation before acceptance.
 
 ## Validation Notes
 
 - Parent-direct implementation is required because all changed policy and template files are validation-authority paths rejected from worker candidates.
+- The existing ownership rules classify `.project-agent-workflow/**` as Copier-managed and `docs/agent/**` as seeded project-owned, so no overlapping ownership entry was added.
+- Independent review round 1 found two Medium issues in the generated command path and apply-stage wording plus one Low checker weakness; the bounded remediation corrected all three.
+- Independent review round 2 reported no findings.
+- Focused validation passed: `python3 scripts/check-root-agent-policy.py`; `git diff --check`.
+- Authoritative validation passed once with the same plan validation commands.
+- Parent-owned execution ledger: `/home/rectaris/tmp/gakumasu-project/plan-execution-ledgers/142-define-local-git-retirement-policy.json`.

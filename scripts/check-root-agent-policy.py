@@ -16,6 +16,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[:：]")
@@ -78,6 +80,8 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/browser-ops/references/browser-run-policy.md",
     ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
+    "docs/agent/SPEC_GIT_RETIREMENT.md",
+    "docs/agent/git-retirement.yaml",
     "docs/agent/SPEC_EXTERNAL_SERVICES.md",
     "docs/agent/external-services.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
@@ -134,6 +138,8 @@ REQUIRED_AGENT_RULES = [
     "docs/agent/SPEC_REFERENT_FIRST.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
     "docs/agent/SPEC_USER_COMMUNICATION.md",
+    "docs/agent/SPEC_GIT_RETIREMENT.md",
+    "docs/agent/git-retirement.yaml",
     "*.backup",
     "decision audit",
     "docs/plan/active",
@@ -848,6 +854,74 @@ def check_external_service_policy() -> None:
             fail(f"root external-service entrypoint missing marker: {marker}")
     if "str(POLICY)" not in entrypoint or "str(MAINTAINED_CHECKER)" not in entrypoint:
         fail("root external-service entrypoint must delegate with the fixed root policy")
+
+
+def check_git_retirement_policy() -> None:
+    index = read("docs/agent/spec-index.yaml")
+    for marker in (
+        "  git_retirement:",
+        "docs/agent/SPEC_GIT_RETIREMENT.md",
+        "docs/agent/SPEC_SECURITY.md",
+    ):
+        if marker not in index:
+            fail(f"root Git-retirement route missing: {marker}")
+
+    root_spec = read("docs/agent/SPEC_GIT_RETIREMENT.md")
+    generated_spec = read("template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md")
+    normalized_generated_spec = generated_spec.replace(
+        "`.project-agent-workflow/scripts/retire-merged-worktrees.py",
+        "`scripts/retire-merged-worktrees.py",
+    )
+    if root_spec != normalized_generated_spec:
+        fail("root/generated Git-retirement specifications differ beyond the command path")
+    for marker in (
+        "docs/agent/git-retirement.yaml",
+        "`scan` enumerates registered worktrees with Git plumbing.",
+        "Every `apply-local` invocation requires a current explicit operator action.",
+        "`git worktree remove`",
+        "`git branch -d`",
+        "must not run `apply-local`",
+        "remote branch deletion",
+    ):
+        if marker not in root_spec:
+            fail(f"Git-retirement specification missing marker: {marker}")
+    if "`.project-agent-workflow/scripts/retire-merged-worktrees.py scan`" not in generated_spec:
+        fail("generated Git-retirement specification names the wrong command path")
+
+    try:
+        root_config = yaml.safe_load(read("docs/agent/git-retirement.yaml"))
+        generated_config = yaml.safe_load(read("template/docs/agent/git-retirement.yaml.jinja"))
+    except yaml.YAMLError as exc:
+        fail(f"invalid Git-retirement configuration YAML: {exc}")
+    expected_root_config = {
+        "version": 1,
+        "enabled": True,
+        "merge_target_refs": ["refs/heads/dev"],
+        "protected_local_branch_refs": ["refs/heads/main", "refs/heads/dev"],
+    }
+    expected_generated_config = {
+        "version": 1,
+        "enabled": False,
+        "merge_target_refs": [],
+        "protected_local_branch_refs": [],
+    }
+    if root_config != expected_root_config:
+        fail("root Git-retirement configuration differs from the exact enabled profile")
+    if generated_config != expected_generated_config:
+        fail("generated Git-retirement configuration differs from the exact safe-disabled profile")
+
+    root_agents = read("AGENTS.md")
+    generated_agents = read("template/.project-agent-workflow/AGENTS.md.jinja")
+    if "docs/agent/SPEC_GIT_RETIREMENT.md" not in root_agents:
+        fail("root AGENTS.md does not route local Git retirement")
+    if ".project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md" not in generated_agents:
+        fail("generated AGENTS.md does not route local Git retirement")
+
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .project-agent-workflow/**" not in ownership:
+        fail("generated Git-retirement specification lacks managed ownership")
+    if "  - docs/agent/**" not in ownership:
+        fail("generated Git-retirement configuration lacks project-owned classification")
 
 
 def check_user_communication_contract() -> None:
@@ -2261,6 +2335,7 @@ def main() -> int:
     check_mcp_execution_context()
     check_browser_routing()
     check_external_service_policy()
+    check_git_retirement_policy()
     check_user_communication_contract()
     check_namespaced_documentation_targets()
     check_orchestration_policy(include_holdout=args.include_holdout)

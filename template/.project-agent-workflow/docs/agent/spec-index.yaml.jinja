@@ -92,6 +92,14 @@ task_types:
       - path: .project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md
         when: Codex CI autofix, GitHub Actions tokens, patch application, or branch writes are in scope.
 
+  git_retirement:
+    summary: Read-only inventory or explicit local removal of linked worktrees and their checked-out local branches.
+    required:
+      - .project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_FLOW.md
+      - .project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md
+      - .project-agent-workflow/docs/agent/SPEC_SECURITY.md
+    conditional: []
+
   browser_automation:
     summary: JavaScript-rendered page state, browser-produced artifacts, DOM inspection, or browser interaction; not a plain URL lookup.
     required:

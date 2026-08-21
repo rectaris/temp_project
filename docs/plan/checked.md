@@ -115,3 +115,4 @@ id	path
 140	docs/plan/checked/2026/08/16-31/140-integrate-concrete-provider-context-bindings.md
 141	docs/plan/checked/2026/08/16-31/141-separate-synthetic-copier-version-tags.md
 138	docs/plan/checked/2026/08/16-31/138-integrate-provider-auth-call-context.md
+142	docs/plan/checked/2026/08/16-31/142-define-local-git-retirement-policy.md
