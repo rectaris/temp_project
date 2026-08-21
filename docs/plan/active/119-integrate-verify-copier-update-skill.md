@@ -1,7 +1,6 @@
 # Integrate verify-copier-update Skill
 
-status: deferred
-completion_deferred_reason: Plan 126 must be checked before this preserved Plan 119 candidate resumes through another fresh execution run.
+status: in_progress
 primary_invariant: deliver one reusable isolated Copier update verification Skill whose complete source acceptance baseline passes realistic and repository-authoritative validation
 task_types:
   - planning_docs
@@ -70,6 +69,7 @@ replan_contract: docs/plan/replanned/contracts/117-verify-copier-update-skill.js
 integration_gates:
   - plan 118 must complete and commit the original-repository snapshot invariant first
   - plan 123 must complete and commit the bounded root validation-command authorization repair before this plan resumes
+  - plan 126 must complete the generated authority and real-Copier integration repair before the final fresh run
   - the final independent review must report zero unresolved High or Medium findings across both successor slices
 successor_plans:
   - docs/plan/active/118-harden-original-repository-snapshot.md
@@ -111,3 +111,5 @@ checked_summary_ja: 隔離したCopier更新検証スキルをテンプレート
 - This plan resumes with unchanged acceptance, safety conditions, scope, validation authority outside the checked repair, and external-effect authorization. The resumed execution uses a fresh plan digest, source HEAD, candidate lifecycle, and execution ledger.
 - The fresh authoritative run then exposed one independent real-Copier fixture omission: the v1.2.2 update-source copied `validate-changes.py` without the matching current `plan_validation_commands.py`.
 - Plan 124 was replanned after copying that file proved insufficient; Plan 125 checked the user-authorized exact generated-helper compilation allowance, and Plan 126 now owns the unchanged real-Copier integration gate.
+- Plans 125, 128, 129, and 126 are checked; the generated authority, dedicated helper target, dependency-environment isolation, and complete real-Copier fixture now pass without changing this plan's acceptance or safety boundary.
+- This final resumed execution uses a fresh source HEAD, plan digest, lifecycle state, and execution ledger.
