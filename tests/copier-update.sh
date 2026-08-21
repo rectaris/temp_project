@@ -645,7 +645,10 @@ run_adoption() {
   ref=$2
   shift 2
   if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
-    (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" uv run python \
+    (cd "$root" && env \
+      UV_CACHE_DIR="$tmp/adoption-uv-cache" \
+      UV_PROJECT_ENVIRONMENT="$tmp/adoption-uv-venv" \
+      uv run --locked --project "$root" python \
       "$root/scripts/adopt-to-namespaced-layout.py" \
       --destination "$destination" --vcs-ref "$ref" "$@")
   else

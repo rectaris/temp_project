@@ -1,6 +1,6 @@
 # Integrate the dedicated Copier verification target
 
-status: in_progress
+status: checked
 primary_invariant: prove the dedicated helper target and preserved Plan 119 candidate through the complete required-Copier fixture
 replan_source: docs/plan/active/127-repair-temporary-copier-cli-shim.md
 replan_contract: docs/plan/replanned/contracts/127-repair-temporary-copier-cli-shim.json
@@ -44,7 +44,7 @@ context_files:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/plan/active/119-integrate-verify-copier-update-skill.md
   - docs/plan/active/126-integrate-generated-verify-helper-compilation.md
-  - docs/plan/active/128-create-dedicated-copier-verification-target.md
+  - docs/plan/checked/2026/08/16-31/128-create-dedicated-copier-verification-target.md
   - docs/plan/replanned/2026/08/16-31/127-repair-temporary-copier-cli-shim.md
   - template/.project-agent-workflow/scripts/plan_validation_commands.py
   - tests/validation_tools/plan.py
@@ -78,11 +78,17 @@ checked_summary_ja: helper専用targetを実Copier fixtureへ統合し、元repo
 
 ## Tasks
 
-- [ ] Confirm Plan 128 is checked and inspect the combined preserved candidate.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the complete required-Copier fixture once and require success.
-- [ ] Archive and commit this integration, then resume Plan 126 with a fresh execution identity.
+- [x] Confirm Plan 128 is checked and inspect the combined preserved candidate.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the complete required-Copier fixture once and require success.
+- [x] Archive and commit this integration, then resume Plan 126 with a fresh execution identity.
 
 ## Validation Notes
 
 - Plan 127 A/B evidence disproved the launcher hypothesis and the user approved dedicated target separation.
+- Focused validation passed all 32 validation-tool tests, all 33 helper tests, the template checker, shell syntax, and diff checking.
+- Initial independent review found one Medium root dependency-artifact boundary in `run_adoption`; bounded remediation added a temporary cache, temporary virtual environment, explicit root project, and locked resolution.
+- Remediation review reported High 0 and Medium 0 and made no file changes.
+- Authoritative `tests/copier-update.sh --require-copier` and `git diff --check` passed.
+- Root HEAD/status, `uv.lock`, `.venv`, and `.uv-cache` identities matched exactly before and after the authoritative run.
+- Parent execution evidence: `/tmp/plan129-execution.1Ywyb7/execution.json`.
