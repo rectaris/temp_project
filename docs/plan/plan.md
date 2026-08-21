@@ -7,7 +7,8 @@ id	path	status
 131	docs/plan/active/131-require-confirmed-failure-diagnosis.md	in_progress
 132	docs/plan/active/132-checkpoint-plan-session-resources.md	in_progress
 133	docs/plan/active/133-evaluate-resource-bounded-orchestration.md	in_progress
-143	docs/plan/active/143-implement-read-only-retirement-scan.md	in_progress
 144	docs/plan/active/144-implement-revalidated-local-apply.md	in_progress
 145	docs/plan/active/145-integrate-retirement-copier-preservation.md	in_progress
 146	docs/plan/active/146-integrate-local-git-retirement.md	in_progress
+147	docs/plan/active/147-complete-exact-root-retirement-scan.md	in_progress
+148	docs/plan/active/148-certify-exact-root-retirement-scan.md	in_progress

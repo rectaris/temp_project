@@ -14,3 +14,4 @@ id	path	contract
 111	docs/plan/replanned/2026/08/16-31/111-bind-provider-auth-to-call-context.md	docs/plan/replanned/contracts/111-bind-provider-auth-to-call-context.json
 137	docs/plan/replanned/2026/08/16-31/137-define-noncircular-provider-auth-preflight.md	docs/plan/replanned/contracts/137-define-noncircular-provider-auth-preflight.json
 112	docs/plan/replanned/2026/08/16-31/112-retire-merged-local-worktrees.md	docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
+143	docs/plan/replanned/2026/08/16-31/143-implement-read-only-retirement-scan.md	docs/plan/replanned/contracts/143-implement-read-only-retirement-scan.json

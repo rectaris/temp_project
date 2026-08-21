@@ -16,7 +16,7 @@ primary_invariant: apply-local revalidates one unchanged pinned eligible target 
 replan_source: docs/plan/active/112-retire-merged-local-worktrees.md
 replan_contract: docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
 integration_gates:
-  - plans 142 and 143 must be checked before local apply implementation starts
+  - plans 142, 147, and 148 must be checked before local apply implementation starts
   - every removal test must stay inside a disposable repository and preserve the source repository worktrees and refs
   - plan 146 must verify the combined successors against every source acceptance item
 successor_plans:
@@ -49,6 +49,9 @@ write_scope:
   - tests/test-git-retirement.py
 context_files:
   - docs/plan/replanned/2026/08/16-31/112-retire-merged-local-worktrees.md
+  - docs/plan/replanned/2026/08/16-31/143-implement-read-only-retirement-scan.md
+  - docs/plan/checked/2026/08/16-31/147-complete-exact-root-retirement-scan.md
+  - docs/plan/checked/2026/08/16-31/148-certify-exact-root-retirement-scan.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/git-retirement.yaml
   - references/validation.md
@@ -59,12 +62,10 @@ required_specs:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
 focused_validation:
-  - python3 -m pytest tests/test-git-retirement.py
-  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py
+  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
   - git diff --check
 validation:
-  - python3 -m pytest tests/test-git-retirement.py
-  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py
+  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
   - git diff --check
 acceptance:
   - Provide one root and generated CLI with separate read-only `scan` and explicit `apply-local` subcommands that share one manifest schema and eligibility implementation.
@@ -107,3 +108,4 @@ It must reject every manifest, path, ref, OID, upstream, registration, lock, cle
 ## Validation Notes
 
 - Parent-direct implementation is required because the executable and tests are validation-authority paths rejected from worker candidates.
+- Parent behavior validation additionally runs `python3 tests/test-git-retirement.py`; the plan command allowlist does not accept a newly introduced direct test path, and the repository does not depend on pytest.

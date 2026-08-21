@@ -1,6 +1,6 @@
 # Implement read-only retirement scan
 
-status: in_progress
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -12,25 +12,8 @@ implementation_risk: ordinary
 implementation_ambiguity: ordinary
 implementation_mode: parent_direct
 parent_direct_reason: the executable and its deterministic tests are parent-owned validation authority under the current runner
-primary_invariant: scan inventories registered linked worktrees and writes a pinned manifest without changing worktrees branches refs or remote state
-replan_source: docs/plan/active/112-retire-merged-local-worktrees.md
-replan_contract: docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
-integration_gates:
-  - plan 142 must be checked before scan implementation starts
-  - plan 144 must preserve scan behavior while adding the separate local apply effect boundary
-  - plan 146 must verify the combined successors against every source acceptance item
-successor_plans:
-  - docs/plan/active/142-define-local-git-retirement-policy.md
-  - docs/plan/active/143-implement-read-only-retirement-scan.md
-  - docs/plan/active/144-implement-revalidated-local-apply.md
-  - docs/plan/active/145-integrate-retirement-copier-preservation.md
-  - docs/plan/active/146-integrate-local-git-retirement.md
-inherited_acceptance_digests:
-  - sha256:3005d6bd08511b36771d0469514d61f43c928fc57fffa9733d294dbac0e7e035
-  - sha256:053494f2046950d1749673055c4e3d840b1991b2a51edac4b32e77b6f274b5ea
-  - sha256:6b9408c8ebd718b6da2954363ee6624ada7af9791ff5e87981b92254f96ce759
-  - sha256:3bf52a9421d768236116af7d7ad8e5a9d3d4c3339dd93dffd5992ded03dd477d
-  - sha256:afc2af96b43affbae68ebf3ab4926a7e18429e9e6cb50e08c8351c958950965b
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 write_scope:
   - scripts/retire-merged-worktrees.py
   - template/.project-agent-workflow/scripts/retire-merged-worktrees.py
@@ -48,12 +31,12 @@ required_specs:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
 focused_validation:
-  - python3 -m pytest tests/test-git-retirement.py
-  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py
+  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
   - git diff --check
+parent_behavior_validation:
+  - python3 tests/test-git-retirement.py
 validation:
-  - python3 -m pytest tests/test-git-retirement.py
-  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py
+  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
   - git diff --check
 acceptance:
   - Require `--allowed-root` at runtime, reject the repository root, home directory, filesystem root, unresolved paths, and paths outside the exact allowed root, and never persist host-specific absolute worktree roots in reusable files.
@@ -61,6 +44,20 @@ acceptance:
   - Require an upstream for the local branch and block it when the upstream comparison has any ahead commits, is unavailable, or is ambiguous; do not fetch or claim remote freshness.
   - Treat elapsed time, branch naming, a missing provider pull request, and absence from the current worktree list as insufficient deletion evidence.
   - Write scan output only to an ignored local artifact path and include repository identity, exact canonical worktree path, branch full ref and tip OID, merge-target ref and OID, upstream relation, every eligibility result, schema version, and content digest.
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/143-implement-read-only-retirement-scan.md
+replan_contract: docs/plan/replanned/contracts/143-implement-read-only-retirement-scan.json
+integration_gates:
+  - combined successors must satisfy every source acceptance item
+successor_plans:
+  - docs/plan/active/147-complete-exact-root-retirement-scan.md
+  - docs/plan/active/148-certify-exact-root-retirement-scan.md
+inherited_acceptance_digests:
+  - sha256:3005d6bd08511b36771d0469514d61f43c928fc57fffa9733d294dbac0e7e035
+  - sha256:053494f2046950d1749673055c4e3d840b1991b2a51edac4b32e77b6f274b5ea
+  - sha256:6b9408c8ebd718b6da2954363ee6624ada7af9791ff5e87981b92254f96ce759
+  - sha256:3bf52a9421d768236116af7d7ad8e5a9d3d4c3339dd93dffd5992ded03dd477d
+  - sha256:afc2af96b43affbae68ebf3ab4926a7e18429e9e6cb50e08c8351c958950965b
 checked_summary_ja: Git plumbingだけでlinked worktreeの適格性を調べ、local状態を変更せずに固定manifestを出力する。
 
 ## Context
@@ -86,3 +83,7 @@ It must enumerate registered worktrees, explain every eligibility result, and wr
 ## Validation Notes
 
 - Parent-direct implementation is required because the executable and tests are validation-authority paths rejected from worker candidates.
+- Parent behavior validation additionally runs `python3 tests/test-git-retirement.py`; the plan command allowlist does not accept a newly introduced direct test path, and the repository does not depend on pytest.
+- Parent execution ledger run `143-parent-direct-v3-20260821` stopped with `replan_required` after two parent-direct remediation rounds.
+- The final independent review reported High 0 and Medium 1: command-adjacent untracked configuration can shadow the exact project-owned worktree-root configuration.
+- Preserve the current CLI, template, fixture, and test changes as unaccepted candidate work. Do not continue implementation or validation under this source plan.

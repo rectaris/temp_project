@@ -17,7 +17,7 @@ primary_invariant: the checked successor set satisfies every unchanged source ac
 replan_source: docs/plan/active/112-retire-merged-local-worktrees.md
 replan_contract: docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
 integration_gates:
-  - plans 142 through 145 must be checked before combined acceptance starts
+  - plans 142, 144, 145, 147, and 148 must be checked before combined acceptance starts
   - the parent must review the combined diff and critical invariants before one authoritative validation run
 successor_plans:
   - docs/plan/active/142-define-local-git-retirement-policy.md
@@ -49,6 +49,9 @@ write_scope:
   - docs/plan/
 context_files:
   - docs/plan/replanned/2026/08/16-31/112-retire-merged-local-worktrees.md
+  - docs/plan/replanned/2026/08/16-31/143-implement-read-only-retirement-scan.md
+  - docs/plan/checked/2026/08/16-31/147-complete-exact-root-retirement-scan.md
+  - docs/plan/checked/2026/08/16-31/148-certify-exact-root-retirement-scan.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/git-retirement.yaml
   - references/validation.md
@@ -63,12 +66,12 @@ required_specs:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
 focused_validation:
-  - python3 -m pytest tests/test-git-retirement.py
+  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
   - python3 scripts/check-root-agent-policy.py
   - python3 scripts/check-copier-template.py
   - git diff --check
 validation:
-  - python3 -m pytest tests/test-git-retirement.py
+  - python3 -m py_compile scripts/retire-merged-worktrees.py template/.project-agent-workflow/scripts/retire-merged-worktrees.py tests/test-git-retirement.py
   - python3 scripts/check-root-agent-policy.py
   - python3 scripts/check-copier-template.py
   - python3 scripts/validate-changes.py --all
@@ -121,3 +124,4 @@ It verifies the accepted outputs of plans 142 through 145 against the exact sour
 ## Validation Notes
 
 - The integration plan inherits every source acceptance item in exact source order.
+- Parent behavior validation additionally runs `python3 tests/test-git-retirement.py`; the repository does not depend on pytest.
