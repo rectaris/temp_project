@@ -39,7 +39,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/113-generate-plan-bound-worker-contract.md
+  - docs/plan/active/136-integrate-plan-bound-worker-contract.md
   - docs/plan/checked/2026/08/01-15/074-isolated-candidate-correction.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
   - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
@@ -70,8 +70,8 @@ validation:
   - REQUIRE_COPIER=1 tests/copier-update.sh
   - git diff --check
 acceptance:
-  - Require plan 113 to be accepted and archived before implementation starts, and consume its verified worker execution contract identity rather than reconstructing plan authority from worker output.
-  - After plan 113 is archived, replace its active `context_files` entry with the exact checked archive path before worker start; treat this as a dependency-path refresh only, rerun plan checks, and do not change accepted requirements or broaden scope.
+  - Require plan 136, the accepted successor for plan 113, to be checked and archived before implementation starts, and consume its verified worker execution contract identity rather than reconstructing plan authority from worker output.
+  - After plan 136 is archived, replace its active `context_files` entry with the exact checked archive path before worker start; treat this as a dependency-path refresh only, rerun plan checks, and do not change accepted requirements or broaden scope.
   - Define one versioned, size-bounded worker completion receipt for each successful or failed initial and correction attempt, written only inside the isolated attempt output boundary.
   - Bind the receipt to repository identity, source HEAD, plan path and digest, worker execution contract digest, orchestration run identifier, attempt identifier, correction lineage when applicable, candidate patch digest when emitted, and normalized changed paths.
   - Require bounded fields for claimed acceptance evidence, commands attempted with observed exit status, blockers, residual risks, and an explicit out-of-scope-change declaration; allow empty evidence only when the attempt reports failure before a candidate exists.
@@ -112,5 +112,5 @@ A structured receipt can reduce review ambiguity, but it cannot prove that the p
 
 - Decision audit selected a structured result artifact while preserving the manager-style parent as the only final acceptance owner.
 - The advisory referent contract sealed the worker completion receipt as bounded advisory evidence rather than a validation receipt or acceptance decision.
-- Plan 113 is a hard predecessor because this plan binds completion evidence to its generated contract identity.
-- The parent must refresh plan 113's context path after archival before invoking a worker for this plan.
+- Plan 136 is the accepted Plan 113 successor and a hard predecessor because this plan binds completion evidence to its generated contract identity.
+- The parent must refresh Plan 136's context path after archival before invoking a worker for this plan.

@@ -50,7 +50,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/113-generate-plan-bound-worker-contract.md
+  - docs/plan/active/136-integrate-plan-bound-worker-contract.md
   - docs/plan/active/114-validate-structured-worker-completion.md
   - docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md
@@ -90,7 +90,7 @@ acceptance:
 replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
-  - plans 113 through 115 must be checked before implementation starts
+  - plan 136 as the accepted successor for plan 113, plus plans 114 and 115, must be checked before implementation starts
   - plan 133 must compare the checkpointed path with the unchanged baseline under the same provider observations
 successor_plans:
   - docs/plan/active/130-map-acceptance-validation-witnesses.md

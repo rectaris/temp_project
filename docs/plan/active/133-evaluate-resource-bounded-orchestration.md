@@ -34,7 +34,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/113-generate-plan-bound-worker-contract.md
+  - docs/plan/active/136-integrate-plan-bound-worker-contract.md
   - docs/plan/active/114-validate-structured-worker-completion.md
   - docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/active/130-map-acceptance-validation-witnesses.md
@@ -93,7 +93,7 @@ acceptance:
 replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
-  - plans 113 through 115 must be checked and their context paths refreshed before paired evaluation
+  - plan 136 as the accepted successor for plan 113, plus plans 114 and 115, must be checked and their context paths refreshed before paired evaluation
   - plans 130 through 132 must be checked and their exact checked archive paths must replace active context paths
   - the combined staged path must satisfy every source acceptance item with zero unresolved High or Medium findings
 successor_plans:
@@ -126,7 +126,7 @@ checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、�
 
 ## Decisions
 
-- Preserve every source acceptance item and evaluate the combined accepted outputs of plans 113 through 115 and 130 through 132.
+- Preserve every source acceptance item and interpret references to Plan 113 as its accepted Plan 136 successor when evaluating the combined outputs with plans 114, 115, and 130 through 132.
 - Add one fixed generic workload that reproduces late integration coverage, speculative repair planning, repeated reviewer context, and multi-plan parent accumulation without product-specific paths.
 - Require directly comparable token improvement only when both paired sides expose provider-observed usage; otherwise retain not_observed and make no token-reduction claim.
 - Keep the current path as default on missing, noncomparable, unsafe, or below-threshold evidence.
@@ -139,7 +139,7 @@ checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、�
 - [ ] Execute or ingest comparable baseline and staged runs and generate digest-linked orchestration comparison evidence.
 - [ ] Extend deterministic comparability, token-observation, safety, tampering, rollback, and default-selection checks.
 - [ ] Align root and generated policy, Skill, inventories, changelog, and Copier behavior for the measured outcome.
-- [ ] Review the complete acceptance chain, obtain independent review, run the authoritative suite once, and archive the accepted plan.
+- [ ] Review the complete Plan 136 successor lineage and the remaining acceptance chain, obtain independent review, run the authoritative suite once, and archive the accepted plan.
 
 ## Validation Notes
 
