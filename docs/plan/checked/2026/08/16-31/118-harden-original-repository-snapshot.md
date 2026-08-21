@@ -1,6 +1,6 @@
 # Harden original repository state snapshot
 
-status: in_progress
+status: checked
 primary_invariant: compare the complete observable original Git repository state before and after isolated verification without mutating it during inspection
 task_types:
   - planning_docs
@@ -56,6 +56,10 @@ checked_summary_ja: 元リポジトリのGit状態を変更せず、検証前後
 ## Decisions
 
 - Snapshot the actual worktree-specific index bytes and every referenced split-index backing file with optional Git locks disabled.
+- Reject baselines that use `assume-unchanged` or `skip-worktree`, because normal Git status cannot prove their tracked worktree bytes are unchanged.
+- Snapshot raw tracked regular-file and symbolic-link bytes plus actual mode so clean filters and EOL normalization cannot hide original worktree changes; block Git submodule entries as an unsupported prerequisite.
+- Block effective repository-local external clean/process filters before status inspection, disable system/global Git config inputs, and compare tracked raw identity before and after status to prevent snapshot observer effects.
+- Stream tracked file hashing without the bounded Git-metadata file size limit; retain the limit only for HEAD, index, and split-index metadata files.
 - Snapshot symbolic HEAD identity and ref symbolic targets in addition to resolved object IDs.
 - Keep ignored-file identity bounded to metadata and symlink targets while detecting additions, deletions, and ordinary content writes.
 - Replace filesystem exception details with bounded path-free messages before recording the manifest.
@@ -63,11 +67,16 @@ checked_summary_ja: 元リポジトリのGit状態を変更せず、検証前後
 
 ## Tasks
 
-- [ ] Add failing regressions for index flags, symbolic HEAD changes, and path-free manifest errors.
-- [ ] Implement complete original-state capture and byte-identical root/template helper updates.
-- [ ] Complete independent review with zero High or Medium findings.
-- [ ] Run focused and authoritative validation, record evidence, and commit this slice without staging integration-owned paths.
+- [x] Add failing regressions for index flags, symbolic HEAD changes, and path-free manifest errors.
+- [x] Implement complete original-state capture and byte-identical root/template helper updates.
+- [x] Complete independent review with zero High or Medium findings.
+- [x] Run focused and authoritative validation, record evidence, and commit this slice without staging integration-owned paths.
 
 ## Validation Notes
 
 - This successor preserves the mapped source acceptance text exactly.
+- Independent read-only review found zero High or Medium issues after two bounded parent remediation rounds. Dedicated include/includeIf mixed-case filter and tracked-symlink mutation tests remain Low-priority coverage opportunities; the corresponding implementation paths were reviewed as correct.
+- Initial focused validation exposed three test-fixture defects: two incorrect test assumptions and one missing validation argument. The fixtures were corrected without changing the implementation contract.
+- Focused validation passed: `python3 tests/test-verify-copier-update.py` (33 tests) and `git diff --check`.
+- Authoritative validation passed once: `python3 tests/test-verify-copier-update.py` (33 tests) and `git diff --check`.
+- Root and generated-template helper copies were byte-identical at acceptance.

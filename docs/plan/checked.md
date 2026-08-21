@@ -99,3 +99,4 @@ id	path
 100	docs/plan/checked/2026/08/01-15/100-durable-successor-lineage.md
 101	docs/plan/checked/2026/08/01-15/101-durable-successor-integration.md
 110	docs/plan/checked/2026/08/01-15/110-release-v144.md
+118	docs/plan/checked/2026/08/16-31/118-harden-original-repository-snapshot.md
