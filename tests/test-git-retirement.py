@@ -25,6 +25,7 @@ def run(
     cwd: Path | None = None,
     check: bool = True,
     environment: dict[str, str] | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     command_environment = os.environ.copy()
     command_environment.update(
@@ -39,6 +40,7 @@ def run(
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=timeout,
     )
     if check and completed.returncode != 0:
         raise AssertionError(
@@ -154,6 +156,7 @@ def apply_local(
     *,
     confirm: bool = True,
     command_environment: dict[str, str] | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     arguments = [
         sys.executable,
@@ -173,11 +176,25 @@ def apply_local(
         cwd=repository,
         check=False,
         environment=command_environment,
+        timeout=timeout,
     )
 
 
 def load_manifest(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_manifest_with_digest(path: Path, manifest: dict[str, object]) -> None:
+    unsigned = dict(manifest)
+    unsigned.pop("content_digest", None)
+    canonical = json.dumps(
+        unsigned,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    unsigned["content_digest"] = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    path.write_text(json.dumps(unsigned, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def candidate_for(manifest: dict[str, object], branch_ref: str) -> dict[str, object]:
@@ -735,6 +752,192 @@ class GitRetirementScanTests(unittest.TestCase):
             self.assertIn("branch deletion was not attempted", failed.stderr.decode())
             effects = log.read_text(encoding="utf-8")
             self.assertNotIn(" branch -d ", f" {effects} ")
+            self.assertTrue(worktree.is_dir())
+            self.assertEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+
+    def test_manifest_change_before_worktree_effect_stops_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            changed_manifest = load_manifest(manifest_path)
+            changed_manifest["current_worktree"] = f"{changed_manifest['current_worktree']}-changed"
+            replacement = base / "changed-manifest.json"
+            write_manifest_with_digest(replacement, changed_manifest)
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            log = base / "git-commands.log"
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$*\" >> {log}\n"
+                "case \" $* \" in\n"
+                "  *\" update-ref --stdin \"*)\n"
+                f"    cp {replacement} {manifest_path} || exit $?;;\n"
+                "esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            stopped = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+            )
+            self.assertNotEqual(stopped.returncode, 0)
+            self.assertIn("exact manifest changed", stopped.stderr.decode())
+            self.assertNotIn(" worktree remove ", f" {log.read_text(encoding='utf-8')} ")
+            self.assertTrue(worktree.is_dir())
+            self.assertEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+
+    def test_manifest_change_between_effects_stops_branch_deletion(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            changed_manifest = load_manifest(manifest_path)
+            changed_manifest["current_worktree"] = f"{changed_manifest['current_worktree']}-changed"
+            replacement = base / "changed-manifest.json"
+            write_manifest_with_digest(replacement, changed_manifest)
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            log = base / "git-commands.log"
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$*\" >> {log}\n"
+                "case \" $* \" in\n"
+                "  *\" worktree remove \"*)\n"
+                f"    {real_git} \"$@\" || exit $?\n"
+                f"    cp {replacement} {manifest_path} || exit $?\n"
+                "    exit 0;;\n"
+                "esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            stopped = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+            )
+            self.assertNotEqual(stopped.returncode, 0)
+            self.assertIn("exact manifest changed", stopped.stderr.decode())
+            self.assertNotIn(" branch -d ", f" {log.read_text(encoding='utf-8')} ")
+            self.assertFalse(worktree.exists())
+            self.assertEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+
+    def test_manifest_ancestor_symlink_race_stops_before_worktree_effect(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            artifact_root = repository / ".agent-artifacts"
+            preserved_root = repository / ".agent-artifacts-preserved"
+            outside_root = base / "outside-artifacts"
+            outside_manifest = outside_root / "git-retirement" / manifest_path.name
+            outside_manifest.parent.mkdir(parents=True)
+            shutil.copy2(manifest_path, outside_manifest)
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            armed = base / "arm-manifest-race"
+            log = base / "git-commands.log"
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$*\" >> {log}\n"
+                "case \" $* \" in\n"
+                f"  *\" update-ref --stdin \"*) touch {armed};;\n"
+                "  *\" check-ignore -q \"*)\n"
+                f"    if test -f {armed}; then\n"
+                f"      {real_git} \"$@\" || exit $?\n"
+                f"      mv {artifact_root} {preserved_root} || exit $?\n"
+                f"      ln -s {outside_root} {artifact_root} || exit $?\n"
+                "      exit 0\n"
+                "    fi;;\n"
+                "esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            stopped = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+                timeout=5,
+            )
+            self.assertNotEqual(stopped.returncode, 0)
+            self.assertNotIn(" worktree remove ", f" {log.read_text(encoding='utf-8')} ")
+            self.assertTrue(worktree.is_dir())
+            self.assertEqual(
+                git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,
+                0,
+            )
+
+    def test_manifest_fifo_race_stops_without_hanging_or_removing_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            repository, allowed_root, worktree = initialize_repository(base)
+            scanned, manifest_path = scan(repository, allowed_root)
+            self.assertEqual(scanned.returncode, 0, scanned.stderr.decode())
+            wrapper_dir = base / "bin"
+            wrapper_dir.mkdir()
+            armed = base / "arm-manifest-race"
+            log = base / "git-commands.log"
+            wrapper = wrapper_dir / "git"
+            real_git = shutil.which("git")
+            self.assertIsNotNone(real_git)
+            wrapper.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$*\" >> {log}\n"
+                "case \" $* \" in\n"
+                f"  *\" update-ref --stdin \"*) touch {armed};;\n"
+                "  *\" check-ignore -q \"*)\n"
+                f"    if test -f {armed}; then\n"
+                f"      {real_git} \"$@\" || exit $?\n"
+                f"      rm -f {manifest_path} || exit $?\n"
+                f"      mkfifo {manifest_path} || exit $?\n"
+                "      exit 0\n"
+                "    fi;;\n"
+                "esac\n"
+                f"exec {real_git} \"$@\"\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            stopped = apply_local(
+                repository,
+                allowed_root,
+                worktree,
+                manifest_path,
+                command_environment={"PATH": f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}"},
+                timeout=5,
+            )
+            self.assertNotEqual(stopped.returncode, 0)
+            self.assertNotIn(" worktree remove ", f" {log.read_text(encoding='utf-8')} ")
             self.assertTrue(worktree.is_dir())
             self.assertEqual(
                 git(repository, "show-ref", "--verify", "--quiet", "refs/heads/feature", check=False).returncode,

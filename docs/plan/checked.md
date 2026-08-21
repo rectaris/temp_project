@@ -121,3 +121,4 @@ id	path
 149	docs/plan/checked/2026/08/16-31/149-complete-exact-ref-local-apply.md
 150	docs/plan/checked/2026/08/16-31/150-certify-exact-ref-local-apply.md
 145	docs/plan/checked/2026/08/16-31/145-integrate-retirement-copier-preservation.md
+151	docs/plan/checked/2026/08/16-31/151-complete-effect-adjacent-manifest-revalidation.md

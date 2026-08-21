@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -546,10 +547,67 @@ def validate_manifest_input(raw: str, primary: Path) -> Path:
     return resolved
 
 
-def read_manifest(path: Path) -> dict[str, Any]:
-    data = path.read_bytes()
+def open_exact_regular_file(path: Path) -> tuple[int, os.stat_result]:
+    if not path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts[1:]):
+        raise RetirementError("manifest input path must remain absolute and normalized")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+    directory = os.open(path.anchor, directory_flags)
+    try:
+        for part in path.parts[1:-1]:
+            following = os.open(part, directory_flags, dir_fd=directory)
+            os.close(directory)
+            directory = following
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=directory,
+        )
+    finally:
+        os.close(directory)
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        raise RetirementError("manifest input must remain a regular non-symlink file")
+    return descriptor, metadata
+
+
+def read_bounded_file(descriptor: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = MAX_MANIFEST_BYTES + 1
+    while remaining:
+        chunk = os.read(descriptor, remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    data = b"".join(chunks)
     if len(data) > MAX_MANIFEST_BYTES:
         raise RetirementError("manifest exceeds the size limit")
+    return data
+
+
+def read_exact_manifest_bytes(path: Path, primary: Path) -> bytes:
+    validate_manifest_input(str(path), primary)
+    first_descriptor, first_metadata = open_exact_regular_file(path)
+    try:
+        first_data = read_bounded_file(first_descriptor)
+    finally:
+        os.close(first_descriptor)
+    validate_manifest_input(str(path), primary)
+    second_descriptor, second_metadata = open_exact_regular_file(path)
+    try:
+        second_data = read_bounded_file(second_descriptor)
+    finally:
+        os.close(second_descriptor)
+    first_identity = (first_metadata.st_dev, first_metadata.st_ino)
+    second_identity = (second_metadata.st_dev, second_metadata.st_ino)
+    if first_identity != second_identity or first_data != second_data:
+        raise RetirementError("exact manifest path changed during validation")
+    return second_data
+
+
+def read_manifest(path: Path, primary: Path) -> dict[str, Any]:
+    data = read_exact_manifest_bytes(path, primary)
     try:
         value = json.loads(data.decode("utf-8"), object_pairs_hook=reject_duplicate_json_keys)
     except json.JSONDecodeError as exc:
@@ -585,6 +643,17 @@ def read_manifest(path: Path) -> dict[str, Any]:
             raise RetirementError("manifest contains a duplicate worktree candidate")
         paths.add(candidate["worktree_path"])
     return value
+
+
+def revalidate_manifest_snapshot(
+    path: Path,
+    expected_manifest: dict[str, Any],
+    primary: Path,
+) -> None:
+    if validate_manifest_input(str(path), primary) != path:
+        raise RetirementError("exact manifest path changed since startup validation")
+    if read_manifest(path, primary) != expected_manifest:
+        raise RetirementError("exact manifest changed since startup validation")
 
 
 def validate_manifest_candidate(candidate: Any) -> None:
@@ -931,7 +1000,7 @@ def apply_local(args: argparse.Namespace) -> int:
     project_root = project_root_from_script()
     initial_context = repository_context(project_root, args.allowed_root)
     manifest_path = validate_manifest_input(args.manifest, initial_context["primary"])
-    manifest = read_manifest(manifest_path)
+    manifest = read_manifest(manifest_path, initial_context["primary"])
     context, candidate, target, record = revalidate_before_worktree_removal(
         project_root,
         args.allowed_root,
@@ -971,6 +1040,7 @@ def apply_local(args: argparse.Namespace) -> int:
             )
             if locked_record is None or locked_candidate != candidate or locked_target != target:
                 raise RetirementError("worktree identity changed after effect lock acquisition")
+            revalidate_manifest_snapshot(manifest_path, manifest, locked_context["primary"])
             removal = git(
                 locked_context["primary"],
                 "worktree",
@@ -998,6 +1068,7 @@ def apply_local(args: argparse.Namespace) -> int:
         candidate["branch_tip_oid"],
     )
     try:
+        revalidate_manifest_snapshot(manifest_path, manifest, context["primary"])
         deletion = git(
             context["primary"],
             "branch",
