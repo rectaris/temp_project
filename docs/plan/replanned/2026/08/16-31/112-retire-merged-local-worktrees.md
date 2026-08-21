@@ -1,6 +1,6 @@
 # Safely retire ancestry-merged local worktrees and branches
 
-status: in_progress
+status: replanned
 task_types:
   - planning_docs
   - template_workflow
@@ -11,7 +11,8 @@ human_design_required: yes
 human_approval_status: approved
 implementation_risk: ordinary
 implementation_ambiguity: ordinary
-primary_invariant: remove only revalidated ancestry-merged local worktrees and branches without force, remote effects, or data loss
+replan_reason_codes:
+  - multiple_independent_invariants
 write_scope:
   - AGENTS.md
   - CHANGELOG.md
@@ -87,6 +88,36 @@ acceptance:
   - Never run removal tests against the source repository; create every test repository and linked worktree under an isolated temporary directory and assert the source repository's registered worktrees and refs remain unchanged.
   - Route cleanup requests through the new specification in root and generated agent policy, record the behavior under Unreleased, run all validation commands, and finish with zero unresolved High or Medium independent-review findings.
   - Keep provider-assisted squash or rebase integration evidence, remote branch deletion, and actual stale-worktree metadata pruning outside this implementation; require separate active plans and applicable authorization before adding them.
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/112-retire-merged-local-worktrees.md
+replan_contract: docs/plan/replanned/contracts/112-retire-merged-local-worktrees.json
+integration_gates:
+  - combined successors must satisfy every source acceptance item
+successor_plans:
+  - docs/plan/active/142-define-local-git-retirement-policy.md
+  - docs/plan/active/143-implement-read-only-retirement-scan.md
+  - docs/plan/active/144-implement-revalidated-local-apply.md
+  - docs/plan/active/145-integrate-retirement-copier-preservation.md
+  - docs/plan/active/146-integrate-local-git-retirement.md
+inherited_acceptance_digests:
+  - sha256:6958ab89c494d1adfd48540a046650cf4cfc1672306d43e0c3a8ecd70264a26e
+  - sha256:27f9713e8bde723f894fc8c6ebf44f0daf5109f16c4502b16dddf1a9fbd92557
+  - sha256:3005d6bd08511b36771d0469514d61f43c928fc57fffa9733d294dbac0e7e035
+  - sha256:053494f2046950d1749673055c4e3d840b1991b2a51edac4b32e77b6f274b5ea
+  - sha256:6b9408c8ebd718b6da2954363ee6624ada7af9791ff5e87981b92254f96ce759
+  - sha256:3bf52a9421d768236116af7d7ad8e5a9d3d4c3339dd93dffd5992ded03dd477d
+  - sha256:afc2af96b43affbae68ebf3ab4926a7e18429e9e6cb50e08c8351c958950965b
+  - sha256:945e37cf14543bb37e02cafb153b2d8c528eb174970a10995e7647ced980d35e
+  - sha256:5d9b1cae94a56d755c5dd22deab898f8776227ffd1fa908adb706c5890afa72b
+  - sha256:fb5c41fc615e6e548dee36f7eadd970cd746570e8e97507c8bdbbf2db2d2b5bf
+  - sha256:4d44ce23a04fa81fd22ea1684cdfa307ccb916558b04ff2f936fa8e9f0d19177
+  - sha256:31b60f932bf07f6ee1589f786f849e78eebbddec7625a95690026e5aa29f7bce
+  - sha256:dab3be427e961b4584d9e634104eba538cd644eaf9e8657f25558acda39895cf
+  - sha256:a24659ceb636d526e4ad01d26f86c6a0ba7a74cea99d59481fdd36229d35816f
+  - sha256:a2b23ff25475494004da91dd894d47a90e42ef06c9de39a3b3a4b7a70573a433
+  - sha256:ac0c3d8d8604109b7a1cde9b1e4d553fbeada2fa2c29362b11f04ebf3971bf4f
+  - sha256:e68c131cb92d4f444edaa9257ee5f16e677e808ba07c64b631a7b8410a842695
+  - sha256:3688d2080c082315da128caac3e8acf11b8dab8aa552a4490a66c34d0c2277aa
 checked_summary_ja: 祖先関係を確認したlocal branchとcleanなlinked worktreeだけを、固定manifestの再検証後に強制指定なしで削除できるようにする。
 
 ## Context
