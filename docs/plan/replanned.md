@@ -6,3 +6,4 @@ id	path	contract
 095	docs/plan/replanned/2026/08/01-15/095-structural-nested-replan-metadata.md	docs/plan/replanned/contracts/095-structural-nested-replan-metadata.json
 096	docs/plan/replanned/2026/08/01-15/096-replanned-successor-resolution.md	docs/plan/replanned/contracts/096-replanned-successor-resolution.json
 117	docs/plan/replanned/2026/08/16-31/117-verify-copier-update-skill.md	docs/plan/replanned/contracts/117-verify-copier-update-skill.json
+120	docs/plan/replanned/2026/08/16-31/120-limit-plan-stop-scope-and-resume-local-repairs.md	docs/plan/replanned/contracts/120-limit-plan-stop-scope-and-resume-local-repairs.json
