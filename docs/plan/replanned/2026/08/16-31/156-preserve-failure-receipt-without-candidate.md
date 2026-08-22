@@ -1,6 +1,6 @@
 # Preserve failure receipts without a candidate
 
-status: replan_required
+status: replanned
 replan_reason_codes:
   - spec_drift
 task_types:
@@ -14,7 +14,6 @@ human_approval_status: approved
 implementation_risk: high
 implementation_ambiguity: low
 parent_direct_reason: the remaining defect is in the parent-owned runner and its validation-authority tests
-primary_invariant: emit one valid bounded failure receipt and preserve the separate process result when a worker exits nonzero with valid failure claims before any candidate exists
 write_scope:
   - scripts/run-sandboxed-plan-worker.py
   - template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py
@@ -53,15 +52,14 @@ acceptance:
   - Require bounded fields for claimed acceptance evidence, commands attempted with observed exit status, blockers, residual risks, and an explicit out-of-scope-change declaration; allow empty evidence only when the attempt reports failure before a candidate exists.
   - Validate schema, exact fields, types, bounds, normalized paths, identity, lineage, cross-linked digests, and consistency with the admitted candidate before using the receipt; fail closed on missing, duplicate, unknown, malformed, oversized, stale, replayed, or symlink-escaping content.
   - Preserve worker process exit status and bounded sanitized diagnostics separately from receipt validity so malformed reporting cannot convert a failed implementation into success or erase failure evidence.
-replan_source: docs/plan/active/154-enforce-structured-worker-completion-receipt.md
-replan_contract: docs/plan/replanned/contracts/154-enforce-structured-worker-completion-receipt.json
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/156-preserve-failure-receipt-without-candidate.md
+replan_contract: docs/plan/replanned/contracts/156-preserve-failure-receipt-without-candidate.json
 integration_gates:
-  - preserve the stopped Plan 154 implementation as read-only baseline except for the exact no-candidate failure branch and its regression test
-  - keep the tuned scenarios read-only and do not inspect or execute the digest-sealed holdout
-  - Plan 157 must integrate every unchanged Plan 154 acceptance item after this plan is checked
+  - combined successors must satisfy every source acceptance item
 successor_plans:
-  - docs/plan/active/156-preserve-failure-receipt-without-candidate.md
-  - docs/plan/active/157-integrate-structured-worker-completion-enforcement.md
+  - docs/plan/active/158-emit-structured-claims-in-runner-self-test.md
+  - docs/plan/active/159-integrate-failure-receipt-validation.md
 inherited_acceptance_digests:
   - sha256:95ab4926d09833304ba7223b6dfc8ce15fdf4a870566265e03aaf579795b14dd
   - sha256:b29da5035ef6c28f6cb15dd7c9e74e6d0aaea22550eb83d451f147533ca3d089
