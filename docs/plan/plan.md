@@ -8,5 +8,4 @@ id	path	status
 133	docs/plan/active/133-evaluate-resource-bounded-orchestration.md	in_progress
 155	docs/plan/active/155-integrate-structured-worker-completion-receipt.md	in_progress
 157	docs/plan/active/157-integrate-structured-worker-completion-enforcement.md	in_progress
-158	docs/plan/active/158-emit-structured-claims-in-runner-self-test.md	in_progress
 159	docs/plan/active/159-integrate-failure-receipt-validation.md	in_progress

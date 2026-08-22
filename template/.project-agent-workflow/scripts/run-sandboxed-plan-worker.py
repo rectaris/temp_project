@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -28,6 +29,22 @@ from typing import Any, Sequence
 SCHEMA_VERSION = 1
 WORKER_CONTRACT_SCHEMA_VERSION = 1
 WORKER_CONTRACT_MAX_BYTES = 65_536
+WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION = 1
+WORKER_COMPLETION_RECEIPT_MAX_BYTES = 65_536
+WORKER_COMPLETION_RECEIPT_VALUE_MAX_BYTES = 1_024
+WORKER_COMPLETION_RECEIPT_MAX_ITEMS = 64
+WORKER_COMPLETION_BLOCKER_CODES = frozenset({
+    "acceptance_evidence_mismatch", "candidate_not_derived", "command_failed",
+    "false_success_claim", "implementation_failed", "incomplete_change",
+    "invalid_completion_claims", "missing_completion_claims", "missing_input",
+    "out_of_scope_change_reported", "worker_failed",
+})
+WORKER_COMPLETION_RISK_CODES = frozenset({
+    "incomplete_change", "known_limitation", "parent_review_required", "validation_not_run",
+})
+WORKER_COMPLETION_DIAGNOSTIC_CODES = frozenset({"worker_failed"})
+WORKER_COMPLETION_EXIT_STATUS_MIN = -255
+WORKER_COMPLETION_EXIT_STATUS_MAX = 255
 DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1
 DEPENDENCY_SNAPSHOT_MAX_BYTES = 16_384
 DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
@@ -172,6 +189,12 @@ ARTIFACT_NAMES = (
     "worker-fallback-last-message.txt",
     "candidate.patch",
     "worker-contract.json",
+    "worker-completion-receipt.json",
+    "worker-primary-completion-receipt.json",
+    "worker-fallback-completion-receipt.json",
+    "worker-process-result.json",
+    "worker-primary-process-result.json",
+    "worker-fallback-process-result.json",
     "manifest.json",
     "validation.json",
 )
@@ -193,6 +216,7 @@ RESERVED_WORKER_ENV = frozenset(
         f"{ENV_PREFIX}SCRATCH_DIR",
         f"{ENV_PREFIX}PLAN_PATH",
         f"{ENV_PREFIX}WORKER_CONTRACT",
+        f"{ENV_PREFIX}COMPLETION_CLAIMS",
         f"{ENV_PREFIX}NEW_FILE_ROOT",
         f"{ENV_PREFIX}CORRECTION_BRIEF",
     }
@@ -1565,11 +1589,513 @@ def load_exact_json_object(content: bytes, *, label: str) -> dict[str, Any]:
 
     try:
         value = json.loads(content.decode("utf-8"), object_pairs_hook=exact_pairs)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise RunnerError(f"{label} is not valid UTF-8 JSON") from exc
     if not isinstance(value, dict):
         raise RunnerError(f"{label} must contain one JSON object")
     return value
+
+
+def prefixed_sha256(value: bytes | str) -> str:
+    payload = value.encode("utf-8") if isinstance(value, str) else value
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def require_receipt_digest(value: object, *, label: str, allow_origin: bool = False) -> str:
+    prefix = r"(?:origin-)?sha256" if allow_origin else "sha256"
+    if not isinstance(value, str) or re.fullmatch(prefix + r":[0-9a-f]{64}", value) is None:
+        raise RunnerError(f"worker completion receipt has an invalid {label}")
+    return value
+
+
+def require_receipt_code(value: object, *, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value.encode("utf-8")) > WORKER_COMPLETION_RECEIPT_VALUE_MAX_BYTES
+        or re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", value) is None
+    ):
+        raise RunnerError(f"worker completion receipt contains prohibited or oversized {label}")
+    return value
+
+
+def require_receipt_code_list(
+    value: object, *, label: str, allowed: frozenset[str]
+) -> list[str]:
+    if not isinstance(value, list) or len(value) > WORKER_COMPLETION_RECEIPT_MAX_ITEMS:
+        raise RunnerError(f"worker completion receipt has an invalid {label} list")
+    result = [require_receipt_code(item, label=label) for item in value]
+    if any(item not in allowed for item in result):
+        raise RunnerError(f"worker completion receipt contains a non-allowlisted {label}")
+    if len(result) != len(set(result)):
+        raise RunnerError(f"worker completion receipt has duplicate {label} entries")
+    return result
+
+
+def require_completion_exit_status(value: object, *, label: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not WORKER_COMPLETION_EXIT_STATUS_MIN <= value <= WORKER_COMPLETION_EXIT_STATUS_MAX
+    ):
+        raise RunnerError(f"worker completion receipt has an invalid or unbounded {label}")
+    return value
+
+
+def validate_worker_completion_claims(value: object) -> dict[str, Any]:
+    required = {
+        "attempt_result", "acceptance_evidence", "commands_attempted", "blockers",
+        "residual_risks", "out_of_scope_change",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        if isinstance(value, dict) and "out_of_scope_change" not in value:
+            raise RunnerError("worker completion receipt is missing the out-of-scope declaration")
+        raise RunnerError("worker completion receipt claims have unknown or missing fields")
+    if value["attempt_result"] not in {"success", "failure"}:
+        raise RunnerError("worker completion receipt has an invalid attempt result")
+    evidence = value["acceptance_evidence"]
+    if not isinstance(evidence, list) or len(evidence) > WORKER_COMPLETION_RECEIPT_MAX_ITEMS:
+        raise RunnerError("worker completion receipt has invalid acceptance evidence")
+    normalized_evidence: list[dict[str, str]] = []
+    seen_evidence: set[str] = set()
+    for item in evidence:
+        if not isinstance(item, dict) or set(item) != {"acceptance_digest", "claim"}:
+            raise RunnerError("worker completion receipt has invalid acceptance evidence")
+        digest = require_receipt_digest(item["acceptance_digest"], label="acceptance digest")
+        if digest in seen_evidence or item["claim"] not in {"satisfied", "not_satisfied"}:
+            raise RunnerError("worker completion receipt has invalid acceptance evidence")
+        seen_evidence.add(digest)
+        normalized_evidence.append({"acceptance_digest": digest, "claim": item["claim"]})
+    commands = value["commands_attempted"]
+    if not isinstance(commands, list) or len(commands) > WORKER_COMPLETION_RECEIPT_MAX_ITEMS:
+        raise RunnerError("worker completion receipt has invalid command evidence")
+    normalized_commands: list[dict[str, object]] = []
+    seen_commands: set[str] = set()
+    for index, item in enumerate(commands, start=1):
+        if not isinstance(item, dict) or set(item) != {"command_id", "exit_status"}:
+            raise RunnerError("worker completion receipt has invalid command evidence")
+        command_id = require_receipt_code(item["command_id"], label="command identifier")
+        if command_id != f"worker-check-{index}":
+            raise RunnerError("worker completion receipt contains a non-derived command identifier")
+        status = require_completion_exit_status(
+            item["exit_status"], label="command exit status"
+        )
+        if command_id in seen_commands:
+            raise RunnerError("worker completion receipt has invalid command evidence")
+        seen_commands.add(command_id)
+        normalized_commands.append({"command_id": command_id, "exit_status": status})
+    if not isinstance(value["out_of_scope_change"], bool):
+        raise RunnerError("worker completion receipt has an invalid out-of-scope declaration")
+    return {
+        "attempt_result": value["attempt_result"],
+        "acceptance_evidence": normalized_evidence,
+        "commands_attempted": normalized_commands,
+        "blockers": require_receipt_code_list(
+            value["blockers"], label="blocker", allowed=WORKER_COMPLETION_BLOCKER_CODES
+        ),
+        "residual_risks": require_receipt_code_list(
+            value["residual_risks"], label="residual risk", allowed=WORKER_COMPLETION_RISK_CODES
+        ),
+        "out_of_scope_change": value["out_of_scope_change"],
+    }
+
+
+def validate_receipt_attempt(value: object) -> dict[str, Any]:
+    required = {"attempt_id", "attempt_kind", "correction_round", "correction_lineage"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise RunnerError("worker completion receipt attempt has an invalid exact field shape")
+    attempt_id = require_receipt_code(value["attempt_id"], label="attempt identifier")
+    kind = value["attempt_kind"]
+    round_value = value["correction_round"]
+    lineage = value["correction_lineage"]
+    if kind not in {"initial", "correction"} or isinstance(round_value, bool) or not isinstance(round_value, int):
+        raise RunnerError("worker completion receipt attempt lineage is invalid")
+    if kind == "initial":
+        if round_value != 0 or lineage is not None:
+            raise RunnerError("worker completion receipt attempt lineage is invalid")
+    elif (
+        round_value < 1
+        or not isinstance(lineage, dict)
+        or set(lineage) != {"prior_manifest_digest"}
+    ):
+        raise RunnerError("worker completion receipt attempt lineage is invalid")
+    else:
+        lineage = {
+            "prior_manifest_digest": require_receipt_digest(
+                lineage["prior_manifest_digest"], label="prior manifest digest"
+            )
+        }
+    return {
+        "attempt_id": attempt_id,
+        "attempt_kind": kind,
+        "correction_round": round_value,
+        "correction_lineage": lineage,
+    }
+
+
+def validate_receipt_candidate(value: object) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"patch_digest", "changed_paths"}:
+        raise RunnerError("worker completion receipt candidate has an invalid exact field shape")
+    raw_paths = value["changed_paths"]
+    if not isinstance(raw_paths, list) or not raw_paths or len(raw_paths) > WORKER_COMPLETION_RECEIPT_MAX_ITEMS:
+        raise RunnerError("worker completion receipt changed paths are invalid")
+    paths: list[str] = []
+    for raw in raw_paths:
+        if not isinstance(raw, str):
+            raise RunnerError("worker completion receipt changed paths are invalid")
+        normalized, _ = normalize_repo_relpath(raw, label="worker completion receipt changed path")
+        paths.append(normalized)
+    if len(paths) != len(set(paths)) or paths != sorted(paths):
+        raise RunnerError("worker completion receipt changed paths are not unique and sorted")
+    return {
+        "patch_digest": require_receipt_digest(value["patch_digest"], label="patch digest"),
+        "changed_paths": paths,
+    }
+
+
+def validate_worker_completion_receipt(
+    value: object,
+    *,
+    expected: dict[str, object] | None = None,
+    consumed_attempt_ids: Sequence[str] = (),
+) -> dict[str, Any]:
+    required = {
+        "schema_version", "repository_identity", "source_head", "plan_path", "plan_digest",
+        "worker_contract_digest", "orchestration_run_id", "attempt", "candidate", "process", "claims",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise RunnerError("worker completion receipt has unknown or missing fields")
+    if value["schema_version"] != WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION:
+        raise RunnerError("worker completion receipt has an unsupported schema version")
+    repository_identity = require_receipt_digest(
+        value["repository_identity"], label="repository identity", allow_origin=True
+    )
+    source_head = value["source_head"]
+    if not isinstance(source_head, str) or re.fullmatch(r"[0-9a-f]{40}", source_head) is None:
+        raise RunnerError("worker completion receipt has an invalid source HEAD")
+    if not isinstance(value["plan_path"], str):
+        raise RunnerError("worker completion receipt plan path is invalid")
+    plan_path, _ = normalize_repo_relpath(
+        value["plan_path"], label="worker completion receipt plan path"
+    )
+    plan_digest = require_receipt_digest(value["plan_digest"], label="plan digest")
+    contract_digest = require_receipt_digest(
+        value["worker_contract_digest"], label="worker contract digest"
+    )
+    run_id = value["orchestration_run_id"]
+    validate_bounded_text(run_id, "worker completion receipt run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES)
+    attempt = validate_receipt_attempt(value["attempt"])
+    if attempt["attempt_id"] in consumed_attempt_ids:
+        raise RunnerError("worker completion receipt replays a consumed attempt")
+    candidate = validate_receipt_candidate(value["candidate"])
+    process = value["process"]
+    if not isinstance(process, dict) or set(process) != {"exit_status", "diagnostic_codes"}:
+        raise RunnerError("worker completion receipt process has an invalid exact field shape")
+    exit_status = require_completion_exit_status(
+        process["exit_status"], label="process exit status"
+    )
+    diagnostic_codes = require_receipt_code_list(
+        process["diagnostic_codes"],
+        label="diagnostic",
+        allowed=WORKER_COMPLETION_DIAGNOSTIC_CODES,
+    )
+    claims = validate_worker_completion_claims(value["claims"])
+    if claims["attempt_result"] == "success" and exit_status != 0:
+        raise RunnerError("worker completion receipt makes a false success claim")
+    if claims["attempt_result"] == "success" and any(
+        item["claim"] != "satisfied" for item in claims["acceptance_evidence"]
+    ):
+        raise RunnerError("worker completion receipt success has unsatisfied acceptance evidence")
+    if candidate is not None and exit_status != 0:
+        raise RunnerError("worker completion receipt binds a candidate to a failed process")
+    if (exit_status == 0) != (not diagnostic_codes):
+        raise RunnerError("worker completion receipt diagnostics differ from process status")
+    if claims["attempt_result"] == "success" and (candidate is None or not claims["acceptance_evidence"]):
+        raise RunnerError("worker completion receipt success lacks candidate evidence")
+    if candidate is None and claims["acceptance_evidence"]:
+        raise RunnerError("worker completion receipt has evidence without a candidate")
+    if candidate is not None and not claims["acceptance_evidence"]:
+        raise RunnerError("worker completion receipt candidate lacks acceptance evidence")
+    normalized = {
+        "schema_version": WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION,
+        "repository_identity": repository_identity,
+        "source_head": source_head,
+        "plan_path": plan_path,
+        "plan_digest": plan_digest,
+        "worker_contract_digest": contract_digest,
+        "orchestration_run_id": run_id,
+        "attempt": attempt,
+        "candidate": candidate,
+        "process": {"exit_status": exit_status, "diagnostic_codes": diagnostic_codes},
+        "claims": claims,
+    }
+    if expected is not None:
+        for field, error in (
+            ("repository_identity", "repository identity mismatch"),
+            ("source_head", "stale receipt source HEAD"),
+            ("plan_path", "receipt plan path mismatch"),
+            ("plan_digest", "receipt plan digest mismatch"),
+            ("worker_contract_digest", "receipt worker contract digest mismatch"),
+            ("orchestration_run_id", "receipt orchestration run mismatch"),
+            ("attempt", "receipt attempt lineage mismatch"),
+        ):
+            if field in expected and normalized[field] != expected[field]:
+                raise RunnerError(error)
+        if "candidate" in expected:
+            expected_candidate = expected["candidate"]
+            if normalized["candidate"] is None or not isinstance(expected_candidate, dict):
+                if normalized["candidate"] != expected_candidate:
+                    raise RunnerError("receipt candidate mismatch")
+            else:
+                if normalized["candidate"]["patch_digest"] != expected_candidate.get("patch_digest"):
+                    raise RunnerError("receipt patch digest mismatch")
+                if normalized["candidate"]["changed_paths"] != expected_candidate.get("changed_paths"):
+                    raise RunnerError("receipt changed paths mismatch")
+        if "acceptance_digests" in expected:
+            expected_digests = expected["acceptance_digests"]
+            observed_digests = [
+                item["acceptance_digest"] for item in normalized["claims"]["acceptance_evidence"]
+            ]
+            if not isinstance(expected_digests, list) or set(observed_digests) != set(expected_digests):
+                raise RunnerError("receipt acceptance evidence differs from the worker contract")
+    return normalized
+
+
+def serialize_worker_completion_receipt(value: object) -> bytes:
+    normalized = validate_worker_completion_receipt(value)
+    content = (json.dumps(normalized, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(content) > WORKER_COMPLETION_RECEIPT_MAX_BYTES:
+        raise RunnerError("worker completion receipt exceeds the byte bound")
+    return content
+
+
+def load_worker_completion_receipt(content: bytes) -> dict[str, Any]:
+    if len(content) > WORKER_COMPLETION_RECEIPT_MAX_BYTES:
+        raise RunnerError("worker completion receipt exceeds the byte bound")
+    return validate_worker_completion_receipt(
+        load_exact_json_object(content, label="worker completion receipt")
+    )
+
+
+def verify_worker_completion_receipt_path(attempt_output: Path, relative_path: str) -> Path:
+    normalized, _ = normalize_repo_relpath(relative_path, label="worker completion receipt path")
+    if normalized != "worker-completion-receipt.json":
+        raise RunnerError("worker completion receipt path must use the fixed attempt output name")
+    path = attempt_output / normalized
+    ensure_no_symlink_components(path)
+    if path.is_symlink():
+        raise RunnerError("worker completion receipt path must not be a symlink")
+    return path
+
+
+def receipt_attempt_from_contract_lineage(
+    lineage: dict[str, object], *, attempt_id: str | None = None
+) -> dict[str, Any]:
+    validated = validate_contract_lineage(lineage)
+    kind = validated["attempt_kind"]
+    round_value = int(validated["correction_round"])
+    label = str(validated["attempt_label"])
+    return {
+        "attempt_id": attempt_id or f"{kind}-{round_value}-{label}",
+        "attempt_kind": kind,
+        "correction_round": round_value,
+        "correction_lineage": None if kind == "initial" else {
+            "prior_manifest_digest": "sha256:" + str(validated["prior_manifest_digest"])
+        },
+    }
+
+
+def safe_failure_claims(code: str) -> dict[str, Any]:
+    if code not in WORKER_COMPLETION_BLOCKER_CODES:
+        raise RunnerError("safe worker completion blocker is not allowlisted")
+    return {
+        "attempt_result": "failure",
+        "acceptance_evidence": [],
+        "commands_attempted": [],
+        "blockers": [require_receipt_code(code, label="blocker")],
+        "residual_risks": ["parent_review_required"],
+        "out_of_scope_change": False,
+    }
+
+
+def load_attempt_completion_claims(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not path.exists() and not path.is_symlink():
+        return None, "missing_completion_claims"
+    try:
+        content = read_bounded_regular_file(
+            path, WORKER_COMPLETION_RECEIPT_MAX_BYTES, "worker completion claims"
+        )
+        claims = validate_worker_completion_claims(
+            load_exact_json_object(content, label="worker completion claims")
+        )
+    except RunnerError:
+        return None, "invalid_completion_claims"
+    return claims, None
+
+
+def completion_receipt_artifact_key(label: str) -> str:
+    return (
+        "worker-completion-receipt.json"
+        if label == "custom"
+        else f"worker-{label}-completion-receipt.json"
+    )
+
+
+def process_result_artifact_key(label: str) -> str:
+    return "worker-process-result.json" if label == "custom" else f"worker-{label}-process-result.json"
+
+
+def validate_attempt_process_result(value: object) -> dict[str, Any]:
+    required = {
+        "schema_version", "attempt_id", "exit_status", "diagnostic_codes",
+        "stdout_digest", "stderr_digest",
+    }
+    if not isinstance(value, dict) or set(value) != required or value["schema_version"] != 1:
+        raise RunnerError("worker process result has an invalid exact schema")
+    attempt_id = require_receipt_code(value["attempt_id"], label="attempt identifier")
+    exit_status = require_completion_exit_status(
+        value["exit_status"], label="process exit status"
+    )
+    diagnostic_codes = require_receipt_code_list(
+        value["diagnostic_codes"],
+        label="diagnostic",
+        allowed=WORKER_COMPLETION_DIAGNOSTIC_CODES,
+    )
+    if (exit_status == 0) != (not diagnostic_codes):
+        raise RunnerError("worker process result diagnostics differ from exit status")
+    stdout_digest = require_receipt_digest(value["stdout_digest"], label="stdout digest")
+    stderr_digest = require_receipt_digest(value["stderr_digest"], label="stderr digest")
+    return {
+        "schema_version": 1,
+        "attempt_id": attempt_id,
+        "exit_status": exit_status,
+        "diagnostic_codes": diagnostic_codes,
+        "stdout_digest": stdout_digest,
+        "stderr_digest": stderr_digest,
+    }
+
+
+def write_attempt_process_result(
+    *,
+    label: str,
+    attempt_id: str,
+    result: subprocess.CompletedProcess[bytes],
+    stdout_digest: str,
+    stderr_digest: str,
+    reserved_artifacts: dict[str, Path],
+) -> tuple[Path, str, dict[str, Any]]:
+    payload = validate_attempt_process_result(
+        {
+            "schema_version": 1,
+            "attempt_id": attempt_id,
+            "exit_status": result.returncode,
+            "diagnostic_codes": [] if result.returncode == 0 else ["worker_failed"],
+            "stdout_digest": "sha256:" + stdout_digest,
+            "stderr_digest": "sha256:" + stderr_digest,
+        }
+    )
+    content = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    path = reserved_artifacts[process_result_artifact_key(label)]
+    path.write_bytes(content)
+    return path, prefixed_sha256(content), payload
+
+
+def write_attempt_completion_receipt(
+    attempt: dict[str, Any],
+    *,
+    reserved_artifacts: dict[str, Path],
+    candidate: dict[str, Any] | None,
+    final: bool,
+) -> dict[str, Any]:
+    contract = load_exact_json_object(
+        attempt["contract_bytes"], label="worker execution contract"
+    )
+    result: subprocess.CompletedProcess[bytes] = attempt["result"]
+    claims = attempt["completion_claims"]
+    claims_error = attempt["completion_claims_error"]
+    diagnostic_codes = [] if result.returncode == 0 else ["worker_failed"]
+    if claims_error is not None:
+        selected_claims = safe_failure_claims(claims_error)
+        selected_candidate = None
+    elif result.returncode != 0 and claims["attempt_result"] == "success":
+        selected_claims = safe_failure_claims("false_success_claim")
+        selected_candidate = None
+        attempt["completion_claims_error"] = "false_success_claim"
+    elif not final:
+        selected_claims = safe_failure_claims("candidate_not_derived")
+        selected_candidate = None
+    else:
+        expected_acceptance_list = [
+            prefixed_sha256(item) for item in contract["acceptance"]
+        ]
+        expected_acceptance = set(expected_acceptance_list)
+        observed_acceptance = {
+            item["acceptance_digest"] for item in claims["acceptance_evidence"]
+        }
+        bounded_failure_evidence = [
+            {"acceptance_digest": digest, "claim": "not_satisfied"}
+            for digest in expected_acceptance_list
+        ]
+        if claims["attempt_result"] == "failure":
+            selected_claims = {
+                **claims,
+                "acceptance_evidence": (
+                    bounded_failure_evidence if candidate is not None else []
+                ),
+            }
+            selected_candidate = candidate
+        elif observed_acceptance != expected_acceptance:
+            selected_claims = {
+                **safe_failure_claims("acceptance_evidence_mismatch"),
+                "acceptance_evidence": bounded_failure_evidence,
+            }
+            selected_candidate = candidate
+            attempt["completion_claims_error"] = "acceptance_evidence_mismatch"
+        elif claims["out_of_scope_change"]:
+            selected_claims = {
+                **safe_failure_claims("out_of_scope_change_reported"),
+                "acceptance_evidence": bounded_failure_evidence,
+            }
+            selected_candidate = candidate
+            attempt["completion_claims_error"] = "out_of_scope_change_reported"
+        else:
+            selected_claims = claims
+            selected_candidate = candidate
+    receipt = {
+        "schema_version": WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION,
+        "repository_identity": contract["repository_identity"],
+        "source_head": contract["source_head"],
+        "plan_path": contract["plan_path"],
+        "plan_digest": "sha256:" + contract["plan_digest"],
+        "worker_contract_digest": prefixed_sha256(attempt["contract_bytes"]),
+        "orchestration_run_id": contract["orchestration_run_id"],
+        "attempt": receipt_attempt_from_contract_lineage(
+            contract["attempt_lineage"], attempt_id=attempt["attempt_id"]
+        ),
+        "candidate": selected_candidate,
+        "process": {
+            "exit_status": result.returncode,
+            "diagnostic_codes": diagnostic_codes,
+        },
+        "claims": selected_claims,
+    }
+    content = serialize_worker_completion_receipt(receipt)
+    receipt_path = verify_worker_completion_receipt_path(
+        attempt["scratch_dir"], "worker-completion-receipt.json"
+    )
+    receipt_path.write_bytes(content)
+    artifact_path = reserved_artifacts[completion_receipt_artifact_key(attempt["record"]["label"])]
+    artifact_path.write_bytes(content)
+    receipt_digest = prefixed_sha256(content)
+    attempt["record"]["completion_receipt_path"] = str(artifact_path)
+    attempt["record"]["completion_receipt_digest"] = receipt_digest
+    attempt["record"]["completion_claims_valid"] = attempt["completion_claims_error"] is None
+    attempt["record"]["completion_receipt_valid"] = True
+    attempt["completion_receipt"] = receipt
+    attempt["completion_receipt_path"] = artifact_path
+    attempt["completion_receipt_digest"] = receipt_digest
+    return receipt
 
 
 def derive_worker_contract(
@@ -2175,6 +2701,18 @@ def build_worker_prompt() -> str:
         - Do not run plan validation. The parent performs review and authorizes validation after admission.
         - Write transient diagnostics, tool caches, and temporary artifacts only under
           $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
+        - Before exit, write one UTF-8 JSON object to
+          $SANDBOXED_PLAN_WORKER_COMPLETION_CLAIMS with exactly these fields:
+          attempt_result, acceptance_evidence, commands_attempted, blockers,
+          residual_risks, and out_of_scope_change. Use only acceptance SHA-256 digests,
+          positional command ids `worker-check-1` through `worker-check-64`, fixed policy
+          blocker/risk codes, observed integer exit statuses, and booleans;
+          worker blocker codes are command_failed, implementation_failed, incomplete_change,
+          missing_input, or worker_failed; residual-risk codes are incomplete_change,
+          known_limitation, parent_review_required, or validation_not_run.
+          never include commands, output bodies, prompts, environment values, credentials,
+          logs, patches, or absolute paths. The runner binds these advisory claims to Git,
+          process, contract, and attempt facts in the final completion receipt.
 
         The parent will reject any changed path outside write_scope.
         Report changed paths, validation results, blockers, remaining risks, and confirm whether any out-of-scope path changed.
@@ -2202,6 +2740,8 @@ def build_correction_prompt() -> str:
         - Write transient diagnostics, caches, and temporary artifacts only under
           $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
         - Report changed paths and blockers. Do not run broad plan validation.
+        - Before exit, write the same bounded advisory JSON claims object required by the
+          initial prompt to $SANDBOXED_PLAN_WORKER_COMPLETION_CLAIMS.
 
         The parent will admit one aggregate patch against the original source HEAD.
         """
@@ -2754,6 +3294,11 @@ def execute_isolated_attempt(
     prior_patch: bytes | None = None,
     correction_brief: bytes | None = None,
 ) -> dict[str, Any]:
+    validated_attempt_lineage = validate_contract_lineage(attempt_lineage)
+    attempt_id = (
+        f"{validated_attempt_lineage['attempt_kind']}-"
+        f"{validated_attempt_lineage['correction_round']}-{label}-{secrets.token_hex(16)}"
+    )
     attempt_root = workspace / label
     clone_dir = attempt_root / "clone"
     scratch_dir = attempt_root / "scratch"
@@ -2769,7 +3314,7 @@ def execute_isolated_attempt(
         values=values,
         normalized_scope=normalized_scope,
         run_id=run_id,
-        lineage=attempt_lineage,
+        lineage=validated_attempt_lineage,
     )
     contract_path = scratch_dir / "worker-contract.json"
     contract_path.write_bytes(contract_bytes)
@@ -2846,6 +3391,8 @@ def execute_isolated_attempt(
         include_codex_home=include_codex_home,
     )
     env_vars[f"{ENV_PREFIX}WORKER_CONTRACT"] = str(contract_path)
+    completion_claims_path = scratch_dir / "worker-completion-claims.json"
+    env_vars[f"{ENV_PREFIX}COMPLETION_CLAIMS"] = str(completion_claims_path)
     env_vars[f"{ENV_PREFIX}NEW_FILE_ROOT"] = str(scratch_dir / "writable-shadows")
     if correction_brief_path is not None:
         env_vars[f"{ENV_PREFIX}CORRECTION_BRIEF"] = str(correction_brief_path)
@@ -2859,7 +3406,7 @@ def execute_isolated_attempt(
         values=values,
         normalized_scope=normalized_scope,
         run_id=run_id,
-        lineage=attempt_lineage,
+        lineage=validated_attempt_lineage,
     )
     if fresh_contract != contract_bytes or contract_path.read_bytes() != contract_bytes:
         raise RunnerError("worker execution contract does not equal a fresh derivation")
@@ -2893,6 +3440,7 @@ def execute_isolated_attempt(
     stdout_digest = write_bytes(stdout_path, result.stdout)
     stderr_digest = write_bytes(stderr_path, result.stderr)
     record: dict[str, Any] = {
+        "attempt_id": attempt_id,
         "label": label,
         "model": model,
         "reasoning_effort": reasoning,
@@ -2904,13 +3452,26 @@ def execute_isolated_attempt(
         "stderr_digest": stderr_digest,
         "selected": False,
     }
+    process_result_path, process_result_digest, process_result = write_attempt_process_result(
+        label=label,
+        attempt_id=attempt_id,
+        result=result,
+        stdout_digest=stdout_digest,
+        stderr_digest=stderr_digest,
+        reserved_artifacts=reserved_artifacts,
+    )
+    record["process_result_path"] = str(process_result_path)
+    record["process_result_digest"] = process_result_digest
     attempt_last_message: Path | None = None
     if result.returncode == 0 and last_message_path.is_file():
         attempt_last_message = reserved_artifacts[f"{artifact_prefix}-last-message.txt"]
         attempt_last_message.write_bytes(last_message_path.read_bytes())
         record["last_message_path"] = str(attempt_last_message)
         record["last_message_digest"] = hash_file(attempt_last_message)
-    return {
+    completion_claims, completion_claims_error = load_attempt_completion_claims(
+        completion_claims_path
+    )
+    attempt = {
         "clone_dir": clone_dir,
         "attempt_root": attempt_root,
         "scratch_dir": scratch_dir,
@@ -2922,7 +3483,20 @@ def execute_isolated_attempt(
         "record": record,
         "last_message_path": attempt_last_message,
         "contract_bytes": contract_bytes,
+        "attempt_id": attempt_id,
+        "process_result": process_result,
+        "process_result_path": process_result_path,
+        "process_result_digest": process_result_digest,
+        "completion_claims": completion_claims,
+        "completion_claims_error": completion_claims_error,
     }
+    write_attempt_completion_receipt(
+        attempt,
+        reserved_artifacts=reserved_artifacts,
+        candidate=None,
+        final=result.returncode != 0,
+    )
+    return attempt
 
 
 def select_attempt_artifacts(
@@ -3166,6 +3740,12 @@ def run_worker(args: argparse.Namespace) -> int:
                     f"worker exited with {selected['result'].returncode}; stdout/stderr saved under {output_dir}"
                 )
 
+        if selected["completion_claims_error"] is not None:
+            raise RunnerError(
+                "worker completion claims were rejected; process diagnostics and a safe failure receipt "
+                f"were saved under {output_dir}"
+            )
+
         worker_result = select_attempt_artifacts(selected, reserved_artifacts)
         contract_path = reserved_artifacts["worker-contract.json"]
         contract_path.write_bytes(selected["contract_bytes"])
@@ -3195,8 +3775,7 @@ def run_worker(args: argparse.Namespace) -> int:
         if not patch_bytes:
             raise RunnerError("worker produced no candidate changes")
 
-        patch_path = reserved_artifacts["candidate.patch"]
-        patch_digest = write_bytes(patch_path, patch_bytes)
+        patch_digest = hashlib.sha256(patch_bytes).hexdigest()
         changed_paths = normalize_changed_paths(
             derive_changed_paths_from_patch(repo_root, git_bin, patch_bytes, head),
             repo_root,
@@ -3206,6 +3785,28 @@ def run_worker(args: argparse.Namespace) -> int:
         disallowed = [path for path in changed_paths if not scope_allows_path(normalized_scope, path)]
         if disallowed:
             raise RunnerError(f"worker changed paths outside write_scope: {', '.join(disallowed)}")
+
+        receipt_candidate = {
+            "patch_digest": "sha256:" + patch_digest,
+            "changed_paths": sorted(changed_paths),
+        }
+        completion_receipt = write_attempt_completion_receipt(
+            selected,
+            reserved_artifacts=reserved_artifacts,
+            candidate=receipt_candidate,
+            final=True,
+        )
+        patch_path = reserved_artifacts["candidate.patch"]
+        if write_bytes(patch_path, patch_bytes) != patch_digest:
+            raise RunnerError("candidate patch changed while it was published")
+        if completion_receipt["claims"]["attempt_result"] != "success":
+            raise RunnerError(
+                "worker completion receipt reports failure; candidate was not admitted"
+            )
+        completion_receipt_path = selected["completion_receipt_path"]
+        completion_receipt_digest = selected["completion_receipt_digest"]
+        process_result_path = selected["process_result_path"]
+        process_result_digest = selected["process_result_digest"]
 
         telemetry_attempts = attempts if worker_kind == "codex" else [selected["record"]]
         telemetry = {
@@ -3235,7 +3836,12 @@ def run_worker(args: argparse.Namespace) -> int:
             "plan_digest": plan_digest,
             "worker_contract_path": str(contract_path),
             "worker_contract_digest": contract_digest,
+            "worker_completion_receipt_path": str(completion_receipt_path),
+            "worker_completion_receipt_digest": completion_receipt_digest.removeprefix("sha256:"),
+            "worker_process_result_path": str(process_result_path),
+            "worker_process_result_digest": process_result_digest.removeprefix("sha256:"),
             "worker_attempt_label": selected["record"]["label"],
+            "worker_attempt_id": selected["attempt_id"],
             "allowed_write_scope": normalized_scope,
             "changed_paths": changed_paths,
             "patch_path": str(patch_path),
@@ -3284,7 +3890,9 @@ def read_bounded_regular_file(path: Path, maximum_bytes: int, label: str) -> byt
         path = (Path.cwd() / path).absolute()
     ensure_no_symlink_components(path)
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        descriptor = os.open(
+            path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+        )
     except OSError as exc:
         raise RunnerError(f"{label} must be a regular non-symlink file") from exc
     try:
@@ -3378,6 +3986,107 @@ def verify_candidate_manifest(
     ]
     if changed_paths != normalized_manifest_changed:
         raise RunnerError("candidate patch changed paths do not match the worker manifest")
+    receipt_path_raw = manifest.get("worker_completion_receipt_path")
+    receipt_digest = manifest.get("worker_completion_receipt_digest")
+    if not isinstance(receipt_path_raw, str) or not isinstance(receipt_digest, str):
+        raise RunnerError("candidate manifest is missing the worker completion receipt binding")
+    receipt_path = Path(receipt_path_raw).expanduser()
+    if not receipt_path.is_absolute():
+        receipt_path = (manifest_path.parent / receipt_path).absolute()
+    if receipt_path.parent != manifest_path.parent or receipt_path.name not in {
+        "worker-completion-receipt.json",
+        "worker-primary-completion-receipt.json",
+        "worker-fallback-completion-receipt.json",
+    }:
+        raise RunnerError("worker completion receipt must be one fixed sibling of the candidate manifest")
+    receipt_bytes = read_bounded_regular_file(
+        receipt_path, WORKER_COMPLETION_RECEIPT_MAX_BYTES, "worker completion receipt"
+    )
+    if hashlib.sha256(receipt_bytes).hexdigest() != receipt_digest:
+        raise RunnerError("worker completion receipt digest no longer matches the candidate manifest")
+    receipt = load_worker_completion_receipt(receipt_bytes)
+    attempt_label = manifest.get("worker_attempt_label")
+    if attempt_label not in {"primary", "fallback", "custom"}:
+        raise RunnerError("candidate manifest has an invalid worker attempt label")
+    attempt_id = require_receipt_code(
+        manifest.get("worker_attempt_id"), label="manifest attempt identifier"
+    )
+    process_path_raw = manifest.get("worker_process_result_path")
+    process_digest = manifest.get("worker_process_result_digest")
+    if not isinstance(process_path_raw, str) or not isinstance(process_digest, str):
+        raise RunnerError("candidate manifest is missing the worker process result binding")
+    process_path = Path(process_path_raw).expanduser()
+    if not process_path.is_absolute():
+        process_path = (manifest_path.parent / process_path).absolute()
+    if process_path.parent != manifest_path.parent or process_path.name not in {
+        "worker-process-result.json",
+        "worker-primary-process-result.json",
+        "worker-fallback-process-result.json",
+    }:
+        raise RunnerError("worker process result must be one fixed sibling of the candidate manifest")
+    process_bytes = read_bounded_regular_file(
+        process_path, WORKER_COMPLETION_RECEIPT_MAX_BYTES, "worker process result"
+    )
+    if hashlib.sha256(process_bytes).hexdigest() != process_digest:
+        raise RunnerError("worker process result digest no longer matches the candidate manifest")
+    process_result = validate_attempt_process_result(
+        load_exact_json_object(process_bytes, label="worker process result")
+    )
+    correction_lineage = manifest.get("correction_lineage")
+    if correction_lineage is None:
+        expected_attempt = {
+            "attempt_id": attempt_id,
+            "attempt_kind": "initial",
+            "correction_round": 0,
+            "correction_lineage": None,
+        }
+    else:
+        if not isinstance(correction_lineage, dict):
+            raise RunnerError("candidate manifest correction lineage is invalid")
+        expected_attempt = {
+            "attempt_id": attempt_id,
+            "attempt_kind": "correction",
+            "correction_round": correction_lineage.get("correction_round"),
+            "correction_lineage": {
+                "prior_manifest_digest": "sha256:" + str(
+                    correction_lineage.get("prior_manifest_digest")
+                )
+            },
+        }
+    expected_receipt = {
+        "repository_identity": derive_repository_identity(repo_root, git_bin),
+        "source_head": current_head,
+        "plan_path": plan_rel,
+        "plan_digest": "sha256:" + current_plan_digest,
+        "worker_contract_digest": "sha256:" + str(manifest.get("worker_contract_digest")),
+        "orchestration_run_id": run_id,
+        "attempt": expected_attempt,
+        "candidate": {
+            "patch_digest": "sha256:" + patch_digest,
+            "changed_paths": changed_paths,
+        },
+        "acceptance_digests": [
+            prefixed_sha256(item)
+            for item in unique_contract_text_items(
+                values.get("acceptance"), label="acceptance", require_nonempty=True
+            )
+        ],
+    }
+    receipt = validate_worker_completion_receipt(receipt, expected=expected_receipt)
+    worker_result = manifest.get("worker_result")
+    expected_process = {
+        "exit_status": process_result["exit_status"],
+        "diagnostic_codes": process_result["diagnostic_codes"],
+    }
+    if (
+        not isinstance(worker_result, dict)
+        or process_result["attempt_id"] != attempt_id
+        or receipt["process"] != expected_process
+        or process_result["exit_status"] != worker_result.get("returncode")
+        or process_result["stdout_digest"] != "sha256:" + str(worker_result.get("stdout_digest"))
+        or process_result["stderr_digest"] != "sha256:" + str(worker_result.get("stderr_digest"))
+    ):
+        raise RunnerError("worker completion receipt process status differs from preserved worker diagnostics")
     disallowed = [path for path in changed_paths if not scope_allows_path(normalized_scope, path)]
     if disallowed:
         raise RunnerError(f"candidate patch changes paths outside the current write_scope: {', '.join(disallowed)}")
@@ -3406,6 +4115,12 @@ def verify_candidate_manifest(
         "patch_bytes": patch_bytes,
         "patch_digest": patch_digest,
         "changed_paths": changed_paths,
+        "worker_completion_receipt": receipt,
+        "worker_completion_receipt_path": receipt_path,
+        "worker_completion_receipt_digest": receipt_digest,
+        "worker_process_result": process_result,
+        "worker_process_result_path": process_path,
+        "worker_process_result_digest": process_digest,
     }
 
 
@@ -3963,6 +4678,11 @@ def correct_worker(args: argparse.Namespace) -> int:
                         f"fallback correction worker exited with {fallback['result'].returncode}; stdout/stderr saved under {output_dir}"
                     )
                 selected = fallback
+        if selected["completion_claims_error"] is not None:
+            raise RunnerError(
+                "correction completion claims were rejected; process diagnostics and a safe failure "
+                f"receipt were saved under {output_dir}"
+            )
         worker_result = select_attempt_artifacts(selected, reserved_artifacts)
         contract_path = reserved_artifacts["worker-contract.json"]
         contract_path.write_bytes(selected["contract_bytes"])
@@ -3989,8 +4709,7 @@ def correct_worker(args: argparse.Namespace) -> int:
             raise RunnerError("correction worker changed clone refs")
         if not patch_bytes:
             raise RunnerError("correction produced no aggregate candidate changes")
-        patch_path = reserved_artifacts["candidate.patch"]
-        patch_digest = write_bytes(patch_path, patch_bytes)
+        patch_digest = hashlib.sha256(patch_bytes).hexdigest()
         changed_paths = normalize_changed_paths(
             derive_changed_paths_from_patch(repo_root, git_bin, patch_bytes, verified["head"]),
             repo_root,
@@ -4012,6 +4731,27 @@ def correct_worker(args: argparse.Namespace) -> int:
         ensure_clean_worktree(repo_root, git_bin)
         if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
             raise RunnerError("source HEAD changed during correction admission")
+        receipt_candidate = {
+            "patch_digest": "sha256:" + patch_digest,
+            "changed_paths": sorted(changed_paths),
+        }
+        completion_receipt = write_attempt_completion_receipt(
+            selected,
+            reserved_artifacts=reserved_artifacts,
+            candidate=receipt_candidate,
+            final=True,
+        )
+        patch_path = reserved_artifacts["candidate.patch"]
+        if write_bytes(patch_path, patch_bytes) != patch_digest:
+            raise RunnerError("correction patch changed while it was published")
+        if completion_receipt["claims"]["attempt_result"] != "success":
+            raise RunnerError(
+                "correction completion receipt reports failure; candidate was not admitted"
+            )
+        completion_receipt_path = selected["completion_receipt_path"]
+        completion_receipt_digest = selected["completion_receipt_digest"]
+        process_result_path = selected["process_result_path"]
+        process_result_digest = selected["process_result_digest"]
         telemetry_attempts = attempts if worker_kind == "codex" else [selected["record"]]
         manifest = {
             "schema_version": SCHEMA_VERSION,
@@ -4020,7 +4760,12 @@ def correct_worker(args: argparse.Namespace) -> int:
             "plan_digest": verified["plan_digest"],
             "worker_contract_path": str(contract_path),
             "worker_contract_digest": contract_digest,
+            "worker_completion_receipt_path": str(completion_receipt_path),
+            "worker_completion_receipt_digest": completion_receipt_digest.removeprefix("sha256:"),
+            "worker_process_result_path": str(process_result_path),
+            "worker_process_result_digest": process_result_digest.removeprefix("sha256:"),
             "worker_attempt_label": selected["record"]["label"],
+            "worker_attempt_id": selected["attempt_id"],
             "allowed_write_scope": verified["normalized_scope"],
             "changed_paths": changed_paths,
             "patch_path": str(patch_path),
@@ -4165,6 +4910,8 @@ def write_self_test_worker(path: Path) -> None:
             #!/usr/bin/env python3
             from __future__ import annotations
 
+            import hashlib
+            import json
             import os
             from pathlib import Path
 
@@ -4195,6 +4942,34 @@ def write_self_test_worker(path: Path) -> None:
                     raise SystemExit(f"unexpected write success: {{label}}")
             if denied != ["source", "outside"]:
                 raise SystemExit(f"unexpected denied set: {{denied}}")
+
+            contract = json.loads(
+                Path(os.environ[prefix + "WORKER_CONTRACT"]).read_text(encoding="utf-8")
+            )
+            acceptance_evidence = [
+                {{
+                    "acceptance_digest": "sha256:"
+                    + hashlib.sha256(item.encode()).hexdigest(),
+                    "claim": "satisfied",
+                }}
+                for item in contract["acceptance"]
+            ]
+            Path(os.environ[prefix + "COMPLETION_CLAIMS"]).write_text(
+                json.dumps(
+                    {{
+                        "attempt_result": "success",
+                        "acceptance_evidence": acceptance_evidence,
+                        "commands_attempted": [],
+                        "blockers": [],
+                        "residual_risks": [],
+                        "out_of_scope_change": False,
+                    }},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\\n",
+                encoding="utf-8",
+            )
             """
         ),
         encoding="utf-8",

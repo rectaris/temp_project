@@ -1,6 +1,6 @@
 # Emit structured claims in the runner self-test
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -65,11 +65,15 @@ Plan 156's one authoritative suite exposed that the deterministic self-test work
 
 ## Tasks
 
-- [ ] Add contract-bound success claims to the deterministic self-test worker.
-- [ ] Keep root and generated runners byte-identical.
-- [ ] Obtain independent review, run focused validation, run this plan's validation exactly once, and archive it.
+- [x] Add contract-bound success claims to the deterministic self-test worker.
+- [x] Keep root and generated runners byte-identical.
+- [x] Obtain independent review, run focused validation, run this plan's validation exactly once, and archive it.
 
 ## Validation Notes
 
 - Plan 156 stopped at `/tmp/project-agent-workflow-plan156-20260822-a/execution-state.json` after its single authoritative run exposed validation-method drift.
 - The holdout remains opaque and unexecuted.
+- The self-test worker now derives one `satisfied` evidence record per contract acceptance digest and writes the exact bounded claims object through `SANDBOXED_PLAN_WORKER_COMPLETION_CLAIMS`.
+- Independent review reported High 0, Medium 0, Low 0 and accepted the bounded runner change; receipt: `sha256:ad0eb76bf6e18fa6769013436d8ae27ddebc15d00ec3fb5a7138fa16457bf896`.
+- Focused validation passed once: runner self-test, Copier static check, and `git diff --check`.
+- Authoritative validation passed exactly once with the same three commands; ledger: `/tmp/project-agent-workflow-plan158-20260822-a/execution-state.json`.

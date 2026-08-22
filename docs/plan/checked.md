@@ -124,3 +124,4 @@ id	path
 151	docs/plan/checked/2026/08/16-31/151-complete-effect-adjacent-manifest-revalidation.md
 152	docs/plan/checked/2026/08/16-31/152-certify-integrated-local-git-retirement.md
 153	docs/plan/checked/2026/08/16-31/153-freeze-worker-completion-receipt-scenarios.md
+158	docs/plan/checked/2026/08/16-31/158-emit-structured-claims-in-runner-self-test.md
