@@ -17,3 +17,4 @@ id	path	contract
 143	docs/plan/replanned/2026/08/16-31/143-implement-read-only-retirement-scan.md	docs/plan/replanned/contracts/143-implement-read-only-retirement-scan.json
 144	docs/plan/replanned/2026/08/16-31/144-implement-revalidated-local-apply.md	docs/plan/replanned/contracts/144-implement-revalidated-local-apply.json
 146	docs/plan/replanned/2026/08/16-31/146-integrate-local-git-retirement.md	docs/plan/replanned/contracts/146-integrate-local-git-retirement.json
+114	docs/plan/replanned/2026/08/16-31/114-validate-structured-worker-completion.md	docs/plan/replanned/contracts/114-validate-structured-worker-completion.json

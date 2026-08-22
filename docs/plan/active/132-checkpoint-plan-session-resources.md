@@ -51,7 +51,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
-  - docs/plan/active/114-validate-structured-worker-completion.md
+  - docs/plan/active/155-integrate-structured-worker-completion-receipt.md
   - docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md
   - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
@@ -90,7 +90,7 @@ acceptance:
 replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
-  - plan 136 as the accepted successor for plan 113, plus plans 114 and 115, must be checked before implementation starts
+  - plan 136 as the accepted successor for plan 113, plan 155 as the accepted integration successor for plan 114, and plan 115 must be checked before implementation starts
   - Do not implement this plan in the session that creates or materially updates it.
   - Start the next numbered plan only in a root session whose directly observed runtime session identity differs from the session that emitted the prior terminal checkpoint.
   - Treat compaction or a summary injected into the same conversation as continued context, not a fresh root session.

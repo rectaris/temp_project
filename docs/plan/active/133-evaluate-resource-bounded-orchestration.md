@@ -35,7 +35,7 @@ context_files:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
-  - docs/plan/active/114-validate-structured-worker-completion.md
+  - docs/plan/active/155-integrate-structured-worker-completion-receipt.md
   - docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/active/130-map-acceptance-validation-witnesses.md
   - docs/plan/active/131-require-confirmed-failure-diagnosis.md
@@ -93,7 +93,7 @@ acceptance:
 replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
-  - plan 136 as the accepted successor for plan 113, plus plans 114 and 115, must be checked and their context paths refreshed before paired evaluation
+  - plan 136 as the accepted successor for plan 113, plan 155 as the accepted integration successor for plan 114, and plan 115 must be checked and their context paths refreshed before paired evaluation
   - plans 130 through 132 must be checked and their exact checked archive paths must replace active context paths
   - add a second fixed regression workload structurally equivalent to one root session carrying diagnosis, proposal, an initial rejected implementation, replanning, three successor plans, context compactions, and full-history reviewer starts; keep product paths and conversation bodies out of the fixture
   - reject the staged side when it reuses a root-session identity across a numbered-plan boundary, substitutes compaction for a fresh session, starts a reviewer with inherited turns, or claims token improvement from proxy counts; keep the result `measurement_pending` when required outer-runtime identity or fork-mode evidence is unavailable
@@ -129,7 +129,7 @@ checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、�
 
 ## Decisions
 
-- Preserve every source acceptance item and interpret references to Plan 113 as its accepted Plan 136 successor when evaluating the combined outputs with plans 114, 115, and 130 through 132.
+- Preserve every source acceptance item and interpret references to Plan 113 and Plan 114 as their accepted integration successors, Plan 136 and Plan 155, when evaluating the combined outputs with Plan 115 and plans 130 through 132.
 - Add one fixed generic workload that reproduces late integration coverage, speculative repair planning, repeated reviewer context, and multi-plan parent accumulation without product-specific paths.
 - Add a distinct fixed regression workload for the observed bootstrap failure: same-session analysis and implementation, a stopped initial plan, successor-plan accumulation, compaction, and full-history review.
 - Treat outer-runtime session identity and reviewer inheritance mode as required comparability evidence for this regression workload; use `measurement_pending` rather than inference when either is unavailable.
