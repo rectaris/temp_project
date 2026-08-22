@@ -384,6 +384,44 @@ def require_orchestration_policy_markers() -> None:
     worker_holdout_bytes = (ROOT / worker_holdout_path).read_bytes()
     if hashlib.sha256(worker_holdout_bytes).hexdigest() != "a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27":
         fail("worker-contract holdout bytes differ from the preimplementation seal")
+    receipt_scenarios_path = "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
+    receipt_holdout_path = "tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+    receipt_scenarios_bytes = (ROOT / receipt_scenarios_path).read_bytes()
+    if hashlib.sha256(receipt_scenarios_bytes).hexdigest() != "264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a":
+        fail("worker-completion-receipt tuned scenario bytes differ from the preimplementation seal")
+    receipt_scenarios = json.loads(receipt_scenarios_bytes.decode("utf-8"))
+    if set(receipt_scenarios) != {"schema_version", "suite", "used_for_tuning", "holdout_file", "base", "cases"}:
+        fail("worker-completion-receipt scenarios have an invalid exact shape")
+    if (
+        receipt_scenarios.get("schema_version") != 1
+        or receipt_scenarios.get("suite") != "worker-completion-receipt"
+        or receipt_scenarios.get("used_for_tuning") is not True
+        or receipt_scenarios.get("holdout_file") != Path(receipt_holdout_path).name
+    ):
+        fail("worker-completion-receipt scenarios have an unsupported identity or holdout link")
+    receipt_cases = receipt_scenarios.get("cases")
+    if not isinstance(receipt_cases, list) or {case.get("class") for case in receipt_cases if isinstance(case, dict)} != {"median", "edge", "negative"}:
+        fail("worker-completion-receipt scenarios must preserve median, edge, and negative classes")
+    if any(not isinstance(case, dict) or case.get("used_for_tuning") is not True for case in receipt_cases):
+        fail("worker-completion-receipt scenarios must remain tuned inputs")
+    receipt_coverage = {
+        marker
+        for case in receipt_cases
+        for marker in (case.get("covers", []) if isinstance(case, dict) else [])
+    }
+    expected_receipt_coverage = {
+        "successful_attempt", "failed_attempt", "initial_attempt", "correction_attempt",
+        "failure_before_candidate", "partial_command_execution", "stale_receipt",
+        "replayed_receipt", "plan_mismatch", "contract_mismatch", "patch_mismatch",
+        "changed_path_mismatch", "false_success_claim", "missing_out_of_scope_declaration",
+        "unknown_field", "duplicate_field", "oversized_receipt", "oversized_value",
+        "path_traversal", "symlink_escape", "secret_inclusion", "raw_output_inclusion",
+    }
+    if receipt_coverage != expected_receipt_coverage:
+        fail("worker-completion-receipt scenarios do not cover the accepted boundary")
+    receipt_holdout_bytes = (ROOT / receipt_holdout_path).read_bytes()
+    if hashlib.sha256(receipt_holdout_bytes).hexdigest() != "4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76":
+        fail("worker-completion-receipt holdout bytes differ from the preimplementation seal")
     evidence = json.loads(
         (ROOT / "tests/fixtures/orchestration/worker-contract-evidence.json").read_text(
             encoding="utf-8"

@@ -82,7 +82,7 @@ acceptance:
 replan_source: docs/plan/active/114-validate-structured-worker-completion.md
 replan_contract: docs/plan/replanned/contracts/114-validate-structured-worker-completion.json
 integration_gates:
-  - plan 153 must be checked and its exact archive path and frozen fixture digests must replace active predecessor inputs before implementation starts
+  - plan 153 must be checked at docs/plan/checked/2026/08/16-31/153-freeze-worker-completion-receipt-scenarios.md; tuned scenarios must equal sha256:264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a and the opaque holdout must equal sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76 before implementation starts
   - keep the tuned scenarios read-only and do not inspect or execute the digest-sealed holdout in this plan
   - plan 155 must execute the unchanged holdout only after this implementation is otherwise review-ready
 successor_plans:
@@ -129,3 +129,5 @@ The concrete implementation boundary is one active plan that changes the exact r
 - Plan 136 is checked at `docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md`.
 - Plan 153 is a hard predecessor; its fixture files are absent from this write scope.
 - The source Plan 114 acceptance text is preserved exactly.
+- Plan 153 is checked at `docs/plan/checked/2026/08/16-31/153-freeze-worker-completion-receipt-scenarios.md`.
+- The tuned fixture is sealed at `sha256:264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a`; the opaque holdout is sealed at `sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76` and must not be inspected or executed in this plan.

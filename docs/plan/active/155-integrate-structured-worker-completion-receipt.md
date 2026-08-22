@@ -82,7 +82,7 @@ replan_source: docs/plan/active/114-validate-structured-worker-completion.md
 replan_contract: docs/plan/replanned/contracts/114-validate-structured-worker-completion.json
 integration_gates:
   - plans 153 and 154 must be checked and their exact archive paths must replace active context paths before evaluation starts
-  - tuned and holdout fixture digests must equal the values recorded by plan 153 before any evaluation command starts
+  - tuned scenarios must equal sha256:264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a and holdout must equal sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76 before any evaluation command starts
   - plan 115 may start only after this integration plan is checked and its dependency path is refreshed to this plan's exact checked archive
 successor_plans:
   - docs/plan/active/153-freeze-worker-completion-receipt-scenarios.md

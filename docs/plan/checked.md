@@ -123,3 +123,4 @@ id	path
 145	docs/plan/checked/2026/08/16-31/145-integrate-retirement-copier-preservation.md
 151	docs/plan/checked/2026/08/16-31/151-complete-effect-adjacent-manifest-revalidation.md
 152	docs/plan/checked/2026/08/16-31/152-certify-integrated-local-git-retirement.md
+153	docs/plan/checked/2026/08/16-31/153-freeze-worker-completion-receipt-scenarios.md

@@ -1,6 +1,6 @@
 # Freeze worker completion receipt scenarios before implementation
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - referent_first
@@ -85,14 +85,20 @@ The concrete implementation boundary is one active plan that adds exact bounded 
 
 ## Tasks
 
-- [ ] Define exact-shape scenario records for every source-required success, failure, malformed, deceptive, tampering, path, and prohibited-content case.
-- [ ] Add a generic executable evaluator that reports observed acceptance or rejection for a caller-selected fixture.
-- [ ] Keep the holdout physically separate from reusable prompts and tuned data.
-- [ ] Align inventory and Copier-preservation checks for the new fixture files.
-- [ ] Review the bounded parent diff, run focused validation, obtain independent review, run the authoritative suite once, and archive this plan with the committed fixture digests.
+- [x] Define exact-shape scenario records for every source-required success, failure, malformed, deceptive, tampering, path, and prohibited-content case.
+- [x] Add a generic executable evaluator that reports observed acceptance or rejection for a caller-selected fixture.
+- [x] Keep the holdout physically separate from reusable prompts and tuned data.
+- [x] Align inventory and Copier-preservation checks for the new fixture files.
+- [x] Review the bounded parent diff, run focused validation, obtain independent review, run the authoritative suite once, and archive this plan with the committed fixture digests.
 
 ## Validation Notes
 
 - Plan 136 is checked at `docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md`.
 - The source Plan 114 acceptance text is preserved exactly.
 - Production receipt behavior and explicit holdout execution remain assigned to plans 154 and 155.
+- Frozen tuned-scenario digest: `sha256:264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a`.
+- Frozen holdout digest: `sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76`.
+- Independent review initially found two Medium issues: missing successful-correction coverage and default holdout parsing. Both were corrected; the fresh rereview reported High 0, Medium 0, and Low 0.
+- Focused validation passed with 83 runner tests, the Copier-template static check, and `git diff --check`.
+- The authoritative validation list ran exactly once and every command passed, including root policy checks, change selection, workflow lint, smoke, and the required real Copier update lane.
+- No unresolved risk remains in this fixture-freezing scope.

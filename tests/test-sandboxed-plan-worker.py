@@ -50,6 +50,39 @@ WORKER_CONTRACT_HOLDOUT_COVERAGE = {
     "explicit_new_path",
     "missing_parent_path",
 }
+WORKER_COMPLETION_RECEIPT_SCENARIOS = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
+WORKER_COMPLETION_RECEIPT_HOLDOUT = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+WORKER_COMPLETION_RECEIPT_SCENARIOS_SHA256 = "264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a"
+WORKER_COMPLETION_RECEIPT_HOLDOUT_SHA256 = "4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76"
+WORKER_COMPLETION_RECEIPT_COVERAGE = {
+    "successful_attempt",
+    "failed_attempt",
+    "initial_attempt",
+    "correction_attempt",
+    "failure_before_candidate",
+    "partial_command_execution",
+    "stale_receipt",
+    "replayed_receipt",
+    "plan_mismatch",
+    "contract_mismatch",
+    "patch_mismatch",
+    "changed_path_mismatch",
+    "false_success_claim",
+    "missing_out_of_scope_declaration",
+    "unknown_field",
+    "duplicate_field",
+    "oversized_receipt",
+    "oversized_value",
+    "path_traversal",
+    "symlink_escape",
+    "secret_inclusion",
+    "raw_output_inclusion",
+}
+WORKER_COMPLETION_RECEIPT_HOLDOUT_COVERAGE = {
+    "host_path_inclusion",
+    "raw_output_inclusion",
+    "residual_risk_bound",
+}
 
 
 def require_fixture_lineage(value: object, *, label: str) -> None:
@@ -238,6 +271,329 @@ def evaluate_worker_contract_fixture(
         if observed != case["expected"]:
             raise AssertionError(
                 f"worker-contract scenario {case['id']} observed {observed!r}, expected {case['expected']!r}"
+            )
+        observations.append({"id": case["id"], "observed": observed})
+    return observations
+
+
+def require_receipt_fixture_digest(value: object, *, label: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 71
+        or not value.startswith("sha256:")
+        or any(char not in "0123456789abcdef" for char in value[7:])
+    ):
+        raise ValueError(f"worker-completion-receipt digest is invalid: {label}")
+
+
+def require_receipt_fixture_string_list(
+    value: object, *, label: str, allow_empty: bool = True
+) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise ValueError(f"worker-completion-receipt string list is invalid: {label}")
+    if len(value) != len(set(value)):
+        raise ValueError(f"worker-completion-receipt string list has duplicates: {label}")
+    if not allow_empty and not value:
+        raise ValueError(f"worker-completion-receipt string list is empty: {label}")
+
+
+def require_receipt_fixture_attempt(value: object, *, label: str) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "attempt_id", "attempt_kind", "correction_round", "correction_lineage"
+    }:
+        raise ValueError(f"worker-completion-receipt attempt shape is invalid: {label}")
+    if not isinstance(value["attempt_id"], str) or not value["attempt_id"]:
+        raise ValueError(f"worker-completion-receipt attempt id is invalid: {label}")
+    if value["attempt_kind"] not in {"initial", "correction"}:
+        raise ValueError(f"worker-completion-receipt attempt kind is invalid: {label}")
+    round_value = value["correction_round"]
+    if isinstance(round_value, bool) or not isinstance(round_value, int) or round_value < 0:
+        raise ValueError(f"worker-completion-receipt correction round is invalid: {label}")
+    lineage = value["correction_lineage"]
+    if value["attempt_kind"] == "initial":
+        if round_value != 0 or lineage is not None:
+            raise ValueError(f"worker-completion-receipt initial lineage is invalid: {label}")
+        return
+    if round_value < 1 or not isinstance(lineage, dict) or set(lineage) != {"prior_manifest_digest"}:
+        raise ValueError(f"worker-completion-receipt correction lineage is invalid: {label}")
+    require_receipt_fixture_digest(lineage["prior_manifest_digest"], label=label)
+
+
+def require_receipt_fixture_candidate(value: object, *, label: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict) or set(value) != {"patch_digest", "changed_paths"}:
+        raise ValueError(f"worker-completion-receipt candidate shape is invalid: {label}")
+    require_receipt_fixture_digest(value["patch_digest"], label=label)
+    require_receipt_fixture_string_list(value["changed_paths"], label=label, allow_empty=False)
+
+
+def require_receipt_fixture_process(value: object, *, label: str) -> None:
+    if not isinstance(value, dict) or set(value) != {"exit_status", "diagnostic_codes"}:
+        raise ValueError(f"worker-completion-receipt process shape is invalid: {label}")
+    if isinstance(value["exit_status"], bool) or not isinstance(value["exit_status"], int):
+        raise ValueError(f"worker-completion-receipt process status is invalid: {label}")
+    require_receipt_fixture_string_list(value["diagnostic_codes"], label=label)
+
+
+def require_receipt_fixture_claims(value: object, *, label: str) -> None:
+    required = {
+        "attempt_result", "acceptance_evidence", "commands_attempted", "blockers",
+        "residual_risks", "out_of_scope_change",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError(f"worker-completion-receipt claims shape is invalid: {label}")
+    if value["attempt_result"] not in {"success", "failure"}:
+        raise ValueError(f"worker-completion-receipt attempt result is invalid: {label}")
+    evidence = value["acceptance_evidence"]
+    if not isinstance(evidence, list):
+        raise ValueError(f"worker-completion-receipt evidence list is invalid: {label}")
+    for item in evidence:
+        if not isinstance(item, dict) or set(item) != {"acceptance_digest", "claim"}:
+            raise ValueError(f"worker-completion-receipt evidence item is invalid: {label}")
+        require_receipt_fixture_digest(item["acceptance_digest"], label=label)
+        if item["claim"] not in {"satisfied", "not_satisfied"}:
+            raise ValueError(f"worker-completion-receipt evidence claim is invalid: {label}")
+    commands = value["commands_attempted"]
+    if not isinstance(commands, list):
+        raise ValueError(f"worker-completion-receipt commands list is invalid: {label}")
+    for item in commands:
+        if not isinstance(item, dict) or set(item) != {"command_id", "exit_status"}:
+            raise ValueError(f"worker-completion-receipt command item is invalid: {label}")
+        if not isinstance(item["command_id"], str) or not item["command_id"]:
+            raise ValueError(f"worker-completion-receipt command id is invalid: {label}")
+        if isinstance(item["exit_status"], bool) or not isinstance(item["exit_status"], int):
+            raise ValueError(f"worker-completion-receipt command status is invalid: {label}")
+    require_receipt_fixture_string_list(value["blockers"], label=label)
+    require_receipt_fixture_string_list(value["residual_risks"], label=label)
+    if not isinstance(value["out_of_scope_change"], bool):
+        raise ValueError(f"worker-completion-receipt out-of-scope declaration is invalid: {label}")
+
+
+def require_worker_completion_receipt_case_input(
+    operation: str, value: object, *, label: str
+) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"worker-completion-receipt input is not an object: {label}")
+    if operation == "derive_twice":
+        if value:
+            raise ValueError(f"derive_twice input is not empty: {label}")
+        return
+    if operation == "derive_failure_before_candidate":
+        if set(value) != {"exit_status", "diagnostic_codes"}:
+            raise ValueError(f"failure-before-candidate input shape is invalid: {label}")
+        require_receipt_fixture_process(value, label=label)
+        return
+    if operation == "derive_correction_failure":
+        if set(value) != {"attempt_id", "correction_round", "prior_manifest_digest", "exit_status"}:
+            raise ValueError(f"correction failure input shape is invalid: {label}")
+        if not isinstance(value["attempt_id"], str) or not value["attempt_id"]:
+            raise ValueError(f"correction attempt id is invalid: {label}")
+        if isinstance(value["correction_round"], bool) or not isinstance(value["correction_round"], int) or value["correction_round"] < 1:
+            raise ValueError(f"correction round is invalid: {label}")
+        require_receipt_fixture_digest(value["prior_manifest_digest"], label=label)
+        if isinstance(value["exit_status"], bool) or not isinstance(value["exit_status"], int):
+            raise ValueError(f"correction exit status is invalid: {label}")
+        return
+    if operation == "derive_correction_success":
+        if set(value) != {
+            "attempt_id", "correction_round", "prior_manifest_digest", "patch_digest",
+            "changed_paths",
+        }:
+            raise ValueError(f"successful correction input shape is invalid: {label}")
+        if not isinstance(value["attempt_id"], str) or not value["attempt_id"]:
+            raise ValueError(f"successful correction attempt id is invalid: {label}")
+        if isinstance(value["correction_round"], bool) or not isinstance(value["correction_round"], int) or value["correction_round"] < 1:
+            raise ValueError(f"successful correction round is invalid: {label}")
+        require_receipt_fixture_digest(value["prior_manifest_digest"], label=label)
+        require_receipt_fixture_digest(value["patch_digest"], label=label)
+        require_receipt_fixture_string_list(value["changed_paths"], label=label, allow_empty=False)
+        return
+    if operation == "derive_partial_commands":
+        if set(value) != {"commands_attempted", "blockers", "exit_status"}:
+            raise ValueError(f"partial-command input shape is invalid: {label}")
+        require_receipt_fixture_claims(
+            {
+                "attempt_result": "failure",
+                "acceptance_evidence": [],
+                "commands_attempted": value["commands_attempted"],
+                "blockers": value["blockers"],
+                "residual_risks": [],
+                "out_of_scope_change": False,
+            },
+            label=label,
+        )
+        if isinstance(value["exit_status"], bool) or not isinstance(value["exit_status"], int):
+            raise ValueError(f"partial-command exit status is invalid: {label}")
+        return
+    if operation == "verify_identity_mismatch":
+        if set(value) != {"field", "value"} or value["field"] not in {
+            "source_head", "plan_digest", "worker_contract_digest"
+        } or not isinstance(value["value"], str) or not value["value"]:
+            raise ValueError(f"identity mismatch input shape is invalid: {label}")
+        return
+    if operation == "verify_replay":
+        if set(value) != {"consumed_attempt_id"} or not isinstance(value["consumed_attempt_id"], str) or not value["consumed_attempt_id"]:
+            raise ValueError(f"receipt replay input shape is invalid: {label}")
+        return
+    if operation == "verify_candidate_mismatch":
+        if set(value) != {"field", "value"} or value["field"] not in {"patch_digest", "changed_paths"}:
+            raise ValueError(f"candidate mismatch input shape is invalid: {label}")
+        if value["field"] == "patch_digest":
+            require_receipt_fixture_digest(value["value"], label=label)
+        else:
+            require_receipt_fixture_string_list(value["value"], label=label, allow_empty=False)
+        return
+    if operation == "verify_false_success":
+        if set(value) != {"process_exit_status", "attempt_result"} or value["attempt_result"] != "success":
+            raise ValueError(f"false-success input shape is invalid: {label}")
+        if isinstance(value["process_exit_status"], bool) or not isinstance(value["process_exit_status"], int):
+            raise ValueError(f"false-success process status is invalid: {label}")
+        return
+    if operation == "verify_receipt_mutation":
+        if set(value) != {"mutation"} or not isinstance(value["mutation"], dict):
+            raise ValueError(f"receipt mutation input shape is invalid: {label}")
+        mutation = value["mutation"]
+        kind = mutation.get("kind")
+        expected_keys = {
+            "remove_claim_field": {"kind", "name"},
+            "add_top_field": {"kind", "name", "value"},
+            "oversized_claim_value": {"kind", "field", "byte_count"},
+        }.get(kind)
+        if expected_keys is None or set(mutation) != expected_keys:
+            raise ValueError(f"receipt mutation shape is invalid: {label}")
+        if kind == "remove_claim_field" and mutation["name"] != "out_of_scope_change":
+            raise ValueError(f"receipt removed field is invalid: {label}")
+        if kind == "add_top_field" and (not isinstance(mutation["name"], str) or not mutation["name"]):
+            raise ValueError(f"receipt added field is invalid: {label}")
+        if kind == "oversized_claim_value" and (
+            mutation["field"] not in {"blockers", "residual_risks"}
+            or isinstance(mutation["byte_count"], bool)
+            or not isinstance(mutation["byte_count"], int)
+            or mutation["byte_count"] <= 0
+        ):
+            raise ValueError(f"receipt oversized value input is invalid: {label}")
+        return
+    if operation == "verify_serialized_receipt":
+        if set(value) == {"json_prefix"} and isinstance(value["json_prefix"], str) and value["json_prefix"]:
+            return
+        if set(value) == {"byte_count", "fill_byte"}:
+            if isinstance(value["byte_count"], bool) or not isinstance(value["byte_count"], int) or value["byte_count"] <= 0:
+                raise ValueError(f"receipt byte count is invalid: {label}")
+            if not isinstance(value["fill_byte"], str) or len(value["fill_byte"].encode()) != 1:
+                raise ValueError(f"receipt fill byte is invalid: {label}")
+            return
+        raise ValueError(f"serialized receipt input shape is invalid: {label}")
+    if operation == "verify_output_path":
+        if set(value) not in ({"path"}, {"path", "symlink_target"}) or any(
+            not isinstance(item, str) or not item for item in value.values()
+        ):
+            raise ValueError(f"receipt output path input is invalid: {label}")
+        return
+    if operation == "verify_prohibited_content":
+        if set(value) != {"field", "value"} or value["field"] not in {"blockers", "residual_risks"}:
+            raise ValueError(f"prohibited content input shape is invalid: {label}")
+        if not isinstance(value["value"], str) or not value["value"]:
+            raise ValueError(f"prohibited content sentinel is invalid: {label}")
+        return
+    raise ValueError(f"worker-completion-receipt operation is unsupported: {operation}")
+
+
+def load_worker_completion_receipt_fixture(
+    path: Path, *, used_for_tuning: bool
+) -> dict[str, object]:
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+    required_top = {"schema_version", "suite", "used_for_tuning", "base", "cases"}
+    if used_for_tuning:
+        required_top.add("holdout_file")
+    if not isinstance(fixture, dict) or set(fixture) != required_top:
+        raise ValueError(f"worker-completion-receipt fixture has an invalid exact shape: {path.name}")
+    if fixture["schema_version"] != 1 or fixture["suite"] != "worker-completion-receipt":
+        raise ValueError(f"worker-completion-receipt fixture has an unsupported identity: {path.name}")
+    if fixture["used_for_tuning"] is not used_for_tuning:
+        raise ValueError(f"worker-completion-receipt tuning flag differs: {path.name}")
+    base = fixture["base"]
+    required_base = {
+        "receipt_relative_path", "repository_identity", "source_head", "plan_path",
+        "plan_digest", "worker_contract_digest", "orchestration_run_id", "attempt",
+        "candidate", "process", "claims",
+    }
+    if not isinstance(base, dict) or set(base) != required_base:
+        raise ValueError(f"worker-completion-receipt base has an invalid exact shape: {path.name}")
+    for field in ("receipt_relative_path", "plan_path", "orchestration_run_id"):
+        if not isinstance(base[field], str) or not base[field]:
+            raise ValueError(f"worker-completion-receipt base scalar is invalid: {path.name}")
+    for field in ("repository_identity", "plan_digest", "worker_contract_digest"):
+        require_receipt_fixture_digest(base[field], label=path.name)
+    if not isinstance(base["source_head"], str) or len(base["source_head"]) != 40 or any(
+        char not in "0123456789abcdef" for char in base["source_head"]
+    ):
+        raise ValueError(f"worker-completion-receipt source head is invalid: {path.name}")
+    require_receipt_fixture_attempt(base["attempt"], label=path.name)
+    require_receipt_fixture_candidate(base["candidate"], label=path.name)
+    require_receipt_fixture_process(base["process"], label=path.name)
+    require_receipt_fixture_claims(base["claims"], label=path.name)
+    cases = fixture["cases"]
+    if not isinstance(cases, list) or not cases:
+        raise ValueError(f"worker-completion-receipt cases are empty: {path.name}")
+    seen: set[str] = set()
+    for case in cases:
+        if not isinstance(case, dict) or set(case) != {
+            "id", "class", "used_for_tuning", "covers", "operation", "input", "expected"
+        }:
+            raise ValueError(f"worker-completion-receipt case has an invalid exact shape: {path.name}")
+        case_id = case["id"]
+        if not isinstance(case_id, str) or not case_id or case_id in seen:
+            raise ValueError(f"worker-completion-receipt case id is invalid: {path.name}")
+        seen.add(case_id)
+        if used_for_tuning:
+            if case["class"] not in {"median", "edge", "negative"}:
+                raise ValueError(f"worker-completion-receipt case class is invalid: {case_id}")
+        elif case["class"] != "holdout":
+            raise ValueError(f"worker-completion-receipt holdout class differs: {case_id}")
+        if case["used_for_tuning"] is not used_for_tuning:
+            raise ValueError(f"worker-completion-receipt case tuning flag differs: {case_id}")
+        require_receipt_fixture_string_list(case["covers"], label=case_id, allow_empty=False)
+        allowed_coverage = (
+            WORKER_COMPLETION_RECEIPT_COVERAGE
+            if used_for_tuning
+            else WORKER_COMPLETION_RECEIPT_HOLDOUT_COVERAGE
+        )
+        if any(marker not in allowed_coverage for marker in case["covers"]):
+            raise ValueError(f"worker-completion-receipt coverage marker is unknown: {case_id}")
+        if not isinstance(case["operation"], str) or not case["operation"]:
+            raise ValueError(f"worker-completion-receipt operation is invalid: {case_id}")
+        require_worker_completion_receipt_case_input(
+            case["operation"], case["input"], label=case_id
+        )
+        expected = case["expected"]
+        if not isinstance(expected, dict) or set(expected) != {"result", "error_code"}:
+            raise ValueError(f"worker-completion-receipt expected shape is invalid: {case_id}")
+        if expected["result"] not in {"accepted", "rejected"}:
+            raise ValueError(f"worker-completion-receipt expected result is invalid: {case_id}")
+        if (expected["result"] == "accepted") != (expected["error_code"] is None):
+            raise ValueError(f"worker-completion-receipt error code is inconsistent: {case_id}")
+        if expected["error_code"] is not None and (
+            not isinstance(expected["error_code"], str) or not expected["error_code"]
+        ):
+            raise ValueError(f"worker-completion-receipt error code is invalid: {case_id}")
+    return fixture
+
+
+def evaluate_worker_completion_receipt_fixture(
+    path: Path,
+    evaluator,
+    *,
+    used_for_tuning: bool,
+) -> list[dict[str, object]]:
+    """Evaluate only the caller-selected receipt fixture and compare exact outcomes."""
+    fixture = load_worker_completion_receipt_fixture(path, used_for_tuning=used_for_tuning)
+    observations: list[dict[str, object]] = []
+    for case in fixture["cases"]:
+        observed = evaluator(fixture["base"], case)
+        if observed != case["expected"]:
+            raise AssertionError(
+                f"worker-completion-receipt scenario {case['id']} observed {observed!r}, expected {case['expected']!r}"
             )
         observations.append({"id": case["id"], "observed": observed})
     return observations
@@ -967,6 +1323,44 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "observed"):
             evaluate_worker_contract_fixture(
                 WORKER_CONTRACT_SCENARIOS,
+                lambda _base, _case: {"result": "rejected", "error_code": "wrong"},
+                used_for_tuning=True,
+            )
+
+    def test_tuned_worker_completion_receipt_fixture_is_frozen_and_evaluator_is_generic(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(WORKER_COMPLETION_RECEIPT_SCENARIOS.read_bytes()).hexdigest(),
+            WORKER_COMPLETION_RECEIPT_SCENARIOS_SHA256,
+        )
+        fixture = load_worker_completion_receipt_fixture(
+            WORKER_COMPLETION_RECEIPT_SCENARIOS, used_for_tuning=True
+        )
+        self.assertEqual(fixture["holdout_file"], WORKER_COMPLETION_RECEIPT_HOLDOUT.name)
+        self.assertEqual(
+            hashlib.sha256(WORKER_COMPLETION_RECEIPT_HOLDOUT.read_bytes()).hexdigest(),
+            WORKER_COMPLETION_RECEIPT_HOLDOUT_SHA256,
+        )
+        self.assertEqual(
+            {case["class"] for case in fixture["cases"]},
+            {"median", "edge", "negative"},
+        )
+        self.assertEqual(
+            {coverage for case in fixture["cases"] for coverage in case["covers"]},
+            WORKER_COMPLETION_RECEIPT_COVERAGE,
+        )
+        expected_by_id = {case["id"]: case["expected"] for case in fixture["cases"]}
+        observations = evaluate_worker_completion_receipt_fixture(
+            WORKER_COMPLETION_RECEIPT_SCENARIOS,
+            lambda _base, case: expected_by_id[case["id"]],
+            used_for_tuning=True,
+        )
+        self.assertEqual(
+            [item["id"] for item in observations],
+            [case["id"] for case in fixture["cases"]],
+        )
+        with self.assertRaisesRegex(AssertionError, "observed"):
+            evaluate_worker_completion_receipt_fixture(
+                WORKER_COMPLETION_RECEIPT_SCENARIOS,
                 lambda _base, _case: {"result": "rejected", "error_code": "wrong"},
                 used_for_tuning=True,
             )

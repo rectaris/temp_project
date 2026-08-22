@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "suite": "worker-completion-receipt",
+  "used_for_tuning": false,
+  "base": {
+    "receipt_relative_path": "worker-completion-receipt.json",
+    "repository_identity": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "source_head": "dddddddddddddddddddddddddddddddddddddddd",
+    "plan_path": "docs/plan/active/001-worker-completion-receipt-holdout.md",
+    "plan_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "worker_contract_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "orchestration_run_id": "worker-completion-receipt-holdout-run",
+    "attempt": {
+      "attempt_id": "holdout-initial-1",
+      "attempt_kind": "initial",
+      "correction_round": 0,
+      "correction_lineage": null
+    },
+    "candidate": {
+      "patch_digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212",
+      "changed_paths": ["product/report.txt"]
+    },
+    "process": {
+      "exit_status": 0,
+      "diagnostic_codes": []
+    },
+    "claims": {
+      "attempt_result": "success",
+      "acceptance_evidence": [
+        {
+          "acceptance_digest": "sha256:1313131313131313131313131313131313131313131313131313131313131313",
+          "claim": "satisfied"
+        }
+      ],
+      "commands_attempted": [
+        {
+          "command_id": "holdout-check-1",
+          "exit_status": 0
+        }
+      ],
+      "blockers": [],
+      "residual_risks": [],
+      "out_of_scope_change": false
+    }
+  },
+  "cases": [
+    {
+      "id": "holdout-host-path-raw-output-in-residual-risk",
+      "class": "holdout",
+      "used_for_tuning": false,
+      "covers": ["host_path_inclusion", "raw_output_inclusion", "residual_risk_bound"],
+      "operation": "verify_prohibited_content",
+      "input": {"field": "residual_risks", "value": "HOST_PATH_RAW_OUTPUT_SENTINEL"},
+      "expected": {"result": "rejected", "error_code": "prohibited_receipt_content"}
+    }
+  ]
+}

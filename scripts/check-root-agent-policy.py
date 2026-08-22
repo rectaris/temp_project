@@ -1605,9 +1605,73 @@ def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
         fail("worker-contract execution differs from the recorded integration evidence")
 
 
+def check_worker_completion_receipt_scenarios() -> None:
+    scenario_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
+    holdout_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+    try:
+        scenario_bytes = scenario_path.read_bytes()
+        scenarios = json.loads(scenario_bytes.decode("utf-8"))
+        holdout_bytes = holdout_path.read_bytes()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-completion-receipt fixture: {exc}")
+    if hashlib.sha256(scenario_bytes).hexdigest() != "264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a":
+        fail("worker-completion-receipt tuned scenario bytes differ from the preimplementation seal")
+    if set(scenarios) != {"schema_version", "suite", "used_for_tuning", "holdout_file", "base", "cases"}:
+        fail("worker-completion-receipt scenarios have an invalid exact shape")
+    if (
+        scenarios.get("schema_version") != 1
+        or scenarios.get("suite") != "worker-completion-receipt"
+        or scenarios.get("used_for_tuning") is not True
+        or scenarios.get("holdout_file") != holdout_path.name
+    ):
+        fail("worker-completion-receipt scenarios have an unsupported identity or holdout link")
+    cases = scenarios.get("cases")
+    if not isinstance(cases, list) or not cases:
+        fail("worker-completion-receipt scenarios must not be empty")
+    if {case.get("class") for case in cases if isinstance(case, dict)} != {"median", "edge", "negative"}:
+        fail("worker-completion-receipt scenarios must preserve median, edge, and negative classes")
+    if any(not isinstance(case, dict) or case.get("used_for_tuning") is not True for case in cases):
+        fail("worker-completion-receipt scenarios must remain tuned inputs")
+    expected_coverage = {
+        "successful_attempt", "failed_attempt", "initial_attempt", "correction_attempt",
+        "failure_before_candidate", "partial_command_execution", "stale_receipt",
+        "replayed_receipt", "plan_mismatch", "contract_mismatch", "patch_mismatch",
+        "changed_path_mismatch", "false_success_claim", "missing_out_of_scope_declaration",
+        "unknown_field", "duplicate_field", "oversized_receipt", "oversized_value",
+        "path_traversal", "symlink_escape", "secret_inclusion", "raw_output_inclusion",
+    }
+    observed_coverage = {
+        marker
+        for case in cases
+        for marker in (case.get("covers", []) if isinstance(case, dict) else [])
+    }
+    if observed_coverage != expected_coverage:
+        fail("worker-completion-receipt scenarios do not cover the accepted preimplementation boundary")
+    if hashlib.sha256(holdout_bytes).hexdigest() != "4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76":
+        fail("worker-completion-receipt holdout bytes differ from the preimplementation seal")
+    test_path = ROOT / "tests/test-sandboxed-plan-worker.py"
+    spec = importlib.util.spec_from_file_location("worker_completion_receipt_fixture_evaluator", test_path)
+    if spec is None or spec.loader is None:
+        fail("could not load the generic worker-completion-receipt evaluator")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        expected_by_id = {case["id"]: case["expected"] for case in cases}
+        observations = module.evaluate_worker_completion_receipt_fixture(
+            scenario_path,
+            lambda _base, case: expected_by_id[case["id"]],
+            used_for_tuning=True,
+        )
+    except Exception as exc:
+        fail(f"worker-completion-receipt fixture evaluation failed: {exc}")
+    if len(observations) != len(cases):
+        fail("worker-completion-receipt tuned observations are incomplete")
+
+
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     check_plan_restructuring_scenarios()
     check_worker_contract_scenarios(include_holdout=include_holdout)
+    check_worker_completion_receipt_scenarios()
     policy = read("references/orchestration.md").lower()
     shared_markers = (
         "per-task user instruction",
