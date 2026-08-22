@@ -1386,6 +1386,10 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 if key != "receipt_relative_path"
             },
         }
+        for index, command in enumerate(
+            receipt["claims"]["commands_attempted"], start=1
+        ):
+            command["command_id"] = f"worker-check-{index}"
         expected_identity = {
             key: json.loads(json.dumps(receipt[key]))
             for key in (
@@ -1558,6 +1562,25 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 lambda _base, _case: {"result": "rejected", "error_code": "wrong"},
                 used_for_tuning=True,
             )
+
+    def test_exposed_worker_completion_receipt_holdout_is_a_known_regression(self) -> None:
+        observations = evaluate_worker_completion_receipt_fixture(
+            WORKER_COMPLETION_RECEIPT_HOLDOUT,
+            self.evaluate_worker_completion_receipt_case,
+            used_for_tuning=False,
+        )
+        self.assertEqual(
+            observations,
+            [
+                {
+                    "id": "holdout-host-path-raw-output-in-residual-risk",
+                    "observed": {
+                        "result": "rejected",
+                        "error_code": "prohibited_receipt_content",
+                    },
+                }
+            ],
+        )
 
     def test_codex_unavailability_classifier_is_bounded_to_cli_error_lines(self) -> None:
         cases = (

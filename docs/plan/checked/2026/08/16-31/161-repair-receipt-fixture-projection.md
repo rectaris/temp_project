@@ -1,6 +1,6 @@
 # Repair receipt fixture baseline projection
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -72,11 +72,14 @@ The exposed original holdout expected a prohibited-content rejection, but its ol
 
 ## Tasks
 
-- [ ] Canonicalize only baseline command identifiers before case mutation.
-- [ ] Add a regression proving the exposed original holdout now reaches its selected prohibited-content boundary.
-- [ ] Verify tuned observations remain unchanged and production code is untouched.
-- [ ] Obtain independent review, run validation once, and archive the plan.
+- [x] Canonicalize only baseline command identifiers before case mutation.
+- [x] Add a regression proving the exposed original holdout now reaches its selected prohibited-content boundary.
+- [x] Verify tuned observations remain unchanged and production code is untouched.
+- [x] Obtain independent review, run validation once, and archive the plan.
 
 ## Validation Notes
 
 - The original holdout's initial failure remains recorded in `/tmp/project-agent-workflow-plan155-20260822-a/execution-state.json` and is not claimed as untuned passing evidence.
+- Plan 160 is checked at `docs/plan/checked/2026/08/16-31/160-freeze-replacement-receipt-holdout-evidence.md`; replacement v2 remained opaque and unexecuted.
+- Independent review reported High 0, Medium 0, Low 0; receipt: `sha256:de3dda8763caa982807afbc7fd38d54e472bf52e5939496e246fde70fd4ad0ea`.
+- Focused validation passed once with 93 tests and both checkers. Authoritative validation passed exactly once with 93 tests, runner self-test, both checkers, and diff check; ledger: `/tmp/project-agent-workflow-plan161-20260822-a/execution-state.json`.

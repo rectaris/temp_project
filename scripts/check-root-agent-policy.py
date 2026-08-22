@@ -1681,6 +1681,29 @@ def check_worker_completion_receipt_scenarios() -> None:
         fail(f"worker-completion-receipt fixture evaluation failed: {exc}")
     if len(observations) != len(cases):
         fail("worker-completion-receipt tuned observations are incomplete")
+    try:
+        exposed_holdout = json.loads(holdout_bytes.decode("utf-8"))
+        exposed_observations = module.evaluate_worker_completion_receipt_fixture(
+            holdout_path,
+            evaluator,
+            used_for_tuning=False,
+        )
+    except Exception as exc:
+        fail(f"worker-completion-receipt exposed holdout regression failed: {exc}")
+    if (
+        exposed_holdout.get("used_for_tuning") is not False
+        or exposed_observations
+        != [
+            {
+                "id": "holdout-host-path-raw-output-in-residual-risk",
+                "observed": {
+                    "result": "rejected",
+                    "error_code": "prohibited_receipt_content",
+                },
+            }
+        ]
+    ):
+        fail("worker-completion-receipt exposed holdout observations differ")
 
 
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:
