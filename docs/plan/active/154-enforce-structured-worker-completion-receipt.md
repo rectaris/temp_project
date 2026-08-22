@@ -1,6 +1,8 @@
 # Enforce one structured worker completion receipt
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 task_types:
   - planning_docs
   - referent_first
