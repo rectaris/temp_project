@@ -20,3 +20,4 @@ id	path	contract
 114	docs/plan/replanned/2026/08/16-31/114-validate-structured-worker-completion.md	docs/plan/replanned/contracts/114-validate-structured-worker-completion.json
 154	docs/plan/replanned/2026/08/16-31/154-enforce-structured-worker-completion-receipt.md	docs/plan/replanned/contracts/154-enforce-structured-worker-completion-receipt.json
 156	docs/plan/replanned/2026/08/16-31/156-preserve-failure-receipt-without-candidate.md	docs/plan/replanned/contracts/156-preserve-failure-receipt-without-candidate.json
+155	docs/plan/replanned/2026/08/16-31/155-integrate-structured-worker-completion-receipt.md	docs/plan/replanned/contracts/155-integrate-structured-worker-completion-receipt.json
