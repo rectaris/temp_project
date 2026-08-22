@@ -1078,6 +1078,7 @@ grep -q '"suite": "worker-execution-contract-integration"' "$root/tests/fixtures
 test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
 grep -q '"suite": "worker-completion-receipt"' "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
 test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
 test -x "$root/scripts/run-sandboxed-plan-worker.py"
 test -x "$root/template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 test -x "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"

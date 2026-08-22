@@ -1617,10 +1617,12 @@ def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
 def check_worker_completion_receipt_scenarios() -> None:
     scenario_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
     holdout_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+    replacement_holdout_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
     try:
         scenario_bytes = scenario_path.read_bytes()
         scenarios = json.loads(scenario_bytes.decode("utf-8"))
         holdout_bytes = holdout_path.read_bytes()
+        replacement_holdout_bytes = replacement_holdout_path.read_bytes()
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         fail(f"invalid worker-completion-receipt fixture: {exc}")
     if hashlib.sha256(scenario_bytes).hexdigest() != "264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a":
@@ -1658,6 +1660,8 @@ def check_worker_completion_receipt_scenarios() -> None:
         fail("worker-completion-receipt scenarios do not cover the accepted preimplementation boundary")
     if hashlib.sha256(holdout_bytes).hexdigest() != "4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76":
         fail("worker-completion-receipt holdout bytes differ from the preimplementation seal")
+    if hashlib.sha256(replacement_holdout_bytes).hexdigest() != "ddbbedb5c65cfe16ae48763b403c1beb16c241b7a77ab9379a88f98c8dd0f8de":
+        fail("worker-completion-receipt replacement holdout bytes differ from the independent seal")
     test_path = ROOT / "tests/test-sandboxed-plan-worker.py"
     spec = importlib.util.spec_from_file_location("worker_completion_receipt_fixture_evaluator", test_path)
     if spec is None or spec.loader is None:

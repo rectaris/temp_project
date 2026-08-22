@@ -127,3 +127,4 @@ id	path
 158	docs/plan/checked/2026/08/16-31/158-emit-structured-claims-in-runner-self-test.md
 159	docs/plan/checked/2026/08/16-31/159-integrate-failure-receipt-validation.md
 157	docs/plan/checked/2026/08/16-31/157-integrate-structured-worker-completion-enforcement.md
+160	docs/plan/checked/2026/08/16-31/160-freeze-replacement-receipt-holdout-evidence.md

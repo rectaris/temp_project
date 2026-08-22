@@ -866,6 +866,7 @@ validate_common_lane() {
   test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
   grep -q '"suite": "worker-completion-receipt"' "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
   test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+  test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
 
   test -f "$out/.copier-answers.yml"
   test -f "$out/.project-agent-workflow/AGENTS.md"

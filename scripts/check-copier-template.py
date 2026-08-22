@@ -390,6 +390,7 @@ def require_orchestration_policy_markers() -> None:
         fail("worker-contract holdout bytes differ from the preimplementation seal")
     receipt_scenarios_path = "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
     receipt_holdout_path = "tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+    receipt_replacement_holdout_path = "tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
     receipt_scenarios_bytes = (ROOT / receipt_scenarios_path).read_bytes()
     if hashlib.sha256(receipt_scenarios_bytes).hexdigest() != "264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a":
         fail("worker-completion-receipt tuned scenario bytes differ from the preimplementation seal")
@@ -426,6 +427,9 @@ def require_orchestration_policy_markers() -> None:
     receipt_holdout_bytes = (ROOT / receipt_holdout_path).read_bytes()
     if hashlib.sha256(receipt_holdout_bytes).hexdigest() != "4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76":
         fail("worker-completion-receipt holdout bytes differ from the preimplementation seal")
+    receipt_replacement_holdout_bytes = (ROOT / receipt_replacement_holdout_path).read_bytes()
+    if hashlib.sha256(receipt_replacement_holdout_bytes).hexdigest() != "ddbbedb5c65cfe16ae48763b403c1beb16c241b7a77ab9379a88f98c8dd0f8de":
+        fail("worker-completion-receipt replacement holdout bytes differ from the independent seal")
     evidence = json.loads(
         (ROOT / "tests/fixtures/orchestration/worker-contract-evidence.json").read_text(
             encoding="utf-8"

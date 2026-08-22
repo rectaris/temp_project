@@ -1,6 +1,6 @@
 # Freeze replacement receipt holdout evidence
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -74,11 +74,15 @@ The original sealed holdout was exposed by its first execution and revealed a ba
 
 ## Tasks
 
-- [ ] Create one independent replacement holdout file with exact ownership and no other writes.
-- [ ] Seal its path and digest without inspecting or executing its contents in the main session.
-- [ ] Add existence, inventory, smoke, and Copier preservation checks that do not parse the new holdout.
-- [ ] Obtain independent review, run validation once, and archive the plan.
+- [x] Create one independent replacement holdout file with exact ownership and no other writes.
+- [x] Seal its path and digest without inspecting or executing its contents in the main session.
+- [x] Add existence, inventory, smoke, and Copier preservation checks that do not parse the new holdout.
+- [x] Obtain independent review, run validation once, and archive the plan.
 
 ## Validation Notes
 
 - The original holdout remains unchanged at `sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76`.
+- The replacement holdout is a regular 2007-byte file sealed at `sha256:ddbbedb5c65cfe16ae48763b403c1beb16c241b7a77ab9379a88f98c8dd0f8de`; the main session and independent reviewer did not inspect or execute it.
+- Independent review reported High 0, Medium 0, Low 0; receipt: `sha256:e9b7b9504a24679029e0bbc8c0cf57bb92567d9f1399a2ea93259133aaaad3dc`.
+- Focused validation passed once. Authoritative validation passed exactly once with root/Copier checks, all-change validation, workflow lint, smoke, real Copier update, and diff check; ledger: `/tmp/project-agent-workflow-plan160-20260822-a/execution-state.json`.
+- Helper `create_receipt_holdout_v2` owned only `tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json`; the main session accepted its digest/schema receipt and separately verified scope and preservation.

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "suite": "worker-completion-receipt",
+  "used_for_tuning": false,
+  "base": {
+    "receipt_relative_path": "worker-completion-receipt.json",
+    "repository_identity": "sha256:1212121212121212121212121212121212121212121212121212121212121212",
+    "source_head": "3434343434343434343434343434343434343434",
+    "plan_path": "docs/plan/active/162-worker-completion-receipt-holdout.md",
+    "plan_digest": "sha256:5656565656565656565656565656565656565656565656565656565656565656",
+    "worker_contract_digest": "sha256:7878787878787878787878787878787878787878787878787878787878787878",
+    "orchestration_run_id": "worker-completion-receipt-holdout-v2",
+    "attempt": {
+      "attempt_id": "initial-holdout-v2-1",
+      "attempt_kind": "initial",
+      "correction_round": 0,
+      "correction_lineage": null
+    },
+    "candidate": {
+      "patch_digest": "sha256:9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+      "changed_paths": ["product/holdout-v2.txt"]
+    },
+    "process": {
+      "exit_status": 0,
+      "diagnostic_codes": []
+    },
+    "claims": {
+      "attempt_result": "success",
+      "acceptance_evidence": [
+        {
+          "acceptance_digest": "sha256:bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc",
+          "claim": "satisfied"
+        }
+      ],
+      "commands_attempted": [
+        {
+          "command_id": "worker-check-1",
+          "exit_status": 0
+        }
+      ],
+      "blockers": [],
+      "residual_risks": [],
+      "out_of_scope_change": false
+    }
+  },
+  "cases": [
+    {
+      "id": "holdout-host-path-in-completion-risk",
+      "class": "holdout",
+      "used_for_tuning": false,
+      "covers": ["host_path_inclusion"],
+      "operation": "verify_prohibited_content",
+      "input": {
+        "field": "residual_risks",
+        "value": "/host/private/worker.log"
+      },
+      "expected": {
+        "result": "rejected",
+        "error_code": "prohibited_receipt_content"
+      }
+    }
+  ]
+}
