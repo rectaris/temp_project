@@ -667,6 +667,45 @@ def run_cli(repo: Path, *args: str, env: dict[str, str] | None = None) -> subpro
             command_args.extend(["--plan-execution-state", execution_state])
         else:
             execution_state = command_args[command_args.index("--plan-execution-state") + 1]
+        if command_args[0] == "correct":
+            execution_payload = json.loads(Path(execution_state).read_text(encoding="utf-8"))
+            open_attempt = execution_payload.get("open_attempt_id")
+            if open_attempt:
+                lifecycle_bytes = Path(lifecycle_path).read_bytes()
+                lifecycle = json.loads(lifecycle_bytes)
+                candidate = "sha256:" + lifecycle["current_manifest_digest"]
+                prior_candidates = {
+                    event.get("candidate_digest")
+                    for event in execution_payload.get("events", [])
+                    if event.get("candidate_digest")
+                }
+                reason_codes = (
+                    "acceptance_unmet", "required_spec_missed", "focused_validation_failed"
+                )
+                reason = reason_codes[min(execution_payload["correction_rounds"], 2)]
+                close_command = [
+                    sys.executable, str(ROOT / "scripts/plan-execution-state.py"),
+                    "close", execution_state, "--run-id", run_id,
+                    "--attempt-id", open_attempt, "--outcome", "correction_requested",
+                    "--review-author", "parent", "--review-reason-code", reason,
+                    "--review-evidence-digest", "sha256:" + hashlib.sha256(
+                        f"{run_id}:{open_attempt}:{reason}".encode()
+                    ).hexdigest(),
+                    "--invariant-digest", execution_payload["primary_invariant_digest"],
+                    "--lifecycle-state", lifecycle_path,
+                ]
+                if candidate not in prior_candidates:
+                    close_command.extend((
+                        "--candidate-digest", candidate,
+                        "--candidate-lifecycle-digest",
+                        "sha256:" + hashlib.sha256(lifecycle_bytes).hexdigest(),
+                    ))
+                closed = subprocess.run(
+                    close_command, cwd=repo, env=child_env, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                if closed.returncode != 0:
+                    return closed
         if command_args[0] == "apply" and manifest_path is not None and manifest_path.is_file():
             try:
                 lifecycle = json.loads(Path(lifecycle_path).read_text(encoding="utf-8"))
@@ -1234,6 +1273,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                     values=values,
                     normalized_scope=scope,
                     run_id=base["orchestration_run_id"],
+                    plan_execution_attempt_id="attempt-fixture-ledger",
                     lineage=lineage,
                 )
 
@@ -1389,6 +1429,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 if key != "receipt_relative_path"
             },
         }
+        receipt["plan_execution_attempt_id"] = "attempt-fixture-ledger"
         for index, command in enumerate(
             receipt["claims"]["commands_attempted"], start=1
         ):
@@ -1398,6 +1439,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             for key in (
                 "repository_identity", "source_head", "plan_path", "plan_digest",
                 "worker_contract_digest", "orchestration_run_id", "attempt", "candidate",
+                "plan_execution_attempt_id",
             )
         }
         operation = case["operation"]
@@ -1886,6 +1928,17 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             manifest["worker_completion_receipt_digest"],
         )
         receipt = RUNNER.load_worker_completion_receipt(receipt_bytes)
+        lifecycle = json.loads(Path(manifest["lifecycle_state_path"]).read_text(encoding="utf-8"))
+        contract = json.loads(Path(manifest["worker_contract_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                manifest["plan_execution_attempt_id"],
+                lifecycle["plan_execution_attempt_id"],
+                contract["plan_execution_attempt_id"],
+                receipt["plan_execution_attempt_id"],
+            },
+            {manifest["plan_execution_attempt_id"]},
+        )
         self.assertEqual(receipt["process"], {"exit_status": 0, "diagnostic_codes": []})
         self.assertTrue(receipt["attempt"]["attempt_id"].startswith("initial-0-custom-"))
         self.assertEqual(receipt["candidate"]["changed_paths"], manifest["changed_paths"])
@@ -1929,6 +1982,15 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertGreaterEqual(telemetry["runner_duration_seconds"], telemetry["attempt_durations_seconds"][0])
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
         self.assertEqual((repo / "dir" / "nested.txt").read_text(encoding="utf-8"), "before\n")
+        manifest["bounded_padding"] = "x" * 70_000
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        self.assertGreater(manifest_path.stat().st_size, 65_536)
+        lifecycle["current_manifest_digest"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        Path(manifest["lifecycle_state_path"]).write_text(
+            json.dumps(lifecycle, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         apply = run_cli(repo, "apply", str(manifest_path))
         self.assertEqual(apply.returncode, 0, apply.stderr)
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "updated\n")
@@ -1938,6 +2000,35 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             git(repo, "status", "--porcelain=1", "--untracked-files=all").stdout.splitlines(),
             [" M allowed.txt", " M dir/nested.txt"],
         )
+        git(repo, "add", "allowed.txt", "dir/nested.txt")
+        git(repo, "commit", "-qm", "accept exact candidate")
+        accepted_head = git(repo, "rev-parse", "HEAD").stdout.strip()
+        lifecycle_path = Path(manifest["lifecycle_state_path"])
+        lifecycle_bytes = lifecycle_path.read_bytes()
+        execution_state = lifecycle_path.with_name(
+            lifecycle_path.name
+            + f".{manifest['orchestration_run_id']}.plan-execution.json"
+        )
+        execution_payload = json.loads(execution_state.read_text(encoding="utf-8"))
+        closed = subprocess.run(
+            [
+                sys.executable, str(ROOT / "scripts/plan-execution-state.py"),
+                "close", str(execution_state),
+                "--run-id", manifest["orchestration_run_id"],
+                "--attempt-id", manifest["plan_execution_attempt_id"],
+                "--outcome", "accepted", "--review-author", "parent",
+                "--review-evidence-digest", "sha256:" + hashlib.sha256(b"accepted").hexdigest(),
+                "--invariant-digest", execution_payload["primary_invariant_digest"],
+                "--candidate-digest", "sha256:" + hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                "--candidate-manifest", str(manifest_path),
+                "--candidate-lifecycle-digest", "sha256:" + hashlib.sha256(lifecycle_bytes).hexdigest(),
+                "--accepted-source-head", accepted_head,
+                "--lifecycle-state", str(lifecycle_path),
+            ],
+            cwd=repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
 
     def test_malformed_completion_claims_fail_closed_without_retaining_prohibited_content(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
@@ -2200,7 +2291,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertFalse((output / "candidate.patch").exists())
         self.assertFalse((output / "manifest.json").exists())
 
-    def test_same_run_retry_uses_fresh_attempt_identity_and_rejects_replayed_receipt(self) -> None:
+    def test_open_attempt_blocks_same_run_regeneration_and_fresh_run_rejects_replayed_receipt(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -2219,12 +2310,45 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(first.returncode, 1)
         first_receipt_bytes = (first_output / "worker-completion-receipt.json").read_bytes()
         first_receipt = RUNNER.load_worker_completion_receipt(first_receipt_bytes)
+        blocked, _blocked_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "blocked-regeneration",
+            extra_args=common,
+        )
+        self.assertEqual(blocked.returncode, 1)
+        self.assertIn("already open", blocked.stderr)
+        execution_state = lifecycle.with_name(
+            lifecycle.name + ".same-run-replay-test.plan-execution.json"
+        )
+        execution_payload = json.loads(execution_state.read_text(encoding="utf-8"))
+        closed = subprocess.run(
+            [
+                sys.executable, str(ROOT / "scripts/plan-execution-state.py"),
+                "close", str(execution_state), "--run-id", "same-run-replay-test",
+                "--attempt-id", execution_payload["open_attempt_id"],
+                "--outcome", "rejected", "--review-author", "parent",
+                "--review-reason-code", "evidence_incomplete",
+                "--review-evidence-digest", "sha256:" + hashlib.sha256(
+                    b"first failure review"
+                ).hexdigest(),
+                "--invariant-digest", execution_payload["primary_invariant_digest"],
+                "--lifecycle-state", str(lifecycle),
+            ],
+            cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        fresh_lifecycle = root / "fresh-run.lifecycle.json"
         second, _second_output, _worker = self.run_with_worker(
             repo,
             plan_path,
             '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
             output_dir=root / "second-success",
-            extra_args=common,
+            extra_args=(
+                "--lifecycle-state", str(fresh_lifecycle),
+                "--orchestration-run-id", "fresh-run-replay-test",
+            ),
         )
         self.assertEqual(second.returncode, 0, second.stderr)
         manifest_path = Path(second.stdout.strip())
@@ -2241,7 +2365,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         apply = run_cli(repo, "apply", str(manifest_path))
         self.assertEqual(apply.returncode, 1)
-        self.assertIn("attempt lineage mismatch", apply.stderr)
+        self.assertIn("worker contract digest mismatch", apply.stderr)
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_explicit_missing_file_preserves_absence_until_worker_creation(self) -> None:
@@ -2900,7 +3024,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             output_dir=root / "round-3",
         )
         self.assertEqual(third.returncode, 1)
-        self.assertIn("budget exhausted", third.stderr)
+        self.assertIn("stopped for restructuring", third.stderr)
         self.assertFalse((root / "round-3" / "worker.stdout").exists())
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
@@ -3105,7 +3229,7 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             output_dir=root / "correction-semantic-failure",
         )
         self.assertEqual(semantic.returncode, 1)
-        self.assertIn("current lifecycle leaf", semantic.stderr)
+        self.assertIn("stopped for restructuring", semantic.stderr)
         self.assertFalse((root / "correction-semantic-failure" / "worker-fallback.stdout").exists())
 
     def test_correction_sandbox_denies_source_out_of_scope_and_git_metadata_writes(self) -> None:
@@ -3986,7 +4110,7 @@ fs.linkSync(source, target);
         git(repo, "commit", "-qm", "advance head")
         apply = run_cli(repo, "apply", str(manifest_path))
         self.assertEqual(apply.returncode, 1)
-        self.assertIn("source HEAD no longer matches", apply.stderr)
+        self.assertIn("source HEAD differs from the execution baseline", apply.stderr)
 
     def test_run_rejects_worker_commit_or_ref_change(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
@@ -4040,7 +4164,7 @@ fs.linkSync(source, target);
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         apply = run_cli(repo, "apply", str(manifest_path))
         self.assertEqual(apply.returncode, 1)
-        self.assertIn("active plan digest no longer matches", apply.stderr)
+        self.assertIn("source HEAD differs from the execution baseline", apply.stderr)
 
     def test_apply_rejects_mismatched_patch_digest(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])

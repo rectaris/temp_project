@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import secrets
 import stat
 import subprocess
 import tempfile
@@ -18,8 +19,9 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 MAX_BYTES = 65_536
+CANDIDATE_MANIFEST_MAX_BYTES = 1024 * 1024
 MAX_EVENTS = 64
 MAX_CORRECTIONS = 2
 MAX_PARENT_REMEDIATIONS = 2
@@ -36,7 +38,18 @@ REASON_CODES = {
     "parent_remediation_budget_exhausted",
 }
 REPAIR_REASON_CODES = {"independent_repair_required"}
+REVIEW_REASON_CODES = {
+    "acceptance_unmet",
+    "out_of_scope_change",
+    "required_spec_missed",
+    "integration_contract_mismatch",
+    "focused_validation_failed",
+    "evidence_incomplete",
+    "multiple_invariants_coupled",
+}
 MODES = {"candidate", "parent_direct"}
+ATTEMPT_KINDS = {"initial", "correction"}
+REVIEW_OUTCOMES = {"accepted", "correction_requested", "rejected"}
 EVENT_TYPES = {
     "candidate_generation",
     "correction_rejected",
@@ -49,22 +62,38 @@ EVENT_TYPES = {
     "post_authoritative_design_change",
     "repair_classification",
     "elapsed_checkpoint",
+    "writable_attempt_started",
+    "attempt_closed",
+    "successor_claimed",
 }
+RECORD_EVENT_TYPES = EVENT_TYPES - {"writable_attempt_started", "attempt_closed"}
 EXACT_KEYS = {
     "schema_version", "run_id", "plan_path", "plan_digest", "source_head",
     "primary_invariant_digest", "candidate_lifecycle_identity_digest", "state",
     "implementation_mode", "candidate_generations", "correction_rounds",
     "parent_direct_remediation_rounds", "focused_validation_events",
     "authoritative_validation_events", "repair_reason_codes", "replan_reason_codes",
-    "last_monotonic_ns", "event_chain_digest", "events",
+    "predecessor_plan_digest", "predecessor_accepted_candidate_digest",
+    "predecessor_closing_event_digest", "predecessor_accepted_source_head",
+    "writable_attempt_starts",
+    "writable_attempt_closures", "open_attempt_id", "accepted_candidate_digest",
+    "accepted_closing_event_digest", "accepted_source_head", "successor_claim_digest",
+    "review_reason_codes", "last_monotonic_ns", "genesis_digest", "event_chain_digest", "events",
 }
 EVENT_KEYS = {
     "sequence", "event_id", "event_type", "implementation_mode", "invariant_digests",
     "finding_severities", "independent_review_receipt_digest", "repair_classification",
     "repair_evidence_digest",
     "candidate_lifecycle_digest",
+    "attempt_id", "attempt_kind", "candidate_digest", "review_outcome",
+    "review_reason_code", "review_author", "review_evidence_digest",
+    "predecessor_plan_digest", "predecessor_accepted_candidate_digest",
+    "predecessor_closing_event_digest", "predecessor_accepted_source_head",
+    "accepted_source_head", "successor_run_id", "successor_plan_digest",
+    "successor_source_head", "successor_primary_invariant_digest", "successor_genesis_digest",
     "elapsed_seconds", "monotonic_ns", "previous_event_digest", "event_digest",
 }
+LEGACY_EVENT_KEYS = EVENT_KEYS - {"successor_genesis_digest"}
 REPAIR_CLASSIFICATION_KEYS = {
     "schema_version", "plan_path", "plan_digest", "source_head", "primary_invariant_digest",
     "affected_invariant_digests", "candidate_lifecycle_identity_digest", "candidate_lifecycle_digest",
@@ -74,11 +103,22 @@ REPAIR_CLASSIFICATION_KEYS = {
     "safety_conditions_unchanged", "external_effect_authority_unchanged",
     "independent_invariant_count",
 }
+CANDIDATE_LIFECYCLE_KEYS = {
+    "schema_version", "orchestration_run_id", "current_manifest_digest",
+    "current_patch_digest", "correction_round", "candidate_generations", "phase",
+    "focused_required", "focused_validation_count", "authoritative_validation_count",
+    "parent_review_rejections",
+    "plan_execution_attempt_id",
+}
 EMPTY_CHAIN_DIGEST = digest(b"") if "digest" in globals() else "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 
 class StateError(ValueError):
     pass
+
+
+def sanitized_git_environment() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
 
 def digest(data: bytes | str) -> str:
@@ -122,10 +162,65 @@ def repository_root() -> Path:
     completed = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"], check=False,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=sanitized_git_environment(),
     )
     if completed.returncode != 0:
         raise StateError("current directory is not a Git repository")
     return Path(completed.stdout.strip()).resolve()
+
+
+def git_output(root: Path, *arguments: str) -> bytes:
+    completed = subprocess.run(
+        ["git", *arguments], cwd=root, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=sanitized_git_environment(),
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise StateError(detail or f"git {' '.join(arguments)} failed")
+    return completed.stdout
+
+
+def current_head(root: Path) -> str:
+    return git_output(root, "rev-parse", "HEAD").decode().strip()
+
+
+def require_clean_repository(root: Path) -> None:
+    if git_output(root, "status", "--porcelain=1", "--untracked-files=all"):
+        raise StateError("accepted closure requires a clean repository")
+
+
+def require_repository_baseline(state: dict[str, Any]) -> None:
+    root = repository_root()
+    if current_head(root) != state["source_head"]:
+        raise StateError("repository source HEAD differs from the execution baseline")
+    plan = root / state["plan_path"]
+    reject_symlink_ancestors(plan, include_target=True)
+    try:
+        plan_bytes = plan.read_bytes()
+    except OSError as exc:
+        raise StateError("execution plan is unavailable") from exc
+    if digest(plan_bytes) != state["plan_digest"]:
+        raise StateError("repository plan digest differs from the execution baseline")
+    try:
+        plan_text = plan_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise StateError("execution plan must be UTF-8") from exc
+    invariants = re.findall(r"^primary_invariant: (.+)$", plan_text, flags=re.MULTILINE)
+    if len(invariants) != 1 or digest(invariants[0]) != state["primary_invariant_digest"]:
+        raise StateError("repository primary invariant differs from the execution baseline")
+
+
+def state_genesis_digest(value: dict[str, Any]) -> str:
+    identity_keys = (
+        "schema_version", "run_id", "plan_path", "plan_digest", "source_head",
+        "primary_invariant_digest", "candidate_lifecycle_identity_digest",
+        "implementation_mode", "predecessor_plan_digest",
+        "predecessor_accepted_candidate_digest", "predecessor_closing_event_digest",
+        "predecessor_accepted_source_head",
+    )
+    identity = {key: value[key] for key in identity_keys}
+    return digest(json.dumps(identity, sort_keys=True, separators=(",", ":")))
 
 
 def require_outside_repository(path: Path, label: str) -> None:
@@ -158,15 +253,17 @@ def open_read(path: Path) -> tuple[int, bytes]:
         os.close(descriptor)
 
 
-def read_external_artifact(path: Path, label: str) -> bytes:
+def read_external_artifact(
+    path: Path, label: str, maximum_bytes: int = MAX_BYTES
+) -> bytes:
     require_outside_repository(path, label)
     reject_symlink_ancestors(path, include_target=True)
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise StateError(f"{label} must be a regular file")
-        data = os.read(descriptor, MAX_BYTES + 1)
-        if len(data) > MAX_BYTES:
+        data = os.read(descriptor, maximum_bytes + 1)
+        if len(data) > maximum_bytes:
             raise StateError(f"{label} exceeds size limit")
         return data
     finally:
@@ -260,13 +357,47 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("invalid source_head")
     require_digest(value["primary_invariant_digest"], "primary_invariant_digest")
     require_digest(value["candidate_lifecycle_identity_digest"], "candidate_lifecycle_identity_digest")
-    if value["state"] not in {"active", "repair_required", "replan_required"}:
+    predecessor_fields = (
+        "predecessor_plan_digest",
+        "predecessor_accepted_candidate_digest",
+        "predecessor_closing_event_digest",
+    )
+    predecessor_values = [
+        require_digest(value[key], key, allow_empty=True) for key in predecessor_fields
+    ]
+    if any(predecessor_values) and not all(predecessor_values):
+        raise StateError("predecessor acceptance digests must be all present or all absent")
+    predecessor_source = value["predecessor_accepted_source_head"]
+    if not isinstance(predecessor_source, str) or (
+        predecessor_source and not re.fullmatch(r"[0-9a-f]{40}", predecessor_source)
+    ):
+        raise StateError("invalid predecessor accepted source HEAD")
+    if bool(predecessor_source) != bool(any(predecessor_values)):
+        raise StateError("predecessor accepted source HEAD must accompany predecessor digests")
+    accepted_fields = ("accepted_candidate_digest", "accepted_closing_event_digest")
+    accepted_values = [
+        require_digest(value[key], key, allow_empty=True) for key in accepted_fields
+    ]
+    if any(accepted_values) and not all(accepted_values):
+        raise StateError("accepted candidate and closing-event digests must be paired")
+    accepted_source = value["accepted_source_head"]
+    if not isinstance(accepted_source, str) or (
+        accepted_source and not re.fullmatch(r"[0-9a-f]{40}", accepted_source)
+    ):
+        raise StateError("invalid accepted source HEAD")
+    if bool(accepted_source) != bool(any(accepted_values)):
+        raise StateError("accepted source HEAD must accompany accepted candidate evidence")
+    require_digest(value["successor_claim_digest"], "successor_claim_digest", allow_empty=True)
+    if value["state"] not in {
+        "active", "accepted", "rejected", "repair_required", "replan_required"
+    }:
         raise StateError("invalid state")
     if value["implementation_mode"] not in MODES:
         raise StateError("invalid implementation_mode")
     counter_keys = (
         "candidate_generations", "correction_rounds", "parent_direct_remediation_rounds",
-        "focused_validation_events", "authoritative_validation_events", "last_monotonic_ns",
+        "focused_validation_events", "authoritative_validation_events",
+        "writable_attempt_starts", "writable_attempt_closures", "last_monotonic_ns",
     )
     for key in counter_keys:
         item = value[key]
@@ -274,7 +405,8 @@ def validate_state(value: Any) -> dict[str, Any]:
             raise StateError(f"{key} must be a nonnegative integer")
     reasons = value["replan_reason_codes"]
     if not isinstance(reasons, list) or len(reasons) != len(set(reasons)) or any(
-        not isinstance(reason, str) or reason not in REASON_CODES for reason in reasons
+        not isinstance(reason, str) or reason not in REASON_CODES | REVIEW_REASON_CODES
+        for reason in reasons
     ):
         raise StateError("invalid replan_reason_codes")
     if value["state"] == "replan_required" and not reasons:
@@ -288,6 +420,20 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("repair_required state needs a reason")
     if value["state"] == "active" and (reasons or repair_reasons):
         raise StateError("active state cannot have stop reasons")
+    review_reasons = value["review_reason_codes"]
+    if not isinstance(review_reasons, list) or len(review_reasons) != len(set(review_reasons)) or any(
+        not isinstance(reason, str) or reason not in REVIEW_REASON_CODES
+        for reason in review_reasons
+    ):
+        raise StateError("invalid review_reason_codes")
+    if not isinstance(value["open_attempt_id"], str) or (
+        value["open_attempt_id"] and not ID_RE.fullmatch(value["open_attempt_id"])
+    ):
+        raise StateError("invalid open_attempt_id")
+    if value["state"] == "accepted" and not all(accepted_values):
+        raise StateError("accepted state requires accepted candidate evidence")
+    if value["state"] != "accepted" and any(accepted_values):
+        raise StateError("only accepted state may retain accepted candidate evidence")
     if reasons and repair_reasons:
         raise StateError("repair and replan reasons cannot be combined")
     events = value["events"]
@@ -296,14 +442,16 @@ def validate_state(value: Any) -> dict[str, Any]:
     seen_ids: set[str] = set()
     seen_review_receipts: set[str] = set()
     validated_events: list[dict[str, Any]] = []
-    terminal_event_seen = False
     previous_ns = 0
-    previous_digest = EMPTY_CHAIN_DIGEST
+    require_digest(value["genesis_digest"], "genesis_digest")
+    if value["genesis_digest"] != state_genesis_digest(value):
+        raise StateError("execution-state genesis identity digest mismatch")
+    previous_digest = value["genesis_digest"]
     for index, event in enumerate(events, start=1):
-        if terminal_event_seen:
-            raise StateError("event history continues after a terminal execution state")
-        if not isinstance(event, dict) or set(event) != EVENT_KEYS:
+        allowed_event_keys = {frozenset(EVENT_KEYS), frozenset(LEGACY_EVENT_KEYS)}
+        if not isinstance(event, dict) or frozenset(event) not in allowed_event_keys:
             raise StateError("event has an invalid exact schema")
+        successor_genesis_digest = event.get("successor_genesis_digest", "")
         if event["sequence"] != index or isinstance(event["sequence"], bool):
             raise StateError("event sequence mismatch")
         if not isinstance(event["event_id"], str) or not ID_RE.fullmatch(event["event_id"]):
@@ -313,6 +461,15 @@ def validate_state(value: Any) -> dict[str, Any]:
         seen_ids.add(event["event_id"])
         if event["event_type"] not in EVENT_TYPES or event["implementation_mode"] not in MODES:
             raise StateError("invalid event classification")
+        prior_summary = derive_summary(validated_events)
+        if prior_summary["state"] != "active":
+            successor_is_allowed = (
+                prior_summary["state"] == "accepted"
+                and event["event_type"] == "successor_claimed"
+                and not prior_summary["successor_claim_digest"]
+            )
+            if not successor_is_allowed:
+                raise StateError("event history continues after a terminal execution state")
         invariants = event["invariant_digests"]
         if not isinstance(invariants, list) or len(invariants) != len(set(invariants)) or any(
             not isinstance(item, str) or not DIGEST_RE.fullmatch(item) for item in invariants
@@ -343,6 +500,101 @@ def validate_state(value: Any) -> dict[str, Any]:
         if not isinstance(classification, dict):
             raise StateError("invalid repair classification")
         require_digest(event["candidate_lifecycle_digest"], "candidate_lifecycle_digest", allow_empty=True)
+        attempt_id = event["attempt_id"]
+        if not isinstance(attempt_id, str) or (attempt_id and not ID_RE.fullmatch(attempt_id)):
+            raise StateError("invalid attempt_id")
+        if event["attempt_kind"] not in ATTEMPT_KINDS | {""}:
+            raise StateError("invalid attempt_kind")
+        require_digest(event["candidate_digest"], "candidate_digest", allow_empty=True)
+        if event["review_outcome"] not in REVIEW_OUTCOMES | {""}:
+            raise StateError("invalid review_outcome")
+        if event["review_reason_code"] not in REVIEW_REASON_CODES | {""}:
+            raise StateError("invalid review_reason_code")
+        if event["review_author"] not in {"", "parent"}:
+            raise StateError("review outcome reason must be parent-authored")
+        require_digest(event["review_evidence_digest"], "review_evidence_digest", allow_empty=True)
+        event_predecessors = [
+            require_digest(event[key], key, allow_empty=True) for key in predecessor_fields
+        ]
+        if any(event_predecessors) and not all(event_predecessors):
+            raise StateError("event predecessor digests must be all present or all absent")
+        event_predecessor_source = event["predecessor_accepted_source_head"]
+        if not isinstance(event_predecessor_source, str) or (
+            event_predecessor_source
+            and not re.fullmatch(r"[0-9a-f]{40}", event_predecessor_source)
+        ):
+            raise StateError("event has an invalid predecessor accepted source HEAD")
+        if bool(event_predecessor_source) != bool(any(event_predecessors)):
+            raise StateError("event predecessor source HEAD is incomplete")
+        event_accepted_source = event["accepted_source_head"]
+        if not isinstance(event_accepted_source, str) or (
+            event_accepted_source and not re.fullmatch(r"[0-9a-f]{40}", event_accepted_source)
+        ):
+            raise StateError("event has an invalid accepted source HEAD")
+        successor_run_id = event["successor_run_id"]
+        if not isinstance(successor_run_id, str) or (
+            successor_run_id and not ID_RE.fullmatch(successor_run_id)
+        ):
+            raise StateError("event has an invalid successor run id")
+        for key in ("successor_plan_digest", "successor_primary_invariant_digest"):
+            require_digest(event[key], key, allow_empty=True)
+        require_digest(successor_genesis_digest, "successor_genesis_digest", allow_empty=True)
+        successor_source = event["successor_source_head"]
+        if not isinstance(successor_source, str) or (
+            successor_source and not re.fullmatch(r"[0-9a-f]{40}", successor_source)
+        ):
+            raise StateError("event has an invalid successor source HEAD")
+        if event["event_type"] == "writable_attempt_started":
+            if not attempt_id or not event["attempt_kind"]:
+                raise StateError("writable attempt start is missing its identifier or kind")
+            if any((event["candidate_digest"], event["review_outcome"], event["review_reason_code"],
+                    event["review_author"], event["review_evidence_digest"],
+                    event_accepted_source, successor_run_id, event["successor_plan_digest"],
+                    successor_source, event["successor_primary_invariant_digest"],
+                    successor_genesis_digest)):
+                raise StateError("writable attempt start contains review outcome data")
+            if event_predecessors != predecessor_values:
+                raise StateError("writable attempt start predecessor evidence differs from its run")
+            if event_predecessor_source != predecessor_source:
+                raise StateError("writable attempt start predecessor source differs from its run")
+        elif event["event_type"] == "attempt_closed":
+            if not attempt_id or event["attempt_kind"] or not event["review_outcome"]:
+                raise StateError("attempt closure has invalid attempt identity fields")
+            if event["review_author"] != "parent" or not event["review_evidence_digest"]:
+                raise StateError("attempt closure requires parent review evidence")
+            if not invariants:
+                raise StateError("attempt closure must identify affected invariants")
+            if event["review_outcome"] == "accepted":
+                if (not event["candidate_digest"] or event["review_reason_code"]
+                        or not event_accepted_source):
+                    raise StateError("accepted attempt closure has invalid candidate or reason data")
+            elif not event["review_reason_code"] or event_accepted_source:
+                raise StateError("non-accepted attempt closure requires a review reason code")
+            if any(event_predecessors) or event_predecessor_source:
+                raise StateError("attempt closure cannot restate predecessor evidence")
+            if any((successor_run_id, event["successor_plan_digest"], successor_source,
+                    event["successor_primary_invariant_digest"],
+                    successor_genesis_digest)):
+                raise StateError("attempt closure cannot contain successor identity")
+        elif event["event_type"] == "successor_claimed":
+            successor_values = (
+                successor_run_id, event["successor_plan_digest"], successor_source,
+                event["successor_primary_invariant_digest"], successor_genesis_digest,
+            )
+            if not all(successor_values):
+                raise StateError("successor claim has incomplete child identity")
+            if any((attempt_id, event["attempt_kind"], event["candidate_digest"],
+                    event["review_outcome"], event["review_reason_code"],
+                    event["review_author"], event["review_evidence_digest"],
+                    *event_predecessors, event_predecessor_source, event_accepted_source)):
+                raise StateError("successor claim contains unrelated attempt data")
+        elif any((attempt_id, event["attempt_kind"], event["candidate_digest"],
+                  event["review_outcome"], event["review_reason_code"],
+                  event["review_author"], event["review_evidence_digest"], *event_predecessors,
+                  event_predecessor_source, event_accepted_source, successor_run_id,
+                  event["successor_plan_digest"], successor_source,
+                  event["successor_primary_invariant_digest"], successor_genesis_digest)):
+            raise StateError("non-attempt event contains writable-attempt data")
         if event["event_type"] == "repair_classification":
             if not invariants:
                 raise StateError("repair classification event must affect at least one invariant")
@@ -374,13 +626,12 @@ def validate_state(value: Any) -> dict[str, Any]:
         if event["previous_event_digest"] != previous_digest:
             raise StateError("event hash-chain predecessor mismatch")
         require_digest(event["event_digest"], "event_digest")
-        unsigned = {key: event[key] for key in EVENT_KEYS if key != "event_digest"}
+        unsigned = {key: value for key, value in event.items() if key != "event_digest"}
         expected_event_digest = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")))
         if event["event_digest"] != expected_event_digest:
             raise StateError("event hash-chain digest mismatch")
         previous_digest = event["event_digest"]
         validated_events.append(event)
-        terminal_event_seen = derive_summary(validated_events)["state"] != "active"
     if events and value["last_monotonic_ns"] != events[-1]["monotonic_ns"]:
         raise StateError("last_monotonic_ns mismatch")
     if value["event_chain_digest"] != previous_digest:
@@ -398,6 +649,17 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     parent_rounds = 0
     focused_events = 0
     authoritative_events = 0
+    attempt_starts = 0
+    attempt_closures = 0
+    open_attempt_id = ""
+    last_attempt_kind = ""
+    last_review_outcome = ""
+    accepted_candidate_digest = ""
+    accepted_closing_event_digest = ""
+    accepted_source_head = ""
+    successor_claim_digest = ""
+    terminal_rejection = False
+    review_reason_codes: list[str] = []
     reasons: list[str] = []
     repair_reasons: list[str] = []
 
@@ -408,8 +670,12 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     for event in events:
         event_type = event["event_type"]
         if event_type == "candidate_generation":
+            if candidate_generations != 0:
+                raise StateError("initial candidate generation already recorded")
             candidate_generations += 1
         elif event_type == "correction_rejected":
+            if candidate_generations != correction_rounds + 1:
+                raise StateError("correction event is out of order")
             correction_rounds += 1
             candidate_generations += 1
             if correction_rounds >= MAX_CORRECTIONS:
@@ -437,7 +703,67 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
                 repair_reasons.append(classification_result)
             else:
                 add_reason(classification_result)
-    state = "replan_required" if reasons else "repair_required" if repair_reasons else "active"
+        elif event_type == "writable_attempt_started":
+            if open_attempt_id:
+                raise StateError("writable attempts overlap")
+            attempt_kind = event["attempt_kind"]
+            if attempt_kind == "initial":
+                if attempt_starts:
+                    raise StateError("initial writable attempt may start only once")
+            elif last_review_outcome != "correction_requested":
+                raise StateError("correction attempt lacks a parent correction decision")
+            if attempt_kind == "correction" and correction_rounds >= MAX_CORRECTIONS:
+                raise StateError("candidate correction budget is exhausted")
+            attempt_starts += 1
+            candidate_generations += 1
+            if attempt_kind == "correction":
+                correction_rounds += 1
+            open_attempt_id = event["attempt_id"]
+            last_attempt_kind = attempt_kind
+            last_review_outcome = ""
+        elif event_type == "attempt_closed":
+            if not open_attempt_id or event["attempt_id"] != open_attempt_id:
+                raise StateError("attempt closure does not match the open writable attempt")
+            attempt_closures += 1
+            open_attempt_id = ""
+            outcome = event["review_outcome"]
+            last_review_outcome = outcome
+            reason = event["review_reason_code"]
+            if reason:
+                repeated = reason in review_reason_codes
+                if not repeated:
+                    review_reason_codes.append(reason)
+                if repeated:
+                    add_reason(reason)
+                if reason == "multiple_invariants_coupled":
+                    add_reason(reason)
+            if outcome == "accepted":
+                if last_attempt_kind not in ATTEMPT_KINDS:
+                    raise StateError("accepted closure lacks a writable attempt")
+                accepted_candidate_digest = event["candidate_digest"]
+                accepted_closing_event_digest = event["event_digest"]
+                accepted_source_head = event["accepted_source_head"]
+            elif outcome == "rejected":
+                if correction_rounds >= MAX_CORRECTIONS:
+                    add_reason("candidate_correction_budget_exhausted")
+                else:
+                    terminal_rejection = True
+            elif correction_rounds >= MAX_CORRECTIONS:
+                add_reason("candidate_correction_budget_exhausted")
+        elif event_type == "successor_claimed":
+            if not accepted_candidate_digest or successor_claim_digest:
+                raise StateError("successor claim is not attached to one accepted leaf")
+            successor_claim_digest = event["event_digest"]
+    if reasons:
+        state = "replan_required"
+    elif repair_reasons:
+        state = "repair_required"
+    elif accepted_candidate_digest:
+        state = "accepted"
+    elif terminal_rejection:
+        state = "rejected"
+    else:
+        state = "active"
     return {
         "state": state,
         "candidate_generations": candidate_generations,
@@ -445,6 +771,14 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "parent_direct_remediation_rounds": parent_rounds,
         "focused_validation_events": focused_events,
         "authoritative_validation_events": authoritative_events,
+        "writable_attempt_starts": attempt_starts,
+        "writable_attempt_closures": attempt_closures,
+        "open_attempt_id": open_attempt_id,
+        "accepted_candidate_digest": accepted_candidate_digest,
+        "accepted_closing_event_digest": accepted_closing_event_digest,
+        "accepted_source_head": accepted_source_head,
+        "successor_claim_digest": successor_claim_digest,
+        "review_reason_codes": review_reason_codes,
         "repair_reason_codes": repair_reasons,
         "replan_reason_codes": reasons,
     }
@@ -461,30 +795,164 @@ def read_state(path: Path) -> dict[str, Any]:
         raise StateError(f"invalid execution state JSON: {exc}") from exc
 
 
+def predecessor_acceptance_from_state(predecessor: dict[str, Any]) -> dict[str, str]:
+    if predecessor["state"] != "accepted" or predecessor["open_attempt_id"]:
+        raise StateError("predecessor execution state lacks an accepted closing transition")
+    return {
+        "predecessor_plan_digest": predecessor["plan_digest"],
+        "predecessor_accepted_candidate_digest": predecessor["accepted_candidate_digest"],
+        "predecessor_closing_event_digest": predecessor["accepted_closing_event_digest"],
+        "predecessor_accepted_source_head": predecessor["accepted_source_head"],
+    }
+
+
+def read_predecessor_acceptance(path: Path) -> dict[str, str]:
+    require_outside_repository(path, "predecessor execution state")
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        predecessor = read_state(path)
+    return predecessor_acceptance_from_state(predecessor)
+
+
+def successor_identity(state: dict[str, Any]) -> dict[str, str]:
+    return {
+        "successor_run_id": state["run_id"],
+        "successor_plan_digest": state["plan_digest"],
+        "successor_source_head": state["source_head"],
+        "successor_primary_invariant_digest": state["primary_invariant_digest"],
+        "successor_genesis_digest": state["genesis_digest"],
+    }
+
+
+def claim_predecessor_for_successor(
+    predecessor_path: Path,
+    expected: dict[str, str],
+    successor: dict[str, Any],
+    elapsed_seconds: float,
+) -> None:
+    require_outside_repository(predecessor_path, "predecessor execution state")
+    with with_lock(predecessor_path) as predecessor_lock:
+        fcntl.flock(predecessor_lock.fileno(), fcntl.LOCK_EX)
+        predecessor = read_state(predecessor_path)
+        observed = predecessor_acceptance_from_state(predecessor)
+        if observed != expected:
+            raise StateError("predecessor acceptance proof is stale or mismatched")
+        identity = successor_identity(successor)
+        prior_claims = [
+            event for event in predecessor["events"]
+            if event["event_type"] == "successor_claimed"
+        ]
+        if prior_claims:
+            prior = prior_claims[0]
+            if any(prior[key] != value for key, value in identity.items()):
+                raise StateError("accepted predecessor is already claimed by another successor")
+            return
+        monotonic_ns = max(time.monotonic_ns(), predecessor["last_monotonic_ns"] + 1)
+        event = {
+            "sequence": len(predecessor["events"]) + 1,
+            "event_id": f"successor:{successor['run_id']}",
+            "event_type": "successor_claimed",
+            "implementation_mode": predecessor["implementation_mode"],
+            "invariant_digests": [],
+            "finding_severities": [],
+            "independent_review_receipt_digest": "",
+            "repair_classification": {},
+            "repair_evidence_digest": "",
+            "candidate_lifecycle_digest": "",
+            "attempt_id": "",
+            "attempt_kind": "",
+            "candidate_digest": "",
+            "review_outcome": "",
+            "review_reason_code": "",
+            "review_author": "",
+            "review_evidence_digest": "",
+            "predecessor_plan_digest": "",
+            "predecessor_accepted_candidate_digest": "",
+            "predecessor_closing_event_digest": "",
+            "predecessor_accepted_source_head": "",
+            "accepted_source_head": "",
+            **identity,
+            "elapsed_seconds": elapsed_seconds,
+            "monotonic_ns": monotonic_ns,
+            "previous_event_digest": predecessor["event_chain_digest"],
+        }
+        event["event_digest"] = digest(
+            json.dumps(event, sort_keys=True, separators=(",", ":"))
+        )
+        predecessor["events"].append(event)
+        predecessor["last_monotonic_ns"] = monotonic_ns
+        predecessor["event_chain_digest"] = event["event_digest"]
+        for key, value in derive_summary(predecessor["events"]).items():
+            predecessor[key] = value
+        validate_state(predecessor)
+        atomic_write(predecessor_path, predecessor)
+
+
+def require_predecessor_ancestry(accepted_source_head: str, successor_source_head: str) -> None:
+    root = repository_root()
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", accepted_source_head, successor_source_head],
+        cwd=root, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if completed.returncode != 0:
+        raise StateError("successor source HEAD is not based on the accepted predecessor source")
+
+
 def atomic_write(path: Path, value: dict[str, Any]) -> None:
     reject_symlink_ancestors(path, include_target=False)
     data = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
     if len(data) > MAX_BYTES:
         raise StateError("execution state exceeds size limit")
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    directory_descriptor = os.open(path.parent, directory_flags)
+    temporary_name = f".{path.name}.{secrets.token_hex(16)}.tmp"
+    descriptor = -1
     try:
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_descriptor,
+        )
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        os.replace(
+            temporary_name, path.name,
+            src_dir_fd=directory_descriptor, dst_dir_fd=directory_descriptor,
+        )
+        os.fsync(directory_descriptor)
     finally:
-        temporary.unlink(missing_ok=True)
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_name, dir_fd=directory_descriptor)
+        except FileNotFoundError:
+            pass
+        os.close(directory_descriptor)
 
 
 def with_lock(path: Path):
     lock_path = path.with_name(path.name + ".lock")
     reject_symlink_ancestors(lock_path, include_target=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    directory_descriptor = os.open(
+        lock_path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        descriptor = os.open(
+            lock_path.name,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+    finally:
+        os.close(directory_descriptor)
     return os.fdopen(descriptor, "a", encoding="utf-8")
 
 
@@ -504,9 +972,22 @@ def init_state(args: argparse.Namespace) -> None:
     invariant_matches = re.findall(r"^primary_invariant: (.+)$", plan_text, flags=re.MULTILINE)
     if len(invariant_matches) > 1 or (invariant_matches and digest(invariant_matches[0]) != invariant_digest):
         raise StateError("primary invariant digest mismatch")
-    actual_head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    actual_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], text=True, env=sanitized_git_environment()
+    ).strip()
     if actual_head != args.source_head:
         raise StateError("source HEAD mismatch")
+    predecessor = {
+        "predecessor_plan_digest": "",
+        "predecessor_accepted_candidate_digest": "",
+        "predecessor_closing_event_digest": "",
+        "predecessor_accepted_source_head": "",
+    }
+    if args.predecessor_state:
+        predecessor = read_predecessor_acceptance(Path(args.predecessor_state))
+        require_predecessor_ancestry(
+            predecessor["predecessor_accepted_source_head"], args.source_head
+        )
     state = {
         "schema_version": SCHEMA_VERSION,
         "run_id": args.run_id,
@@ -522,12 +1003,24 @@ def init_state(args: argparse.Namespace) -> None:
         "parent_direct_remediation_rounds": 0,
         "focused_validation_events": 0,
         "authoritative_validation_events": 0,
+        **predecessor,
+        "writable_attempt_starts": 0,
+        "writable_attempt_closures": 0,
+        "open_attempt_id": "",
+        "accepted_candidate_digest": "",
+        "accepted_closing_event_digest": "",
+        "accepted_source_head": "",
+        "successor_claim_digest": "",
+        "review_reason_codes": [],
         "repair_reason_codes": [],
         "replan_reason_codes": [],
         "last_monotonic_ns": 0,
-        "event_chain_digest": EMPTY_CHAIN_DIGEST,
+        "genesis_digest": "",
+        "event_chain_digest": "",
         "events": [],
     }
+    state["genesis_digest"] = state_genesis_digest(state)
+    state["event_chain_digest"] = state["genesis_digest"]
     validate_state(state)
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -551,6 +1044,10 @@ def require_independent_repair(state: dict[str, Any]) -> None:
 def stopped_message(state: dict[str, Any]) -> str:
     if state["state"] == "replan_required":
         return "plan execution is stopped for restructuring"
+    if state["state"] == "accepted":
+        return "plan execution is closed with an accepted candidate"
+    if state["state"] == "rejected":
+        return "plan execution is closed with a rejected candidate"
     return "plan execution is stopped for an independent repair"
 
 
@@ -620,6 +1117,23 @@ def record_event(args: argparse.Namespace) -> None:
             "repair_classification": repair_classification,
             "repair_evidence_digest": repair_evidence,
             "candidate_lifecycle_digest": lifecycle,
+            "attempt_id": "",
+            "attempt_kind": "",
+            "candidate_digest": "",
+            "review_outcome": "",
+            "review_reason_code": "",
+            "review_author": "",
+            "review_evidence_digest": "",
+            "predecessor_plan_digest": "",
+            "predecessor_accepted_candidate_digest": "",
+            "predecessor_closing_event_digest": "",
+            "predecessor_accepted_source_head": "",
+            "accepted_source_head": "",
+            "successor_run_id": "",
+            "successor_plan_digest": "",
+            "successor_source_head": "",
+            "successor_primary_invariant_digest": "",
+            "successor_genesis_digest": "",
             "elapsed_seconds": args.elapsed_seconds,
             "monotonic_ns": monotonic_ns,
             "previous_event_digest": state["event_chain_digest"],
@@ -627,44 +1141,347 @@ def record_event(args: argparse.Namespace) -> None:
         event["event_digest"] = digest(
             json.dumps(event, sort_keys=True, separators=(",", ":"))
         )
-        state["implementation_mode"] = args.implementation_mode
         state["events"].append(event)
         state["last_monotonic_ns"] = monotonic_ns
         state["event_chain_digest"] = event["event_digest"]
-        if args.event_type == "candidate_generation":
-            if state["candidate_generations"] != 0:
-                raise StateError("initial candidate generation already recorded")
-            state["candidate_generations"] += 1
-        elif args.event_type == "correction_rejected":
-            if state["candidate_generations"] != state["correction_rounds"] + 1:
-                raise StateError("correction event is out of order")
-            state["correction_rounds"] += 1
-            state["candidate_generations"] += 1
-            if state["correction_rounds"] >= MAX_CORRECTIONS:
-                trigger(state, "candidate_correction_budget_exhausted")
-        elif args.event_type == "parent_review":
-            if len(invariants) > 1:
-                trigger(state, "multiple_independent_invariants")
-            if args.implementation_mode == "parent_direct" and set(severities) & {"High", "Medium"}:
-                state["parent_direct_remediation_rounds"] += 1
-                if state["parent_direct_remediation_rounds"] >= MAX_PARENT_REMEDIATIONS:
-                    trigger(state, "parent_remediation_budget_exhausted")
-        elif args.event_type == "focused_validation":
-            state["focused_validation_events"] += 1
-        elif args.event_type == "authoritative_validation":
-            state["authoritative_validation_events"] += 1
-        elif args.event_type in {
-            "scope_drift", "spec_drift", "security_boundary_drift", "post_authoritative_design_change"
-        }:
-            if args.event_type == "post_authoritative_design_change" and not state["authoritative_validation_events"]:
-                raise StateError("post-authoritative design change requires an authoritative event")
-            trigger(state, args.event_type)
-        elif args.event_type == "repair_classification":
-            classification_result = classify_repair(repair_classification)
-            if classification_result == "independent_repair_required":
-                require_independent_repair(state)
-            else:
-                trigger(state, classification_result)
+        if args.event_type == "post_authoritative_design_change" and not state[
+            "authoritative_validation_events"
+        ]:
+            raise StateError("post-authoritative design change requires an authoritative event")
+        for key, value in derive_summary(state["events"]).items():
+            state[key] = value
+        validate_state(state)
+        atomic_write(path, state)
+
+
+def require_lifecycle_identity(state: dict[str, Any], run_id: str, lifecycle_path: Path) -> None:
+    if state["candidate_lifecycle_identity_digest"] != lifecycle_identity_digest(
+        run_id, lifecycle_path
+    ):
+        raise StateError("candidate lifecycle identity mismatch")
+
+
+def record_writable_attempt_start(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    lifecycle_path = Path(args.lifecycle_state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        if state["run_id"] != args.run_id:
+            raise StateError("run_id mismatch")
+        if state["plan_path"] != args.plan:
+            raise StateError("plan path mismatch")
+        if state["state"] != "active":
+            raise StateError(stopped_message(state))
+        if state["implementation_mode"] != "candidate":
+            raise StateError("writable attempt start requires candidate implementation mode")
+        require_repository_baseline(state)
+        require_lifecycle_identity(state, args.run_id, lifecycle_path)
+        if state["open_attempt_id"]:
+            raise StateError("a writable attempt is already open in this dependency chain")
+        if any(event["attempt_id"] == args.attempt_id for event in state["events"]):
+            raise StateError("attempt identifier replay is not allowed")
+        prior_candidate_digest = args.prior_candidate_digest or ""
+        if args.attempt_kind == "correction":
+            require_digest(prior_candidate_digest, "prior_candidate_digest")
+            closures = [
+                event for event in state["events"] if event["event_type"] == "attempt_closed"
+            ]
+            if (
+                not closures
+                or closures[-1]["review_outcome"] != "correction_requested"
+                or closures[-1]["candidate_digest"] != prior_candidate_digest
+            ):
+                raise StateError("correction start is not bound to the parent-rejected candidate")
+        elif prior_candidate_digest:
+            raise StateError("only a correction start may bind a prior candidate")
+        predecessor = {
+            "predecessor_plan_digest": state["predecessor_plan_digest"],
+            "predecessor_accepted_candidate_digest": state[
+                "predecessor_accepted_candidate_digest"
+            ],
+            "predecessor_closing_event_digest": state["predecessor_closing_event_digest"],
+            "predecessor_accepted_source_head": state["predecessor_accepted_source_head"],
+        }
+        if args.attempt_kind == "initial" and any(predecessor.values()):
+            if not args.predecessor_state:
+                raise StateError("dependent writable start requires predecessor execution state")
+            predecessor_path = Path(args.predecessor_state)
+            if predecessor_path.absolute() == path.absolute():
+                raise StateError("predecessor execution state cannot be the current ledger")
+            require_predecessor_ancestry(
+                predecessor["predecessor_accepted_source_head"], state["source_head"]
+            )
+            claim_predecessor_for_successor(
+                predecessor_path, predecessor, state, args.elapsed_seconds
+            )
+        elif args.predecessor_state:
+            raise StateError("predecessor execution state is valid only for an initial dependent start")
+        monotonic_ns = max(time.monotonic_ns(), state["last_monotonic_ns"] + 1)
+        event = {
+            "sequence": len(state["events"]) + 1,
+            "event_id": f"start:{args.attempt_id}",
+            "event_type": "writable_attempt_started",
+            "implementation_mode": "candidate",
+            "invariant_digests": [],
+            "finding_severities": [],
+            "independent_review_receipt_digest": "",
+            "repair_classification": {},
+            "repair_evidence_digest": "",
+            "candidate_lifecycle_digest": "",
+            "attempt_id": args.attempt_id,
+            "attempt_kind": args.attempt_kind,
+            "candidate_digest": "",
+            "review_outcome": "",
+            "review_reason_code": "",
+            "review_author": "",
+            "review_evidence_digest": "",
+            **predecessor,
+            "accepted_source_head": "",
+            "successor_run_id": "",
+            "successor_plan_digest": "",
+            "successor_source_head": "",
+            "successor_primary_invariant_digest": "",
+            "successor_genesis_digest": "",
+            "elapsed_seconds": args.elapsed_seconds,
+            "monotonic_ns": monotonic_ns,
+            "previous_event_digest": state["event_chain_digest"],
+        }
+        event["event_digest"] = digest(
+            json.dumps(event, sort_keys=True, separators=(",", ":"))
+        )
+        state["events"].append(event)
+        state["last_monotonic_ns"] = monotonic_ns
+        state["event_chain_digest"] = event["event_digest"]
+        for key, value in derive_summary(state["events"]).items():
+            state[key] = value
+        validate_state(state)
+        atomic_write(path, state)
+
+
+def load_candidate_lifecycle_for_close(
+    path: Path, run_id: str, attempt_id: str, lifecycle_digest: str, candidate_digest: str
+) -> dict[str, Any]:
+    require_digest(lifecycle_digest, "candidate_lifecycle_digest")
+    raw = read_external_artifact(path, "candidate lifecycle state")
+    if digest(raw) != lifecycle_digest:
+        raise StateError("candidate lifecycle content digest mismatch")
+    try:
+        lifecycle = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError("candidate lifecycle state is invalid JSON") from exc
+    if not isinstance(lifecycle, dict) or set(lifecycle) != CANDIDATE_LIFECYCLE_KEYS:
+        raise StateError("candidate lifecycle state has an invalid exact schema")
+    if lifecycle["schema_version"] != 2 or lifecycle["orchestration_run_id"] != run_id:
+        raise StateError("candidate lifecycle run identity mismatch")
+    if lifecycle["plan_execution_attempt_id"] != attempt_id:
+        raise StateError("candidate lifecycle attempt identity mismatch")
+    for key in ("current_manifest_digest", "current_patch_digest"):
+        if not isinstance(lifecycle[key], str) or not re.fullmatch(r"[0-9a-f]{64}", lifecycle[key]):
+            raise StateError(f"candidate lifecycle state has an invalid digest: {key}")
+    for key in (
+        "correction_round", "candidate_generations", "focused_validation_count",
+        "authoritative_validation_count", "parent_review_rejections",
+    ):
+        value = lifecycle[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 3:
+            raise StateError(f"candidate lifecycle state has an invalid counter: {key}")
+    if lifecycle["candidate_generations"] != lifecycle["correction_round"] + 1 or lifecycle[
+        "parent_review_rejections"
+    ] != lifecycle["correction_round"]:
+        raise StateError("candidate lifecycle state has inconsistent correction lineage")
+    if not isinstance(lifecycle["focused_required"], bool):
+        raise StateError("candidate lifecycle focused_required must be boolean")
+    phase = lifecycle["phase"]
+    if phase not in {
+        "admitted", "focused_passed", "focused_failed", "focused_running",
+        "authoritative_passed", "authoritative_failed", "authoritative_running",
+        "applying", "applied",
+    }:
+        raise StateError("candidate lifecycle state has an invalid phase")
+    focused_count = lifecycle["focused_validation_count"]
+    authoritative_count = lifecycle["authoritative_validation_count"]
+    if phase == "admitted" and (focused_count or authoritative_count):
+        raise StateError("candidate lifecycle admitted phase has validation events")
+    if phase.startswith("focused_") and (focused_count != 1 or authoritative_count != 0):
+        raise StateError("candidate lifecycle focused phase has inconsistent counters")
+    if phase in {
+        "authoritative_running", "authoritative_passed", "authoritative_failed",
+        "applying", "applied",
+    } and (authoritative_count != 1 or (lifecycle["focused_required"] and focused_count != 1)):
+        raise StateError("candidate lifecycle authoritative phase has inconsistent counters")
+    manifest_digest = lifecycle["current_manifest_digest"]
+    if candidate_digest != f"sha256:{manifest_digest}":
+        raise StateError("candidate identifier differs from the lifecycle manifest")
+    return lifecycle
+
+
+def load_candidate_manifest_for_close(
+    path: Path,
+    state: dict[str, Any],
+    attempt_id: str,
+    candidate_digest: str,
+    lifecycle: dict[str, Any],
+) -> dict[str, Any]:
+    raw = read_external_artifact(
+        path, "candidate manifest", CANDIDATE_MANIFEST_MAX_BYTES
+    )
+    if digest(raw) != candidate_digest:
+        raise StateError("candidate manifest digest mismatch")
+    try:
+        manifest = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError("candidate manifest is invalid JSON") from exc
+    if not isinstance(manifest, dict):
+        raise StateError("candidate manifest must be a JSON object")
+    expected = {
+        "orchestration_run_id": state["run_id"],
+        "plan_path": state["plan_path"],
+        "plan_digest": state["plan_digest"].removeprefix("sha256:"),
+        "source_head": state["source_head"],
+        "plan_execution_attempt_id": attempt_id,
+    }
+    if any(manifest.get(key) != value for key, value in expected.items()):
+        raise StateError("candidate manifest differs from the ledger run baseline or attempt")
+    patch_digest = manifest.get("patch_digest")
+    if not isinstance(patch_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", patch_digest):
+        raise StateError("candidate manifest has an invalid patch digest")
+    if lifecycle["current_manifest_digest"] != candidate_digest.removeprefix("sha256:"):
+        raise StateError("candidate manifest is not the current lifecycle leaf")
+    if lifecycle["current_patch_digest"] != patch_digest:
+        raise StateError("candidate manifest patch differs from the lifecycle leaf")
+    return manifest
+
+
+def require_accepted_candidate_commit(
+    state: dict[str, Any], manifest: dict[str, Any], accepted_source_head: str
+) -> None:
+    if not re.fullmatch(r"[0-9a-f]{40}", accepted_source_head):
+        raise StateError("accepted source HEAD must be a full Git object id")
+    root = repository_root()
+    require_clean_repository(root)
+    if current_head(root) != accepted_source_head:
+        raise StateError("accepted source HEAD differs from the current clean repository")
+    require_predecessor_ancestry(state["source_head"], accepted_source_head)
+    commit_line = git_output(
+        root, "rev-list", "--parents", "-n", "1", accepted_source_head
+    ).decode().strip().split()
+    if commit_line != [accepted_source_head, state["source_head"]]:
+        raise StateError("accepted source must be exactly one non-merge commit after the ledger baseline")
+    patch = git_output(
+        root, "diff", "--binary", "--full-index", state["source_head"], accepted_source_head, "--"
+    )
+    if hashlib.sha256(patch).hexdigest() != manifest["patch_digest"]:
+        raise StateError("accepted source commit does not exactly contain the admitted candidate")
+
+
+def record_attempt_close(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    lifecycle_path = Path(args.lifecycle_state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        if state["run_id"] != args.run_id:
+            raise StateError("run_id mismatch")
+        if state["state"] != "active":
+            raise StateError(stopped_message(state))
+        require_lifecycle_identity(state, args.run_id, lifecycle_path)
+        if not state["open_attempt_id"] or state["open_attempt_id"] != args.attempt_id:
+            raise StateError("attempt closure does not match the open writable attempt")
+        if args.review_author != "parent":
+            raise StateError("review outcome reason must be parent-authored")
+        evidence_digest = require_digest(args.review_evidence_digest, "review_evidence_digest")
+        reason = args.review_reason_code or ""
+        if args.outcome == "accepted":
+            if reason:
+                raise StateError("accepted attempt closure cannot include a review reason code")
+        elif reason not in REVIEW_REASON_CODES:
+            raise StateError("unknown review reason code")
+        invariants = args.invariant_digest or []
+        if len(invariants) != len(set(invariants)):
+            raise StateError("invariant digests must be unique")
+        for invariant in invariants:
+            require_digest(invariant, "invariant_digest")
+        if reason == "multiple_invariants_coupled":
+            if len(invariants) < 2 or state["primary_invariant_digest"] not in invariants:
+                raise StateError(
+                    "multiple_invariants_coupled requires the primary and another affected invariant"
+                )
+        elif invariants != [state["primary_invariant_digest"]]:
+            raise StateError("attempt closure must bind the primary invariant")
+        candidate_digest = args.candidate_digest or ""
+        lifecycle_digest = args.candidate_lifecycle_digest or ""
+        lifecycle: dict[str, Any] | None = None
+        manifest: dict[str, Any] | None = None
+        if candidate_digest:
+            require_digest(candidate_digest, "candidate_digest")
+            if any(
+                event["candidate_digest"] == candidate_digest
+                for event in state["events"]
+                if event["candidate_digest"]
+            ):
+                raise StateError("candidate identifier replay is not allowed")
+            lifecycle = load_candidate_lifecycle_for_close(
+                lifecycle_path, args.run_id, args.attempt_id, lifecycle_digest, candidate_digest
+            )
+            if args.candidate_manifest:
+                manifest = load_candidate_manifest_for_close(
+                    Path(args.candidate_manifest), state, args.attempt_id, candidate_digest, lifecycle
+                )
+        elif lifecycle_digest or args.candidate_manifest:
+            raise StateError("candidate lifecycle and manifest require a candidate identifier")
+        accepted_source_head = args.accepted_source_head or ""
+        if args.outcome == "accepted":
+            if lifecycle is None or lifecycle.get("phase") != "applied":
+                raise StateError("accepted attempt closure requires an applied candidate lifecycle")
+            if manifest is None or not accepted_source_head:
+                raise StateError("accepted closure requires candidate and source-commit evidence")
+            require_accepted_candidate_commit(state, manifest, accepted_source_head)
+        else:
+            if accepted_source_head:
+                raise StateError("only an accepted closure may record an accepted source HEAD")
+            require_repository_baseline(state)
+        monotonic_ns = max(time.monotonic_ns(), state["last_monotonic_ns"] + 1)
+        event = {
+            "sequence": len(state["events"]) + 1,
+            "event_id": f"close:{args.attempt_id}",
+            "event_type": "attempt_closed",
+            "implementation_mode": "candidate",
+            "invariant_digests": invariants,
+            "finding_severities": [],
+            "independent_review_receipt_digest": "",
+            "repair_classification": {},
+            "repair_evidence_digest": "",
+            "candidate_lifecycle_digest": lifecycle_digest,
+            "attempt_id": args.attempt_id,
+            "attempt_kind": "",
+            "candidate_digest": candidate_digest,
+            "review_outcome": args.outcome,
+            "review_reason_code": reason,
+            "review_author": "parent",
+            "review_evidence_digest": evidence_digest,
+            "predecessor_plan_digest": "",
+            "predecessor_accepted_candidate_digest": "",
+            "predecessor_closing_event_digest": "",
+            "predecessor_accepted_source_head": "",
+            "accepted_source_head": accepted_source_head,
+            "successor_run_id": "",
+            "successor_plan_digest": "",
+            "successor_source_head": "",
+            "successor_primary_invariant_digest": "",
+            "successor_genesis_digest": "",
+            "elapsed_seconds": args.elapsed_seconds,
+            "monotonic_ns": monotonic_ns,
+            "previous_event_digest": state["event_chain_digest"],
+        }
+        event["event_digest"] = digest(
+            json.dumps(event, sort_keys=True, separators=(",", ":"))
+        )
+        state["events"].append(event)
+        state["last_monotonic_ns"] = monotonic_ns
+        state["event_chain_digest"] = event["event_digest"]
+        for key, value in derive_summary(state["events"]).items():
+            state[key] = value
         validate_state(state)
         atomic_write(path, state)
 
@@ -677,12 +1494,23 @@ def check_gate(args: argparse.Namespace) -> None:
         raise StateError(stopped_message(state))
     if args.plan and state["plan_path"] != args.plan:
         raise StateError("plan path mismatch")
+    if args.open_attempt_id and state["open_attempt_id"] != args.open_attempt_id:
+        raise StateError("plan execution attempt is no longer the exact open writable attempt")
+    require_repository_baseline(state)
     if args.lifecycle_state and state["candidate_lifecycle_identity_digest"] != lifecycle_identity_digest(
         args.run_id, Path(args.lifecycle_state)
     ):
         raise StateError("candidate lifecycle identity mismatch")
+    latest_start = max(
+        (
+            index for index, event in enumerate(state["events"])
+            if event["event_type"] == "writable_attempt_started"
+        ),
+        default=-1,
+    )
     recorded_lifecycle_digests = [
-        event["candidate_lifecycle_digest"] for event in state["events"]
+        event["candidate_lifecycle_digest"]
+        for event in state["events"][latest_start + 1:]
         if event["candidate_lifecycle_digest"]
     ]
     if recorded_lifecycle_digests and file_digest(Path(args.lifecycle_state)) != recorded_lifecycle_digests[-1]:
@@ -700,13 +1528,14 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--source-head", required=True)
     init.add_argument("--primary-invariant-digest", required=True)
     init.add_argument("--lifecycle-state", required=True)
+    init.add_argument("--predecessor-state")
     init.add_argument("--implementation-mode", choices=sorted(MODES), required=True)
     init.set_defaults(handler=init_state)
     record = sub.add_parser("record")
     record.add_argument("state")
     record.add_argument("--run-id", required=True)
     record.add_argument("--event-id", required=True)
-    record.add_argument("--event-type", choices=sorted(EVENT_TYPES), required=True)
+    record.add_argument("--event-type", choices=sorted(RECORD_EVENT_TYPES), required=True)
     record.add_argument("--implementation-mode", choices=sorted(MODES), required=True)
     record.add_argument("--invariant-digest", action="append")
     record.add_argument("--finding-severity", action="append", choices=("High", "Medium", "Low"))
@@ -716,11 +1545,39 @@ def parser() -> argparse.ArgumentParser:
     record.add_argument("--lifecycle-state", required=True)
     record.add_argument("--elapsed-seconds", type=float, default=0.0)
     record.set_defaults(handler=record_event)
+    start = sub.add_parser("start")
+    start.add_argument("state")
+    start.add_argument("--run-id", required=True)
+    start.add_argument("--plan", required=True)
+    start.add_argument("--attempt-id", required=True)
+    start.add_argument("--attempt-kind", choices=sorted(ATTEMPT_KINDS), required=True)
+    start.add_argument("--predecessor-state")
+    start.add_argument("--prior-candidate-digest")
+    start.add_argument("--lifecycle-state", required=True)
+    start.add_argument("--elapsed-seconds", type=float, default=0.0)
+    start.set_defaults(handler=record_writable_attempt_start)
+    close = sub.add_parser("close")
+    close.add_argument("state")
+    close.add_argument("--run-id", required=True)
+    close.add_argument("--attempt-id", required=True)
+    close.add_argument("--outcome", choices=sorted(REVIEW_OUTCOMES), required=True)
+    close.add_argument("--review-author", required=True)
+    close.add_argument("--review-reason-code")
+    close.add_argument("--review-evidence-digest", required=True)
+    close.add_argument("--invariant-digest", action="append", required=True)
+    close.add_argument("--candidate-digest")
+    close.add_argument("--candidate-manifest")
+    close.add_argument("--candidate-lifecycle-digest")
+    close.add_argument("--accepted-source-head")
+    close.add_argument("--lifecycle-state", required=True)
+    close.add_argument("--elapsed-seconds", type=float, default=0.0)
+    close.set_defaults(handler=record_attempt_close)
     check = sub.add_parser("check")
     check.add_argument("state")
     check.add_argument("--run-id", required=True)
     check.add_argument("--plan")
     check.add_argument("--lifecycle-state")
+    check.add_argument("--open-attempt-id")
     check.set_defaults(handler=check_gate)
     return root
 

@@ -1,6 +1,6 @@
 # Gate sequential writable plan execution on parent review outcomes
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - referent_first
@@ -110,11 +110,11 @@ The review outcome reason is a parent-authored bounded reason value attached to 
 
 ## Tasks
 
-- [ ] Extend the execution ledger with one attempt-closing transition that binds predecessor admission, candidate acceptance, and bounded rejection or correction evidence.
-- [ ] Gate dependent writable starts on the exact accepted closing transition and prevent overlapping writable attempts in one chain.
-- [ ] Align root and generated policy, Skill, ledger, runner, inventories, and Copier behavior.
-- [ ] Add deterministic sequencing, classification, replay, crash, concurrency, budget, authority, and holdout coverage.
-- [ ] Perform bounded parent implementation, inspect all critical lifecycle invariants, obtain independent review, run the authoritative suite once, and archive the accepted plan before plan 116 starts.
+- [x] Extend the execution ledger with one attempt-closing transition that binds predecessor admission, candidate acceptance, and bounded rejection or correction evidence.
+- [x] Gate dependent writable starts on the exact accepted closing transition and prevent overlapping writable attempts in one chain.
+- [x] Align root and generated policy, Skill, ledger, runner, inventories, and Copier behavior.
+- [x] Add deterministic sequencing, classification, replay, crash, concurrency, budget, authority, and holdout coverage.
+- [x] Perform bounded parent implementation, inspect all critical lifecycle invariants, obtain independent review, run the authoritative suite once, and archive the accepted plan before plan 116 starts.
 
 ## Validation Notes
 
@@ -124,3 +124,7 @@ The review outcome reason is a parent-authored bounded reason value attached to 
 - Plan 136's context path names its exact checked archive.
 - This plan is deferred until Plan 155, the accepted integration successor for Plan 114, is checked; the parent must then refresh Plan 155's context path before bounded parent implementation begins.
 - Plan 162 is the checked replacement integration path produced by the accepted Plan 155 replan contract. Its exact archive path now resolves the dependency gate without changing this plan's accepted requirements.
+- Bounded parent implementation used the declared write scope. Independent read-only change review finished with High 0, Medium 0, and Low 0 after one remediation round and one compatibility follow-up.
+- Focused validation passed with 32 execution-ledger tests, 94 runner tests, root-policy checks, Copier static checks, and `git diff --check`.
+- The authoritative validation list ran exactly once and passed, including the runner self-test, holdout checks, full change validation, lint, smoke, and required Copier update test.
+- Deterministic syscall, lease, concurrency, and integration tests cover the critical boundaries. Real-process kill injection at atomic replacement or predecessor claim and a full runner-versus-close race remain an accepted low-risk validation gap.

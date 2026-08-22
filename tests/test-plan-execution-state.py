@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+import importlib.util
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import time
 from pathlib import Path
 
@@ -20,6 +24,20 @@ STATE_SCRIPT = ROOT / "scripts/plan-execution-state.py"
 RUNNER = ROOT / "scripts/run-sandboxed-plan-worker.py"
 SCENARIOS = ROOT / "tests/fixtures/orchestration/plan-restructuring-scenarios.json"
 HOLDOUT = ROOT / "tests/fixtures/orchestration/plan-restructuring-holdout.json"
+SEQUENCING_SCENARIOS = ROOT / "tests/fixtures/orchestration/review-sequencing-scenarios.json"
+SEQUENCING_HOLDOUT = ROOT / "tests/fixtures/orchestration/review-sequencing-holdout.json"
+
+
+def load_state_module():
+    spec = importlib.util.spec_from_file_location("plan_execution_state", STATE_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load plan execution state module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+STATE_MODULE = load_state_module()
 
 
 def digest(text: str) -> str:
@@ -37,7 +55,47 @@ class PlanExecutionStateTest(unittest.TestCase):
         subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.repo, check=True)
         self.plan = self.repo / "docs/plan/active/001-test.md"
         self.plan.parent.mkdir(parents=True)
-        self.plan.write_text("status: in_progress\nprimary_invariant: one invariant\n", encoding="utf-8")
+        self.plan.write_text(
+            "status: in_progress\n"
+            "task_types:\n  - template_workflow\n"
+            "review_class: B\n"
+            "human_design_required: no\n"
+            "human_approval_status: not_required\n"
+            "primary_invariant: one invariant\n"
+            "write_scope:\n  - allowed.txt\n"
+            "context_files:\n  - AGENTS.md\n"
+            "required_specs:\n  - AGENTS.md\n"
+            "validation:\n  - true\n"
+            "acceptance:\n  - Test acceptance.\n"
+            "checked_summary_ja: fixture\n",
+            encoding="utf-8",
+        )
+        self.child_plan = self.repo / "docs/plan/active/002-child.md"
+        self.child_plan.write_text(
+            "status: in_progress\n"
+            "task_types:\n  - template_workflow\n"
+            "review_class: B\n"
+            "human_design_required: no\n"
+            "human_approval_status: not_required\n"
+            "implementation_risk: low\n"
+            "implementation_ambiguity: low\n"
+            "primary_invariant: child invariant\n"
+            "write_scope:\n  - allowed.txt\n"
+            "context_files:\n  - AGENTS.md\n"
+            "required_specs:\n  - AGENTS.md\n"
+            "validation:\n  - true\n"
+            "acceptance:\n  - Test child acceptance.\n"
+            "checked_summary_ja: child fixture\n",
+            encoding="utf-8",
+        )
+        (self.repo / "docs/plan/plan.md").write_text(
+            "# Active Plan\n\nid\tpath\tstatus\n"
+            "001\tdocs/plan/active/001-test.md\tin_progress\n"
+            "002\tdocs/plan/active/002-child.md\tin_progress\n",
+            encoding="utf-8",
+        )
+        (self.repo / "AGENTS.md").write_text("test policy\n", encoding="utf-8")
+        (self.repo / "allowed.txt").write_text("original\n", encoding="utf-8")
         subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
         subprocess.run(["git", "commit", "-qm", "plan"], cwd=self.repo, check=True)
         self.head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.repo, text=True).strip()
@@ -68,6 +126,206 @@ class PlanExecutionStateTest(unittest.TestCase):
 
     def payload(self) -> dict[str, object]:
         return json.loads(self.state.read_text(encoding="utf-8"))
+
+    def test_legacy_v4_event_without_successor_genesis_remains_appendable(self) -> None:
+        recorded = self.record(
+            "legacy-review", "parent_review", "--invariant-digest", digest("one invariant")
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        value = self.payload()
+        event = value["events"][0]  # type: ignore[index]
+        del event["successor_genesis_digest"]
+        unsigned = {key: item for key, item in event.items() if key != "event_digest"}
+        event["event_digest"] = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")))
+        value["event_chain_digest"] = event["event_digest"]
+        self.state.write_text(json.dumps(value), encoding="utf-8")
+
+        appended = self.record("after-legacy", "elapsed_checkpoint")
+        self.assertEqual(appended.returncode, 0, appended.stderr)
+        self.assertEqual(len(self.payload()["events"]), 2)  # type: ignore[arg-type]
+
+    def initialize_execution(
+        self,
+        label: str,
+        *,
+        plan: Path | None = None,
+        predecessor: Path | None = None,
+    ) -> tuple[Path, Path, str]:
+        selected_plan = plan or self.plan
+        run_id = f"run-{label}"
+        state = self.base / f"{label}-execution.json"
+        lifecycle = self.base / f"{label}-lifecycle.json"
+        invariant = next(
+            line.split(": ", 1)[1]
+            for line in selected_plan.read_text(encoding="utf-8").splitlines()
+            if line.startswith("primary_invariant: ")
+        )
+        arguments = [
+            "init", str(state), "--run-id", run_id,
+            "--plan", selected_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(selected_plan.read_text(encoding="utf-8")),
+            "--source-head", subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+            ).strip(),
+            "--primary-invariant-digest", digest(invariant),
+            "--lifecycle-state", str(lifecycle),
+            "--implementation-mode", "candidate",
+        ]
+        if predecessor is not None:
+            arguments.extend(("--predecessor-state", str(predecessor)))
+        initialized = self.run_cli(*arguments)
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        return state, lifecycle, run_id
+
+    def start_writable_attempt(
+        self,
+        state: Path,
+        lifecycle: Path,
+        run_id: str,
+        attempt_id: str,
+        *,
+        plan: Path | None = None,
+        kind: str = "initial",
+        predecessor: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        selected_plan = plan or self.plan
+        arguments = [
+            "start", str(state), "--run-id", run_id,
+            "--plan", selected_plan.relative_to(self.repo).as_posix(),
+            "--attempt-id", attempt_id, "--attempt-kind", kind,
+            "--lifecycle-state", str(lifecycle),
+        ]
+        if predecessor is not None:
+            arguments.extend(("--predecessor-state", str(predecessor)))
+        if kind == "correction":
+            payload = json.loads(state.read_text(encoding="utf-8"))
+            closures = [
+                event for event in payload["events"]
+                if event["event_type"] == "attempt_closed"
+            ]
+            if closures and closures[-1]["candidate_digest"]:
+                arguments.extend(("--prior-candidate-digest", closures[-1]["candidate_digest"]))
+        return self.run_cli(*arguments)
+
+    def write_applied_lifecycle(
+        self,
+        lifecycle: Path,
+        run_id: str,
+        attempt_id: str,
+        candidate_digest: str,
+        patch_digest: str,
+    ) -> str:
+        payload = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "current_manifest_digest": candidate_digest.removeprefix("sha256:"),
+            "current_patch_digest": patch_digest,
+            "correction_round": 0,
+            "candidate_generations": 1,
+            "phase": "applied",
+            "focused_required": False,
+            "focused_validation_count": 0,
+            "authoritative_validation_count": 1,
+            "parent_review_rejections": 0,
+        }
+        content = json.dumps(payload, sort_keys=True, indent=2) + "\n"
+        lifecycle.write_text(content, encoding="utf-8")
+        return digest(content)
+
+    def close_writable_attempt(
+        self,
+        state: Path,
+        lifecycle: Path,
+        run_id: str,
+        attempt_id: str,
+        *,
+        invariant: str,
+        outcome: str,
+        reason: str | None = None,
+        evidence: str = "review-evidence",
+        author: str = "parent",
+        candidate: str | None = None,
+        lifecycle_digest: str | None = None,
+        extra_invariants: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
+        candidate_manifest: Path | None = None
+        accepted_source_head: str | None = None
+        if outcome in {"accepted", "correction_requested"} and candidate is None:
+            state_payload = json.loads(state.read_text(encoding="utf-8"))
+            if outcome == "accepted":
+                target = self.repo / "allowed.txt"
+                target.write_text(
+                    target.read_text(encoding="utf-8") + f"accepted {attempt_id}\n",
+                    encoding="utf-8",
+                )
+                subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+                subprocess.run(
+                    ["git", "commit", "-qm", f"accept {attempt_id}"], cwd=self.repo, check=True
+                )
+                accepted_source_head = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+                ).strip()
+                patch = subprocess.check_output(
+                    [
+                        "git", "diff", "--binary", "--full-index",
+                        state_payload["source_head"], accepted_source_head, "--",
+                    ],
+                    cwd=self.repo,
+                )
+                patch_digest = hashlib.sha256(patch).hexdigest()
+            else:
+                patch_digest = hashlib.sha256(f"patch:{attempt_id}".encode()).hexdigest()
+            manifest = {
+                "schema_version": 2,
+                "orchestration_run_id": run_id,
+                "plan_execution_attempt_id": attempt_id,
+                "plan_path": state_payload["plan_path"],
+                "plan_digest": state_payload["plan_digest"].removeprefix("sha256:"),
+                "source_head": state_payload["source_head"],
+                "patch_digest": patch_digest,
+            }
+            manifest_content = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+            candidate_manifest = self.base / f"{attempt_id}-manifest.json"
+            candidate_manifest.write_text(manifest_content, encoding="utf-8")
+            candidate = digest(manifest_content)
+            lifecycle_digest = self.write_applied_lifecycle(
+                lifecycle, run_id, attempt_id, candidate, patch_digest
+            )
+        arguments = [
+            "close", str(state), "--run-id", run_id,
+            "--attempt-id", attempt_id, "--outcome", outcome,
+            "--review-author", author,
+            "--review-evidence-digest", digest(evidence),
+            "--invariant-digest", invariant,
+            "--lifecycle-state", str(lifecycle),
+        ]
+        for item in extra_invariants:
+            arguments.extend(("--invariant-digest", item))
+        if reason is not None:
+            arguments.extend(("--review-reason-code", reason))
+        if candidate is not None:
+            arguments.extend(("--candidate-digest", candidate))
+        if candidate_manifest is not None:
+            arguments.extend(("--candidate-manifest", str(candidate_manifest)))
+        if lifecycle_digest is not None:
+            arguments.extend(("--candidate-lifecycle-digest", lifecycle_digest))
+        if accepted_source_head is not None:
+            arguments.extend(("--accepted-source-head", accepted_source_head))
+        return self.run_cli(*arguments)
+
+    def accepted_execution(self, label: str) -> tuple[Path, Path, str]:
+        state, lifecycle, run_id = self.initialize_execution(label)
+        started = self.start_writable_attempt(
+            state, lifecycle, run_id, f"{label}-attempt"
+        )
+        self.assertEqual(started.returncode, 0, started.stderr)
+        closed = self.close_writable_attempt(
+            state, lifecycle, run_id, f"{label}-attempt",
+            invariant=digest("one invariant"), outcome="accepted",
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        return state, lifecycle, run_id
 
     def write_repair_evidence(
         self,
@@ -377,6 +635,23 @@ class PlanExecutionStateTest(unittest.TestCase):
             "repair_classification": {},
             "repair_evidence_digest": "",
             "candidate_lifecycle_digest": "",
+            "attempt_id": "",
+            "attempt_kind": "",
+            "candidate_digest": "",
+            "review_outcome": "",
+            "review_reason_code": "",
+            "review_author": "",
+            "review_evidence_digest": "",
+            "predecessor_plan_digest": "",
+            "predecessor_accepted_candidate_digest": "",
+            "predecessor_closing_event_digest": "",
+            "predecessor_accepted_source_head": "",
+            "accepted_source_head": "",
+            "successor_run_id": "",
+            "successor_plan_digest": "",
+            "successor_source_head": "",
+            "successor_primary_invariant_digest": "",
+            "successor_genesis_digest": "",
             "elapsed_seconds": 1.0,
             "monotonic_ns": int(value["last_monotonic_ns"]) + 1,
             "previous_event_digest": value["event_chain_digest"],
@@ -631,6 +906,516 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertNotEqual(denied.returncode, 0)
         self.assertIn("stopped for restructuring", denied.stderr)
+
+    def test_accepted_two_plan_chain_is_exact_sequential_and_helper_reads_do_not_lock_it(self) -> None:
+        predecessor, _, _ = self.accepted_execution("predecessor")
+        child_state, child_lifecycle, child_run = self.initialize_execution(
+            "child", plan=self.child_plan, predecessor=predecessor
+        )
+        started = self.start_writable_attempt(
+            child_state, child_lifecycle, child_run, "child-attempt",
+            plan=self.child_plan, predecessor=predecessor,
+        )
+        self.assertEqual(started.returncode, 0, started.stderr)
+        before_helper = child_state.read_bytes()
+        helper_check = self.run_cli(
+            "check", str(child_state), "--run-id", child_run,
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--lifecycle-state", str(child_lifecycle),
+        )
+        self.assertEqual(helper_check.returncode, 0, helper_check.stderr)
+        self.assertEqual(child_state.read_bytes(), before_helper)
+        overlapping = self.start_writable_attempt(
+            child_state, child_lifecycle, child_run, "overlap",
+            plan=self.child_plan, predecessor=predecessor,
+        )
+        self.assertNotEqual(overlapping.returncode, 0)
+        self.assertIn("already open", overlapping.stderr)
+
+        payload = json.loads(child_state.read_text(encoding="utf-8"))
+        predecessor_payload = json.loads(predecessor.read_text(encoding="utf-8"))
+        self.assertEqual(payload["writable_attempt_starts"], 1)
+        self.assertEqual(payload["open_attempt_id"], "child-attempt")
+        self.assertEqual(
+            payload["predecessor_closing_event_digest"],
+            predecessor_payload["accepted_closing_event_digest"],
+        )
+
+    def test_rejected_or_substituted_predecessor_cannot_admit_a_dependent_start(self) -> None:
+        rejected_state, rejected_lifecycle, rejected_run = self.initialize_execution("rejected")
+        self.assertEqual(
+            self.start_writable_attempt(
+                rejected_state, rejected_lifecycle, rejected_run, "rejected-attempt"
+            ).returncode,
+            0,
+        )
+        rejected = self.close_writable_attempt(
+            rejected_state, rejected_lifecycle, rejected_run, "rejected-attempt",
+            invariant=digest("one invariant"), outcome="rejected",
+            reason="acceptance_unmet",
+        )
+        self.assertEqual(rejected.returncode, 0, rejected.stderr)
+        child_state = self.base / "rejected-child.json"
+        denied_init = self.run_cli(
+            "init", str(child_state), "--run-id", "rejected-child",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text(encoding="utf-8")),
+            "--source-head", self.head,
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(self.base / "rejected-child-lifecycle.json"),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(rejected_state),
+        )
+        self.assertNotEqual(denied_init.returncode, 0)
+        self.assertIn("lacks an accepted closing transition", denied_init.stderr)
+
+        first, _, _ = self.accepted_execution("accepted-first")
+        second, _, _ = self.accepted_execution("accepted-second")
+        bound_state, bound_lifecycle, bound_run = self.initialize_execution(
+            "bound-child", plan=self.child_plan, predecessor=first
+        )
+        substituted = self.start_writable_attempt(
+            bound_state, bound_lifecycle, bound_run, "substituted",
+            plan=self.child_plan, predecessor=second,
+        )
+        self.assertNotEqual(substituted.returncode, 0)
+        self.assertIn("stale or mismatched", substituted.stderr)
+
+    def test_parent_review_reason_authority_replay_and_crash_recovery_fail_closed(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("classification")
+        invariant = digest("one invariant")
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, "classification-1").returncode,
+            0,
+        )
+        unknown = self.close_writable_attempt(
+            state, lifecycle, run_id, "classification-1", invariant=invariant,
+            outcome="correction_requested", reason="unknown_reason",
+        )
+        self.assertNotEqual(unknown.returncode, 0)
+        worker_authored = self.close_writable_attempt(
+            state, lifecycle, run_id, "classification-1", invariant=invariant,
+            outcome="correction_requested", reason="acceptance_unmet", author="worker",
+        )
+        self.assertNotEqual(worker_authored.returncode, 0)
+        missing_evidence = self.run_cli(
+            "close", str(state), "--run-id", run_id,
+            "--attempt-id", "classification-1", "--outcome", "correction_requested",
+            "--review-author", "parent", "--review-reason-code", "acceptance_unmet",
+            "--invariant-digest", invariant, "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(missing_evidence.returncode, 0)
+
+        closed = self.close_writable_attempt(
+            state, lifecycle, run_id, "classification-1", invariant=invariant,
+            outcome="correction_requested", reason="acceptance_unmet",
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        replay = self.close_writable_attempt(
+            state, lifecycle, run_id, "classification-1", invariant=invariant,
+            outcome="correction_requested", reason="acceptance_unmet",
+        )
+        self.assertNotEqual(replay.returncode, 0)
+        self.assertEqual(
+            self.start_writable_attempt(
+                state, lifecycle, run_id, "classification-2", kind="correction"
+            ).returncode,
+            0,
+        )
+        repeated = self.close_writable_attempt(
+            state, lifecycle, run_id, "classification-2", invariant=invariant,
+            outcome="correction_requested", reason="acceptance_unmet",
+        )
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(payload["state"], "replan_required")
+        self.assertIn("acceptance_unmet", payload["replan_reason_codes"])
+
+        crashed_state, crashed_lifecycle, crashed_run = self.initialize_execution("crashed")
+        self.assertEqual(
+            self.start_writable_attempt(
+                crashed_state, crashed_lifecycle, crashed_run, "crashed-attempt"
+            ).returncode,
+            0,
+        )
+        recovered = self.close_writable_attempt(
+            crashed_state, crashed_lifecycle, crashed_run, "crashed-attempt",
+            invariant=invariant, outcome="rejected", reason="evidence_incomplete",
+        )
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(
+            json.loads(crashed_state.read_text(encoding="utf-8"))["state"], "rejected"
+        )
+
+    def test_changed_reasons_use_two_corrections_then_budget_and_coupling_stop(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("changed-reasons")
+        invariant = digest("one invariant")
+        reasons = ("acceptance_unmet", "required_spec_missed", "focused_validation_failed")
+        kinds = ("initial", "correction", "correction")
+        for index, (reason, kind) in enumerate(zip(reasons, kinds), start=1):
+            attempt = f"changed-{index}"
+            started = self.start_writable_attempt(
+                state, lifecycle, run_id, attempt, kind=kind
+            )
+            self.assertEqual(started.returncode, 0, started.stderr)
+            closed = self.close_writable_attempt(
+                state, lifecycle, run_id, attempt, invariant=invariant,
+                outcome="correction_requested", reason=reason,
+            )
+            self.assertEqual(closed.returncode, 0, closed.stderr)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(payload["state"], "replan_required")
+        self.assertIn("candidate_correction_budget_exhausted", payload["replan_reason_codes"])
+        self.assertEqual(payload["correction_rounds"], 2)
+
+        coupled_state, coupled_lifecycle, coupled_run = self.initialize_execution("coupled")
+        self.assertEqual(
+            self.start_writable_attempt(
+                coupled_state, coupled_lifecycle, coupled_run, "coupled-attempt"
+            ).returncode,
+            0,
+        )
+        coupled = self.close_writable_attempt(
+            coupled_state, coupled_lifecycle, coupled_run, "coupled-attempt",
+            invariant=invariant, extra_invariants=(digest("second invariant"),),
+            outcome="correction_requested", reason="multiple_invariants_coupled",
+        )
+        self.assertEqual(coupled.returncode, 0, coupled.stderr)
+        self.assertEqual(
+            json.loads(coupled_state.read_text(encoding="utf-8"))["state"],
+            "replan_required",
+        )
+
+        rejected_state, rejected_lifecycle, rejected_run = self.initialize_execution(
+            "final-correction-rejected"
+        )
+        for index, outcome in enumerate(
+            ("correction_requested", "correction_requested", "rejected"), start=1
+        ):
+            kind = "initial" if index == 1 else "correction"
+            attempt = f"final-rejected-{index}"
+            started = self.start_writable_attempt(
+                rejected_state, rejected_lifecycle, rejected_run, attempt, kind=kind
+            )
+            self.assertEqual(started.returncode, 0, started.stderr)
+            closed = self.close_writable_attempt(
+                rejected_state, rejected_lifecycle, rejected_run, attempt,
+                invariant=invariant, outcome=outcome,
+                reason=("acceptance_unmet", "required_spec_missed", "evidence_incomplete")[index - 1],
+            )
+            self.assertEqual(closed.returncode, 0, closed.stderr)
+        final_payload = json.loads(rejected_state.read_text(encoding="utf-8"))
+        self.assertEqual(final_payload["state"], "replan_required")
+        self.assertIn("candidate_correction_budget_exhausted", final_payload["replan_reason_codes"])
+
+    def test_runner_records_open_attempt_before_prerequisite_failure(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("runner-start")
+        command = [
+            sys.executable, str(RUNNER), "run", self.source_path_for_runner(),
+            "--orchestration-run-id", run_id,
+            "--lifecycle-state", str(lifecycle),
+            "--plan-execution-state", str(state),
+            "--bwrap-bin", "definitely-missing-bwrap",
+        ]
+        failed = subprocess.run(
+            command, cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("definitely-missing-bwrap", failed.stderr)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(payload["writable_attempt_starts"], 1)
+        self.assertTrue(payload["open_attempt_id"])
+        overlapping = subprocess.run(
+            command, cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(overlapping.returncode, 0)
+        self.assertIn("already open", overlapping.stderr)
+        self.assertNotIn("definitely-missing-bwrap", overlapping.stderr)
+
+    def test_plan_head_and_genesis_drift_fail_before_writable_start(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("baseline-drift")
+        self.plan.write_text(self.plan.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        plan_drift = self.start_writable_attempt(
+            state, lifecycle, run_id, "plan-drift"
+        )
+        self.assertNotEqual(plan_drift.returncode, 0)
+        self.assertIn("plan digest differs", plan_drift.stderr)
+        subprocess.run(["git", "restore", self.plan.relative_to(self.repo)], cwd=self.repo, check=True)
+        (self.repo / "later.txt").write_text("later\n", encoding="utf-8")
+        subprocess.run(["git", "add", "later.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "advance"], cwd=self.repo, check=True)
+        head_drift = self.start_writable_attempt(
+            state, lifecycle, run_id, "head-drift"
+        )
+        self.assertNotEqual(head_drift.returncode, 0)
+        self.assertIn("source HEAD differs", head_drift.stderr)
+
+        value = json.loads(state.read_text(encoding="utf-8"))
+        value["source_head"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        state.write_text(json.dumps(value), encoding="utf-8")
+        tampered = self.run_cli("check", str(state), "--run-id", run_id)
+        self.assertNotEqual(tampered.returncode, 0)
+        self.assertIn("genesis identity digest mismatch", tampered.stderr)
+
+    def test_predecessor_source_ancestry_and_single_successor_claim_fail_closed(self) -> None:
+        predecessor, _, _ = self.accepted_execution("chain-root")
+        first_state, first_lifecycle, first_run = self.initialize_execution(
+            "chain-first", plan=self.child_plan, predecessor=predecessor
+        )
+        second_state, second_lifecycle, second_run = self.initialize_execution(
+            "chain-second", plan=self.child_plan, predecessor=predecessor
+        )
+
+        commands = []
+        for state, lifecycle, run_id, attempt in (
+            (first_state, first_lifecycle, first_run, "first-attempt"),
+            (second_state, second_lifecycle, second_run, "second-attempt"),
+        ):
+            commands.append([
+                sys.executable, str(STATE_SCRIPT), "start", str(state),
+                "--run-id", run_id,
+                "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+                "--attempt-id", attempt, "--attempt-kind", "initial",
+                "--predecessor-state", str(predecessor),
+                "--lifecycle-state", str(lifecycle),
+            ])
+        processes = [
+            subprocess.Popen(
+                command, cwd=self.repo, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            for command in commands
+        ]
+        results = [(*process.communicate(timeout=10), process.returncode) for process in processes]
+        self.assertEqual(sorted(result[2] for result in results), [0, 1])
+        self.assertTrue(any("already claimed" in result[1] for result in results if result[2]))
+        predecessor_payload = json.loads(predecessor.read_text(encoding="utf-8"))
+        self.assertTrue(predecessor_payload["successor_claim_digest"])
+        self.assertEqual(
+            sum(
+                1 for event in predecessor_payload["events"]
+                if event["event_type"] == "successor_claimed"
+            ),
+            1,
+        )
+
+        duplicate_predecessor, _, _ = self.accepted_execution("duplicate-root")
+        duplicate_run = "same-successor-run"
+        duplicate_states = (
+            (self.base / "duplicate-a.json", self.base / "duplicate-a-lifecycle.json"),
+            (self.base / "duplicate-b.json", self.base / "duplicate-b-lifecycle.json"),
+        )
+        duplicate_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        for state_path, lifecycle_path in duplicate_states:
+            initialized = self.run_cli(
+                "init", str(state_path), "--run-id", duplicate_run,
+                "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+                "--plan-digest", digest(self.child_plan.read_text(encoding="utf-8")),
+                "--source-head", duplicate_head,
+                "--primary-invariant-digest", digest("child invariant"),
+                "--lifecycle-state", str(lifecycle_path),
+                "--implementation-mode", "candidate",
+                "--predecessor-state", str(duplicate_predecessor),
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        first_duplicate = self.start_writable_attempt(
+            duplicate_states[0][0], duplicate_states[0][1], duplicate_run,
+            "duplicate-attempt-a", plan=self.child_plan, predecessor=duplicate_predecessor,
+        )
+        self.assertEqual(first_duplicate.returncode, 0, first_duplicate.stderr)
+        second_duplicate = self.start_writable_attempt(
+            duplicate_states[1][0], duplicate_states[1][1], duplicate_run,
+            "duplicate-attempt-b", plan=self.child_plan, predecessor=duplicate_predecessor,
+        )
+        self.assertNotEqual(second_duplicate.returncode, 0)
+        self.assertIn("already claimed", second_duplicate.stderr)
+
+        tree = subprocess.check_output(
+            ["git", "rev-parse", "HEAD^{tree}"], cwd=self.repo, text=True
+        ).strip()
+        unrelated = subprocess.run(
+            ["git", "commit-tree", tree, "-m", "unrelated root"],
+            cwd=self.repo, check=True, text=True, stdout=subprocess.PIPE,
+        ).stdout.strip()
+        subprocess.run(["git", "switch", "-q", "--detach", unrelated], cwd=self.repo, check=True)
+        denied_state = self.base / "unrelated-child.json"
+        denied = self.run_cli(
+            "init", str(denied_state), "--run-id", "unrelated-child",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text(encoding="utf-8")),
+            "--source-head", unrelated,
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(self.base / "unrelated-lifecycle.json"),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(predecessor),
+        )
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("not based on the accepted predecessor source", denied.stderr)
+
+    def test_attempt_binding_and_post_start_recheck_reject_closed_attempt(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("attempt-binding")
+        attempt = "bound-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, attempt).returncode,
+            0,
+        )
+        mismatched_lifecycle = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": "different-attempt",
+            "current_manifest_digest": "1" * 64,
+            "current_patch_digest": "2" * 64,
+            "correction_round": 0,
+            "candidate_generations": 1,
+            "phase": "applied",
+            "focused_required": False,
+            "focused_validation_count": 0,
+            "authoritative_validation_count": 1,
+            "parent_review_rejections": 0,
+        }
+        lifecycle_content = json.dumps(mismatched_lifecycle, sort_keys=True, indent=2) + "\n"
+        lifecycle.write_text(lifecycle_content, encoding="utf-8")
+        mismatch = self.close_writable_attempt(
+            state, lifecycle, run_id, attempt,
+            invariant=digest("one invariant"), outcome="rejected",
+            reason="integration_contract_mismatch", candidate="sha256:" + "1" * 64,
+            lifecycle_digest=digest(lifecycle_content),
+        )
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn("attempt identity mismatch", mismatch.stderr)
+
+        lifecycle.unlink()
+        closed = self.close_writable_attempt(
+            state, lifecycle, run_id, attempt,
+            invariant=digest("one invariant"), outcome="correction_requested",
+            reason="evidence_incomplete",
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        post_close = self.run_cli(
+            "check", str(state), "--run-id", run_id,
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--lifecycle-state", str(lifecycle),
+            "--open-attempt-id", attempt,
+        )
+        self.assertNotEqual(post_close.returncode, 0)
+        self.assertIn("no longer the exact open writable attempt", post_close.stderr)
+
+    def test_accepted_close_rejects_a_multi_commit_cumulative_patch(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("multi-commit")
+        attempt = "multi-commit-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, attempt).returncode,
+            0,
+        )
+        baseline = json.loads(state.read_text(encoding="utf-8"))["source_head"]
+        (self.repo / "temporary-extra.txt").write_text("temporary\n", encoding="utf-8")
+        subprocess.run(["git", "add", "temporary-extra.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "temporary intermediate"], cwd=self.repo, check=True)
+        (self.repo / "temporary-extra.txt").unlink()
+        (self.repo / "allowed.txt").write_text("accepted candidate\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "candidate after revert"], cwd=self.repo, check=True)
+        accepted_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        patch = subprocess.check_output(
+            ["git", "diff", "--binary", "--full-index", baseline, accepted_head, "--"],
+            cwd=self.repo,
+        )
+        patch_digest = hashlib.sha256(patch).hexdigest()
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        manifest = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt,
+            "plan_path": state_payload["plan_path"],
+            "plan_digest": state_payload["plan_digest"].removeprefix("sha256:"),
+            "source_head": baseline,
+            "patch_digest": patch_digest,
+        }
+        manifest_content = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+        manifest_path = self.base / "multi-commit-manifest.json"
+        manifest_path.write_text(manifest_content, encoding="utf-8")
+        candidate = digest(manifest_content)
+        lifecycle_digest = self.write_applied_lifecycle(
+            lifecycle, run_id, attempt, candidate, patch_digest
+        )
+        denied = self.run_cli(
+            "close", str(state), "--run-id", run_id,
+            "--attempt-id", attempt, "--outcome", "accepted",
+            "--review-author", "parent",
+            "--review-evidence-digest", digest("multi-commit-review"),
+            "--invariant-digest", digest("one invariant"),
+            "--candidate-digest", candidate,
+            "--candidate-manifest", str(manifest_path),
+            "--candidate-lifecycle-digest", lifecycle_digest,
+            "--accepted-source-head", accepted_head,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("exactly one non-merge commit", denied.stderr)
+
+    def test_runner_consumes_exact_predecessor_proof_before_prerequisites(self) -> None:
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.invalid/test/repo.git"],
+            cwd=self.repo, check=True,
+        )
+        predecessor, _, _ = self.accepted_execution("runner-predecessor")
+        child_state, child_lifecycle, child_run = self.initialize_execution(
+            "runner-child", plan=self.child_plan, predecessor=predecessor
+        )
+        result = subprocess.run(
+            [
+                sys.executable, str(RUNNER), "run",
+                self.child_plan.relative_to(self.repo).as_posix(),
+                "--orchestration-run-id", child_run,
+                "--lifecycle-state", str(child_lifecycle),
+                "--plan-execution-state", str(child_state),
+                "--predecessor-plan-execution-state", str(predecessor),
+                "--bwrap-bin", "definitely-missing-bwrap",
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("definitely-missing-bwrap", result.stderr)
+        child_payload = json.loads(child_state.read_text(encoding="utf-8"))
+        self.assertTrue(child_payload["open_attempt_id"])
+        predecessor_payload = json.loads(predecessor.read_text(encoding="utf-8"))
+        self.assertTrue(predecessor_payload["successor_claim_digest"])
+
+    def test_atomic_ledger_replace_fsyncs_file_and_parent_directory(self) -> None:
+        target = self.base / "durable-state.json"
+        observed_modes: list[int] = []
+        original_fsync = STATE_MODULE.os.fsync
+
+        def tracked_fsync(descriptor: int) -> None:
+            observed_modes.append(os.fstat(descriptor).st_mode)
+            original_fsync(descriptor)
+
+        with mock.patch.object(STATE_MODULE.os, "fsync", side_effect=tracked_fsync):
+            STATE_MODULE.atomic_write(target, {"durable": True})
+        self.assertTrue(any(stat.S_ISREG(mode) for mode in observed_modes))
+        self.assertTrue(any(stat.S_ISDIR(mode) for mode in observed_modes))
+
+    def test_review_sequencing_fixtures_keep_tuned_and_holdout_boundaries(self) -> None:
+        fixture = json.loads(SEQUENCING_SCENARIOS.read_text(encoding="utf-8"))
+        holdout = json.loads(SEQUENCING_HOLDOUT.read_text(encoding="utf-8"))
+        self.assertIs(fixture["used_for_tuning"], True)
+        self.assertEqual(len(fixture["requirements"]), 4)
+        scenario_ids = {scenario["id"] for scenario in fixture["scenarios"]}
+        self.assertEqual(len(scenario_ids), 15)
+        self.assertIn("negative-global-lock-or-shared-write", scenario_ids)
+        self.assertIs(holdout["used_for_tuning"], False)
+        self.assertEqual(
+            holdout["scenarios"][0]["expected"], "dependent_start_rejected"
+        )
 
     def source_path_for_runner(self) -> str:
         return self.plan.relative_to(self.repo).as_posix()

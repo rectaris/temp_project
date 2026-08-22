@@ -26,10 +26,10 @@ from types import ModuleType
 from typing import Any, Sequence
 
 
-SCHEMA_VERSION = 1
-WORKER_CONTRACT_SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+WORKER_CONTRACT_SCHEMA_VERSION = 2
 WORKER_CONTRACT_MAX_BYTES = 65_536
-WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION = 1
+WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION = 2
 WORKER_COMPLETION_RECEIPT_MAX_BYTES = 65_536
 WORKER_COMPLETION_RECEIPT_VALUE_MAX_BYTES = 1_024
 WORKER_COMPLETION_RECEIPT_MAX_ITEMS = 64
@@ -61,7 +61,7 @@ AVAILABILITY_STATE_MAX_MODEL_BYTES = 128
 ORCHESTRATION_RUN_ID_MAX_BYTES = 128
 TELEMETRY_SCHEMA_VERSION = 1
 TELEMETRY_MAX_DURATION_SECONDS = 31_536_000.0
-LIFECYCLE_STATE_SCHEMA_VERSION = 1
+LIFECYCLE_STATE_SCHEMA_VERSION = 2
 LIFECYCLE_STATE_MAX_BYTES = 8192
 CORRECTION_BRIEF_MAX_BYTES = 8192
 MAX_CORRECTION_ROUNDS = 2
@@ -1762,7 +1762,8 @@ def validate_worker_completion_receipt(
 ) -> dict[str, Any]:
     required = {
         "schema_version", "repository_identity", "source_head", "plan_path", "plan_digest",
-        "worker_contract_digest", "orchestration_run_id", "attempt", "candidate", "process", "claims",
+        "worker_contract_digest", "orchestration_run_id", "plan_execution_attempt_id",
+        "attempt", "candidate", "process", "claims",
     }
     if not isinstance(value, dict) or set(value) != required:
         raise RunnerError("worker completion receipt has unknown or missing fields")
@@ -1785,6 +1786,9 @@ def validate_worker_completion_receipt(
     )
     run_id = value["orchestration_run_id"]
     validate_bounded_text(run_id, "worker completion receipt run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES)
+    plan_execution_attempt_id = require_receipt_code(
+        value["plan_execution_attempt_id"], label="plan execution attempt identifier"
+    )
     attempt = validate_receipt_attempt(value["attempt"])
     if attempt["attempt_id"] in consumed_attempt_ids:
         raise RunnerError("worker completion receipt replays a consumed attempt")
@@ -1825,6 +1829,7 @@ def validate_worker_completion_receipt(
         "plan_digest": plan_digest,
         "worker_contract_digest": contract_digest,
         "orchestration_run_id": run_id,
+        "plan_execution_attempt_id": plan_execution_attempt_id,
         "attempt": attempt,
         "candidate": candidate,
         "process": {"exit_status": exit_status, "diagnostic_codes": diagnostic_codes},
@@ -1838,6 +1843,7 @@ def validate_worker_completion_receipt(
             ("plan_digest", "receipt plan digest mismatch"),
             ("worker_contract_digest", "receipt worker contract digest mismatch"),
             ("orchestration_run_id", "receipt orchestration run mismatch"),
+            ("plan_execution_attempt_id", "receipt plan execution attempt mismatch"),
             ("attempt", "receipt attempt lineage mismatch"),
         ):
             if field in expected and normalized[field] != expected[field]:
@@ -2070,6 +2076,7 @@ def write_attempt_completion_receipt(
         "plan_digest": "sha256:" + contract["plan_digest"],
         "worker_contract_digest": prefixed_sha256(attempt["contract_bytes"]),
         "orchestration_run_id": contract["orchestration_run_id"],
+        "plan_execution_attempt_id": contract["plan_execution_attempt_id"],
         "attempt": receipt_attempt_from_contract_lineage(
             contract["attempt_lineage"], attempt_id=attempt["attempt_id"]
         ),
@@ -2109,6 +2116,7 @@ def derive_worker_contract(
     values: dict[str, str | list[str]],
     normalized_scope: Sequence[str],
     run_id: str,
+    plan_execution_attempt_id: str,
     lineage: dict[str, object],
 ) -> bytes:
     """Project authoritative plan fields into one bounded, read-only worker input."""
@@ -2137,6 +2145,7 @@ def derive_worker_contract(
         "plan_path": plan_rel,
         "plan_digest": plan_digest,
         "orchestration_run_id": run_id,
+        "plan_execution_attempt_id": plan_execution_attempt_id,
         "attempt_lineage": validated_lineage,
         "primary_invariant": primary_invariant,
         "write_scope": list(normalized_scope),
@@ -2187,7 +2196,8 @@ def verify_worker_contract(
     contract = load_exact_json_object(content, label="worker execution contract")
     expected_fields = {
         "schema_version", "repository_identity", "source_head", "plan_path", "plan_digest",
-        "orchestration_run_id", "attempt_lineage", "primary_invariant", "write_scope",
+        "orchestration_run_id", "plan_execution_attempt_id", "attempt_lineage",
+        "primary_invariant", "write_scope",
         "context_files", "required_specs", "acceptance", "focused_validation",
         "explicit_exclusions", "hard_stop_conditions",
     }
@@ -2213,6 +2223,8 @@ def verify_worker_contract(
     )
     if any(lineage.get(key) != value for key, value in expected_lineage.items()):
         raise RunnerError("worker execution contract lineage differs from the candidate manifest")
+    if contract.get("plan_execution_attempt_id") != manifest.get("plan_execution_attempt_id"):
+        raise RunnerError("worker execution contract plan attempt differs from the candidate manifest")
     fresh = derive_worker_contract(
         repo_root=repo_root,
         git_bin=git_bin,
@@ -2223,6 +2235,7 @@ def verify_worker_contract(
         values=values,
         normalized_scope=normalized_scope,
         run_id=str(manifest["orchestration_run_id"]),
+        plan_execution_attempt_id=str(manifest["plan_execution_attempt_id"]),
         lineage=lineage,
     )
     if content != fresh:
@@ -2368,6 +2381,7 @@ def validate_lifecycle_payload(payload: object, run_id: str) -> dict[str, Any]:
     required = {
         "schema_version",
         "orchestration_run_id",
+        "plan_execution_attempt_id",
         "current_manifest_digest",
         "current_patch_digest",
         "correction_round",
@@ -2384,6 +2398,9 @@ def validate_lifecycle_payload(payload: object, run_id: str) -> dict[str, Any]:
         raise RunnerError("lifecycle state has an unsupported schema version")
     if payload["orchestration_run_id"] != run_id:
         raise RunnerError("lifecycle state belongs to a different orchestration run identifier")
+    require_receipt_code(
+        payload["plan_execution_attempt_id"], label="lifecycle plan execution attempt identifier"
+    )
     for key in ("current_manifest_digest", "current_patch_digest"):
         value = payload[key]
         if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
@@ -3280,6 +3297,7 @@ def execute_isolated_attempt(
     plan_digest: str,
     values: dict[str, str | list[str]],
     run_id: str,
+    plan_execution_attempt_id: str,
     attempt_lineage: dict[str, object],
     normalized_scope: Sequence[str],
     bwrap_bin: str,
@@ -3314,6 +3332,7 @@ def execute_isolated_attempt(
         values=values,
         normalized_scope=normalized_scope,
         run_id=run_id,
+        plan_execution_attempt_id=plan_execution_attempt_id,
         lineage=validated_attempt_lineage,
     )
     contract_path = scratch_dir / "worker-contract.json"
@@ -3406,6 +3425,7 @@ def execute_isolated_attempt(
         values=values,
         normalized_scope=normalized_scope,
         run_id=run_id,
+        plan_execution_attempt_id=plan_execution_attempt_id,
         lineage=validated_attempt_lineage,
     )
     if fresh_contract != contract_bytes or contract_path.read_bytes() != contract_bytes:
@@ -3523,7 +3543,12 @@ def select_attempt_artifacts(
     return worker_result
 
 
-def enforce_plan_execution_gate(args: argparse.Namespace, *, plan: str | None = None) -> None:
+def enforce_plan_execution_gate(
+    args: argparse.Namespace,
+    *,
+    plan: str | None = None,
+    open_attempt_id: str | None = None,
+) -> None:
     state = args.plan_execution_state
     checker = Path(__file__).with_name("plan-execution-state.py")
     if not checker.is_file():
@@ -3540,10 +3565,50 @@ def enforce_plan_execution_gate(args: argparse.Namespace, *, plan: str | None = 
     ]
     if plan is not None:
         command.extend(("--plan", plan))
+    if open_attempt_id is not None:
+        command.extend(("--open-attempt-id", open_attempt_id))
     completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", "replace").strip()
         raise RunnerError(detail or "plan execution state gate rejected the operation")
+
+
+def begin_plan_execution_attempt(
+    args: argparse.Namespace,
+    *,
+    attempt_kind: str,
+    prior_candidate_digest: str | None = None,
+) -> None:
+    checker = Path(__file__).with_name("plan-execution-state.py")
+    if not checker.is_file():
+        raise RunnerError("plan execution state checker is unavailable")
+    attempt_id = f"attempt-{secrets.token_hex(16)}"
+    command = [
+        sys.executable,
+        str(checker),
+        "start",
+        args.plan_execution_state,
+        "--run-id",
+        args.orchestration_run_id,
+        "--plan",
+        args.plan,
+        "--attempt-id",
+        attempt_id,
+        "--attempt-kind",
+        attempt_kind,
+        "--lifecycle-state",
+        args.lifecycle_state,
+    ]
+    predecessor_state = getattr(args, "predecessor_plan_execution_state", None)
+    if predecessor_state:
+        command.extend(("--predecessor-state", predecessor_state))
+    if prior_candidate_digest is not None:
+        command.extend(("--prior-candidate-digest", prior_candidate_digest))
+    completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise RunnerError(detail or "plan execution state rejected the writable attempt start")
+    args.execution_attempt_id = attempt_id
 
 
 def plan_execution_lease(args: argparse.Namespace):
@@ -3563,8 +3628,6 @@ def plan_execution_lease(args: argparse.Namespace):
 def run_worker(args: argparse.Namespace) -> int:
     runner_started = time.monotonic()
     git_bin = require_executable("git", args.git_bin)
-    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
-    ensure_bwrap_usable(bwrap_bin)
     repo_root = detect_repo_root(git_bin)
     os.chdir(repo_root)
     planlib = load_planlib()
@@ -3573,6 +3636,12 @@ def run_worker(args: argparse.Namespace) -> int:
     implementation_risk = implementation_classification(values, "implementation_risk")
     implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
     selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
+    with open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    ) as lifecycle_state:
+        if lifecycle_state.data is not None:
+            raise RunnerError("lifecycle state is already initialized for this orchestration run")
+    begin_plan_execution_attempt(args, attempt_kind="initial")
     head = git_text(repo_root, git_bin, "rev-parse", "HEAD")
     plan_digest = hash_file(plan_path)
     output_dir = materialize_output_dir(repo_root, args.output_dir)
@@ -3590,9 +3659,14 @@ def run_worker(args: argparse.Namespace) -> int:
         repo_root, args.lifecycle_state, args.orchestration_run_id
     )
 
-    with lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
+    with plan_execution_lease(args), lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
         prefix="sandboxed-plan-worker-workspace-"
     ) as workspace_tmp:
+        enforce_plan_execution_gate(
+            args, plan=plan_rel, open_attempt_id=args.execution_attempt_id
+        )
+        bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+        ensure_bwrap_usable(bwrap_bin)
         if lifecycle_state.data is not None:
             raise RunnerError("lifecycle state is already initialized for this orchestration run")
         workspace = Path(workspace_tmp)
@@ -3636,6 +3710,7 @@ def run_worker(args: argparse.Namespace) -> int:
                     plan_digest=plan_digest,
                     values=values,
                     run_id=args.orchestration_run_id,
+                    plan_execution_attempt_id=args.execution_attempt_id,
                     attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "primary"},
                     normalized_scope=normalized_scope,
                     bwrap_bin=bwrap_bin,
@@ -3690,6 +3765,7 @@ def run_worker(args: argparse.Namespace) -> int:
                     plan_digest=plan_digest,
                     values=values,
                     run_id=args.orchestration_run_id,
+                    plan_execution_attempt_id=args.execution_attempt_id,
                     attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "fallback"},
                     normalized_scope=normalized_scope,
                     bwrap_bin=bwrap_bin,
@@ -3725,6 +3801,7 @@ def run_worker(args: argparse.Namespace) -> int:
                 plan_digest=plan_digest,
                 values=values,
                 run_id=args.orchestration_run_id,
+                plan_execution_attempt_id=args.execution_attempt_id,
                 attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "custom"},
                 normalized_scope=normalized_scope,
                 bwrap_bin=bwrap_bin,
@@ -3847,6 +3924,7 @@ def run_worker(args: argparse.Namespace) -> int:
             "patch_path": str(patch_path),
             "patch_digest": patch_digest,
             "orchestration_run_id": args.orchestration_run_id,
+            "plan_execution_attempt_id": args.execution_attempt_id,
             "lifecycle_state_path": str(Path(args.lifecycle_state).expanduser().absolute()),
             "worker_result": worker_result,
             "telemetry": telemetry,
@@ -3858,6 +3936,7 @@ def run_worker(args: argparse.Namespace) -> int:
             {
                 "schema_version": LIFECYCLE_STATE_SCHEMA_VERSION,
                 "orchestration_run_id": args.orchestration_run_id,
+                "plan_execution_attempt_id": args.execution_attempt_id,
                 "current_manifest_digest": hash_file(manifest_path),
                 "current_patch_digest": patch_digest,
                 "correction_round": 0,
@@ -3927,6 +4006,9 @@ def verify_candidate_manifest(
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise RunnerError(f"unsupported manifest schema version: {manifest.get('schema_version')}")
     run_id = manifest.get("orchestration_run_id")
+    plan_execution_attempt_id = require_receipt_code(
+        manifest.get("plan_execution_attempt_id"), label="manifest plan execution attempt identifier"
+    )
     lifecycle_path = manifest.get("lifecycle_state_path")
     validate_bounded_text(run_id, "manifest orchestration run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES)
     if not isinstance(lifecycle_path, str) or not Path(lifecycle_path).is_absolute():
@@ -4060,6 +4142,7 @@ def verify_candidate_manifest(
         "plan_digest": "sha256:" + current_plan_digest,
         "worker_contract_digest": "sha256:" + str(manifest.get("worker_contract_digest")),
         "orchestration_run_id": run_id,
+        "plan_execution_attempt_id": plan_execution_attempt_id,
         "attempt": expected_attempt,
         "candidate": {
             "patch_digest": "sha256:" + patch_digest,
@@ -4182,7 +4265,11 @@ def validate_candidate(args: argparse.Namespace) -> int:
         planlib=planlib,
         manifest_path=manifest_path,
     )
-    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
+    enforce_plan_execution_gate(
+        args,
+        plan=verified["plan_rel"],
+        open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+    )
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("validation run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -4275,7 +4362,9 @@ def validate_candidate(args: argparse.Namespace) -> int:
         lifecycle = lifecycle_state.require_existing()
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
-        ] != verified["patch_digest"]:
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
             raise RunnerError("validation manifest is not the current lifecycle leaf")
         expected_phase = (
             "focused_passed"
@@ -4491,8 +4580,6 @@ def validate_candidate(args: argparse.Namespace) -> int:
 def correct_worker(args: argparse.Namespace) -> int:
     runner_started = time.monotonic()
     git_bin = require_executable("git", args.git_bin)
-    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
-    ensure_bwrap_usable(bwrap_bin)
     repo_root = detect_repo_root(git_bin)
     os.chdir(repo_root)
     planlib = load_planlib()
@@ -4537,6 +4624,30 @@ def correct_worker(args: argparse.Namespace) -> int:
     reserved_artifacts = reserve_output_artifacts(output_dir)
     if args.availability_state is not None and args.orchestration_run_id is None:
         raise RunnerError("availability state requires an orchestration run identifier")
+    hidden_prior = {
+        prior_manifest_path.parent.resolve(),
+        verified["patch_path"].parent.resolve(),
+        brief_path.parent.resolve(),
+    }
+    with open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    ) as lifecycle_state:
+        lifecycle = lifecycle_state.require_existing()
+        if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
+            "current_patch_digest"
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
+            raise RunnerError("correction prior manifest is not the current lifecycle leaf")
+        if lifecycle["phase"] not in {"admitted", "focused_passed"}:
+            raise RunnerError("correction is not allowed after validation failure or final acceptance")
+        if lifecycle["correction_round"] != lineage["correction_round"] - 1:
+            raise RunnerError("correction lineage does not match the run-bound lifecycle round")
+    begin_plan_execution_attempt(
+        args,
+        attempt_kind="correction",
+        prior_candidate_digest="sha256:" + verified["manifest_digest"],
+    )
     state_context = (
         open_availability_state(repo_root, args.availability_state, args.orchestration_run_id)
         if args.availability_state is not None and args.orchestration_run_id is not None
@@ -4545,18 +4656,20 @@ def correct_worker(args: argparse.Namespace) -> int:
     lifecycle_context = open_lifecycle_state(
         repo_root, args.lifecycle_state, args.orchestration_run_id
     )
-    hidden_prior = {
-        prior_manifest_path.parent.resolve(),
-        verified["patch_path"].parent.resolve(),
-        brief_path.parent.resolve(),
-    }
-    with lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
+    with plan_execution_lease(args), lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
         prefix="sandboxed-plan-worker-correction-workspace-"
     ) as workspace_tmp:
+        enforce_plan_execution_gate(
+            args, plan=verified["plan_rel"], open_attempt_id=args.execution_attempt_id
+        )
+        bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+        ensure_bwrap_usable(bwrap_bin)
         lifecycle = lifecycle_state.require_existing()
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
-        ] != verified["patch_digest"]:
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
             raise RunnerError("correction prior manifest is not the current lifecycle leaf")
         if lifecycle["phase"] not in {"admitted", "focused_passed"}:
             raise RunnerError("correction is not allowed after validation failure or final acceptance")
@@ -4575,6 +4688,7 @@ def correct_worker(args: argparse.Namespace) -> int:
             "plan_digest": verified["plan_digest"],
             "values": values,
             "run_id": args.orchestration_run_id,
+            "plan_execution_attempt_id": args.execution_attempt_id,
             "normalized_scope": verified["normalized_scope"],
             "bwrap_bin": bwrap_bin,
             "git_bin": git_bin,
@@ -4771,6 +4885,7 @@ def correct_worker(args: argparse.Namespace) -> int:
             "patch_path": str(patch_path),
             "patch_digest": patch_digest,
             "orchestration_run_id": args.orchestration_run_id,
+            "plan_execution_attempt_id": args.execution_attempt_id,
             "lifecycle_state_path": str(Path(args.lifecycle_state).expanduser().absolute()),
             "correction_lineage": lineage,
             "worker_result": worker_result,
@@ -4800,6 +4915,7 @@ def correct_worker(args: argparse.Namespace) -> int:
         lifecycle_state.persist(
             {
                 **lifecycle,
+                "plan_execution_attempt_id": args.execution_attempt_id,
                 "current_manifest_digest": hash_file(manifest_path),
                 "current_patch_digest": patch_digest,
                 "correction_round": lineage["correction_round"],
@@ -4828,7 +4944,11 @@ def apply_worker_result(args: argparse.Namespace) -> int:
         planlib=planlib,
         manifest_path=manifest_path,
     )
-    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
+    enforce_plan_execution_gate(
+        args,
+        plan=verified["plan_rel"],
+        open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+    )
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("apply run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -4842,7 +4962,9 @@ def apply_worker_result(args: argparse.Namespace) -> int:
         lifecycle = lifecycle_state.require_existing()
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
-        ] != verified["patch_digest"]:
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
             raise RunnerError("apply manifest is not the current lifecycle leaf")
         if lifecycle["phase"] != "authoritative_passed" or lifecycle[
             "authoritative_validation_count"
@@ -4879,7 +5001,11 @@ def finalize_apply(args: argparse.Namespace) -> int:
         require_clean=False,
         allow_applied_symlink_targets=True,
     )
-    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
+    enforce_plan_execution_gate(
+        args,
+        plan=verified["plan_rel"],
+        open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+    )
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("finalize-apply run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -4894,7 +5020,9 @@ def finalize_apply(args: argparse.Namespace) -> int:
             raise RunnerError("finalize-apply requires an applying lifecycle state")
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
-        ] != verified["patch_digest"]:
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
             raise RunnerError("finalize-apply manifest is not the current lifecycle leaf")
         if collect_worktree_patch(repo_root, git_bin, verified["head"]) != verified["patch_bytes"]:
             raise RunnerError("source worktree does not exactly match the verified applied patch")
@@ -5100,6 +5228,7 @@ def run_self_test(args: argparse.Namespace) -> int:
                     availability_state=None,
                     orchestration_run_id=run_id,
                     lifecycle_state=str(lifecycle_path),
+                    plan_execution_state=str(execution_state_path),
                     output_dir=str(output_dir),
                     plan=plan_rel,
                     worker_binary=str(require_executable("python3", sys.executable)),
@@ -5217,6 +5346,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--lifecycle-state", required=True)
     run_parser.add_argument("--plan-execution-state", required=True)
+    run_parser.add_argument(
+        "--predecessor-plan-execution-state",
+        help="accepted predecessor execution ledger bound into this dependent plan run",
+    )
     run_parser.add_argument("--worker-binary", help="override the default Codex worker with a custom executable")
     run_parser.add_argument("--worker-arg", action="append", default=[], help="append one argument for --worker-binary")
     run_parser.add_argument(
@@ -5303,10 +5436,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command in {"run", "correct"}:
+            enforce_plan_execution_gate(args, plan=args.plan)
+            return int(args.handler(args))
         with plan_execution_lease(args):
             if args.command not in {"self-test", "prepare-dependencies"}:
-                plan = args.plan if args.command in {"run", "correct"} else None
-                enforce_plan_execution_gate(args, plan=plan)
+                if args.command not in {"run", "correct"}:
+                    enforce_plan_execution_gate(args)
             return int(args.handler(args))
     except RunnerError as exc:
         fail(str(exc))

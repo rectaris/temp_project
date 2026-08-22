@@ -206,6 +206,12 @@ assert_managed_orchestration_reports() {
   grep -qi 'candidate generation and correction do not run plan validation' "$managed_orchestration"
   grep -q 'focused_validation' "$managed_orchestration"
   grep -qi 'bounded parent implementation' "$managed_orchestration"
+  grep -q 'predecessor_acceptance' "$managed_orchestration"
+  grep -q 'writable_attempt_started' "$managed_orchestration"
+  grep -q 'attempt_closed' "$managed_orchestration"
+  grep -q 'successor_claimed' "$managed_orchestration"
+  grep -q 'review_evidence_digest' "$managed_orchestration"
+  grep -q 'global task lock' "$managed_orchestration"
 }
 
 assert_ci_autofix_validation_graph() {

@@ -1426,6 +1426,71 @@ def check_plan_restructuring_scenarios() -> None:
         fail("plan restructuring holdout must remain fixed and outside tuning scenarios")
 
 
+def check_review_sequencing_scenarios(*, include_holdout: bool) -> None:
+    fixture_path = ROOT / "tests/fixtures/orchestration/review-sequencing-scenarios.json"
+    holdout_path = ROOT / "tests/fixtures/orchestration/review-sequencing-holdout.json"
+    try:
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"invalid review sequencing fixture: {exc}")
+    if not isinstance(fixture, dict) or set(fixture) != {
+        "schema_version", "used_for_tuning", "requirements", "scenarios"
+    }:
+        fail("review sequencing fixture has an invalid exact shape")
+    if fixture["schema_version"] != 1 or fixture["used_for_tuning"] is not True:
+        fail("review sequencing fixture has an invalid identity")
+    requirements = fixture["requirements"]
+    if not isinstance(requirements, list) or len(requirements) != 4 or any(
+        not isinstance(item, str) or not item for item in requirements
+    ):
+        fail("review sequencing requirements are incomplete")
+    expected = {
+        "median-accepted-two-plan-chain": ("median", "dependent_start_admitted"),
+        "edge-independent-read-only-helper": ("edge", "ledger_unchanged"),
+        "negative-rejected-predecessor": ("negative", "dependent_start_rejected"),
+        "negative-overlapping-starts": ("negative", "second_start_rejected"),
+        "negative-repeated-reason": ("negative", "replan_required"),
+        "edge-changed-reason": ("edge", "next_correction_admitted"),
+        "negative-unknown-reason": ("negative", "closure_rejected"),
+        "negative-worker-authored-reason": ("negative", "closure_rejected"),
+        "negative-missing-review-evidence": ("negative", "closure_rejected"),
+        "negative-replay-and-history-rewrite": ("negative", "ledger_rejected"),
+        "edge-crash-recovery": ("edge", "failed_attempt_closed"),
+        "negative-stale-predecessor-digest": ("negative", "dependent_start_rejected"),
+        "negative-correction-budget-exhausted": ("negative", "replan_required"),
+        "negative-multiple-invariants-coupled": ("negative", "replan_required"),
+        "negative-global-lock-or-shared-write": ("negative", "policy_rejected"),
+    }
+    scenarios = fixture["scenarios"]
+    if not isinstance(scenarios, list) or len(scenarios) != len(expected):
+        fail("review sequencing scenario count differs from the accepted set")
+    observed: dict[str, tuple[str, str]] = {}
+    for scenario in scenarios:
+        if not isinstance(scenario, dict) or set(scenario) != {"id", "class", "expected"}:
+            fail("review sequencing scenario has an invalid exact shape")
+        scenario_id = scenario["id"]
+        if not isinstance(scenario_id, str) or scenario_id in observed:
+            fail("review sequencing scenario identifier is invalid")
+        observed[scenario_id] = (scenario["class"], scenario["expected"])
+    if observed != expected:
+        fail("review sequencing scenarios differ from the accepted outcomes")
+    if not include_holdout:
+        return
+    if not isinstance(holdout, dict) or set(holdout) != {
+        "schema_version", "used_for_tuning", "scenarios"
+    }:
+        fail("review sequencing holdout has an invalid exact shape")
+    if holdout["schema_version"] != 1 or holdout["used_for_tuning"] is not False:
+        fail("review sequencing holdout must remain untuned")
+    if holdout["scenarios"] != [{
+        "id": "holdout-accepted-predecessor-proof-substitution",
+        "input": "a different accepted predecessor ledger is supplied after the dependent ledger is bound",
+        "expected": "dependent_start_rejected",
+    }]:
+        fail("review sequencing holdout differs from its sealed outcome")
+
+
 def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
     scenario_path = ROOT / "tests/fixtures/orchestration/worker-contract-scenarios.json"
     holdout_path = ROOT / "tests/fixtures/orchestration/worker-contract-holdout.json"
@@ -1825,6 +1890,7 @@ def check_worker_completion_receipt_scenarios(*, include_holdout: bool) -> None:
 
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     check_plan_restructuring_scenarios()
+    check_review_sequencing_scenarios(include_holdout=include_holdout)
     check_worker_contract_scenarios(include_holdout=include_holdout)
     check_worker_completion_receipt_scenarios(include_holdout=include_holdout)
     policy = read("references/orchestration.md").lower()
@@ -1889,6 +1955,16 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "plan-execution-state.py",
         "independent-review receipt",
         "--plan-execution-state",
+        "--predecessor-plan-execution-state",
+        "predecessor_acceptance",
+        "writable_attempt_started",
+        "attempt_closed",
+        "successor_claimed",
+        "review_evidence_digest",
+        "acceptance_unmet",
+        "multiple_invariants_coupled",
+        "global task lock",
+        "plan_execution_attempt_id",
         "at least 30 percent lower median",
         "p95 time no more than 10 percent worse",
     )
