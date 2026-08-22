@@ -1,6 +1,8 @@
 # Preserve failure receipts without a candidate
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - spec_drift
 task_types:
   - planning_docs
   - referent_first
@@ -88,4 +90,5 @@ Plan 154 stopped after two bounded parent remediation rounds because one valid n
 ## Validation Notes
 
 - The stopped Plan 154 ledger is `/tmp/project-agent-workflow-plan154-20260822-b/execution-state.json` with state `replan_required` and reason `parent_remediation_budget_exhausted`.
+- The Plan 156 ledger is `/tmp/project-agent-workflow-plan156-20260822-a/execution-state.json`; its one authoritative suite passed 92 tests but exposed a self-test worker that did not emit the newly required claims artifact, so the validation method requires restructuring.
 - The tuned fixture remains sealed at `sha256:264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a`; the holdout remains opaque at `sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76`.
