@@ -1,6 +1,8 @@
 # Integrate and evaluate the structured worker completion receipt
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - spec_drift
 task_types:
   - planning_docs
   - referent_first
@@ -128,3 +130,5 @@ The concrete implementation boundary is one active integration plan that refresh
 
 - This integration plan preserves every normalized Plan 114 acceptance item exactly.
 - Any fixture drift or predecessor design change requires replan rather than an in-scope repair.
+- Tuned evaluation passed all twenty-one cases, but the first sealed holdout execution observed `unexpected_error` instead of `prohibited_receipt_content` because its baseline command identifier predates the accepted positional `worker-check-N` rule. Ledger: `/tmp/project-agent-workflow-plan155-20260822-a/execution-state.json`.
+- The exposed holdout remains byte-unchanged and is now known validation evidence; do not relabel a post-exposure evaluator correction as untuned holdout evidence.
