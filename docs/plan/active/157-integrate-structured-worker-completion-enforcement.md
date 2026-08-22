@@ -34,7 +34,7 @@ context_files:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/153-freeze-worker-completion-receipt-scenarios.md
-  - docs/plan/checked/2026/08/16-31/156-preserve-failure-receipt-without-candidate.md
+  - docs/plan/checked/2026/08/16-31/159-integrate-failure-receipt-validation.md
   - docs/plan/replanned/2026/08/16-31/154-enforce-structured-worker-completion-receipt.md
   - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
   - references/validation.md
@@ -78,7 +78,7 @@ acceptance:
 replan_source: docs/plan/active/154-enforce-structured-worker-completion-receipt.md
 replan_contract: docs/plan/replanned/contracts/154-enforce-structured-worker-completion-receipt.json
 integration_gates:
-  - Plan 156 must be checked at docs/plan/checked/2026/08/16-31/156-preserve-failure-receipt-without-candidate.md before integration validation starts
+  - Plan 159 must be checked at docs/plan/checked/2026/08/16-31/159-integrate-failure-receipt-validation.md before integration validation starts
   - keep the tuned scenarios read-only and do not inspect or execute the digest-sealed holdout
   - Plan 155 must replace its Plan 154 predecessor with this plan's exact checked archive before holdout evaluation
 successor_plans:
@@ -104,14 +104,14 @@ This integration boundary adopts the stopped Plan 154 implementation plus the ch
 
 ## Decisions
 
-- Treat Plan 156 as the only correction boundary for the no-candidate failure receipt.
+- Treat checked Plans 158 and 159 as the accepted correction and integration boundary for the no-candidate failure receipt.
 - Integrate the retained policy, Skill, checker, smoke, and Copier changes from stopped Plan 154.
 - Require byte-identical root and generated runners and semantically aligned root and generated policy.
 - Leave holdout execution and final original Plan 114 acceptance evaluation to Plan 155.
 
 ## Tasks
 
-- [ ] Refresh Plan 156 to its exact checked archive and inspect the complete retained diff against all Plan 154 acceptance items.
+- [ ] Refresh Plan 159 to its exact checked archive and inspect the complete retained diff against all Plan 154 acceptance items.
 - [ ] Verify root/template runner parity, policy and Skill alignment, tuned scenario behavior, and non-destructive Copier preservation.
 - [ ] Obtain independent review with zero unresolved High or Medium findings.
 - [ ] Run focused validation, run the authoritative suite exactly once, and archive this plan before Plan 155 starts.

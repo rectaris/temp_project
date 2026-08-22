@@ -125,3 +125,4 @@ id	path
 152	docs/plan/checked/2026/08/16-31/152-certify-integrated-local-git-retirement.md
 153	docs/plan/checked/2026/08/16-31/153-freeze-worker-completion-receipt-scenarios.md
 158	docs/plan/checked/2026/08/16-31/158-emit-structured-claims-in-runner-self-test.md
+159	docs/plan/checked/2026/08/16-31/159-integrate-failure-receipt-validation.md

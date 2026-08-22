@@ -738,6 +738,9 @@ def write_worker(path: Path, body: str) -> None:
         #!/usr/bin/env python3
         from __future__ import annotations
 
+        import atexit
+        import hashlib
+        import json
         import os
         from pathlib import Path
 
@@ -748,6 +751,28 @@ def write_worker(path: Path, body: str) -> None:
         scratch_dir = Path(os.environ[prefix + "SCRATCH_DIR"])
         new_file_root = Path(os.environ[prefix + "NEW_FILE_ROOT"])
         plan_path = os.environ[prefix + "PLAN_PATH"]
+
+
+        def write_default_completion_claims() -> None:
+            target = Path(os.environ[prefix + "COMPLETION_CLAIMS"])
+            if target.exists() or target.is_symlink():
+                return
+            contract = json.loads(Path(os.environ[prefix + "WORKER_CONTRACT"]).read_text(encoding="utf-8"))
+            evidence = [
+                {{"acceptance_digest": "sha256:" + hashlib.sha256(item.encode("utf-8")).hexdigest(), "claim": "satisfied"}}
+                for item in contract["acceptance"]
+            ]
+            target.write_text(json.dumps({{
+                "attempt_result": "success",
+                "acceptance_evidence": evidence,
+                "commands_attempted": [],
+                "blockers": [],
+                "residual_risks": ["parent_review_required"],
+                "out_of_scope_change": False,
+            }}, sort_keys=True) + "\\n", encoding="utf-8")
+
+
+        atexit.register(write_default_completion_claims)
         """
     )
     path.write_text(header + textwrap.dedent(body).lstrip(), encoding="utf-8")
@@ -761,6 +786,9 @@ def write_fake_codex(path: Path) -> None:
             #!{sys.executable}
             from __future__ import annotations
 
+            import atexit
+            import hashlib
+            import json
             import os
             import sys
             from pathlib import Path
@@ -781,6 +809,26 @@ def write_fake_codex(path: Path) -> None:
             last_message = None
             if "--output-last-message" in args:
                 last_message = Path(args[args.index("--output-last-message") + 1])
+
+            def write_default_completion_claims() -> None:
+                target = Path(os.environ["{ENV_PREFIX}COMPLETION_CLAIMS"])
+                if target.exists() or target.is_symlink():
+                    return
+                contract = json.loads(Path(os.environ["{ENV_PREFIX}WORKER_CONTRACT"]).read_text(encoding="utf-8"))
+                evidence = [
+                    {{"acceptance_digest": "sha256:" + hashlib.sha256(item.encode("utf-8")).hexdigest(), "claim": "satisfied"}}
+                    for item in contract["acceptance"]
+                ]
+                target.write_text(json.dumps({{
+                    "attempt_result": "success",
+                    "acceptance_evidence": evidence,
+                    "commands_attempted": [],
+                    "blockers": [],
+                    "residual_risks": ["parent_review_required"],
+                    "out_of_scope_change": False,
+                }}, sort_keys=True) + "\\n", encoding="utf-8")
+
+            atexit.register(write_default_completion_claims)
 
             if model == primary_model:
                 if reasoning != primary_reasoning:
@@ -1327,6 +1375,153 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 used_for_tuning=True,
             )
 
+    def evaluate_worker_completion_receipt_case(
+        self, base: dict[str, object], case: dict[str, object]
+    ) -> dict[str, object]:
+        receipt = {
+            "schema_version": RUNNER.WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION,
+            **{
+                key: json.loads(json.dumps(value))
+                for key, value in base.items()
+                if key != "receipt_relative_path"
+            },
+        }
+        expected_identity = {
+            key: json.loads(json.dumps(receipt[key]))
+            for key in (
+                "repository_identity", "source_head", "plan_path", "plan_digest",
+                "worker_contract_digest", "orchestration_run_id", "attempt", "candidate",
+            )
+        }
+        operation = case["operation"]
+        inputs = case["input"]
+        expected = case["expected"]
+        error_fragments = {
+            "stale_receipt": "stale receipt source HEAD",
+            "replayed_receipt": "replays a consumed attempt",
+            "plan_mismatch": "plan digest mismatch",
+            "contract_mismatch": "worker contract digest mismatch",
+            "patch_mismatch": "patch digest mismatch",
+            "changed_path_mismatch": "changed paths mismatch",
+            "false_success_claim": "false success claim",
+            "missing_out_of_scope_declaration": "missing the out-of-scope declaration",
+            "unknown_receipt_field": "unknown or missing fields",
+            "duplicate_receipt_field": "duplicate field",
+            "receipt_too_large": "exceeds the byte bound",
+            "receipt_value_too_large": "prohibited or oversized",
+            "receipt_path_traversal": "dot-dot traversal",
+            "receipt_symlink_escape": "symlink",
+            "prohibited_receipt_content": "prohibited or oversized",
+        }
+        try:
+            if operation == "derive_twice":
+                first = RUNNER.serialize_worker_completion_receipt(receipt)
+                if first != RUNNER.serialize_worker_completion_receipt(receipt):
+                    raise AssertionError("receipt derivation is not deterministic")
+                RUNNER.validate_worker_completion_receipt(
+                    RUNNER.load_worker_completion_receipt(first), expected=expected_identity
+                )
+            elif operation == "derive_failure_before_candidate":
+                receipt["candidate"] = None
+                receipt["process"] = dict(inputs)
+                receipt["claims"] = RUNNER.safe_failure_claims("worker_failed")
+                RUNNER.load_worker_completion_receipt(
+                    RUNNER.serialize_worker_completion_receipt(receipt)
+                )
+            elif operation in {"derive_correction_failure", "derive_correction_success"}:
+                receipt["attempt"] = {
+                    "attempt_id": inputs["attempt_id"],
+                    "attempt_kind": "correction",
+                    "correction_round": inputs["correction_round"],
+                    "correction_lineage": {
+                        "prior_manifest_digest": inputs["prior_manifest_digest"]
+                    },
+                }
+                if operation == "derive_correction_failure":
+                    receipt["candidate"] = None
+                    receipt["process"] = {
+                        "exit_status": inputs["exit_status"],
+                        "diagnostic_codes": ["worker_failed"],
+                    }
+                    receipt["claims"] = RUNNER.safe_failure_claims("worker_failed")
+                else:
+                    receipt["candidate"] = {
+                        "patch_digest": inputs["patch_digest"],
+                        "changed_paths": inputs["changed_paths"],
+                    }
+                RUNNER.load_worker_completion_receipt(
+                    RUNNER.serialize_worker_completion_receipt(receipt)
+                )
+            elif operation == "derive_partial_commands":
+                receipt["candidate"] = None
+                receipt["process"] = {
+                    "exit_status": inputs["exit_status"],
+                    "diagnostic_codes": ["worker_failed"],
+                }
+                receipt["claims"] = {
+                    "attempt_result": "failure",
+                    "acceptance_evidence": [],
+                    "commands_attempted": inputs["commands_attempted"],
+                    "blockers": inputs["blockers"],
+                    "residual_risks": [],
+                    "out_of_scope_change": False,
+                }
+                RUNNER.load_worker_completion_receipt(
+                    RUNNER.serialize_worker_completion_receipt(receipt)
+                )
+            elif operation == "verify_identity_mismatch":
+                receipt[inputs["field"]] = inputs["value"]
+                RUNNER.validate_worker_completion_receipt(receipt, expected=expected_identity)
+            elif operation == "verify_replay":
+                RUNNER.validate_worker_completion_receipt(
+                    receipt,
+                    expected=expected_identity,
+                    consumed_attempt_ids=[inputs["consumed_attempt_id"]],
+                )
+            elif operation == "verify_candidate_mismatch":
+                receipt["candidate"][inputs["field"]] = inputs["value"]
+                RUNNER.validate_worker_completion_receipt(receipt, expected=expected_identity)
+            elif operation == "verify_false_success":
+                receipt["process"]["exit_status"] = inputs["process_exit_status"]
+                receipt["claims"]["attempt_result"] = inputs["attempt_result"]
+                RUNNER.validate_worker_completion_receipt(receipt)
+            elif operation == "verify_receipt_mutation":
+                mutation = inputs["mutation"]
+                if mutation["kind"] == "remove_claim_field":
+                    del receipt["claims"][mutation["name"]]
+                elif mutation["kind"] == "add_top_field":
+                    receipt[mutation["name"]] = mutation["value"]
+                else:
+                    receipt["claims"][mutation["field"]] = [
+                        "x" * mutation["byte_count"]
+                    ]
+                RUNNER.validate_worker_completion_receipt(receipt)
+            elif operation == "verify_serialized_receipt":
+                if "json_prefix" in inputs:
+                    valid = RUNNER.serialize_worker_completion_receipt(receipt).decode("utf-8")
+                    content = (inputs["json_prefix"] + valid[1:]).encode("utf-8")
+                else:
+                    content = inputs["fill_byte"].encode("utf-8") * inputs["byte_count"]
+                RUNNER.load_worker_completion_receipt(content)
+            elif operation == "verify_output_path":
+                with tempfile.TemporaryDirectory(prefix="completion-receipt-path-") as temporary:
+                    output = Path(temporary)
+                    if "symlink_target" in inputs:
+                        (output / inputs["path"]).symlink_to(inputs["symlink_target"])
+                    RUNNER.verify_worker_completion_receipt_path(output, inputs["path"])
+            elif operation == "verify_prohibited_content":
+                receipt["claims"][inputs["field"]] = [inputs["value"]]
+                RUNNER.validate_worker_completion_receipt(receipt)
+            else:
+                raise AssertionError(f"unsupported tuned receipt operation: {operation}")
+        except RUNNER.RunnerError as exc:
+            expected_code = expected["error_code"]
+            fragment = error_fragments.get(expected_code)
+            if fragment is None or fragment not in str(exc):
+                return {"result": "rejected", "error_code": "unexpected_error"}
+            return {"result": "rejected", "error_code": expected_code}
+        return {"result": "accepted", "error_code": None}
+
     def test_tuned_worker_completion_receipt_fixture_is_frozen_and_evaluator_is_generic(self) -> None:
         self.assertEqual(
             hashlib.sha256(WORKER_COMPLETION_RECEIPT_SCENARIOS.read_bytes()).hexdigest(),
@@ -1348,10 +1543,9 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             {coverage for case in fixture["cases"] for coverage in case["covers"]},
             WORKER_COMPLETION_RECEIPT_COVERAGE,
         )
-        expected_by_id = {case["id"]: case["expected"] for case in fixture["cases"]}
         observations = evaluate_worker_completion_receipt_fixture(
             WORKER_COMPLETION_RECEIPT_SCENARIOS,
-            lambda _base, case: expected_by_id[case["id"]],
+            self.evaluate_worker_completion_receipt_case,
             used_for_tuning=True,
         )
         self.assertEqual(
@@ -1599,6 +1793,28 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(manifest["worker_result"]["kind"], "custom")
         self.assertNotIn("attempts", manifest["worker_result"])
         self.assertNotIn("fallback_reason", manifest["worker_result"])
+        receipt_path = Path(manifest["worker_completion_receipt_path"])
+        receipt_bytes = receipt_path.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(receipt_bytes).hexdigest(),
+            manifest["worker_completion_receipt_digest"],
+        )
+        receipt = RUNNER.load_worker_completion_receipt(receipt_bytes)
+        self.assertEqual(receipt["process"], {"exit_status": 0, "diagnostic_codes": []})
+        self.assertTrue(receipt["attempt"]["attempt_id"].startswith("initial-0-custom-"))
+        self.assertEqual(receipt["candidate"]["changed_paths"], manifest["changed_paths"])
+        self.assertEqual(
+            receipt["candidate"]["patch_digest"], "sha256:" + manifest["patch_digest"]
+        )
+        self.assertEqual(receipt["claims"]["attempt_result"], "success")
+        process_path = Path(manifest["worker_process_result_path"])
+        process_bytes = process_path.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(process_bytes).hexdigest(), manifest["worker_process_result_digest"]
+        )
+        process_result = RUNNER.validate_attempt_process_result(json.loads(process_bytes))
+        self.assertEqual(process_result["attempt_id"], receipt["attempt"]["attempt_id"])
+        self.assertEqual(process_result["exit_status"], receipt["process"]["exit_status"])
         telemetry = manifest["telemetry"]
         self.assertEqual(
             {key: telemetry[key] for key in (
@@ -1636,6 +1852,311 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             git(repo, "status", "--porcelain=1", "--untracked-files=all").stdout.splitlines(),
             [" M allowed.txt", " M dir/nested.txt"],
         )
+
+    def test_malformed_completion_claims_fail_closed_without_retaining_prohibited_content(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output = Path(temporary.name) / "malformed-completion-claims"
+        result, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            textwrap.dedent(
+                """\
+                (worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")
+                claims = Path(os.environ[prefix + "COMPLETION_CLAIMS"])
+                claims.write_text(json.dumps({
+                    "attempt_result": "success",
+                    "acceptance_evidence": [],
+                    "commands_attempted": [],
+                    "blockers": ["CREDENTIAL_SENTINEL"],
+                    "residual_risks": [],
+                    "out_of_scope_change": False,
+                }), encoding="utf-8")
+                """
+            ),
+            output_dir=output,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("completion claims were rejected", result.stderr)
+        receipt_bytes = (output / "worker-completion-receipt.json").read_bytes()
+        self.assertNotIn(b"CREDENTIAL_SENTINEL", receipt_bytes)
+        receipt = RUNNER.load_worker_completion_receipt(receipt_bytes)
+        self.assertEqual(receipt["claims"]["attempt_result"], "failure")
+        self.assertEqual(receipt["process"]["exit_status"], 0)
+        process_result = RUNNER.validate_attempt_process_result(
+            json.loads((output / "worker-process-result.json").read_text(encoding="utf-8"))
+        )
+        self.assertEqual(process_result["exit_status"], 0)
+        self.assertEqual(process_result["attempt_id"], receipt["attempt"]["attempt_id"])
+        self.assertFalse((output / "candidate.patch").exists())
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_worker_completion_claim_tampering_cannot_advance_candidate_lifecycle(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        result, output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest_path = Path(result.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        receipt_path = Path(manifest["worker_completion_receipt_path"])
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["claims"]["attempt_result"] = "failure"
+        receipt_path.write_text(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        apply = run_cli(repo, "apply", str(manifest_path))
+        self.assertEqual(apply.returncode, 1)
+        self.assertIn("receipt digest no longer matches", apply.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+        self.assertFalse((output / "validation.json").exists())
+
+    def test_completion_claim_codes_reject_lowercase_token_shaped_secrets(self) -> None:
+        base = {
+            "attempt_result": "failure",
+            "acceptance_evidence": [],
+            "commands_attempted": [],
+            "blockers": [],
+            "residual_risks": [],
+            "out_of_scope_change": False,
+        }
+        for field, value in (
+            ("blockers", "credential_sentinel"),
+            ("residual_risks", "a" * 64),
+        ):
+            with self.subTest(field=field, value=value):
+                claims = {**base, field: [value]}
+                with self.assertRaisesRegex(RUNNER.RunnerError, "non-allowlisted"):
+                    RUNNER.validate_worker_completion_claims(claims)
+
+    def test_completion_command_claims_are_consecutive_and_status_bounded(self) -> None:
+        base = {
+            "attempt_result": "failure",
+            "acceptance_evidence": [],
+            "blockers": ["command_failed"],
+            "residual_risks": [],
+            "out_of_scope_change": False,
+        }
+        cases = (
+            [{"command_id": "worker-check-2", "exit_status": 1}],
+            [{"command_id": "worker-check-1", "exit_status": 256}],
+            [{"command_id": "worker-check-1", "exit_status": 10**100}],
+        )
+        for commands in cases:
+            with self.subTest(commands=commands):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.validate_worker_completion_claims(
+                        {**base, "commands_attempted": commands}
+                    )
+
+    def test_pathological_completion_claims_still_emit_safe_receipts(self) -> None:
+        cases = {
+            "huge-integer": (
+                '{"attempt_result":"success","acceptance_evidence":[],"commands_attempted":'
+                '[{"command_id":"worker-check-1","exit_status":' + "9" * 5000 + '}],'
+                '"blockers":[],"residual_risks":[],"out_of_scope_change":false}'
+            ),
+            "deep-nesting": "[" * 1500 + "0" + "]" * 1500,
+        }
+        for name, raw_claims in cases.items():
+            with self.subTest(name=name):
+                temporary, repo, plan_path = self.make_repo(["allowed.txt"], repo_name=name)
+                self.addCleanup(temporary.cleanup)
+                output = Path(temporary.name) / f"pathological-{name}"
+                result, _output, _worker = self.run_with_worker(
+                    repo,
+                    plan_path,
+                    textwrap.dedent(
+                        f"""\
+                        (worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")
+                        Path(os.environ[prefix + "COMPLETION_CLAIMS"]).write_text(
+                            {raw_claims!r}, encoding="utf-8"
+                        )
+                        """
+                    ),
+                    output_dir=output,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("completion claims were rejected", result.stderr)
+                receipt = RUNNER.load_worker_completion_receipt(
+                    (output / "worker-completion-receipt.json").read_bytes()
+                )
+                self.assertEqual(receipt["claims"]["blockers"], ["invalid_completion_claims"])
+                self.assertTrue((output / "worker-process-result.json").is_file())
+
+    def test_worker_reported_failure_keeps_parent_derived_candidate_binding(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output = Path(temporary.name) / "reported-failure-candidate"
+        result, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            textwrap.dedent(
+                """\
+                import hashlib
+                import json
+                (worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")
+                contract = json.loads(Path(os.environ[prefix + "WORKER_CONTRACT"]).read_text(encoding="utf-8"))
+                evidence = [
+                    {"acceptance_digest": "sha256:" + hashlib.sha256(item.encode()).hexdigest(), "claim": "not_satisfied"}
+                    for item in contract["acceptance"]
+                ]
+                Path(os.environ[prefix + "COMPLETION_CLAIMS"]).write_text(json.dumps({
+                    "attempt_result": "failure",
+                    "acceptance_evidence": evidence,
+                    "commands_attempted": [],
+                    "blockers": ["implementation_failed"],
+                    "residual_risks": ["incomplete_change"],
+                    "out_of_scope_change": False,
+                }), encoding="utf-8")
+                """
+            ),
+            output_dir=output,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("receipt reports failure", result.stderr)
+        receipt = RUNNER.load_worker_completion_receipt(
+            (output / "worker-completion-receipt.json").read_bytes()
+        )
+        patch_bytes = (output / "candidate.patch").read_bytes()
+        self.assertEqual(
+            receipt["candidate"]["patch_digest"],
+            "sha256:" + hashlib.sha256(patch_bytes).hexdigest(),
+        )
+        self.assertEqual(receipt["candidate"]["changed_paths"], ["allowed.txt"])
+        self.assertEqual(receipt["claims"]["attempt_result"], "failure")
+        self.assertFalse((output / "manifest.json").exists())
+
+    def test_worker_reported_failure_without_candidate_keeps_receipt_and_process_result(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        output = Path(temporary.name) / "reported-failure-without-candidate"
+        result, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            textwrap.dedent(
+                """\
+                import json
+                Path(os.environ[prefix + "COMPLETION_CLAIMS"]).write_text(json.dumps({
+                    "attempt_result": "failure",
+                    "acceptance_evidence": [],
+                    "commands_attempted": [],
+                    "blockers": ["implementation_failed"],
+                    "residual_risks": ["incomplete_change"],
+                    "out_of_scope_change": False,
+                }), encoding="utf-8")
+                raise SystemExit(7)
+                """
+            ),
+            output_dir=output,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("worker exited with 7", result.stderr)
+        receipt = RUNNER.load_worker_completion_receipt(
+            (output / "worker-completion-receipt.json").read_bytes()
+        )
+        self.assertIsNone(receipt["candidate"])
+        self.assertEqual(receipt["claims"]["attempt_result"], "failure")
+        self.assertEqual(receipt["claims"]["acceptance_evidence"], [])
+        process_result = RUNNER.validate_attempt_process_result(
+            json.loads((output / "worker-process-result.json").read_text(encoding="utf-8"))
+        )
+        self.assertEqual(process_result["exit_status"], 7)
+        self.assertEqual(process_result["attempt_id"], receipt["attempt"]["attempt_id"])
+        self.assertFalse((output / "candidate.patch").exists())
+        self.assertFalse((output / "manifest.json").exists())
+
+    def test_malformed_correction_claims_do_not_publish_an_unbound_patch(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("initial\\n", encoding="utf-8")',
+            output_dir=root / "malformed-correction-initial",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        brief = root / "malformed-correction-brief.txt"
+        brief.write_text("Correct the candidate.\n", encoding="utf-8")
+        output = root / "malformed-correction-output"
+        correction = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief,
+            textwrap.dedent(
+                """\
+                (worker_repo / "allowed.txt").write_text("corrected\\n", encoding="utf-8")
+                Path(os.environ[prefix + "COMPLETION_CLAIMS"]).write_text(
+                    '{"attempt_result":"success","acceptance_evidence":[],"commands_attempted":'
+                    '[{"command_id":"worker-check-1","exit_status":' + "9" * 5000 + '}],'
+                    '"blockers":[],"residual_risks":[],"out_of_scope_change":false}',
+                    encoding="utf-8",
+                )
+                """
+            ),
+            output_dir=output,
+        )
+        self.assertEqual(correction.returncode, 1)
+        self.assertIn("correction completion claims were rejected", correction.stderr)
+        receipt = RUNNER.load_worker_completion_receipt(
+            (output / "worker-completion-receipt.json").read_bytes()
+        )
+        self.assertIsNone(receipt["candidate"])
+        self.assertEqual(receipt["claims"]["blockers"], ["invalid_completion_claims"])
+        self.assertTrue((output / "worker-process-result.json").is_file())
+        self.assertFalse((output / "candidate.patch").exists())
+        self.assertFalse((output / "manifest.json").exists())
+
+    def test_same_run_retry_uses_fresh_attempt_identity_and_rejects_replayed_receipt(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        lifecycle = root / "same-run.lifecycle.json"
+        common = (
+            "--lifecycle-state", str(lifecycle),
+            "--orchestration-run-id", "same-run-replay-test",
+        )
+        first, first_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            "raise SystemExit(7)",
+            output_dir=root / "first-failure",
+            extra_args=common,
+        )
+        self.assertEqual(first.returncode, 1)
+        first_receipt_bytes = (first_output / "worker-completion-receipt.json").read_bytes()
+        first_receipt = RUNNER.load_worker_completion_receipt(first_receipt_bytes)
+        second, _second_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "second-success",
+            extra_args=common,
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        manifest_path = Path(second.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        second_receipt_path = Path(manifest["worker_completion_receipt_path"])
+        second_receipt = RUNNER.load_worker_completion_receipt(second_receipt_path.read_bytes())
+        self.assertNotEqual(
+            first_receipt["attempt"]["attempt_id"], second_receipt["attempt"]["attempt_id"]
+        )
+        second_receipt_path.write_bytes(first_receipt_bytes)
+        manifest["worker_completion_receipt_digest"] = hashlib.sha256(
+            first_receipt_bytes
+        ).hexdigest()
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        apply = run_cli(repo, "apply", str(manifest_path))
+        self.assertEqual(apply.returncode, 1)
+        self.assertIn("attempt lineage mismatch", apply.stderr)
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_explicit_missing_file_preserves_absence_until_worker_creation(self) -> None:
         for action in ("create", "noop"):
@@ -2241,6 +2762,15 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
                 "correction_brief_digest": RUNNER.hash_file(brief),
             },
         )
+        receipt = RUNNER.load_worker_completion_receipt(
+            Path(manifest["worker_completion_receipt_path"]).read_bytes()
+        )
+        self.assertEqual(receipt["attempt"]["attempt_kind"], "correction")
+        self.assertEqual(receipt["attempt"]["correction_round"], 1)
+        self.assertEqual(
+            receipt["attempt"]["correction_lineage"]["prior_manifest_digest"],
+            "sha256:" + prior_manifest_digest,
+        )
         self.assertNotIn("Replace the candidate", json.dumps(manifest))
         apply = run_cli(repo, "apply", str(manifest_path))
         self.assertEqual(apply.returncode, 0, apply.stderr)
@@ -2394,6 +2924,17 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         )
         self.assertEqual(failed.returncode, 1)
         self.assertIn("correction worker exited with 7", failed.stderr)
+        receipt = RUNNER.load_worker_completion_receipt(
+            (output / "worker-completion-receipt.json").read_bytes()
+        )
+        self.assertEqual(receipt["process"]["exit_status"], 7)
+        self.assertEqual(receipt["claims"]["attempt_result"], "failure")
+        self.assertIsNone(receipt["candidate"])
+        process_result = RUNNER.validate_attempt_process_result(
+            json.loads((output / "worker-process-result.json").read_text(encoding="utf-8"))
+        )
+        self.assertEqual(process_result["exit_status"], 7)
+        self.assertEqual(process_result["attempt_id"], receipt["attempt"]["attempt_id"])
         self.assertFalse((output / "candidate.patch").exists())
         self.assertFalse((output / "manifest.json").exists())
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
@@ -3300,6 +3841,26 @@ fs.linkSync(source, target);
         self.assertIn("fallback worker exited with 2", result.stderr)
         self.assertTrue((output_dir / "worker-primary.stderr").is_file())
         self.assertTrue((output_dir / "worker-fallback.stderr").is_file())
+        primary_receipt = RUNNER.load_worker_completion_receipt(
+            (output_dir / "worker-primary-completion-receipt.json").read_bytes()
+        )
+        fallback_receipt = RUNNER.load_worker_completion_receipt(
+            (output_dir / "worker-fallback-completion-receipt.json").read_bytes()
+        )
+        self.assertNotEqual(
+            primary_receipt["attempt"]["attempt_id"],
+            fallback_receipt["attempt"]["attempt_id"],
+        )
+        self.assertEqual(primary_receipt["process"]["exit_status"], 1)
+        self.assertEqual(fallback_receipt["process"]["exit_status"], 2)
+        primary_process = RUNNER.validate_attempt_process_result(
+            json.loads((output_dir / "worker-primary-process-result.json").read_text(encoding="utf-8"))
+        )
+        fallback_process = RUNNER.validate_attempt_process_result(
+            json.loads((output_dir / "worker-fallback-process-result.json").read_text(encoding="utf-8"))
+        )
+        self.assertEqual(primary_process["attempt_id"], primary_receipt["attempt"]["attempt_id"])
+        self.assertEqual(fallback_process["attempt_id"], fallback_receipt["attempt"]["attempt_id"])
         self.assertFalse((output_dir / "candidate.patch").exists())
         self.assertFalse((output_dir / "manifest.json").exists())
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")

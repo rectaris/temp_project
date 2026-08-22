@@ -1,6 +1,6 @@
 # Integrate failure receipt validation
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - referent_first
@@ -75,12 +75,16 @@ This integration boundary combines the reviewed candidate-free production failur
 
 ## Tasks
 
-- [ ] Refresh Plan 158 to its exact checked archive.
-- [ ] Inspect the production branch and regression against every inherited acceptance item.
-- [ ] Obtain independent review with zero unresolved High or Medium findings.
-- [ ] Run focused validation, run the authoritative suite exactly once, and archive the plan.
+- [x] Refresh Plan 158 to its exact checked archive.
+- [x] Inspect the production branch and regression against every inherited acceptance item.
+- [x] Obtain independent review with zero unresolved High or Medium findings.
+- [x] Run focused validation, run the authoritative suite exactly once, and archive the plan.
 
 ## Validation Notes
 
 - This plan does not inspect or execute the frozen holdout.
 - The Plan 156 acceptance text and accepted safety conditions are unchanged.
+- Plan 158 is checked at `docs/plan/checked/2026/08/16-31/158-emit-structured-claims-in-runner-self-test.md`.
+- Independent review reported High 0, Medium 0, Low 1 and accepted the integration candidate; the Low item is a non-blocking candidate-present evidence assertion gap. Receipt: `sha256:8500ab83cea08676187f531e1135e55c6b99084c559aca7176fbc89949df181e`.
+- Focused validation passed once with 92 tests, Copier static check, and `git diff --check`.
+- Authoritative validation passed exactly once with 92 tests, runner self-test, Copier static check, and `git diff --check`; ledger: `/tmp/project-agent-workflow-plan159-20260822-a/execution-state.json`.
