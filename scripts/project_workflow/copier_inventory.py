@@ -250,6 +250,7 @@ SOURCE_REQUIRED = [
     "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json",
     "tests/fixtures/orchestration/worker-completion-receipt-holdout.json",
     "tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json",
+    "tests/fixtures/orchestration/worker-completion-receipt-evidence.json",
     "scripts/init-project-workflow.sh",
     "scripts/adopt-to-namespaced-layout.py",
     "scripts/migrate-to-namespaced-layout.py",

@@ -1614,7 +1614,7 @@ def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
         fail("worker-contract execution differs from the recorded integration evidence")
 
 
-def check_worker_completion_receipt_scenarios() -> None:
+def check_worker_completion_receipt_scenarios(*, include_holdout: bool) -> None:
     scenario_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
     holdout_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
     replacement_holdout_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
@@ -1704,12 +1704,129 @@ def check_worker_completion_receipt_scenarios() -> None:
         ]
     ):
         fail("worker-completion-receipt exposed holdout observations differ")
+    evidence_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-evidence.json"
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-completion-receipt integration evidence: {exc}")
+    if set(evidence) != {
+        "schema_version", "suite", "implementation_commit", "tuned_fixture",
+        "exposed_holdout_fixture", "replacement_holdout_fixture", "runner_sha256",
+        "template_runner_sha256", "observations", "source_acceptance",
+    }:
+        fail("worker-completion-receipt integration evidence has an invalid exact shape")
+    if (
+        evidence.get("schema_version") != 1
+        or evidence.get("suite") != "worker-completion-receipt-integration"
+        or evidence.get("tuned_fixture") != {
+            "path": str(scenario_path.relative_to(ROOT)),
+            "sha256": hashlib.sha256(scenario_bytes).hexdigest(),
+        }
+        or evidence.get("exposed_holdout_fixture") != {
+            "path": str(holdout_path.relative_to(ROOT)),
+            "sha256": hashlib.sha256(holdout_bytes).hexdigest(),
+            "evidence_status": "known_regression_after_initial_failure",
+        }
+        or evidence.get("replacement_holdout_fixture") != {
+            "path": str(replacement_holdout_path.relative_to(ROOT)),
+            "sha256": hashlib.sha256(replacement_holdout_bytes).hexdigest(),
+            "evidence_status": "untuned_holdout",
+        }
+    ):
+        fail("worker-completion-receipt evidence fixture bindings differ")
+    implementation_commit = evidence.get("implementation_commit")
+    if not isinstance(implementation_commit, str) or re.fullmatch(r"[0-9a-f]{40}", implementation_commit) is None:
+        fail("worker-completion-receipt evidence implementation commit is invalid")
+    committed_runner_digests = []
+    for relative in (
+        "scripts/run-sandboxed-plan-worker.py",
+        "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
+    ):
+        result = subprocess.run(
+            ["git", "show", f"{implementation_commit}:{relative}"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            fail("worker-completion-receipt evidence implementation commit is unavailable")
+        committed_runner_digests.append(hashlib.sha256(result.stdout).hexdigest())
+    if (
+        evidence.get("runner_sha256") != committed_runner_digests[0]
+        or evidence.get("template_runner_sha256") != committed_runner_digests[1]
+        or committed_runner_digests[0] != committed_runner_digests[1]
+    ):
+        fail("worker-completion-receipt evidence runner bindings differ")
+    source_contract = json.loads(
+        (ROOT / "docs/plan/replanned/contracts/114-validate-structured-worker-completion.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_acceptance = [
+        {"digest": item["digest"].removeprefix("sha256:"), "result": "passed"}
+        for item in source_contract["source"]["acceptance"]
+    ]
+    if evidence.get("source_acceptance") != expected_acceptance:
+        fail("worker-completion-receipt evidence acceptance bindings differ")
+    expected_known_observations = [
+        {
+            "id": case["id"],
+            "class": case["class"],
+            "used_for_tuning": case["used_for_tuning"],
+            **case["expected"],
+        }
+        for fixture in (scenarios, exposed_holdout)
+        for case in fixture["cases"]
+    ]
+    observations = evidence.get("observations")
+    if (
+        not isinstance(observations, list)
+        or observations[:-1] != expected_known_observations
+        or observations[-1:] != [{
+            "id": "holdout-host-path-in-completion-risk",
+            "class": "holdout",
+            "used_for_tuning": False,
+            "result": "rejected",
+            "error_code": "prohibited_receipt_content",
+        }]
+    ):
+        fail("worker-completion-receipt recorded observations differ")
+    if not include_holdout:
+        return
+    try:
+        replacement_holdout = json.loads(replacement_holdout_bytes.decode("utf-8"))
+        replacement_observations = module.evaluate_worker_completion_receipt_fixture(
+            replacement_holdout_path,
+            evaluator,
+            used_for_tuning=False,
+        )
+    except Exception as exc:
+        fail(f"worker-completion-receipt replacement holdout evaluation failed: {exc}")
+    actual_observations = []
+    for fixture, fixture_observations in (
+        (scenarios, observations[:len(cases)]),
+        (exposed_holdout, exposed_observations),
+        (replacement_holdout, replacement_observations),
+    ):
+        observed_by_id = {item["id"]: item.get("observed", item) for item in fixture_observations}
+        actual_observations.extend(
+            {
+                "id": case["id"],
+                "class": case["class"],
+                "used_for_tuning": case["used_for_tuning"],
+                **observed_by_id[case["id"]],
+            }
+            for case in fixture["cases"]
+        )
+    if actual_observations != evidence["observations"]:
+        fail("worker-completion-receipt execution differs from integration evidence")
 
 
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     check_plan_restructuring_scenarios()
     check_worker_contract_scenarios(include_holdout=include_holdout)
-    check_worker_completion_receipt_scenarios()
+    check_worker_completion_receipt_scenarios(include_holdout=include_holdout)
     policy = read("references/orchestration.md").lower()
     shared_markers = (
         "per-task user instruction",

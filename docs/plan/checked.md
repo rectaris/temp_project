@@ -129,3 +129,4 @@ id	path
 157	docs/plan/checked/2026/08/16-31/157-integrate-structured-worker-completion-enforcement.md
 160	docs/plan/checked/2026/08/16-31/160-freeze-replacement-receipt-holdout-evidence.md
 161	docs/plan/checked/2026/08/16-31/161-repair-receipt-fixture-projection.md
+162	docs/plan/checked/2026/08/16-31/162-integrate-structured-worker-completion-receipt.md

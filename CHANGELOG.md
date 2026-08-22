@@ -6,6 +6,7 @@
 - 外部 provider の認証確認を、実際の provider、コマンド実行境界、credential source へ結合し、sandbox 内外や provider 切替時の認証事実を別の呼び出しへ流用しないようにしました。
 - 書き込み可能な逐次workerを、commit済みplanから毎回生成する読み取り専用の実行契約へ結合し、曖昧なdirectory範囲、保護対象、検証権限への書き込みを起動前に拒否するようにしました。
 - 事前に固定した通常scenarioと独立holdoutを同じworker契約評価器で実行し、観測結果をfixture、runner、元planの受入条件digestへ結合する統合証拠を追加しました。
+- worker完了受領書を契約、試行、process結果、候補差分へ結合し、通常case、既知の回帰case、独立holdoutの観測結果を元planの受入条件digestへ結び付ける統合証拠を追加しました。
 - 対象とテンプレートの元リポジトリを変更せず、固定したGit commit間のCopier更新、安全性、製品検証、冪等性を一時cloneで証明してローカルmanifestへ記録するスキルを追加しました。
 - 独立して修復できる局所障害では元planを置換せず、該当する実行だけを停止して修復planの完了後に新しい実行として再開するようにしました。
 

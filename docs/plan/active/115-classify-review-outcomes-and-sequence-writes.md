@@ -1,6 +1,6 @@
 # Gate sequential writable plan execution on parent review outcomes
 
-status: deferred
+status: in_progress
 task_types:
   - planning_docs
   - referent_first
@@ -43,7 +43,7 @@ context_files:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
-  - docs/plan/active/155-integrate-structured-worker-completion-receipt.md
+  - docs/plan/checked/2026/08/16-31/162-integrate-structured-worker-completion-receipt.md
   - docs/plan/checked/2026/08/01-15/074-isolated-candidate-correction.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
   - docs/plan/checked/2026/08/01-15/077-atomic-plan-restructuring.md
@@ -123,3 +123,4 @@ The review outcome reason is a parent-authored bounded reason value attached to 
 - High implementation risk makes this plan ineligible for the writable runner under current routing policy.
 - Plan 136's context path names its exact checked archive.
 - This plan is deferred until Plan 155, the accepted integration successor for Plan 114, is checked; the parent must then refresh Plan 155's context path before bounded parent implementation begins.
+- Plan 162 is the checked replacement integration path produced by the accepted Plan 155 replan contract. Its exact archive path now resolves the dependency gate without changing this plan's accepted requirements.

@@ -430,6 +430,92 @@ def require_orchestration_policy_markers() -> None:
     receipt_replacement_holdout_bytes = (ROOT / receipt_replacement_holdout_path).read_bytes()
     if hashlib.sha256(receipt_replacement_holdout_bytes).hexdigest() != "ddbbedb5c65cfe16ae48763b403c1beb16c241b7a77ab9379a88f98c8dd0f8de":
         fail("worker-completion-receipt replacement holdout bytes differ from the independent seal")
+    try:
+        receipt_exposed_holdout = json.loads(receipt_holdout_bytes.decode("utf-8"))
+        receipt_replacement_holdout = json.loads(receipt_replacement_holdout_bytes.decode("utf-8"))
+        receipt_evidence = json.loads(
+            (ROOT / "tests/fixtures/orchestration/worker-completion-receipt-evidence.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"worker-completion-receipt integration evidence is invalid: {exc}")
+    if set(receipt_evidence) != {
+        "schema_version", "suite", "implementation_commit", "tuned_fixture",
+        "exposed_holdout_fixture", "replacement_holdout_fixture", "runner_sha256",
+        "template_runner_sha256", "observations", "source_acceptance",
+    }:
+        fail("worker-completion-receipt integration evidence has an invalid exact shape")
+    if (
+        receipt_evidence.get("schema_version") != 1
+        or receipt_evidence.get("suite") != "worker-completion-receipt-integration"
+        or receipt_evidence.get("tuned_fixture") != {
+            "path": receipt_scenarios_path,
+            "sha256": hashlib.sha256(receipt_scenarios_bytes).hexdigest(),
+        }
+        or receipt_evidence.get("exposed_holdout_fixture") != {
+            "path": receipt_holdout_path,
+            "sha256": hashlib.sha256(receipt_holdout_bytes).hexdigest(),
+            "evidence_status": "known_regression_after_initial_failure",
+        }
+        or receipt_evidence.get("replacement_holdout_fixture") != {
+            "path": receipt_replacement_holdout_path,
+            "sha256": hashlib.sha256(receipt_replacement_holdout_bytes).hexdigest(),
+            "evidence_status": "untuned_holdout",
+        }
+    ):
+        fail("worker-completion-receipt evidence fixture bindings differ")
+    receipt_implementation_commit = receipt_evidence.get("implementation_commit")
+    if not isinstance(receipt_implementation_commit, str) or re.fullmatch(r"[0-9a-f]{40}", receipt_implementation_commit) is None:
+        fail("worker-completion-receipt evidence implementation commit is invalid")
+    receipt_committed_digests = []
+    for relative in (
+        "scripts/run-sandboxed-plan-worker.py",
+        "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
+    ):
+        result = subprocess.run(
+            ["git", "show", f"{receipt_implementation_commit}:{relative}"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            fail("worker-completion-receipt evidence implementation commit is unavailable")
+        receipt_committed_digests.append(hashlib.sha256(result.stdout).hexdigest())
+    if (
+        receipt_evidence.get("runner_sha256") != receipt_committed_digests[0]
+        or receipt_evidence.get("template_runner_sha256") != receipt_committed_digests[1]
+        or receipt_committed_digests[0] != receipt_committed_digests[1]
+    ):
+        fail("worker-completion-receipt evidence runner bindings differ")
+    expected_receipt_observations = [
+        {
+            "id": case["id"],
+            "class": case["class"],
+            "used_for_tuning": case["used_for_tuning"],
+            **case["expected"],
+        }
+        for fixture in (
+            receipt_scenarios,
+            receipt_exposed_holdout,
+            receipt_replacement_holdout,
+        )
+        for case in fixture["cases"]
+    ]
+    if receipt_evidence.get("observations") != expected_receipt_observations:
+        fail("worker-completion-receipt evidence observations differ")
+    receipt_source_contract = json.loads(
+        (ROOT / "docs/plan/replanned/contracts/114-validate-structured-worker-completion.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_receipt_acceptance = [
+        {"digest": item["digest"].removeprefix("sha256:"), "result": "passed"}
+        for item in receipt_source_contract["source"]["acceptance"]
+    ]
+    if receipt_evidence.get("source_acceptance") != expected_receipt_acceptance:
+        fail("worker-completion-receipt evidence acceptance bindings differ")
     evidence = json.loads(
         (ROOT / "tests/fixtures/orchestration/worker-contract-evidence.json").read_text(
             encoding="utf-8"

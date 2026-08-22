@@ -52,8 +52,11 @@ WORKER_CONTRACT_HOLDOUT_COVERAGE = {
 }
 WORKER_COMPLETION_RECEIPT_SCENARIOS = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
 WORKER_COMPLETION_RECEIPT_HOLDOUT = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+WORKER_COMPLETION_RECEIPT_REPLACEMENT_HOLDOUT = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
+WORKER_COMPLETION_RECEIPT_EVIDENCE = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-evidence.json"
 WORKER_COMPLETION_RECEIPT_SCENARIOS_SHA256 = "264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a"
 WORKER_COMPLETION_RECEIPT_HOLDOUT_SHA256 = "4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76"
+WORKER_COMPLETION_RECEIPT_REPLACEMENT_HOLDOUT_SHA256 = "ddbbedb5c65cfe16ae48763b403c1beb16c241b7a77ab9379a88f98c8dd0f8de"
 WORKER_COMPLETION_RECEIPT_COVERAGE = {
     "successful_attempt",
     "failed_attempt",
@@ -1582,6 +1585,66 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             ],
         )
 
+    def test_worker_completion_receipt_integration_evidence_matches_all_fixtures(self) -> None:
+        evidence = json.loads(WORKER_COMPLETION_RECEIPT_EVIDENCE.read_text(encoding="utf-8"))
+        self.assertEqual(
+            hashlib.sha256(WORKER_COMPLETION_RECEIPT_REPLACEMENT_HOLDOUT.read_bytes()).hexdigest(),
+            WORKER_COMPLETION_RECEIPT_REPLACEMENT_HOLDOUT_SHA256,
+        )
+        actual = []
+        for path, used_for_tuning in (
+            (WORKER_COMPLETION_RECEIPT_SCENARIOS, True),
+            (WORKER_COMPLETION_RECEIPT_HOLDOUT, False),
+            (WORKER_COMPLETION_RECEIPT_REPLACEMENT_HOLDOUT, False),
+        ):
+            fixture = load_worker_completion_receipt_fixture(
+                path, used_for_tuning=used_for_tuning
+            )
+            observations = evaluate_worker_completion_receipt_fixture(
+                path,
+                self.evaluate_worker_completion_receipt_case,
+                used_for_tuning=used_for_tuning,
+            )
+            observed_by_id = {item["id"]: item["observed"] for item in observations}
+            actual.extend(
+                {
+                    "id": case["id"],
+                    "class": case["class"],
+                    "used_for_tuning": case["used_for_tuning"],
+                    **observed_by_id[case["id"]],
+                }
+                for case in fixture["cases"]
+            )
+        self.assertEqual(actual, evidence["observations"])
+        implementation_commit = evidence["implementation_commit"]
+        committed_digests = []
+        for relative in (
+            "scripts/run-sandboxed-plan-worker.py",
+            "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
+        ):
+            content = subprocess.run(
+                ["git", "show", f"{implementation_commit}:{relative}"],
+                cwd=ROOT,
+                check=True,
+                stdout=subprocess.PIPE,
+            ).stdout
+            committed_digests.append(hashlib.sha256(content).hexdigest())
+        self.assertEqual(
+            committed_digests,
+            [evidence["runner_sha256"], evidence["template_runner_sha256"]],
+        )
+        source_contract = json.loads(
+            (ROOT / "docs/plan/replanned/contracts/114-validate-structured-worker-completion.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            evidence["source_acceptance"],
+            [
+                {"digest": item["digest"].removeprefix("sha256:"), "result": "passed"}
+                for item in source_contract["source"]["acceptance"]
+            ],
+        )
     def test_codex_unavailability_classifier_is_bounded_to_cli_error_lines(self) -> None:
         cases = (
             (b"", b"ERROR: You've hit your usage limit for GPT-5.3-Codex-Spark.", "usage_limit"),

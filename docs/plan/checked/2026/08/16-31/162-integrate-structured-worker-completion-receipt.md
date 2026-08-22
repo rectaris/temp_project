@@ -1,6 +1,6 @@
 # Integrate the structured worker completion receipt
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - referent_first
@@ -120,12 +120,19 @@ This final integration boundary combines checked receipt enforcement, the repair
 
 ## Tasks
 
-- [ ] Refresh Plans 160 and 161 to exact checked paths and verify all fixture digests.
-- [ ] Execute tuned, exposed original, and previously unseen replacement holdout cases with the generic evaluator.
-- [ ] Record bounded integration evidence and Unreleased behavior; preserve it through inventory, smoke, and Copier checks.
-- [ ] Obtain independent review with zero unresolved High or Medium findings.
-- [ ] Run focused validation, run the authoritative suite exactly once, archive this plan, and refresh Plan 115.
+- [x] Refresh Plans 160 and 161 to exact checked paths and verify all fixture digests.
+- [x] Execute tuned, exposed original, and previously unseen replacement holdout cases with the generic evaluator.
+- [x] Record bounded integration evidence and Unreleased behavior; preserve it through inventory, smoke, and Copier checks.
+- [x] Obtain independent review with zero unresolved High or Medium findings.
+- [x] Run focused validation, run the authoritative suite exactly once, archive this plan, and refresh Plan 115.
 
 ## Validation Notes
 
 - The first original holdout execution and its failure remain recorded under Plan 155; only the replacement holdout can serve as untuned post-repair evidence.
+- Plans 160 and 161 were consumed from `docs/plan/checked/2026/08/16-31/160-freeze-replacement-receipt-holdout-evidence.md` and `docs/plan/checked/2026/08/16-31/161-repair-receipt-fixture-projection.md`.
+- Fixture digests were verified as tuned `sha256:264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a`, exposed original `sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76`, and replacement `sha256:ddbbedb5c65cfe16ae48763b403c1beb16c241b7a77ab9379a88f98c8dd0f8de`.
+- The generic evaluator produced exact expected outcomes for all 21 tuned cases, the exposed original regression, and the previously unseen replacement holdout. The committed evidence contains exactly 23 bounded observations and binds them to runner commit `006056f276d930562641caa221c009eb7e66be27`, byte-identical runner digest `sha256:c04c78a8caf504452516c8e34e7c97aae6ddbe087115c4a6b8931d806171e1ad`, and all 13 inherited acceptance digests.
+- Independent review accepted the integration with High 0, Medium 0, and Low 1. The remaining Low finding is the previously accepted candidate-present parent-derivation test-strength gap; it is not a production defect or acceptance blocker. The external review receipt digest is `sha256:976d02f1f25805e6fa54c2267e729e2f83330b809f007872187323d6205b81c1`.
+- Parent-owned focused validation passed once: 94 runner tests, root policy check, Copier static check, and diff check.
+- Parent-owned authoritative validation passed exactly once: 94 runner tests, runner self-test, root policy checks with and without holdout execution, Copier static check, all change validation, project workflow lint, smoke, required real Copier update, and diff check.
+- Parent execution ledger `/tmp/project-agent-workflow-plan162-20260822-a/execution-state.json` records one accepted parent review, one focused-validation event, and one authoritative-validation event for the same lifecycle digest.
