@@ -1,6 +1,6 @@
 # Integrate structured worker completion enforcement
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - referent_first
@@ -111,12 +111,16 @@ This integration boundary adopts the stopped Plan 154 implementation plus the ch
 
 ## Tasks
 
-- [ ] Refresh Plan 159 to its exact checked archive and inspect the complete retained diff against all Plan 154 acceptance items.
-- [ ] Verify root/template runner parity, policy and Skill alignment, tuned scenario behavior, and non-destructive Copier preservation.
-- [ ] Obtain independent review with zero unresolved High or Medium findings.
-- [ ] Run focused validation, run the authoritative suite exactly once, and archive this plan before Plan 155 starts.
+- [x] Refresh Plan 159 to its exact checked archive and inspect the complete retained diff against all Plan 154 acceptance items.
+- [x] Verify root/template runner parity, policy and Skill alignment, tuned scenario behavior, and non-destructive Copier preservation.
+- [x] Obtain independent review with zero unresolved High or Medium findings.
+- [x] Run focused validation, run the authoritative suite exactly once, and archive this plan before Plan 155 starts.
 
 ## Validation Notes
 
 - The Plan 154 source acceptance text is copied exactly and requirements, accepted safety conditions, validation authority, and external-effect authority are unchanged.
 - The holdout remains sealed at `sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76` and is not inspected or executed here.
+- Plan 159 is checked at `docs/plan/checked/2026/08/16-31/159-integrate-failure-receipt-validation.md`.
+- Independent review reported High 0, Medium 0, Low 1 and accepted all eleven acceptance items; the Low item is the previously accepted candidate-present evidence assertion gap. Receipt: `sha256:5fde0ee2e7254d47f66738c1c27ef036e8a778a8bfd9bea78f11af2e0d551480`.
+- Focused validation passed once with 92 tests, root policy, Copier static, and diff checks.
+- Authoritative validation passed exactly once with 92 tests, runner self-test, root and Copier checks, all-change validation, workflow lint, smoke, real Copier update, and diff check; ledger: `/tmp/project-agent-workflow-plan157-20260822-a/execution-state.json`.

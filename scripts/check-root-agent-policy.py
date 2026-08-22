@@ -1186,11 +1186,20 @@ def validate_paired_runner_evidence(
                 contract_fields = {
                     "worker_contract_path", "worker_contract_digest", "worker_attempt_label",
                 }
+                receipt_fields = {
+                    "worker_completion_receipt_path", "worker_completion_receipt_digest",
+                    "worker_process_result_path", "worker_process_result_digest",
+                    "worker_attempt_id",
+                }
                 accepted_manifest_shapes = {
                     frozenset(manifest_fields),
                     frozenset(manifest_fields | {"correction_lineage"}),
                     frozenset(manifest_fields | contract_fields),
                     frozenset(manifest_fields | contract_fields | {"correction_lineage"}),
+                    frozenset(manifest_fields | contract_fields | receipt_fields),
+                    frozenset(
+                        manifest_fields | contract_fields | receipt_fields | {"correction_lineage"}
+                    ),
                 }
                 if not isinstance(manifest, dict) or frozenset(manifest) not in accepted_manifest_shapes:
                     raise ValueError("captured manifest is not an exact runner candidate manifest")
@@ -1656,10 +1665,12 @@ def check_worker_completion_receipt_scenarios() -> None:
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
-        expected_by_id = {case["id"]: case["expected"] for case in cases}
+        evaluator = module.SandboxedPlanWorkerTests(
+            methodName="test_tuned_worker_completion_receipt_fixture_is_frozen_and_evaluator_is_generic"
+        ).evaluate_worker_completion_receipt_case
         observations = module.evaluate_worker_completion_receipt_fixture(
             scenario_path,
-            lambda _base, case: expected_by_id[case["id"]],
+            evaluator,
             used_for_tuning=True,
         )
     except Exception as exc:
@@ -1709,6 +1720,9 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "skipped known-unavailable starts",
         "finite and nonnegative",
         "prompts, raw output, environment values, or credentials",
+        "worker completion receipt",
+        "consumed-attempt replay rejection",
+        "receipt claims are advisory only",
         "run-sandboxed-plan-worker.py correct",
         "aggregate patch",
         "at most two correction rounds",
@@ -1754,6 +1768,7 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "per-task user instruction",
         "main session",
         "advisory",
+        "worker completion receipt",
         "repair_required",
         "source-plan scope",
         "validation authority",

@@ -33,7 +33,7 @@ context_files:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/153-freeze-worker-completion-receipt-scenarios.md
-  - docs/plan/checked/2026/08/16-31/154-enforce-structured-worker-completion-receipt.md
+  - docs/plan/checked/2026/08/16-31/157-integrate-structured-worker-completion-enforcement.md
   - docs/plan/replanned/2026/08/16-31/114-validate-structured-worker-completion.md
   - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
   - references/orchestration.md
@@ -81,7 +81,7 @@ acceptance:
 replan_source: docs/plan/active/114-validate-structured-worker-completion.md
 replan_contract: docs/plan/replanned/contracts/114-validate-structured-worker-completion.json
 integration_gates:
-  - plans 153 and 154 must be checked and their exact archive paths must replace active context paths before evaluation starts
+  - plans 153 and 157 must be checked and their exact archive paths must replace active context paths before evaluation starts
   - tuned scenarios must equal sha256:264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a and holdout must equal sha256:4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76 before any evaluation command starts
   - plan 115 may start only after this integration plan is checked and its dependency path is refreshed to this plan's exact checked archive
 successor_plans:
@@ -110,7 +110,7 @@ The concrete implementation boundary is one active integration plan that refresh
 
 ## Decisions
 
-- Treat plans 153 and 154 as immutable predecessors; stop for replan rather than changing either accepted design in this integration scope.
+- Treat plans 153 and 157 as immutable predecessors; stop for replan rather than changing either accepted design in this integration scope.
 - Execute the frozen holdout only after tuned checks, parent diff review, and critical-invariant review pass.
 - Record only bounded digest-linked observations and acceptance mapping; keep raw outputs outside the repository.
 - Interpret this checked integration as the accepted successor for Plan 115's Plan 114 dependency.

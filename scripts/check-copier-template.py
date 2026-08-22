@@ -160,6 +160,9 @@ def require_orchestration_policy_markers() -> None:
         "skipped known-unavailable starts",
         "finite and nonnegative",
         "prompts, raw output, environment values, or credentials",
+        "worker completion receipt",
+        "consumed-attempt replay rejection",
+        "receipt claims are advisory only",
         "run-sandboxed-plan-worker.py correct",
         "aggregate patch",
         "at most two correction rounds",
@@ -186,6 +189,7 @@ def require_orchestration_policy_markers() -> None:
         "p95 time no more than 10 percent worse",
         "run-sandboxed-plan-worker.py run",
         "read-only",
+        "worker completion receipt",
     )
     for marker in shared_markers:
         if marker not in template_spec:
@@ -678,6 +682,12 @@ def require_sandboxed_plan_worker_alignment() -> None:
         "WORKER_CONTRACT_SCHEMA_VERSION",
         "def derive_worker_contract",
         "def verify_worker_contract",
+        "WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION",
+        "def validate_worker_completion_receipt",
+        "def write_attempt_completion_receipt",
+        "def write_attempt_process_result",
+        "worker_completion_receipt_path",
+        "worker_process_result_path",
         "def derive_repository_identity",
         "worker_attempt_label",
         "require_safe_delegated_write_scope",
