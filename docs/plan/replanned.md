@@ -18,3 +18,4 @@ id	path	contract
 144	docs/plan/replanned/2026/08/16-31/144-implement-revalidated-local-apply.md	docs/plan/replanned/contracts/144-implement-revalidated-local-apply.json
 146	docs/plan/replanned/2026/08/16-31/146-integrate-local-git-retirement.md	docs/plan/replanned/contracts/146-integrate-local-git-retirement.json
 114	docs/plan/replanned/2026/08/16-31/114-validate-structured-worker-completion.md	docs/plan/replanned/contracts/114-validate-structured-worker-completion.json
+154	docs/plan/replanned/2026/08/16-31/154-enforce-structured-worker-completion-receipt.md	docs/plan/replanned/contracts/154-enforce-structured-worker-completion-receipt.json
