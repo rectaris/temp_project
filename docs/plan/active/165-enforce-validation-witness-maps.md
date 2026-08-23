@@ -21,7 +21,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/163-capture-validation-witness-migration-provenance.md
+  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
   - docs/plan/active/164-bind-replan-contract-validation-baseline.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
 required_specs:
@@ -45,8 +45,8 @@ validation_witness_map:
 replan_source: docs/plan/active/130-map-acceptance-validation-witnesses.md
 replan_contract: docs/plan/replanned/contracts/130-map-acceptance-validation-witnesses.json
 integration_gates:
-  - Plans 163 and 164 must be checked and their exact checked archive paths must replace active context paths before implementation
-  - accept legacy omission only from the exact migration record defined by Plan 163 and authoritative identity only from the contract projection defined by Plan 164
+  - Plans 179 and 164 must be checked and their exact checked archive paths must replace active context paths before implementation
+  - accept legacy omission only from the exact guardian-backed migration evidence integrated by Plan 179 and authoritative identity only from the contract projection defined by Plan 164
 successor_plans:
   - docs/plan/active/163-capture-validation-witness-migration-provenance.md
   - docs/plan/active/164-bind-replan-contract-validation-baseline.md
@@ -61,7 +61,7 @@ checked_summary_ja: 受入条件、移行証拠、最終検証command、静的pa
 
 - validation-witness-enforcement means the pre-execution checks over acceptance mappings, migration provenance, contracted validation commands, and static path identity.
 - Retain SHA-256 binding and exact source-order coverage for acceptance items.
-- Accept a pre-schema integration plan only when its exact committed bytes match Plan 163 migration evidence and its replan-contract lineage remains valid.
+- Accept a pre-schema integration plan only when its exact committed bytes match the guardian-backed evidence integrated by Plan 179 and its replan-contract lineage remains valid.
 - Compare the live authoritative validation sequence with the immutable Plan 164 contract projection before accepting any witness map.
 - Reject symlinks in every context path component, not only the final component.
 - Use bounded parent implementation and independent review because every changed executable path is validation authority.
@@ -75,4 +75,5 @@ checked_summary_ja: 受入条件、移行証拠、最終検証command、静的pa
 
 ## Validation Notes
 
-- Preserve the current unaccepted parser and test changes as candidate input; review each hunk against the accepted Plan 163 and Plan 164 contracts before reuse.
+- Preserve the current unaccepted parser and test changes as candidate input; review each hunk against the accepted Plan 179 and Plan 164 contracts before reuse.
+- `successor_plans` preserves the immutable Plan 130 lineage; operational dependency paths use Plan 179.

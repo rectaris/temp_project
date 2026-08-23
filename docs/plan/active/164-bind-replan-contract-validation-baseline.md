@@ -20,7 +20,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/163-capture-validation-witness-migration-provenance.md
+  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -43,7 +43,7 @@ validation_witness_map:
 replan_source: docs/plan/active/130-map-acceptance-validation-witnesses.md
 replan_contract: docs/plan/replanned/contracts/130-map-acceptance-validation-witnesses.json
 integration_gates:
-  - Plan 163 must be checked and its exact checked archive path must replace the active context path before implementation
+  - Plan 179 must be checked and its exact checked archive path must replace the active context path before implementation
   - Plan 165 must consume only the accepted versioned contract evidence emitted by this plan
 successor_plans:
   - docs/plan/active/163-capture-validation-witness-migration-provenance.md
@@ -73,3 +73,4 @@ checked_summary_ja: 再計画契約へ最終検証command列とwitness schemaを
 ## Validation Notes
 
 - The existing contract already stores successor content, but an explicit versioned validation projection is required for stable runtime consumption and tamper checks.
+- `successor_plans` preserves the immutable Plan 130 lineage; Plan 179 is the operational replacement for its replanned Plan 163 member.

@@ -37,9 +37,10 @@ context_files:
   - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
   - docs/plan/checked/2026/08/16-31/162-integrate-structured-worker-completion-receipt.md
   - docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
-  - docs/plan/active/130-map-acceptance-validation-witnesses.md
-  - docs/plan/active/131-require-confirmed-failure-diagnosis.md
+  - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
+  - docs/plan/checked/2026/08/16-31/131-require-confirmed-failure-diagnosis.md
   - docs/plan/checked/2026/08/16-31/171-integrate-session-resource-boundaries.md
+  - docs/plan/active/167-integrate-validation-witness-enforcement.md
   - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
   - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
@@ -116,7 +117,7 @@ replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
   - plan 136 as the accepted successor for plan 113, plan 162 as the checked replacement successor for plan 155 and plan 114, and plan 115 must be checked and their context paths refreshed before paired evaluation
-  - plans 130, 131, and 171 must be checked and their exact checked archive paths must replace active context paths
+  - replanned Plan 130, checked Plans 131 and 171, and active Plan 167 must resolve to their exact lifecycle paths; Plan 167 must be checked before paired evaluation starts
   - add a second fixed regression workload structurally equivalent to one root session carrying diagnosis, proposal, an initial rejected implementation, replanning, three successor plans, context compactions, and full-history reviewer starts; keep product paths and conversation bodies out of the fixture
   - reject the staged side when it reuses a root-session identity across a numbered-plan boundary, substitutes compaction for a fresh session, starts a reviewer with inherited turns, or claims token improvement from proxy counts; keep the result `measurement_pending` when required outer-runtime identity or fork-mode evidence is unavailable
   - plan 171 evidence must show different observed root-session identities across numbered-plan boundaries and zero-inheritance reviewer starts before the staged side is eligible for promotion
@@ -151,7 +152,7 @@ checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、�
 
 ## Decisions
 
-- Preserve every source acceptance item and interpret references to Plan 113 and Plan 114 as their accepted integration successors, Plan 136 and Plan 155, when evaluating the combined outputs with Plan 115 and Plans 130, 131, and 171.
+- Preserve every source acceptance item and interpret references to Plan 113 and Plan 114 as their accepted integration successors, Plan 136 and Plan 162, when evaluating the combined outputs with Plan 115, replanned Plan 130, checked Plans 131 and 171, and the accepted Plan 167 integration.
 - Add one fixed generic workload that reproduces late integration coverage, speculative repair planning, repeated reviewer context, and multi-plan parent accumulation without product-specific paths.
 - Add a distinct fixed regression workload for the observed bootstrap failure: same-session analysis and implementation, a stopped initial plan, successor-plan accumulation, compaction, and full-history review.
 - Treat outer-runtime session identity and reviewer inheritance mode as required comparability evidence for this regression workload; use `measurement_pending` rather than inference when either is unavailable.
@@ -170,6 +171,8 @@ checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、�
 - [ ] Review the complete Plan 136 successor lineage and the remaining acceptance chain, obtain independent review, run the authoritative suite once, and archive the accepted plan.
 
 ## Validation Notes
+
+- `successor_plans` preserves the immutable Plan 116 lineage; operational dependency paths use the current checked, replanned, and active records.
 
 - The user approved the expanded resource-efficiency evaluation on 2026-08-21.
 - The 2026-08-21 plan-only refinement adds the second observed high-usage sequence as a regression workload without treating its unavailable token values as measured evidence.

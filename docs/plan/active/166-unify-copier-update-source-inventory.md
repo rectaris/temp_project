@@ -16,6 +16,7 @@ context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
+  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
   - docs/plan/active/165-enforce-validation-witness-maps.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
   - tests/validation_tools/plan.py
@@ -38,8 +39,8 @@ validation_witness_map:
 replan_source: docs/plan/active/130-map-acceptance-validation-witnesses.md
 replan_contract: docs/plan/replanned/contracts/130-map-acceptance-validation-witnesses.json
 integration_gates:
-  - Plan 165 must be checked and its exact checked archive path must replace the active context path before implementation
-  - the inventory must include every source path introduced by Plans 163 through 165 before the complete Copier fixture runs
+  - Plans 179 and 165 must be checked and their exact checked archive paths must replace active context paths before implementation
+  - the inventory must include every source path accepted through Plan 179 and introduced by Plans 164 and 165 before the complete Copier fixture runs
 successor_plans:
   - docs/plan/active/163-capture-validation-witness-migration-provenance.md
   - docs/plan/active/164-bind-replan-contract-validation-baseline.md
@@ -66,3 +67,4 @@ checked_summary_ja: Copier更新fixtureのcopyとGit stagingを同一inventory�
 ## Validation Notes
 
 - This plan owns the preserved tests/copier-update.sh and inventory candidate; it does not change witness lifecycle policy or parsing.
+- `successor_plans` preserves the immutable Plan 130 lineage; Plan 179 replaces Plan 163 only in operational dependencies.
