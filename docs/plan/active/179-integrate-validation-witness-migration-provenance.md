@@ -1,6 +1,7 @@
 # Integrate validation-witness migration provenance
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Plan 184 must be checked and its exact checked archive path must replace the active predecessor before implementation.
 primary_invariant: the accepted guardian protocol, policy, source inventory, and genuine Copier transition jointly prove the Plan 163 migration boundary before downstream witness enforcement begins
 task_types:
   - planning_docs
@@ -47,12 +48,14 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"authoritative","witness":"tests/copier-update.sh --require-copier","authoritative_only_reason":"the genuine pre-update boundary requires a complete versioned Copier transition from a clean committed downstream project"}
+predecessor_plans:
+  - docs/plan/active/184-verify-plan178-successor-acceptance.md
 replan_source: docs/plan/active/163-capture-validation-witness-migration-provenance.md
 replan_contract: docs/plan/replanned/contracts/163-capture-validation-witness-migration-provenance.json
 integration_gates:
   - Plans 180, 181, 177, and 184 must be checked and their exact checked archive paths must replace active context paths before integration starts
   - validation-witness-migration-integration-gate requires all focused checks and independent review to report zero unresolved High or Medium findings
-  - run the Plan 163 authoritative Copier transition exactly once and make its checked archive the only migration dependency consumed by Plan 164
+  - run the Plan 163 authoritative Copier transition exactly once and make its checked archive the only migration dependency consumed by Plan 165
 successor_plans:
   - docs/plan/active/176-establish-live-validation-witness-provenance.md
   - docs/plan/active/177-align-validation-witness-provenance-policy.md
@@ -68,14 +71,16 @@ checked_summary_ja: guardian protocol、方針、inventory、実際のCopier更�
 - Treat checked Plans 180 and 181 as the durable replacement for replanned Plan 176, checked Plan 177 as the policy slice, Plan 184 as the acceptance gate for replanned Plan 178, and this plan as their combined acceptance boundary.
 - Replace predecessor active paths with exact checked archive paths only after each predecessor is accepted.
 - Keep the narrower focused checks executable before the sole authoritative v1.4.4-to-v1.4.5 Copier transition.
-- Make this checked plan, rather than any individual implementation slice or the replanned Plan 163 archive, the dependency consumed by Plan 164 and the remaining Plan 130 chain.
+- Make this checked plan, rather than any individual implementation slice or the replanned Plan 163 archive, the migration dependency consumed by Plan 165 and the remaining Plan 130 chain.
+- Verify policy markers, template checks, and checker behavior read-only; if reconciliation requires a path outside CHANGELOG.md or tests/smoke.sh, enter replan_required instead of editing it here.
+- Treat this complete Copier update as the Plan 163 lineage boundary; Plan 166 and Plan 167 retain their own later authoritative executions.
 
 ## Tasks
 
 - [ ] Confirm Plans 180, 181, 177, and 184 are checked and refresh their exact archive paths.
-- [ ] Reconcile policy markers, template checks, smoke coverage, and the Unreleased change record.
+- [ ] Verify policy markers, template checks, and checker behavior, and change only smoke coverage and the Unreleased record when needed.
 - [ ] Complete focused validation and independent read-only review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative Copier transition exactly once, archive, commit, and refresh Plan 164 to this checked archive.
+- [ ] Run the Plan 163 authoritative Copier transition exactly once, archive, commit, and activate Plan 165 with this exact checked predecessor.
 
 ## Validation Notes
 

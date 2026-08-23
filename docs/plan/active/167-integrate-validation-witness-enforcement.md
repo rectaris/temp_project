@@ -1,6 +1,7 @@
 # Integrate validation witness enforcement
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Plans 179, 164, 165, and 166 must be checked and their exact checked archive paths must replace the active predecessors before implementation.
 primary_invariant: the combined successor state proves every Plan 130 acceptance clause through its earliest parent-owned witness while preserving the complete authoritative suite
 task_types:
   - planning_docs
@@ -13,7 +14,6 @@ implementation_risk: high
 implementation_ambiguity: low
 write_scope:
   - CHANGELOG.md
-  - docs/plan/active/133-evaluate-resource-bounded-orchestration.md
   - scripts/check-copier-template.py
   - scripts/check-root-agent-policy.py
   - tests/smoke.sh
@@ -27,6 +27,7 @@ context_files:
   - docs/plan/active/164-bind-replan-contract-validation-baseline.md
   - docs/plan/active/165-enforce-validation-witness-maps.md
   - docs/plan/active/166-unify-copier-update-source-inventory.md
+  - docs/plan/active/192-freeze-resource-evaluation-contract.md
   - docs/plan/checked/2026/08/16-31/131-require-confirmed-failure-diagnosis.md
   - docs/plan/checked/2026/08/16-31/171-integrate-session-resource-boundaries.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
@@ -57,11 +58,16 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
+predecessor_plans:
+  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
+  - docs/plan/active/164-bind-replan-contract-validation-baseline.md
+  - docs/plan/active/165-enforce-validation-witness-maps.md
+  - docs/plan/active/166-unify-copier-update-source-inventory.md
 replan_source: docs/plan/active/130-map-acceptance-validation-witnesses.md
 replan_contract: docs/plan/replanned/contracts/130-map-acceptance-validation-witnesses.json
 integration_gates:
   - Plans 179 and 164 through 166 must be checked and their exact checked archive paths must replace active context paths before integration starts
-  - checked Plans 131 and 171 remain read-only; active Plan 133 must pass plan checks with their exact accepted witness and dependency mappings
+  - checked Plans 131 and 171 remain read-only; Plan 192 must receive this exact checked predecessor before activation
   - run the source authoritative suite exactly once only after focused validation and independent review report zero unresolved High or Medium findings
 successor_plans:
   - docs/plan/active/163-capture-validation-witness-migration-provenance.md
@@ -84,11 +90,12 @@ checked_summary_ja: 旧形式移行、再計画契約、witness検証、Copier i
 ## Tasks
 
 - [ ] Confirm Plan 179 and Plans 164 through 166 are checked and refresh their exact archive paths.
-- [ ] Reconcile active Plan 133, policy markers, smoke coverage, and the Unreleased record without editing checked Plans 131 or 171.
+- [ ] Reconcile policy markers, smoke coverage, and the Unreleased record without editing checked Plans 131 or 171; parent lifecycle then activates Plan 192 with this exact checked predecessor.
 - [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
 - [ ] Run the unchanged Plan 130 authoritative suite exactly once, archive, commit, and refresh Plan 133 to this checked archive.
 
 ## Validation Notes
 
 - The source authoritative suite was never run under Plan 130 and remains available for this final integration plan.
-- `successor_plans` preserves the immutable Plan 130 lineage; Plan 179 replaces the replanned Plan 163 member in operational dependencies.
+- This plan's complete Copier update is the Plan 130 integration boundary and remains distinct from the Plan 179 and Plan 166 authoritative runs.
+- `successor_plans` preserves the immutable Plan 130 lineage; Plan 179 replaces the replanned Plan 163 member in operational dependencies, and Plan 192 is the next operational plan after this gate.

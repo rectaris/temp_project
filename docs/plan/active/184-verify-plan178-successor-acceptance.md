@@ -1,6 +1,7 @@
 # Verify Plan 178 successor acceptance
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Plan 187 must be checked and its exact checked archive path must replace the active predecessor before implementation.
 primary_invariant: the checked wiring and bounded fixture successors jointly satisfy the unchanged Plan 178 acceptance before Plan 179 consumes the genuine transition
 task_types:
   - planning_docs
@@ -12,11 +13,11 @@ human_approval_status: approved
 implementation_risk: high
 implementation_ambiguity: low
 write_scope:
-  - copier.yml
+  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
+  - docs/plan/plan.md
+preservation_scope:
   - scripts/check-copier-template.py
-  - scripts/project_workflow/copier_inventory.py
   - tests/copier-update.sh
-  - tests/fixtures/orchestration/copier-update-source-inventory.txt
 context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -25,7 +26,9 @@ context_files:
   - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
   - docs/plan/active/187-verify-plan183-successor-acceptance.md
   - docs/plan/replanned/2026/08/16-31/178-wire-validation-witness-copier-transition.md
-  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
+  - copier.yml
+  - scripts/project_workflow/copier_inventory.py
+  - tests/fixtures/orchestration/copier-update-source-inventory.txt
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
@@ -44,11 +47,14 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+predecessor_plans:
+  - docs/plan/active/187-verify-plan183-successor-acceptance.md
 replan_source: docs/plan/active/178-wire-validation-witness-copier-transition.md
 replan_contract: docs/plan/replanned/contracts/178-wire-validation-witness-copier-transition.json
 integration_gates:
   - Plan 182 and Plan 187 must be checked and their exact checked archive paths must be present before focused validation
-  - do not edit, stage, or commit the five preservation-only product paths in this plan
+  - after Plan 187 is checked, remove both preservation entries and add scripts/check-copier-template.py and tests/copier-update.sh as exact read-only context in the same parent-owned activation update
+  - do not edit, stage, or commit any of the five read-only product paths in this plan
   - Plan 179 must not start until this plan is checked and its exact checked archive path replaces the active dependency
 successor_plans:
   - docs/plan/active/182-admit-v145-copier-wiring.md
@@ -62,10 +68,10 @@ checked_summary_ja: checked済みwiringとbounded fixtureを統合確認しPlan 
 
 - Plan 178 successor acceptance gate means the condition that checked Plan 182 and checked Plan 187 jointly satisfy the unchanged source acceptance and original focused validation without consuming Plan 179 authoritative validation.
 - Treat checked Plan 187 as the durable replacement for replanned Plan 183 while retaining this plan's responsibility to verify committed Plan 182 and the replacement result.
-- Treat all five write-scope paths as read-only preservation coverage; any required product edit causes `replan_required`.
+- Treat all five product paths as exact read-only context; preservation_scope protects only the two current dirty candidates and grants no write authority; any required product edit causes `replan_required`.
 - Verify the checked Plan 182 commit and the Plan 185 and Plan 186 implementation commits admitted by checked Plan 187, and confirm that the later checker retains the earlier declarative checks.
 - Leave tests/copier-update.sh execution exclusively to Plan 179.
-- Commit only parent-owned plan lifecycle changes after focused validation and fresh independent review pass.
+- Commit only the declared downstream plan and active-index lifecycle changes after focused validation and fresh independent review pass.
 
 ## Tasks
 

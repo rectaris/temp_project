@@ -1,60 +1,47 @@
-# Evaluate resource-bounded plan orchestration before default rollout
+# Verify Plan 133 successor acceptance
 
 status: deferred
+completion_deferred_reason: Plans 192, 193, and 194 must be checked and their exact checked archive paths must replace the active predecessors before implementation.
+primary_invariant: the checked evaluation contract, evidence, and outcome successors jointly satisfy every unchanged Plan 133 acceptance item and preserve rollback before the source authoritative suite runs once
 task_types:
   - planning_docs
-  - referent_first
   - security
   - template_workflow
 review_class: C
 human_design_required: yes
 human_approval_status: approved
-implementation_risk: ordinary
+implementation_risk: high
 implementation_ambiguity: ordinary
-primary_invariant: promote the combined staged path only when paired evidence preserves every source acceptance item and demonstrates directly comparable safety and resource improvement
 write_scope:
+  - docs/plan/plan.md
+context_files:
+  - docs/agent/spec-index.yaml
+  - docs/agent/SPEC_DECISION_AUDIT.md
+  - docs/agent/SPEC_PLAN_WORKFLOW.md
+  - docs/agent/SPEC_SECURITY.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
+  - docs/plan/active/192-freeze-resource-evaluation-contract.md
+  - docs/plan/active/193-collect-resource-evaluation-evidence.md
+  - docs/plan/active/194-apply-resource-evaluation-outcome.md
+  - docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
+  - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
+  - docs/plan/checked/2026/08/16-31/162-integrate-structured-worker-completion-receipt.md
   - AGENTS.md
   - CHANGELOG.md
-  - .codex/skills/sequential-plan-orchestrator/
-  - docs/plan/
+  - .codex/skills/sequential-plan-orchestrator/SKILL.md
   - references/orchestration.md
   - scripts/check-copier-template.py
   - scripts/check-root-agent-policy.py
   - template/.project-agent-workflow/AGENTS.md.jinja
   - template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
-  - template/.project-agent-workflow/skills/sequential-plan-orchestrator/
+  - template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md
   - tests/copier-update.sh
-  - tests/fixtures/orchestration/
   - tests/smoke.sh
-context_files:
-  - docs/agent/spec-index.yaml
-  - docs/agent/SPEC_DECISION_AUDIT.md
-  - docs/agent/SPEC_PLAN_WORKFLOW.md
-  - docs/agent/SPEC_REFERENT_FIRST.md
-  - docs/agent/SPEC_SECURITY.md
-  - docs/agent/SPEC_SKILL_AUTHORING.md
-  - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
-  - docs/plan/checked/2026/08/16-31/162-integrate-structured-worker-completion-receipt.md
-  - docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
-  - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
-  - docs/plan/checked/2026/08/16-31/131-require-confirmed-failure-diagnosis.md
-  - docs/plan/checked/2026/08/16-31/171-integrate-session-resource-boundaries.md
-  - docs/plan/active/167-integrate-validation-witness-enforcement.md
-  - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md
-  - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
-  - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
-  - references/validation.md
-  - tests/fixtures/orchestration/staged-acceptance.json
-  - tests/fixtures/orchestration/staged-baseline-events.json
-  - tests/fixtures/orchestration/staged-holdout-events.json
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
-  - docs/agent/SPEC_REFERENT_FIRST.md
   - docs/agent/SPEC_SECURITY.md
-  - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
 focused_validation:
   - python3 scripts/check-root-agent-policy.py
@@ -113,20 +100,22 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:cf0c0eaf1b20d2e1a87a62c8c9b82f72b208c16e7ed984058ce9f596df8d15a7","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py"}
   - {"acceptance_sha256":"sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py"}
   - {"acceptance_sha256":"sha256:3758070f0f3636a1edf9b06253cc357baabdb1901375edf08c8ab76026e154ba","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
-replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
-replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
+replan_source: docs/plan/active/133-evaluate-resource-bounded-orchestration.md
+replan_contract: docs/plan/replanned/contracts/133-evaluate-resource-bounded-orchestration.json
+predecessor_plans:
+  - docs/plan/active/192-freeze-resource-evaluation-contract.md
+  - docs/plan/active/193-collect-resource-evaluation-evidence.md
+  - docs/plan/active/194-apply-resource-evaluation-outcome.md
 integration_gates:
-  - plan 136 as the accepted successor for plan 113, plan 162 as the checked replacement successor for plan 155 and plan 114, and plan 115 must be checked and their context paths refreshed before paired evaluation
-  - replanned Plan 130, checked Plans 131 and 171, and active Plan 167 must resolve to their exact lifecycle paths; Plan 167 must be checked before paired evaluation starts
-  - add a second fixed regression workload structurally equivalent to one root session carrying diagnosis, proposal, an initial rejected implementation, replanning, three successor plans, context compactions, and full-history reviewer starts; keep product paths and conversation bodies out of the fixture
-  - reject the staged side when it reuses a root-session identity across a numbered-plan boundary, substitutes compaction for a fresh session, starts a reviewer with inherited turns, or claims token improvement from proxy counts; keep the result `measurement_pending` when required outer-runtime identity or fork-mode evidence is unavailable
-  - plan 171 evidence must show different observed root-session identities across numbered-plan boundaries and zero-inheritance reviewer starts before the staged side is eligible for promotion
-  - the combined staged path must satisfy every source acceptance item with zero unresolved High or Medium findings
+  - Plans 192 through 194 must be checked and their exact checked archive paths must replace active predecessors before focused validation
+  - in the same parent-owned activation update, add the immutable Plan 193 result and Plan 194 decision records as exact read-only context
+  - treat every product path as exact read-only context and enter replan_required if any product edit is needed
+  - run the unchanged Plan 133 authoritative suite exactly once only after focused validation and independent review report zero unresolved High or Medium findings
 successor_plans:
-  - docs/plan/active/130-map-acceptance-validation-witnesses.md
-  - docs/plan/active/131-require-confirmed-failure-diagnosis.md
-  - docs/plan/active/132-checkpoint-plan-session-resources.md
-  - docs/plan/active/133-evaluate-resource-bounded-orchestration.md
+  - docs/plan/active/192-freeze-resource-evaluation-contract.md
+  - docs/plan/active/193-collect-resource-evaluation-evidence.md
+  - docs/plan/active/194-apply-resource-evaluation-outcome.md
+  - docs/plan/active/195-verify-plan133-successor-acceptance.md
 inherited_acceptance_digests:
   - sha256:158d415534f8ba707df6e05f303514c377e4286f6f5128ae2f7174cbaf7473fe
   - sha256:1c4d732d6a277114b68e0b6eca7618d03e5c2cc51f84da2abd8b1863c9f8a576
@@ -148,32 +137,22 @@ inherited_acceptance_digests:
   - sha256:cf0c0eaf1b20d2e1a87a62c8c9b82f72b208c16e7ed984058ce9f596df8d15a7
   - sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc
   - sha256:3758070f0f3636a1edf9b06253cc357baabdb1901375edf08c8ab76026e154ba
-checked_summary_ja: plan単位の限定文脈、原因確定、早期検証、利用量証拠を同一条件で比較し、安全性と効率が改善した場合だけ既定経路へ昇格する。
+checked_summary_ja: 分解済み評価、証拠、結果を全受入条件とrollbackに照らして統合確認する。
 
 ## Decisions
 
-- Preserve every source acceptance item and interpret references to Plan 113 and Plan 114 as their accepted integration successors, Plan 136 and Plan 162, when evaluating the combined outputs with Plan 115, replanned Plan 130, checked Plans 131 and 171, and the accepted Plan 167 integration.
-- Add one fixed generic workload that reproduces late integration coverage, speculative repair planning, repeated reviewer context, and multi-plan parent accumulation without product-specific paths.
-- Add a distinct fixed regression workload for the observed bootstrap failure: same-session analysis and implementation, a stopped initial plan, successor-plan accumulation, compaction, and full-history review.
-- Treat outer-runtime session identity and reviewer inheritance mode as required comparability evidence for this regression workload; use `measurement_pending` rather than inference when either is unavailable.
-- Require directly comparable token improvement only when both paired sides expose provider-observed usage; otherwise retain not_observed and make no token-reduction claim.
-- Keep the current path as default on missing, noncomparable, unsafe, or below-threshold evidence.
-- Stop for replanning instead of repairing predecessor design inside this integration scope.
+- Copy every Plan 133 acceptance item and digest exactly and preserve the original focused and authoritative command order.
+- Verify the exact checked commits, review receipts, evidence digests, measured outcome, default selection, and rollback behavior from Plans 192 through 194.
+- Treat all product paths as read-only and keep lifecycle acceptance and the one complete authoritative suite parent-owned.
+- Use fresh independent review and do not reuse implementation review budgets.
 
 ## Tasks
 
-- [ ] Refresh every predecessor context path to its exact checked archive and revalidate unchanged lineage.
-- [ ] Freeze versioned paired workloads, schemas, raw evidence, thresholds, and physically separated holdout cases.
-- [ ] Freeze the separate session-reuse regression workload and negative cases for compaction-as-freshness, full-history review, unavailable identity, and proxy-based token claims.
-- [ ] Execute or ingest comparable baseline and staged runs and generate digest-linked orchestration comparison evidence.
-- [ ] Extend deterministic comparability, token-observation, safety, tampering, rollback, and default-selection checks.
-- [ ] Align root and generated policy, Skill, inventories, changelog, and Copier behavior for the measured outcome.
-- [ ] Review the complete Plan 136 successor lineage and the remaining acceptance chain, obtain independent review, run the authoritative suite once, and archive the accepted plan.
+- [ ] Replace every active predecessor path with its exact checked archive and verify accepted commits and evidence.
+- [ ] Map all twenty source acceptance items to the combined successor evidence and verify rollback.
+- [ ] Complete focused validation and fresh independent review with zero unresolved High or Medium findings.
+- [ ] Run the unchanged source authoritative suite once, archive, and commit only lifecycle files.
 
 ## Validation Notes
 
-- `successor_plans` preserves the immutable Plan 116 lineage; operational dependency paths use the current checked, replanned, and active records.
-
-- The user approved the expanded resource-efficiency evaluation on 2026-08-21.
-- The 2026-08-21 plan-only refinement adds the second observed high-usage sequence as a regression workload without treating its unavailable token values as measured evidence.
-- The source Plan 116 acceptance text is preserved exactly and no predecessor implementation is absorbed into this plan.
+- This plan changes no product file and is the sole combined acceptance gate for replanned Plan 133.
