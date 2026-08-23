@@ -145,6 +145,30 @@ REQUIRED_AGENT_RULES = [
     "docs/plan/active",
 ]
 
+VALIDATION_WITNESS_MIGRATION_MARKER = (
+    "validation-witness-migration-provenance-schema: 1"
+)
+VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS = (
+    "original live guardian",
+    "256-bit capability",
+    "capability commitment",
+    "challenge-response",
+    "`prepared`",
+    "`pending`",
+    "`consumed`",
+    "`recovering`",
+    "same live guardian",
+    "one-hour",
+    "pre-boundary",
+    "socket pathname is not identity evidence",
+    "expiry rejects after-stage authorization",
+    "verified pre-boundary recovery",
+    "product acceptance evidence",
+    "validation witness by itself",
+    "copying repository and git-local files without the original live guardian fails",
+    "unrestricted same-user actor",
+)
+
 
 def fail(message: str) -> None:
     print(f"root agent policy check failed: {message}", file=sys.stderr)
@@ -199,6 +223,42 @@ def check_agents_rules() -> None:
     for required in REQUIRED_AGENT_RULES:
         if required not in text:
             fail(f"AGENTS.md missing root policy reference: {required}")
+
+
+def validation_witness_migration_policy_statement(relative: str) -> str:
+    matches = [
+        line.strip().lower()
+        for line in read(relative).splitlines()
+        if VALIDATION_WITNESS_MIGRATION_MARKER in line
+    ]
+    if len(matches) != 1:
+        fail(
+            f"{relative} must contain exactly one validation-witness migration "
+            "policy statement"
+        )
+    statement = matches[0]
+    for marker in VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS:
+        if marker not in statement:
+            fail(f"{relative} missing validation-witness migration marker: {marker}")
+    return statement
+
+
+def check_validation_witness_migration_policy() -> None:
+    root_agents = validation_witness_migration_policy_statement("AGENTS.md")
+    template_agents = validation_witness_migration_policy_statement(
+        "template/.project-agent-workflow/AGENTS.md.jinja"
+    )
+    if root_agents != template_agents:
+        fail("root/generated AGENTS validation-witness migration policy differs")
+
+    root_orchestration = validation_witness_migration_policy_statement(
+        "references/orchestration.md"
+    )
+    template_orchestration = validation_witness_migration_policy_statement(
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+    )
+    if root_orchestration != template_orchestration:
+        fail("root/generated orchestration validation-witness migration policy differs")
 
 
 def check_agent_model_profiles() -> None:
@@ -2728,6 +2788,7 @@ def main() -> int:
     check_required_files()
     check_gitignore()
     check_agents_rules()
+    check_validation_witness_migration_policy()
     check_agent_model_profiles()
     check_sandboxed_worker_fallback()
     check_reusable_skill_parity()
