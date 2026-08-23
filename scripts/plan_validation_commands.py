@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import importlib.util
 from pathlib import Path
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
+from types import ModuleType
 
 
 class ValidationCommandError(ValueError):
@@ -224,8 +226,32 @@ def parse_validation_commands(commands: list[str]) -> list[ValidationCommand]:
     return [parse_validation_command(command) for command in commands]
 
 
+def load_planlib() -> ModuleType:
+    candidates = (
+        Path(__file__).with_name("planlib.py"),
+        Path(__file__).resolve().parents[1]
+        / "template/.project-agent-workflow/scripts/planlib.py",
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("plan_validation_commands_planlib", candidate)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    raise ValidationCommandError("could not locate managed planlib.py")
+
+
 def check_plan(path: Path) -> list[ValidationCommand]:
-    return parse_validation_commands(extract_validation_commands(path))
+    commands = parse_validation_commands(extract_validation_commands(path))
+    planlib = load_planlib()
+    try:
+        planlib.validate_validation_witness_map(planlib.parse_manifest(path), plan_path=path)
+    except ValueError as exc:
+        raise ValidationCommandError(str(exc)) from exc
+    return commands
 
 
 def run_plan(path: Path) -> None:

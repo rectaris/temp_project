@@ -172,10 +172,18 @@ def require_orchestration_policy_markers() -> None:
         "critical-invariant review",
         "focused_validation",
         "validation_authority_scope",
+        "validation_witness_map",
+        "authoritative_only_reason",
+        "earliest parent-owned witness",
         "network-isolated review clone",
         "authoritative",
         "bounded parent implementation",
         "independent change review",
+        "diagnosis_required",
+        "failed-operation digest",
+        "observed exit status",
+        "inconclusive",
+        "disputed",
         "repair_required",
         "repair-evidence",
         "fresh plan digest",
@@ -219,6 +227,10 @@ def require_orchestration_policy_markers() -> None:
         "acceptance",
         "run-sandboxed-plan-worker.py",
         "read-only",
+        "diagnosis_required",
+        "confirmed",
+        "inconclusive",
+        "disputed",
         "repair_required",
         "source-plan scope",
         "validation authority",
@@ -232,6 +244,12 @@ def require_orchestration_policy_markers() -> None:
             fail(f"template managed AGENTS missing marker: {marker}")
     for marker in (
         "repair_required",
+        "diagnosis_required",
+        "failed-operation digest",
+        "observed exit status",
+        "confirmed",
+        "inconclusive",
+        "disputed",
         "independently repairable defect",
         "bounded write and validation scope",
         "source-plan scope",
@@ -736,6 +754,15 @@ def require_sandboxed_plan_worker_alignment() -> None:
         fail("plan execution state root/template scripts differ")
     if (root_execution_state.stat().st_mode & 0o777) != (template_execution_state.stat().st_mode & 0o777):
         fail("plan execution state root/template script modes differ")
+    execution_state_text = root_execution_state.read_text(encoding="utf-8")
+    for marker in (
+        '"diagnosis_required"', "MAX_DIAGNOSIS_ATTEMPTS",
+        '"authoritative_failure"', '"failure_diagnosis"',
+        "def load_authoritative_failure", "def load_diagnosis_evidence",
+        '"diagnosis_read"', '"repair_plan"',
+    ):
+        if marker not in execution_state_text:
+            fail(f"plan execution state missing confirmed-diagnosis marker: {marker}")
     for marker in (
         'DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"',
         'DEFAULT_CODEX_REASONING = "medium"',
@@ -773,6 +800,8 @@ def require_sandboxed_plan_worker_alignment() -> None:
         "load_plan_validation_commands",
         '"focused_validation_count"',
         '"authoritative_validation_count"',
+        "def validation_failure_identity",
+        '"failure": failure',
         "network_enabled=False",
         '"prepare-dependencies"',
         '"--dependency-snapshot"',
@@ -818,6 +847,28 @@ def require_sandboxed_plan_worker_alignment() -> None:
         ):
             if marker not in text:
                 fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
+
+    planlib = read("template/.project-agent-workflow/scripts/planlib.py")
+    for marker in (
+        '"validation_witness_schema"',
+        '"validation_witness_map"',
+        "def validate_validation_witness_map",
+        "def validate_legacy_witness_provenance",
+        "def validate_resolved_context_files",
+        "resolved-context-files",
+        "authoritative_only_reason",
+        "skips an available focused witness",
+    ):
+        if marker not in planlib:
+            fail(f"generated plan parser missing validation-witness marker: {marker}")
+    for relative in (
+        "scripts/plan_validation_commands.py",
+        "template/.project-agent-workflow/scripts/plan_validation_commands.py",
+    ):
+        text = read(relative)
+        for marker in ("def load_planlib", "validate_validation_witness_map"):
+            if marker not in text:
+                fail(f"{relative} missing validation-witness check marker: {marker}")
 
 
 def run_hook_payload(script_path: str, run_id: str, payload: dict[str, Any], cwd: Path) -> dict[str, Any]:

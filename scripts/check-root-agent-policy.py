@@ -298,6 +298,8 @@ def check_sandboxed_worker_fallback() -> None:
         "load_plan_validation_commands",
         '"focused_validation_count"',
         '"authoritative_validation_count"',
+        "def validation_failure_identity",
+        '"failure": failure',
         "network_enabled=False",
         '"prepare-dependencies"',
         '"--dependency-snapshot"',
@@ -315,6 +317,16 @@ def check_sandboxed_worker_fallback() -> None:
     for marker in runner_markers:
         if marker not in runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")
+
+    execution_state = read("scripts/plan-execution-state.py")
+    for marker in (
+        '"diagnosis_required"', "MAX_DIAGNOSIS_ATTEMPTS",
+        '"authoritative_failure"', '"failure_diagnosis"',
+        "def load_authoritative_failure", "def load_diagnosis_evidence",
+        '"diagnosis_read"', '"repair_plan"',
+    ):
+        if marker not in execution_state:
+            fail(f"plan execution state missing confirmed-diagnosis marker: {marker}")
 
     for relative in (
         "AGENTS.md",
@@ -1942,10 +1954,20 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "critical-invariant review",
         "focused_validation",
         "validation_authority_scope",
+        "validation_witness_map",
+        "validation_witness_schema: 1",
+        "resolved-context-files",
+        "authoritative_only_reason",
+        "earliest parent-owned witness",
         "network-isolated review clone",
         "authoritative",
         "bounded parent implementation",
         "independent change review",
+        "diagnosis_required",
+        "failed-operation digest",
+        "observed exit status",
+        "inconclusive",
+        "disputed",
         "repair_required",
         "repair-evidence",
         "fresh plan digest",
@@ -1989,6 +2011,12 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "main session",
         "advisory",
         "worker completion receipt",
+        "validation_witness_map",
+        "authoritative-only witness",
+        "diagnosis_required",
+        "confirmed",
+        "inconclusive",
+        "disputed",
         "repair_required",
         "source-plan scope",
         "validation authority",
@@ -2004,6 +2032,12 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     plan_workflow = read("docs/agent/SPEC_PLAN_WORKFLOW.md").lower()
     for marker in (
         "independent repair prerequisite",
+        "diagnosis_required",
+        "failed-operation digest",
+        "observed exit status",
+        "confirmed",
+        "inconclusive",
+        "disputed",
         "repair_required",
         "one observed defect",
         "source-plan scope",
@@ -2018,6 +2052,23 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     ):
         if marker not in plan_workflow:
             fail(f"SPEC_PLAN_WORKFLOW.md missing independent-repair marker: {marker}")
+
+    diagnosis_fixture = json.loads(
+        read("tests/fixtures/orchestration/failure-diagnosis-scenarios.json")
+    )
+    expected_diagnosis_ids = {
+        "confirmed-single-invariant",
+        "inconclusive-read-only-stop",
+        "disputed-read-only-stop",
+        "receipt-replay-rejected",
+        "failure-identity-mutation-rejected",
+        "validation-authority-drift-rejected",
+    }
+    if diagnosis_fixture.get("schema_version") != 1 or {
+        item.get("id") for item in diagnosis_fixture.get("scenarios", [])
+        if isinstance(item, dict)
+    } != expected_diagnosis_ids:
+        fail("failure-diagnosis scenarios do not preserve the exact confirmation boundary")
 
     try:
         fixture = json.loads((ROOT / "tests/fixtures/orchestration/proactive-bounded-subagents.json").read_text(encoding="utf-8"))

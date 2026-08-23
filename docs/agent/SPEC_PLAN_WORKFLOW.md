@@ -69,6 +69,15 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 
 ## Independent Repair Prerequisite
 
+An authoritative validation failure does not itself authorize a repair plan.
+
+- Record the failed authoritative validation as `diagnosis_required` in the parent-owned execution ledger before performing any further lifecycle operation.
+- Bind the failure record to the unchanged plan and source HEAD, execution-lifecycle digest, validation-report digest, exact failed-operation digest, and observed exit status. In candidate mode, also bind the exact failed candidate lifecycle, manifest, patch, and writable-attempt identity; parent-direct mode must not claim candidate artifacts.
+- While `diagnosis_required` is active, permit only bounded parent-owned read-only reproduction and append-only diagnosis evidence. Reject worker, correction, validation, apply, completion, archive, and repair-plan operations before their prerequisites or repository effects.
+- Require each diagnosis result to be `confirmed`, `inconclusive`, or `disputed`, bind it to a fresh independent-review receipt and reproduction-evidence digest, and store no command body, raw output, environment value, or credential in the ledger.
+- Only a `confirmed` result may name exactly one affected invariant and proceed to the existing repair classification. `inconclusive` and `disputed` results remain stopped, and diagnosis attempts are bounded.
+- After confirmation, classify the unchanged boundary evidence through the existing `repair_required` or `replan_required` path. Never create or authorize a numbered repair plan directly from the failure report or an unconfirmed diagnosis.
+
 - Use the execution-ledger state `repair_required` only for one observed defect whose write and validation scope is bounded, whose repair can be accepted independently, and whose classification evidence proves unchanged source-plan scope, unchanged validation authority, unchanged invariant boundaries, unchanged source acceptance, unchanged safety conditions, and unchanged external-effect authority.
 - `repair_required` stops candidate generation, correction, validation, apply, completion, and archival for that execution run. It never authorizes reuse or reopening of the stopped run.
 - Keep the source plan and active index at `status: deferred` with a concrete prerequisite. Create a separate numbered active repair plan without copying or rewriting source acceptance, and do not create a replan contract.

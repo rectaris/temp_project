@@ -434,6 +434,26 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def validation_failure_identity(
+    *, suite: str, kind: str, command_index: int, argv: Sequence[str], exit_status: int
+) -> dict[str, object]:
+    identity = {
+        "suite": suite,
+        "kind": kind,
+        "command_index": command_index,
+        "argv": list(argv),
+    }
+    operation_digest = "sha256:" + hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "kind": kind,
+        "command_index": command_index,
+        "operation_digest": operation_digest,
+        "observed_exit_status": exit_status,
+    }
+
+
 def digest_tree(
     root: Path, *, omit_external_symlinks: bool = False, allow_hardlinks: bool = False
 ) -> str:
@@ -4244,6 +4264,120 @@ def next_correction_lineage(
     }
 
 
+def execute_validation_operation(
+    *,
+    repo_root: Path,
+    git_bin: str,
+    bwrap_bin: str,
+    verified: dict[str, Any],
+    workspace: Path,
+    index: int,
+    command: Any,
+    private_dependency_tree: Path | None,
+    private_node_runtime: dict[str, Any] | None,
+    output_dir: Path,
+    manifest_path: Path,
+) -> tuple[dict[str, Any], Path, bytes]:
+    """Prepare and run one planned validation operation without mutating the source checkout."""
+    command_root = workspace / f"command-{index}"
+    clone_dir = command_root / "review-clone"
+    scratch_dir = command_root / "scratch"
+    scratch_dir.mkdir(parents=True)
+    clone_at_head(repo_root, git_bin, verified["head"], clone_dir)
+    initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
+    run_subprocess(
+        (git_bin, "apply", "--check", "--binary", "-"),
+        cwd=clone_dir,
+        stdin=verified["patch_bytes"],
+    )
+    run_subprocess(
+        (git_bin, "apply", "--binary", "-"), cwd=clone_dir, stdin=verified["patch_bytes"]
+    )
+    read_only_shadows: list[tuple[Path, Path]] = []
+    writable_shadows: list[tuple[Path, Path]] = []
+    dependency_target: Path | None = None
+    if private_dependency_tree is not None:
+        dependency_target = clone_dir / "node_modules"
+        dependency_target.mkdir()
+        read_only_shadows.append((private_dependency_tree, dependency_target))
+        writable_shadows.extend(
+            dependency_cache_shadows(private_dependency_tree, dependency_target, scratch_dir)
+        )
+    env_vars = prepare_worker_environment(
+        source_repo=repo_root,
+        clone_dir=clone_dir,
+        scratch_dir=scratch_dir,
+        plan_rel=verified["plan_rel"],
+        extra_env=(),
+        include_codex_home=False,
+    )
+    env_vars["PATH"] = (
+        f"{private_node_runtime['runtime_root'] / 'bin'}:{DEFAULT_PATH}"
+        if command.argv[0] == "npm" and private_node_runtime is not None
+        else DEFAULT_PATH
+    )
+    playwright_browsers = (
+        private_dependency_tree / ".playwright-browsers"
+        if private_dependency_tree is not None
+        else None
+    )
+    if playwright_browsers is not None and (
+        playwright_browsers.exists() or playwright_browsers.is_symlink()
+    ):
+        if playwright_browsers.is_symlink() or not playwright_browsers.is_dir():
+            raise RunnerError("private Playwright browser snapshot changed shape")
+        assert dependency_target is not None
+        env_vars["PLAYWRIGHT_BROWSERS_PATH"] = str(
+            dependency_target / ".playwright-browsers"
+        )
+    validation_hidden = [output_dir, manifest_path.parent, host_codex_home_path()]
+    host_home = Path.home().resolve()
+    if host_home.is_dir():
+        validation_hidden.append(host_home)
+    command_argv = (
+        (
+            str(private_node_runtime["node_path"]),
+            str(private_node_runtime["npm_cli_path"]),
+            *command.argv[1:],
+        )
+        if command.argv[0] == "npm" and private_node_runtime is not None
+        else (require_validation_executable(command.argv[0], clone_dir), *command.argv[1:])
+    )
+    started = time.monotonic()
+    result = run_subprocess(
+        build_bwrap_command(
+            bwrap_bin=bwrap_bin,
+            clone_dir=clone_dir,
+            scratch_dir=scratch_dir,
+            command=command_argv,
+            env_vars=env_vars,
+            writable_clone=True,
+            writable_shadows=writable_shadows,
+            hidden_directories=normalize_hidden_directories(
+                validation_hidden,
+                visible_paths=(clone_dir, scratch_dir),
+            ),
+            read_only_shadows=read_only_shadows,
+            network_enabled=False,
+        ),
+        cwd=repo_root,
+        env=sanitize_process_env(),
+        check=False,
+    )
+    return (
+        {
+            "index": index,
+            "argv": list(command.argv),
+            "duration_seconds": bounded_duration(started, time.monotonic()),
+            "returncode": result.returncode,
+            "stdout_digest": hashlib.sha256(result.stdout).hexdigest(),
+            "stderr_digest": hashlib.sha256(result.stderr).hexdigest(),
+        },
+        clone_dir,
+        initial_refs,
+    )
+
+
 def validate_candidate(args: argparse.Namespace) -> int:
     if not args.parent_diff_approved or not args.critical_invariants_approved:
         raise RunnerError(
@@ -4338,6 +4472,7 @@ def validate_candidate(args: argparse.Namespace) -> int:
     reserved = reserve_output_artifacts(output_dir)
     records: list[dict[str, Any]] = []
     failed = False
+    failure: dict[str, object] | None = None
     lifecycle_context = open_lifecycle_state(
         repo_root, args.lifecycle_state, args.orchestration_run_id
     )
@@ -4391,106 +4526,54 @@ def validate_candidate(args: argparse.Namespace) -> int:
         )
         suite_error: RunnerError | None = None
         for index, command in enumerate(commands):
-            command_root = workspace / f"command-{index}"
-            clone_dir = command_root / "review-clone"
-            scratch_dir = command_root / "scratch"
-            scratch_dir.mkdir(parents=True)
-            clone_at_head(repo_root, git_bin, verified["head"], clone_dir)
-            initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
-            run_subprocess(
-                (git_bin, "apply", "--check", "--binary", "-"),
-                cwd=clone_dir,
-                stdin=verified["patch_bytes"],
-            )
-            run_subprocess(
-                (git_bin, "apply", "--binary", "-"), cwd=clone_dir, stdin=verified["patch_bytes"]
-            )
-            read_only_shadows: list[tuple[Path, Path]] = []
-            writable_shadows: list[tuple[Path, Path]] = []
-            if private_dependency_tree is not None:
-                dependency_target = clone_dir / "node_modules"
-                dependency_target.mkdir()
-                read_only_shadows.append((private_dependency_tree, dependency_target))
-                writable_shadows.extend(
-                    dependency_cache_shadows(
-                        private_dependency_tree, dependency_target, scratch_dir
-                    )
-                )
-            env_vars = prepare_worker_environment(
-                source_repo=repo_root,
-                clone_dir=clone_dir,
-                scratch_dir=scratch_dir,
-                plan_rel=verified["plan_rel"],
-                extra_env=(),
-                include_codex_home=False,
-            )
-            env_vars["PATH"] = (
-                f"{private_node_runtime['runtime_root'] / 'bin'}:{DEFAULT_PATH}"
-                if command.argv[0] == "npm" and private_node_runtime is not None
-                else DEFAULT_PATH
-            )
-            playwright_browsers = (
-                private_dependency_tree / ".playwright-browsers"
-                if private_dependency_tree is not None
-                else None
-            )
-            if playwright_browsers is not None and (
-                playwright_browsers.exists() or playwright_browsers.is_symlink()
-            ):
-                if playwright_browsers.is_symlink() or not playwright_browsers.is_dir():
-                    raise RunnerError("private Playwright browser snapshot changed shape")
-                env_vars["PLAYWRIGHT_BROWSERS_PATH"] = str(
-                    dependency_target / ".playwright-browsers"
-                )
-            validation_hidden = [output_dir, manifest_path.parent, host_codex_home_path()]
-            host_home = Path.home().resolve()
-            if host_home.is_dir():
-                validation_hidden.append(host_home)
-            command_argv = (
-                (
-                    str(private_node_runtime["node_path"]),
-                    str(private_node_runtime["npm_cli_path"]),
-                    *command.argv[1:],
-                )
-                if command.argv[0] == "npm" and private_node_runtime is not None
-                else (
-                    require_validation_executable(command.argv[0], clone_dir),
-                    *command.argv[1:],
-                )
-            )
             started = time.monotonic()
-            result = run_subprocess(
-                build_bwrap_command(
+            try:
+                record, clone_dir, initial_refs = execute_validation_operation(
+                    repo_root=repo_root,
+                    git_bin=git_bin,
                     bwrap_bin=bwrap_bin,
-                    clone_dir=clone_dir,
-                    scratch_dir=scratch_dir,
-                    command=command_argv,
-                    env_vars=env_vars,
-                    writable_clone=True,
-                    writable_shadows=writable_shadows,
-                    hidden_directories=normalize_hidden_directories(
-                        validation_hidden,
-                        visible_paths=(clone_dir, scratch_dir),
-                    ),
-                    read_only_shadows=read_only_shadows,
-                    network_enabled=False,
-                ),
-                cwd=repo_root,
-                env=sanitize_process_env(),
-                check=False,
-            )
-            records.append(
-                {
+                    verified=verified,
+                    workspace=workspace,
+                    index=index,
+                    command=command,
+                    private_dependency_tree=private_dependency_tree,
+                    private_node_runtime=private_node_runtime,
+                    output_dir=output_dir,
+                    manifest_path=manifest_path,
+                )
+            except (RunnerError, OSError) as exc:
+                failed = True
+                suite_error = exc if isinstance(exc, RunnerError) else RunnerError(
+                    "validation operation setup failed"
+                )
+                record = {
                     "index": index,
                     "argv": list(command.argv),
                     "duration_seconds": bounded_duration(started, time.monotonic()),
-                    "returncode": result.returncode,
-                    "stdout_digest": hashlib.sha256(result.stdout).hexdigest(),
-                    "stderr_digest": hashlib.sha256(result.stderr).hexdigest(),
+                    "returncode": 0,
+                    "stdout_digest": hashlib.sha256(b"").hexdigest(),
+                    "stderr_digest": hashlib.sha256(b"").hexdigest(),
                 }
-            )
-            if result.returncode != 0:
+                records.append(record)
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="runner_setup",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=1,
+                )
+                break
+            records.append(record)
+            result_status = record["returncode"]
+            if result_status != 0:
                 failed = True
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="command",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=int(result_status),
+                )
                 break
             if dependency_snapshot is not None:
                 try:
@@ -4502,6 +4585,13 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 except RunnerError as exc:
                     failed = True
                     suite_error = exc
+                    failure = validation_failure_identity(
+                        suite=args.suite,
+                        kind="dependency_integrity",
+                        command_index=index,
+                        argv=command.argv,
+                        exit_status=1,
+                    )
                     break
             if node_runtime is not None:
                 try:
@@ -4509,23 +4599,82 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 except RunnerError as exc:
                     failed = True
                     suite_error = exc
+                    failure = validation_failure_identity(
+                        suite=args.suite,
+                        kind="runtime_integrity",
+                        command_index=index,
+                        argv=command.argv,
+                        exit_status=1,
+                    )
                     break
-            if git_text(clone_dir, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            try:
+                observed_clone_head = git_text(clone_dir, git_bin, "rev-parse", "HEAD")
+                observed_clone_refs = git(
+                    clone_dir, git_bin, "show-ref", "--head", "--dereference"
+                ).stdout
+            except RunnerError as exc:
+                failed = True
+                suite_error = exc
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="runner_setup",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=1,
+                )
+                break
+            if observed_clone_head != verified["head"]:
                 failed = True
                 suite_error = RunnerError("validation command changed review-clone HEAD")
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="head_immutability",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=1,
+                )
                 break
-            if git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout != initial_refs:
+            if observed_clone_refs != initial_refs:
                 failed = True
                 suite_error = RunnerError("validation command changed review-clone refs")
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="ref_immutability",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=1,
+                )
                 break
-        ensure_clean_worktree(repo_root, git_bin)
-        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
-            raise RunnerError("source HEAD changed during candidate validation")
+        try:
+            ensure_clean_worktree(repo_root, git_bin)
+            if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+                raise RunnerError("source HEAD changed during candidate validation")
+        except RunnerError as exc:
+            if not records:
+                raise
+            if failed:
+                suite_error = suite_error or exc
+            else:
+                failed = True
+                suite_error = exc
+                source_index = len(records) - 1
+                source_command = commands[source_index]
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="source_integrity",
+                    command_index=source_index,
+                    argv=source_command.argv,
+                    exit_status=1,
+                )
         report = {
             "schema_version": 1,
             "candidate_manifest_digest": verified["manifest_digest"],
             "candidate_patch_digest": verified["patch_digest"],
+            "plan_execution_attempt_id": verified["manifest"]["plan_execution_attempt_id"],
             "plan_path": verified["plan_rel"],
+            "plan_digest": "sha256:" + verified["plan_digest"],
+            "source_head": verified["head"],
+            "implementation_mode": "candidate",
             "suite": args.suite,
             "parent_diff_approved": True,
             "critical_invariants_approved": True,
@@ -4552,6 +4701,7 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 else None
             ),
             "passed": not failed,
+            "failure": failure,
             "telemetry": {
                 "duration_seconds": bounded_duration(validation_started, time.monotonic()),
                 "focused_validation_count": focused_count,

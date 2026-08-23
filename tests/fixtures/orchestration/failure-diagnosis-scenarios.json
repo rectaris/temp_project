@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "confirmed-single-invariant",
+      "input": {
+        "diagnosis_result": "confirmed",
+        "failed_operation_matches": true,
+        "observed_exit_status_matches": true,
+        "affected_invariant_count": 1,
+        "fresh_review_receipt": true,
+        "plan_and_authority_unchanged": true
+      },
+      "expected": {
+        "state": "diagnosis_required",
+        "next_action": "classify_repair_or_replan"
+      }
+    },
+    {
+      "id": "inconclusive-read-only-stop",
+      "input": {
+        "diagnosis_result": "inconclusive",
+        "affected_invariant_count": 0
+      },
+      "expected": {
+        "state": "diagnosis_required",
+        "next_action": "bounded_read_only_reproduction"
+      }
+    },
+    {
+      "id": "disputed-read-only-stop",
+      "input": {
+        "diagnosis_result": "disputed",
+        "affected_invariant_count": 0
+      },
+      "expected": {
+        "state": "diagnosis_required",
+        "next_action": "bounded_read_only_reproduction"
+      }
+    },
+    {
+      "id": "receipt-replay-rejected",
+      "input": {
+        "fresh_review_receipt": false
+      },
+      "expected": {
+        "state": "diagnosis_required",
+        "next_action": "reject_transition"
+      }
+    },
+    {
+      "id": "failure-identity-mutation-rejected",
+      "input": {
+        "failed_operation_matches": false
+      },
+      "expected": {
+        "state": "diagnosis_required",
+        "next_action": "reject_transition"
+      }
+    },
+    {
+      "id": "validation-authority-drift-rejected",
+      "input": {
+        "plan_and_authority_unchanged": false
+      },
+      "expected": {
+        "state": "diagnosis_required",
+        "next_action": "reject_transition"
+      }
+    }
+  ]
+}

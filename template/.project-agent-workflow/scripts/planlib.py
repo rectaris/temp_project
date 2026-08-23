@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import tempfile
@@ -65,6 +66,7 @@ SCALAR_KEYS = {
     "primary_invariant",
     "replan_source",
     "replan_contract",
+    "validation_witness_schema",
 }
 IMPLEMENTATION_CLASSIFICATION_KEYS = {"implementation_risk", "implementation_ambiguity"}
 LIST_KEYS = {
@@ -77,6 +79,7 @@ LIST_KEYS = {
     "validation",
     "focused_validation",
     "validation_authority_scope",
+    "validation_witness_map",
     "acceptance",
     "acceptance_focus",
     "integration_gates",
@@ -101,6 +104,10 @@ CONTEXT_KEYS = {
     "VALIDATION": "validation",
 }
 CONTEXT_REQUIRED = ("task_types", "write_scope", "context_files", "required_specs", "validation")
+WITNESS_REQUIRED_STATUSES = {"in_progress"}
+VALIDATION_WITNESS_STAGES = {"static", "focused", "authoritative"}
+STATIC_VALIDATION_WITNESSES = {"resolved-context-files"}
+VALIDATION_WITNESS_REASON_MAX_BYTES = 240
 class PlanError(ValueError):
     """Raised for invalid plan docs or indexes."""
 
@@ -248,6 +255,7 @@ def require_manifest_fields(path: Path, fields: tuple[str, ...] = REQUIRED_FIELD
         value = values.get(key)
         if value in (None, "", []):
             raise PlanError(f"{path} missing field: {key}:")
+    validate_validation_witness_map(values, plan_path=path)
     return values
 
 
@@ -263,6 +271,236 @@ def manifest_joined(values: dict[str, str | list[str]], key: str) -> str:
     if isinstance(value, list):
         return " ".join(item for item in value if item != "none")
     return value
+
+
+def acceptance_digest(acceptance: str) -> str:
+    return "sha256:" + hashlib.sha256(acceptance.encode("utf-8")).hexdigest()
+
+
+def plan_repository_root(plan_path: Path) -> tuple[Path, str]:
+    if not re.fullmatch(r"[0-9]{3}-.+\.md", plan_path.name):
+        raise PlanError(f"invalid active integration plan path: {plan_path}")
+    if tuple(part.name for part in plan_path.parents[:3]) != ("active", "plan", "docs"):
+        raise PlanError(f"integration plan is outside docs/plan/active: {plan_path}")
+    root = plan_path.parents[3].resolve()
+    relative = plan_path.resolve(strict=True).relative_to(root).as_posix()
+    return root, relative
+
+
+def validate_legacy_witness_provenance(
+    plan_path: Path,
+    values: dict[str, str | list[str]],
+) -> None:
+    root, plan_relative = plan_repository_root(plan_path)
+    contract_raw = manifest_scalar(values, "replan_contract")
+    contract_path = Path(contract_raw)
+    if (
+        not contract_raw
+        or contract_raw != contract_path.as_posix()
+        or contract_path.is_absolute()
+        or ".." in contract_path.parts
+    ):
+        raise PlanError("pre-schema integration plan lacks normalized replan_contract provenance")
+    try:
+        contract = json.loads((root / contract_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PlanError("pre-schema integration plan has unreadable replan_contract provenance") from exc
+    if not isinstance(contract, dict) or contract.get("schema_version") != 1:
+        raise PlanError("pre-schema integration plan has unsupported replan_contract provenance")
+    if contract.get("contract_path") != contract_raw:
+        raise PlanError("pre-schema integration plan contract identity differs")
+
+    archive_raw = contract.get("archive_path")
+    if not isinstance(archive_raw, str):
+        raise PlanError("pre-schema integration plan contract lacks a replanned archive")
+    archive_path = Path(archive_raw)
+    if (
+        archive_raw != archive_path.as_posix()
+        or archive_path.parts[:3] != ("docs", "plan", "replanned")
+        or archive_path.suffix != ".md"
+    ):
+        raise PlanError("pre-schema integration plan contract has invalid archive provenance")
+    try:
+        archive_text = (root / archive_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise PlanError("pre-schema integration plan replanned archive is unavailable") from exc
+    if not re.search(r"^status:\s*replanned\s*$", archive_text, re.MULTILINE):
+        raise PlanError("pre-schema integration plan archive is not terminal replanned history")
+
+    candidates = contract.get("successors", [])
+    if not isinstance(candidates, list):
+        raise PlanError("pre-schema integration plan contract has invalid successor provenance")
+    matches = [
+        item for item in candidates
+        if isinstance(item, dict) and item.get("path") == plan_relative
+    ]
+    if len(matches) != 1:
+        raise PlanError("pre-schema integration plan is not one exact contracted successor")
+    record = matches[0]
+    plan_digest = acceptance_digest(plan_path.read_text(encoding="utf-8"))
+    acceptance = values.get("acceptance", [])
+    if not isinstance(acceptance, list):
+        raise PlanError("plan acceptance must be a list")
+    if (
+        record.get("content_digest") != plan_digest
+        or record.get("acceptance_digests") != [acceptance_digest(item) for item in acceptance]
+    ):
+        raise PlanError("pre-schema integration plan bytes differ from contracted provenance")
+
+
+def validate_resolved_context_files(context_files: list[str], *, root: Path = ROOT) -> None:
+    if not context_files:
+        raise PlanError("resolved-context-files requires context_files")
+    seen: set[str] = set()
+    root = root.resolve()
+    for raw in context_files:
+        path = Path(raw)
+        if (
+            not raw
+            or raw != path.as_posix()
+            or path.is_absolute()
+            or "." in path.parts
+            or ".." in path.parts
+            or raw in seen
+        ):
+            raise PlanError(f"resolved-context-files has invalid path: {raw!r}")
+        seen.add(raw)
+        target = root / path
+        try:
+            resolved = target.resolve(strict=True)
+            resolved.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise PlanError(f"resolved-context-files cannot resolve: {raw}") from exc
+        if target.is_symlink() or not resolved.is_file():
+            raise PlanError(f"resolved-context-files requires a regular file: {raw}")
+        expected_status = None
+        if path.parts[:3] == ("docs", "plan", "checked"):
+            expected_status = "checked"
+        elif path.parts[:3] == ("docs", "plan", "replanned") and path.suffix == ".md":
+            expected_status = "replanned"
+        if expected_status is not None:
+            match = re.search(
+                r"^status:\s*(\S+)\s*$",
+                resolved.read_text(encoding="utf-8"),
+                re.MULTILINE,
+            )
+            if match is None or match.group(1) != expected_status:
+                raise PlanError(
+                    f"resolved-context-files expected {expected_status} status: {raw}"
+                )
+
+
+def validate_validation_witness_map(
+    values: dict[str, str | list[str]],
+    *,
+    plan_path: Path | None = None,
+) -> list[dict[str, str]]:
+    acceptance = values.get("acceptance", [])
+    focused = values.get("focused_validation", [])
+    authoritative = values.get("validation", [])
+    raw_map = values.get("validation_witness_map", [])
+    integration_gates = values.get("integration_gates", [])
+    status = manifest_scalar(values, "status")
+    schema = manifest_scalar(values, "validation_witness_schema")
+    for key, value in (
+        ("acceptance", acceptance),
+        ("focused_validation", focused),
+        ("validation", authoritative),
+        ("validation_witness_map", raw_map),
+        ("integration_gates", integration_gates),
+    ):
+        if not isinstance(value, list):
+            raise PlanError(f"plan {key} must be a list")
+
+    required = status in WITNESS_REQUIRED_STATUSES and bool(integration_gates)
+    if not schema:
+        if raw_map:
+            raise PlanError("validation_witness_map requires validation_witness_schema: 1")
+        if required:
+            if plan_path is None:
+                raise PlanError("pre-schema integration plan requires provenance validation")
+            validate_legacy_witness_provenance(plan_path, values)
+        return []
+    if schema != "1":
+        raise PlanError(f"unsupported validation_witness_schema: {schema!r}")
+
+    if not raw_map:
+        if required:
+            raise PlanError("in-progress integration plan missing validation_witness_map")
+        return []
+    if not acceptance:
+        raise PlanError("validation_witness_map requires at least one acceptance item")
+
+    acceptance_digests = [acceptance_digest(item) for item in acceptance]
+    if len(acceptance_digests) != len(set(acceptance_digests)):
+        raise PlanError("acceptance items must be unique before witness mapping")
+
+    records: list[dict[str, str]] = []
+    for index, raw in enumerate(raw_map, start=1):
+        try:
+            record = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise PlanError(f"validation_witness_map entry {index} is not valid JSON") from exc
+        if not isinstance(record, dict):
+            raise PlanError(f"validation_witness_map entry {index} must be an object")
+        if not all(isinstance(key, str) and isinstance(value, str) for key, value in record.items()):
+            raise PlanError(f"validation_witness_map entry {index} values must be text")
+
+        stage = record.get("stage", "")
+        expected_keys = {"acceptance_sha256", "stage", "witness"}
+        if stage == "authoritative":
+            expected_keys.add("authoritative_only_reason")
+        if set(record) != expected_keys:
+            raise PlanError(
+                f"validation_witness_map entry {index} has invalid fields for stage {stage!r}"
+            )
+        if stage not in VALIDATION_WITNESS_STAGES:
+            raise PlanError(f"validation_witness_map entry {index} has invalid stage: {stage!r}")
+
+        witness = record["witness"]
+        if not witness or witness != witness.strip():
+            raise PlanError(f"validation_witness_map entry {index} has invalid witness")
+        if stage == "static":
+            if witness not in STATIC_VALIDATION_WITNESSES:
+                raise PlanError(f"validation_witness_map entry {index} has unknown static witness")
+            if witness == "resolved-context-files":
+                context_files = values.get("context_files", [])
+                if not isinstance(context_files, list):
+                    raise PlanError("plan context_files must be a list")
+                root = plan_repository_root(plan_path)[0] if plan_path is not None else ROOT
+                validate_resolved_context_files(context_files, root=root)
+        elif stage == "focused":
+            if witness not in focused:
+                raise PlanError(
+                    f"validation_witness_map entry {index} focused witness is not declared"
+                )
+        else:
+            if witness not in authoritative:
+                raise PlanError(
+                    f"validation_witness_map entry {index} authoritative witness is not declared"
+                )
+            if witness in focused:
+                raise PlanError(
+                    f"validation_witness_map entry {index} skips an available focused witness"
+                )
+            reason = record["authoritative_only_reason"]
+            if (
+                not reason
+                or reason != reason.strip()
+                or len(reason.encode("utf-8")) > VALIDATION_WITNESS_REASON_MAX_BYTES
+                or any(ord(char) < 0x20 for char in reason)
+            ):
+                raise PlanError(
+                    f"validation_witness_map entry {index} has invalid authoritative-only reason"
+                )
+        records.append(record)
+
+    mapped_digests = [record["acceptance_sha256"] for record in records]
+    if mapped_digests != acceptance_digests:
+        raise PlanError(
+            "validation_witness_map must cover acceptance items exactly once and in source order"
+        )
+    return records
 
 
 def status_text(text: str, status: str) -> str:

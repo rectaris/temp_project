@@ -3993,11 +3993,77 @@ fs.linkSync(source, target);
         self.assertIn("bounded report saved", failed.stderr)
         report = json.loads((failure_output / "validation.json").read_text(encoding="utf-8"))
         self.assertFalse(report["passed"])
+        self.assertEqual(
+            report["plan_execution_attempt_id"],
+            json.loads(Path(failing.stdout.strip()).read_text(encoding="utf-8"))[
+                "plan_execution_attempt_id"
+            ],
+        )
         self.assertNotEqual(report["commands"][0]["returncode"], 0)
         self.assertNotIn("stdout_body", report["commands"][0])
         self.assertNotIn("stderr_body", report["commands"][0])
         self.assertIn("stdout_digest", report["commands"][0])
         self.assertIn("stderr_digest", report["commands"][0])
+        failure = report["failure"]
+        self.assertEqual(failure["kind"], "command")
+        self.assertEqual(failure["command_index"], 0)
+        self.assertEqual(failure["observed_exit_status"], report["commands"][0]["returncode"])
+        identity = {
+            "suite": "focused",
+            "kind": "command",
+            "command_index": 0,
+            "argv": report["commands"][0]["argv"],
+        }
+        self.assertEqual(
+            failure["operation_digest"],
+            "sha256:" + hashlib.sha256(
+                json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
+        self.assertNotIn("stdout", json.dumps(failure))
+        self.assertNotIn("stderr", json.dumps(failure))
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_validation_setup_failure_persists_bounded_report_and_failed_lifecycle(self) -> None:
+        temporary, repo, plan_path = self.make_repo(
+            ["allowed.txt"],
+            files={"allowed.txt": "original\n", "scripts/lint-project-workflow.sh": "#!/bin/sh\n"},
+            focused_validation=["scripts/lint-project-workflow.sh"],
+        )
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("candidate\\n", encoding="utf-8")',
+            output_dir=root / "setup-failure-candidate",
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest = Path(initial.stdout.strip())
+        manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+        report_dir = root / "setup-failure-report"
+        failed = run_cli(
+            repo,
+            "validate",
+            str(manifest),
+            "--suite",
+            "focused",
+            "--parent-diff-approved",
+            "--critical-invariants-approved",
+            "--output-dir",
+            str(report_dir),
+        )
+        self.assertEqual(failed.returncode, 1)
+        report = json.loads((report_dir / "validation.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["failure"]["kind"], "runner_setup")
+        self.assertEqual(report["failure"]["observed_exit_status"], 1)
+        self.assertEqual(report["commands"][0]["returncode"], 0)
+        lifecycle = json.loads(
+            Path(manifest_value["lifecycle_state_path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(lifecycle["phase"], "focused_failed")
+        self.assertEqual(lifecycle["focused_validation_count"], 1)
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_nonavailability_failure_and_disabled_fallback_do_not_retry(self) -> None:

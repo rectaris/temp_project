@@ -131,3 +131,4 @@ id	path
 161	docs/plan/checked/2026/08/16-31/161-repair-receipt-fixture-projection.md
 162	docs/plan/checked/2026/08/16-31/162-integrate-structured-worker-completion-receipt.md
 115	docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
+131	docs/plan/checked/2026/08/16-31/131-require-confirmed-failure-diagnosis.md

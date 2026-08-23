@@ -2,6 +2,9 @@
 
 ## 未リリース
 
+- 権威検証の失敗後は、失敗した操作と終了statusを実行台帳へ固定し、読み取り専用の再現証拠が一つの影響対象invariantを確認するまで修復planの作成を拒否するようにしました。
+- 進行中の統合planでは全受入条件を最初の静的検査、限定検証、または最終検証へdigestで対応付け、限定検証を飛ばす定義と理由のない最終検証専用定義を実行前に拒否するようにしました。
+- Copier更新fixtureのsource copyとGit stagingを単一inventoryから生成し、重複、欠落、および再度の二重管理を検出する回帰検証を追加しました。
 - 登録済みの linked worktree を local Git の ancestry、upstream、clean 状態、保護設定で scan し、固定 manifest を effect 直前に再検証して、明示確認がある場合だけ通常の worktree・branch 削除を行う local retirement workflow を追加しました。生成 project は safe-disabled で開始し、Copier 更新では project-owned 設定を保持します。
 - 外部 provider の認証確認を、実際の provider、コマンド実行境界、credential source へ結合し、sandbox 内外や provider 切替時の認証事実を別の呼び出しへ流用しないようにしました。
 - 書き込み可能な逐次workerを、commit済みplanから毎回生成する読み取り専用の実行契約へ結合し、曖昧なdirectory範囲、保護対象、検証権限への書き込みを起動前に拒否するようにしました。

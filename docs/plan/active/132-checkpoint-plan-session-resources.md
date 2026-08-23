@@ -51,8 +51,8 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
-  - docs/plan/active/155-integrate-structured-worker-completion-receipt.md
-  - docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md
+  - docs/plan/checked/2026/08/16-31/162-integrate-structured-worker-completion-receipt.md
+  - docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md
   - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
 required_specs:
@@ -87,10 +87,15 @@ acceptance:
   - At checked, replanned, repair-required, replan-required, and authoritative-failure boundaries, emit and verify one bounded digest-linked session checkpoint before another numbered plan or reviewer context continues; keep final authority in the parent and never treat a resource checkpoint as a semantic failure.
   - Record provider-observed input, cached input, output, reasoning, model-response, compaction, helper-turn, and tool-call measurements only when directly available, keep unavailable values as not_observed, store no prompts or output bodies, and use deterministic proxy counts without estimating tokens.
   - Give an independent reviewer only the unchanged plan, admitted diff, bounded receipts, and applicable specifications after the candidate is otherwise review-ready; permit one initial review and one bounded rereview per candidate before the existing strategy-change path, and do not reuse an accumulated general-purpose reviewer history across numbered plans.
+validation_witness_schema: 1
+validation_witness_map:
+  - {"acceptance_sha256":"sha256:7ed675c8fc9df790c90252aa2b4ee1afd1063270c97e9adc9a204b62a7442bfa","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
+  - {"acceptance_sha256":"sha256:cf0c0eaf1b20d2e1a87a62c8c9b82f72b208c16e7ed984058ce9f596df8d15a7","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
+  - {"acceptance_sha256":"sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
 replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
-  - plan 136 as the accepted successor for plan 113, plan 155 as the accepted integration successor for plan 114, and plan 115 must be checked before implementation starts
+  - plan 136 as the accepted successor for plan 113, plan 162 as the checked replacement successor for plan 155 and plan 114, and plan 115 must be checked before implementation starts
   - Do not implement this plan in the session that creates or materially updates it.
   - Start the next numbered plan only in a root session whose directly observed runtime session identity differs from the session that emitted the prior terminal checkpoint.
   - Treat compaction or a summary injected into the same conversation as continued context, not a fresh root session.

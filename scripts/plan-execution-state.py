@@ -11,6 +11,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import stat
 import subprocess
 import tempfile
@@ -25,6 +26,7 @@ CANDIDATE_MANIFEST_MAX_BYTES = 1024 * 1024
 MAX_EVENTS = 64
 MAX_CORRECTIONS = 2
 MAX_PARENT_REMEDIATIONS = 2
+MAX_DIAGNOSIS_ATTEMPTS = 3
 ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 PLAN_RE = re.compile(r"docs/plan/active/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
@@ -56,6 +58,8 @@ EVENT_TYPES = {
     "parent_review",
     "focused_validation",
     "authoritative_validation",
+    "authoritative_failure",
+    "failure_diagnosis",
     "scope_drift",
     "spec_drift",
     "security_boundary_drift",
@@ -94,6 +98,10 @@ EVENT_KEYS = {
     "elapsed_seconds", "monotonic_ns", "previous_event_digest", "event_digest",
 }
 LEGACY_EVENT_KEYS = EVENT_KEYS - {"successor_genesis_digest"}
+DIAGNOSIS_EVENT_KEYS = EVENT_KEYS | {
+    "failure_evidence", "failure_evidence_digest", "diagnosis_evidence",
+    "diagnosis_evidence_digest",
+}
 REPAIR_CLASSIFICATION_KEYS = {
     "schema_version", "plan_path", "plan_digest", "source_head", "primary_invariant_digest",
     "affected_invariant_digests", "candidate_lifecycle_identity_digest", "candidate_lifecycle_digest",
@@ -102,6 +110,26 @@ REPAIR_CLASSIFICATION_KEYS = {
     "invariant_boundaries_unchanged", "source_acceptance_unchanged",
     "safety_conditions_unchanged", "external_effect_authority_unchanged",
     "independent_invariant_count",
+}
+FAILURE_EVIDENCE_KEYS = {
+    "schema_version", "plan_path", "plan_digest", "source_head",
+    "implementation_mode",
+    "candidate_lifecycle_identity_digest", "candidate_lifecycle_digest",
+    "candidate_manifest_digest", "validation_report_digest",
+    "failed_operation_digest", "observed_exit_status",
+}
+DIAGNOSIS_EVIDENCE_KEYS = {
+    "schema_version", "plan_path", "plan_digest", "source_head",
+    "candidate_lifecycle_identity_digest", "candidate_lifecycle_digest",
+    "authoritative_failure_event_digest", "failure_evidence_digest",
+    "failed_operation_digest", "observed_exit_status", "affected_invariant_digest",
+    "independent_review_receipt_digest", "reproduction_evidence_digest",
+    "diagnosis_result",
+}
+DIAGNOSIS_RESULTS = {"confirmed", "inconclusive", "disputed"}
+VALIDATION_FAILURE_KINDS = {
+    "command", "dependency_integrity", "runtime_integrity",
+    "head_immutability", "ref_immutability", "runner_setup", "source_integrity",
 }
 CANDIDATE_LIFECYCLE_KEYS = {
     "schema_version", "orchestration_run_id", "current_manifest_digest",
@@ -343,6 +371,285 @@ def load_repair_classification(
     return classification, digest(data)
 
 
+def validation_operation_digest(
+    *, suite: str, kind: str, command_index: int, argv: list[str]
+) -> str:
+    identity = {
+        "suite": suite,
+        "kind": kind,
+        "command_index": command_index,
+        "argv": argv,
+    }
+    return digest(json.dumps(identity, sort_keys=True, separators=(",", ":")))
+
+
+def authoritative_plan_commands(plan_path: Path) -> list[list[str]]:
+    commands: list[list[str]] = []
+    in_validation = False
+    for line in plan_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            break
+        if line == "validation:":
+            in_validation = True
+            continue
+        if in_validation:
+            if line.startswith("  - "):
+                try:
+                    argv = shlex.split(line[4:], posix=True)
+                except ValueError as exc:
+                    raise StateError("execution plan has an invalid authoritative command") from exc
+                if not argv:
+                    raise StateError("execution plan has an empty authoritative command")
+                commands.append(argv)
+                continue
+            if line and not line.startswith(" "):
+                break
+    if not commands:
+        raise StateError("execution plan has no authoritative validation commands")
+    return commands
+
+
+def load_authoritative_failure(
+    path: Path,
+    state: dict[str, Any],
+    lifecycle_path: Path,
+    lifecycle_digest: str,
+) -> tuple[dict[str, Any], str]:
+    data = read_external_artifact(
+        path, "authoritative validation report", CANDIDATE_MANIFEST_MAX_BYTES
+    )
+    try:
+        report = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError("authoritative validation report is invalid JSON") from exc
+    if not isinstance(report, dict):
+        raise StateError("authoritative validation report must be a JSON object")
+    if report.get("suite") != "authoritative" or report.get("passed") is not False:
+        raise StateError("diagnosis requires a failed authoritative validation report")
+    if report.get("plan_path") != state["plan_path"]:
+        raise StateError("authoritative validation report does not match the execution plan")
+    if report.get("implementation_mode") != state["implementation_mode"]:
+        raise StateError("authoritative validation report has the wrong implementation mode")
+    if report.get("plan_digest") != state["plan_digest"]:
+        raise StateError("authoritative validation report does not match the plan digest")
+    if report.get("source_head") != state["source_head"]:
+        raise StateError("authoritative validation report does not match the source HEAD")
+    failure = report.get("failure")
+    if not isinstance(failure, dict) or set(failure) != {
+        "kind", "command_index", "operation_digest", "observed_exit_status"
+    }:
+        raise StateError("authoritative validation report lacks exact failure identity")
+    kind = failure["kind"]
+    command_index = failure["command_index"]
+    observed_exit_status = failure["observed_exit_status"]
+    if kind not in VALIDATION_FAILURE_KINDS:
+        raise StateError("authoritative validation report has an unknown failure kind")
+    if type(command_index) is not int or command_index < 0:
+        raise StateError("authoritative validation report has an invalid command index")
+    if type(observed_exit_status) is not int or not -255 <= observed_exit_status <= 255:
+        raise StateError("authoritative validation report has an invalid observed exit status")
+    commands = report.get("commands")
+    if not isinstance(commands, list) or command_index >= len(commands):
+        raise StateError("authoritative validation report failure does not identify one command")
+    if len(commands) != command_index + 1:
+        raise StateError("authoritative validation report contains operations after the failure")
+    command = commands[command_index]
+    if not isinstance(command, dict) or not isinstance(command.get("argv"), list) or any(
+        not isinstance(item, str) for item in command.get("argv", [])
+    ):
+        raise StateError("authoritative validation report has an invalid failed command")
+    command_status = command.get("returncode")
+    if type(command_status) is not int or not -255 <= command_status <= 255:
+        raise StateError("authoritative validation report has an invalid command status")
+    for index, item in enumerate(commands):
+        if not isinstance(item, dict) or item.get("index") != index:
+            raise StateError("authoritative validation report command sequence is inconsistent")
+        prior_status = item.get("returncode")
+        if type(prior_status) is not int or not -255 <= prior_status <= 255:
+            raise StateError("authoritative validation report has an invalid command status")
+        if index < command_index and prior_status != 0:
+            raise StateError("authoritative validation report continues after an earlier failure")
+    if kind == "command":
+        if command_status == 0 or observed_exit_status != command_status:
+            raise StateError("authoritative command failure status is inconsistent")
+    elif command_status != 0 or observed_exit_status != 1:
+        raise StateError("authoritative safety-check failure must use exit status 1")
+    plan_commands = authoritative_plan_commands(repository_root() / state["plan_path"])
+    if len(plan_commands) <= command_index or any(
+        not isinstance(item, dict)
+        or item.get("argv") != plan_commands[index]
+        for index, item in enumerate(commands)
+    ):
+        raise StateError("authoritative validation report operation differs from plan authority")
+    expected_operation = validation_operation_digest(
+        suite="authoritative",
+        kind=kind,
+        command_index=command_index,
+        argv=command["argv"],
+    )
+    if failure["operation_digest"] != expected_operation:
+        raise StateError("authoritative failed-operation identity is inconsistent")
+    candidate_manifest_digest = ""
+    if state["implementation_mode"] == "candidate":
+        lifecycle_data = read_external_artifact(lifecycle_path, "candidate lifecycle")
+        try:
+            lifecycle = json.loads(lifecycle_data)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StateError("candidate lifecycle is invalid JSON") from exc
+        if not isinstance(lifecycle, dict) or set(lifecycle) != CANDIDATE_LIFECYCLE_KEYS:
+            raise StateError("candidate lifecycle state has an invalid exact schema")
+        if lifecycle.get("schema_version") != 2 or lifecycle.get(
+            "orchestration_run_id"
+        ) != state["run_id"]:
+            raise StateError("candidate lifecycle run identity mismatch")
+        attempt_id = state["open_attempt_id"]
+        if not attempt_id or lifecycle.get("plan_execution_attempt_id") != attempt_id:
+            raise StateError("failed candidate lifecycle attempt identity mismatch")
+        for key in ("current_manifest_digest", "current_patch_digest"):
+            if not isinstance(lifecycle[key], str) or not re.fullmatch(
+                r"[0-9a-f]{64}", lifecycle[key]
+            ):
+                raise StateError(f"candidate lifecycle state has an invalid digest: {key}")
+        for key in (
+            "correction_round", "candidate_generations", "focused_validation_count",
+            "authoritative_validation_count", "parent_review_rejections",
+        ):
+            value = lifecycle[key]
+            if type(value) is not int or not 0 <= value <= 3:
+                raise StateError(f"candidate lifecycle state has an invalid counter: {key}")
+        if lifecycle["candidate_generations"] != lifecycle["correction_round"] + 1 or lifecycle[
+            "parent_review_rejections"
+        ] != lifecycle["correction_round"]:
+            raise StateError("candidate lifecycle state has inconsistent correction lineage")
+        if (
+            lifecycle["candidate_generations"] != state["candidate_generations"]
+            or lifecycle["correction_round"] != state["correction_rounds"]
+            or lifecycle["focused_validation_count"] != state["focused_validation_events"]
+            or lifecycle["authoritative_validation_count"]
+            != state["authoritative_validation_events"]
+        ):
+            raise StateError("failed candidate lifecycle lineage differs from the execution ledger")
+        if type(lifecycle["focused_required"]) is not bool:
+            raise StateError("candidate lifecycle focused_required must be boolean")
+        if lifecycle.get("phase") != "authoritative_failed" or lifecycle.get(
+            "authoritative_validation_count"
+        ) != 1 or (lifecycle["focused_required"] and lifecycle["focused_validation_count"] != 1):
+            raise StateError("diagnosis requires one completed authoritative_failed lifecycle")
+        raw_candidate_digest = report.get("candidate_manifest_digest")
+        if not isinstance(raw_candidate_digest, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", raw_candidate_digest
+        ):
+            raise StateError("authoritative validation report has an invalid candidate digest")
+        if lifecycle.get("current_manifest_digest") != raw_candidate_digest:
+            raise StateError("validation report does not match the failed candidate lifecycle")
+        raw_patch_digest = report.get("candidate_patch_digest")
+        if not isinstance(raw_patch_digest, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", raw_patch_digest
+        ) or lifecycle["current_patch_digest"] != raw_patch_digest:
+            raise StateError("validation report patch does not match the failed candidate lifecycle")
+        if report.get("plan_execution_attempt_id") != attempt_id:
+            raise StateError("validation report attempt does not match the failed candidate lifecycle")
+        candidate_manifest_digest = "sha256:" + raw_candidate_digest
+    elif report.get("candidate_manifest_digest") not in {None, ""}:
+        raise StateError("parent-direct failure cannot claim a candidate manifest")
+    evidence = {
+        "schema_version": 1,
+        "plan_path": state["plan_path"],
+        "plan_digest": state["plan_digest"],
+        "source_head": state["source_head"],
+        "implementation_mode": state["implementation_mode"],
+        "candidate_lifecycle_identity_digest": state["candidate_lifecycle_identity_digest"],
+        "candidate_lifecycle_digest": lifecycle_digest,
+        "candidate_manifest_digest": candidate_manifest_digest,
+        "validation_report_digest": digest(data),
+        "failed_operation_digest": expected_operation,
+        "observed_exit_status": observed_exit_status,
+    }
+    return evidence, digest(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
+
+
+def authoritative_failure_event(state: dict[str, Any]) -> dict[str, Any] | None:
+    failures = [event for event in state["events"] if event["event_type"] == "authoritative_failure"]
+    if len(failures) > 1:
+        raise StateError("execution state contains multiple authoritative failures")
+    return failures[0] if failures else None
+
+
+def confirmed_diagnosis_invariant(state: dict[str, Any]) -> str:
+    confirmed = [
+        event for event in state["events"]
+        if event["event_type"] == "failure_diagnosis"
+        and event["diagnosis_evidence"]["diagnosis_result"] == "confirmed"
+    ]
+    if len(confirmed) > 1:
+        raise StateError("execution state contains multiple confirmed diagnoses")
+    return confirmed[0]["invariant_digests"][0] if confirmed else ""
+
+
+def validate_diagnosis_evidence(
+    value: Any,
+    state: dict[str, Any],
+    invariants: list[str],
+    receipt: str,
+    lifecycle_digest: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != DIAGNOSIS_EVIDENCE_KEYS:
+        raise StateError("failure diagnosis evidence has an invalid exact schema")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise StateError("failure diagnosis evidence has an invalid schema version")
+    failure_event = authoritative_failure_event(state)
+    if failure_event is None:
+        raise StateError("failure diagnosis lacks an authoritative failure")
+    failure = failure_event["failure_evidence"]
+    if lifecycle_digest != failure["candidate_lifecycle_digest"]:
+        raise StateError("failure diagnosis lifecycle differs from authoritative failure")
+    expected_identity = {
+        "plan_path": state["plan_path"],
+        "plan_digest": state["plan_digest"],
+        "source_head": state["source_head"],
+        "candidate_lifecycle_identity_digest": state["candidate_lifecycle_identity_digest"],
+        "candidate_lifecycle_digest": failure["candidate_lifecycle_digest"],
+        "authoritative_failure_event_digest": failure_event["event_digest"],
+        "failure_evidence_digest": failure_event["failure_evidence_digest"],
+        "failed_operation_digest": failure["failed_operation_digest"],
+        "observed_exit_status": failure["observed_exit_status"],
+        "independent_review_receipt_digest": receipt,
+    }
+    if any(value[key] != expected for key, expected in expected_identity.items()):
+        raise StateError("failure diagnosis evidence does not match the authoritative failure")
+    require_digest(value["reproduction_evidence_digest"], "reproduction_evidence_digest")
+    result = value["diagnosis_result"]
+    if result not in DIAGNOSIS_RESULTS:
+        raise StateError("failure diagnosis evidence has an invalid result")
+    affected = value["affected_invariant_digest"]
+    if result == "confirmed":
+        if len(invariants) != 1 or affected != invariants[0]:
+            raise StateError("confirmed diagnosis must identify exactly one affected invariant")
+        require_digest(affected, "affected_invariant_digest")
+    elif invariants or affected != "":
+        raise StateError("unconfirmed diagnosis cannot claim an affected invariant")
+    return value
+
+
+def load_diagnosis_evidence(
+    path: Path,
+    state: dict[str, Any],
+    invariants: list[str],
+    receipt: str,
+    lifecycle_digest: str,
+) -> tuple[dict[str, Any], str]:
+    data = read_external_artifact(path, "failure diagnosis evidence")
+    try:
+        value = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError("failure diagnosis evidence is invalid JSON") from exc
+    evidence = validate_diagnosis_evidence(value, state, invariants, receipt, lifecycle_digest)
+    canonical = (json.dumps(evidence, sort_keys=True, indent=2) + "\n").encode()
+    if data != canonical:
+        raise StateError("failure diagnosis evidence is not canonical JSON")
+    return evidence, digest(data)
+
+
 def validate_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != EXACT_KEYS:
         raise StateError("execution state has an invalid exact schema")
@@ -389,7 +696,8 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("accepted source HEAD must accompany accepted candidate evidence")
     require_digest(value["successor_claim_digest"], "successor_claim_digest", allow_empty=True)
     if value["state"] not in {
-        "active", "accepted", "rejected", "repair_required", "replan_required"
+        "active", "accepted", "rejected", "diagnosis_required",
+        "repair_required", "replan_required"
     }:
         raise StateError("invalid state")
     if value["implementation_mode"] not in MODES:
@@ -448,7 +756,10 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("execution-state genesis identity digest mismatch")
     previous_digest = value["genesis_digest"]
     for index, event in enumerate(events, start=1):
-        allowed_event_keys = {frozenset(EVENT_KEYS), frozenset(LEGACY_EVENT_KEYS)}
+        allowed_event_keys = {
+            frozenset(EVENT_KEYS), frozenset(LEGACY_EVENT_KEYS),
+            frozenset(DIAGNOSIS_EVENT_KEYS),
+        }
         if not isinstance(event, dict) or frozenset(event) not in allowed_event_keys:
             raise StateError("event has an invalid exact schema")
         successor_genesis_digest = event.get("successor_genesis_digest", "")
@@ -468,7 +779,11 @@ def validate_state(value: Any) -> dict[str, Any]:
                 and event["event_type"] == "successor_claimed"
                 and not prior_summary["successor_claim_digest"]
             )
-            if not successor_is_allowed:
+            diagnosis_is_allowed = (
+                prior_summary["state"] == "diagnosis_required"
+                and event["event_type"] in {"failure_diagnosis", "repair_classification"}
+            )
+            if not successor_is_allowed and not diagnosis_is_allowed:
                 raise StateError("event history continues after a terminal execution state")
         invariants = event["invariant_digests"]
         if not isinstance(invariants, list) or len(invariants) != len(set(invariants)) or any(
@@ -486,7 +801,9 @@ def validate_state(value: Any) -> dict[str, Any]:
             allow_empty=True,
         )
         receipt_digest = event["independent_review_receipt_digest"]
-        receipt_required = event["event_type"] == "repair_classification" or (
+        receipt_required = event["event_type"] in {
+            "repair_classification", "failure_diagnosis"
+        } or (
             event["event_type"] == "parent_review" and event["implementation_mode"] == "parent_direct"
         )
         if receipt_required:
@@ -595,6 +912,71 @@ def validate_state(value: Any) -> dict[str, Any]:
                   event["successor_plan_digest"], successor_source,
                   event["successor_primary_invariant_digest"], successor_genesis_digest)):
             raise StateError("non-attempt event contains writable-attempt data")
+        diagnosis_keys_present = frozenset(event) == frozenset(DIAGNOSIS_EVENT_KEYS)
+        failure_evidence = event.get("failure_evidence", {})
+        failure_evidence_digest = event.get("failure_evidence_digest", "")
+        diagnosis_evidence = event.get("diagnosis_evidence", {})
+        diagnosis_evidence_digest = event.get("diagnosis_evidence_digest", "")
+        if event["event_type"] == "authoritative_failure":
+            if not diagnosis_keys_present or set(failure_evidence) != FAILURE_EVIDENCE_KEYS:
+                raise StateError("authoritative failure event has an invalid exact schema")
+            if diagnosis_evidence or diagnosis_evidence_digest:
+                raise StateError("authoritative failure event contains diagnosis evidence")
+            if failure_evidence["schema_version"] != 1:
+                raise StateError("authoritative failure evidence has an invalid schema version")
+            expected_failure_identity = {
+                "plan_path": value["plan_path"],
+                "plan_digest": value["plan_digest"],
+                "source_head": value["source_head"],
+                "implementation_mode": value["implementation_mode"],
+                "candidate_lifecycle_identity_digest": value["candidate_lifecycle_identity_digest"],
+                "candidate_lifecycle_digest": event["candidate_lifecycle_digest"],
+            }
+            if any(failure_evidence[key] != expected for key, expected in expected_failure_identity.items()):
+                raise StateError("authoritative failure evidence does not match the execution baseline")
+            require_digest(
+                failure_evidence["candidate_manifest_digest"],
+                "candidate_manifest_digest",
+                allow_empty=value["implementation_mode"] == "parent_direct",
+            )
+            for key in ("validation_report_digest", "failed_operation_digest"):
+                require_digest(failure_evidence[key], key)
+            if value["implementation_mode"] == "candidate" and not failure_evidence[
+                "candidate_manifest_digest"
+            ]:
+                raise StateError("candidate failure evidence lacks a candidate manifest")
+            if value["implementation_mode"] == "parent_direct" and failure_evidence[
+                "candidate_manifest_digest"
+            ]:
+                raise StateError("parent-direct failure evidence contains a candidate manifest")
+            status = failure_evidence["observed_exit_status"]
+            if type(status) is not int or not -255 <= status <= 255:
+                raise StateError("authoritative failure evidence has an invalid exit status")
+            require_digest(failure_evidence_digest, "failure_evidence_digest")
+            expected_failure_digest = digest(
+                json.dumps(failure_evidence, sort_keys=True, separators=(",", ":"))
+            )
+            if failure_evidence_digest != expected_failure_digest:
+                raise StateError("authoritative failure evidence digest mismatch")
+            if invariants or receipt_digest or severities:
+                raise StateError("authoritative failure cannot pre-claim diagnosis results")
+        elif event["event_type"] == "failure_diagnosis":
+            if not diagnosis_keys_present or failure_evidence or failure_evidence_digest:
+                raise StateError("failure diagnosis event has an invalid exact schema")
+            if not receipt_digest or severities:
+                raise StateError("failure diagnosis requires one independent review receipt")
+            validate_diagnosis_evidence(
+                diagnosis_evidence, value, invariants, receipt_digest,
+                event["candidate_lifecycle_digest"],
+            )
+            require_digest(diagnosis_evidence_digest, "diagnosis_evidence_digest")
+            canonical_diagnosis = (
+                json.dumps(diagnosis_evidence, sort_keys=True, indent=2) + "\n"
+            ).encode()
+            if diagnosis_evidence_digest != digest(canonical_diagnosis):
+                raise StateError("failure diagnosis evidence digest mismatch")
+        elif diagnosis_keys_present:
+            raise StateError("non-diagnosis event contains diagnosis evidence fields")
         if event["event_type"] == "repair_classification":
             if not invariants:
                 raise StateError("repair classification event must affect at least one invariant")
@@ -662,6 +1044,9 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     review_reason_codes: list[str] = []
     reasons: list[str] = []
     repair_reasons: list[str] = []
+    authoritative_failure_seen = False
+    diagnosis_attempts = 0
+    confirmed_invariant = ""
 
     def add_reason(reason: str) -> None:
         if reason not in reasons:
@@ -693,11 +1078,25 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             focused_events += 1
         elif event_type == "authoritative_validation":
             authoritative_events += 1
+        elif event_type == "authoritative_failure":
+            if authoritative_events != 1 or authoritative_failure_seen:
+                raise StateError("authoritative failure is out of order")
+            authoritative_failure_seen = True
+        elif event_type == "failure_diagnosis":
+            if not authoritative_failure_seen or confirmed_invariant:
+                raise StateError("failure diagnosis is out of order")
+            diagnosis_attempts += 1
+            if diagnosis_attempts > MAX_DIAGNOSIS_ATTEMPTS:
+                raise StateError("failure diagnosis attempt budget is exhausted")
+            if event["diagnosis_evidence"]["diagnosis_result"] == "confirmed":
+                confirmed_invariant = event["invariant_digests"][0]
         elif event_type in {
             "scope_drift", "spec_drift", "security_boundary_drift", "post_authoritative_design_change"
         }:
             add_reason(event_type)
         elif event_type == "repair_classification":
+            if not confirmed_invariant or event["invariant_digests"] != [confirmed_invariant]:
+                raise StateError("repair classification requires the confirmed affected invariant")
             classification_result = classify_repair(event["repair_classification"])
             if classification_result == "independent_repair_required":
                 repair_reasons.append(classification_result)
@@ -762,6 +1161,8 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         state = "accepted"
     elif terminal_rejection:
         state = "rejected"
+    elif authoritative_failure_seen:
+        state = "diagnosis_required"
     else:
         state = "active"
     return {
@@ -1048,6 +1449,8 @@ def stopped_message(state: dict[str, Any]) -> str:
         return "plan execution is closed with an accepted candidate"
     if state["state"] == "rejected":
         return "plan execution is closed with a rejected candidate"
+    if state["state"] == "diagnosis_required":
+        return "plan execution is stopped pending confirmed failure diagnosis"
     return "plan execution is stopped for an independent repair"
 
 
@@ -1058,7 +1461,26 @@ def record_event(args: argparse.Namespace) -> None:
         state = read_state(path)
         if state["run_id"] != args.run_id:
             raise StateError("run_id mismatch")
-        if state["state"] != "active":
+        if state["implementation_mode"] != args.implementation_mode:
+            raise StateError("event implementation mode differs from the execution ledger")
+        if state["state"] == "active":
+            if args.event_type == "failure_diagnosis":
+                raise StateError("failure diagnosis requires an authoritative failure")
+            if args.event_type == "repair_classification":
+                raise StateError("repair classification requires a confirmed failure diagnosis")
+        elif state["state"] == "diagnosis_required":
+            if args.event_type not in {"failure_diagnosis", "repair_classification"}:
+                raise StateError(stopped_message(state))
+            if args.event_type == "failure_diagnosis" and confirmed_diagnosis_invariant(state):
+                raise StateError("confirmed failure diagnosis already exists")
+            diagnosis_attempts = sum(
+                event["event_type"] == "failure_diagnosis" for event in state["events"]
+            )
+            if args.event_type == "failure_diagnosis" and diagnosis_attempts >= MAX_DIAGNOSIS_ATTEMPTS:
+                raise StateError("failure diagnosis attempt budget is exhausted")
+            if args.event_type == "repair_classification" and not confirmed_diagnosis_invariant(state):
+                raise StateError("repair classification requires a confirmed failure diagnosis")
+        else:
             raise StateError(stopped_message(state))
         if any(event["event_id"] == args.event_id for event in state["events"]):
             raise StateError("event replay is not allowed")
@@ -1073,6 +1495,10 @@ def record_event(args: argparse.Namespace) -> None:
         receipt = args.independent_review_receipt_digest or ""
         repair_classification: dict[str, Any] = {}
         repair_evidence = ""
+        failure_evidence: dict[str, Any] = {}
+        failure_evidence_digest = ""
+        diagnosis_evidence: dict[str, Any] = {}
+        diagnosis_evidence_digest = ""
         lifecycle = args.candidate_lifecycle_digest or ""
         if args.implementation_mode == "parent_direct" and args.event_type == "parent_review":
             require_digest(receipt, "independent_review_receipt_digest")
@@ -1090,18 +1516,63 @@ def record_event(args: argparse.Namespace) -> None:
                 raise StateError("repair classification cannot carry unresolved findings")
         elif args.repair_evidence_file:
             raise StateError("repair evidence is only valid for independent repair")
+        if args.event_type == "authoritative_failure":
+            if not args.validation_report:
+                raise StateError("authoritative failure requires a validation report")
+            if invariants or severities or receipt:
+                raise StateError("authoritative failure cannot pre-claim diagnosis results")
+            if state["authoritative_validation_events"] != 1:
+                raise StateError("authoritative failure requires exactly one authoritative event")
+        elif args.validation_report:
+            raise StateError("validation report is only valid for authoritative failure")
+        if args.event_type == "failure_diagnosis":
+            require_digest(receipt, "independent_review_receipt_digest")
+            if not args.diagnosis_evidence_file:
+                raise StateError("failure diagnosis requires an evidence file")
+            if severities:
+                raise StateError("failure diagnosis cannot carry unresolved findings")
+            if any(event["independent_review_receipt_digest"] == receipt for event in state["events"]):
+                raise StateError("independent review receipt replay is not allowed")
+        elif args.diagnosis_evidence_file:
+            raise StateError("diagnosis evidence is only valid for failure diagnosis")
         if args.event_type in {
             "parent_review", "scope_drift", "spec_drift", "security_boundary_drift",
             "post_authoritative_design_change",
         } and not invariants:
             raise StateError("this event requires at least one affected invariant digest")
-        if args.event_type in {"candidate_generation", "correction_rejected", "focused_validation", "authoritative_validation", "repair_classification"}:
+        if args.event_type in {
+            "candidate_generation", "correction_rejected", "focused_validation",
+            "authoritative_validation", "authoritative_failure", "failure_diagnosis",
+            "repair_classification",
+        }:
             require_digest(lifecycle, "candidate_lifecycle_digest")
             if lifecycle != file_digest(Path(args.lifecycle_state)):
                 raise StateError("candidate lifecycle content digest mismatch")
+        if args.event_type in {
+            "authoritative_failure", "failure_diagnosis", "repair_classification"
+        }:
+            require_repository_baseline(state)
         if args.event_type == "repair_classification":
+            confirmed = confirmed_diagnosis_invariant(state)
+            if invariants != [confirmed]:
+                raise StateError("repair classification must use the confirmed affected invariant")
+            confirmed_event = next(
+                event for event in state["events"]
+                if event["event_type"] == "failure_diagnosis"
+                and event["diagnosis_evidence"]["diagnosis_result"] == "confirmed"
+            )
+            if lifecycle != confirmed_event["candidate_lifecycle_digest"]:
+                raise StateError("repair classification lifecycle differs from confirmed diagnosis")
             repair_classification, repair_evidence = load_repair_classification(
                 Path(args.repair_evidence_file), state, invariants, receipt, lifecycle,
+            )
+        elif args.event_type == "authoritative_failure":
+            failure_evidence, failure_evidence_digest = load_authoritative_failure(
+                Path(args.validation_report), state, Path(args.lifecycle_state), lifecycle,
+            )
+        elif args.event_type == "failure_diagnosis":
+            diagnosis_evidence, diagnosis_evidence_digest = load_diagnosis_evidence(
+                Path(args.diagnosis_evidence_file), state, invariants, receipt, lifecycle,
             )
         monotonic_ns = time.monotonic_ns()
         if monotonic_ns <= state["last_monotonic_ns"]:
@@ -1138,6 +1609,15 @@ def record_event(args: argparse.Namespace) -> None:
             "monotonic_ns": monotonic_ns,
             "previous_event_digest": state["event_chain_digest"],
         }
+        if args.event_type in {"authoritative_failure", "failure_diagnosis"}:
+            event.update(
+                {
+                    "failure_evidence": failure_evidence,
+                    "failure_evidence_digest": failure_evidence_digest,
+                    "diagnosis_evidence": diagnosis_evidence,
+                    "diagnosis_evidence_digest": diagnosis_evidence_digest,
+                }
+            )
         event["event_digest"] = digest(
             json.dumps(event, sort_keys=True, separators=(",", ":"))
         )
@@ -1490,8 +1970,15 @@ def check_gate(args: argparse.Namespace) -> None:
     state = read_state(Path(args.state))
     if state["run_id"] != args.run_id:
         raise StateError("run_id mismatch")
-    if state["state"] != "active":
+    repair_plan = args.operation == "repair_plan"
+    diagnosis_read = (
+        state["state"] == "diagnosis_required" and args.operation == "diagnosis_read"
+    )
+    repair_plan_allowed = state["state"] == "repair_required" and repair_plan
+    if state["state"] != "active" and not diagnosis_read and not repair_plan_allowed:
         raise StateError(stopped_message(state))
+    if repair_plan and state["state"] != "repair_required":
+        raise StateError("repair-plan gate requires a confirmed independent repair classification")
     if args.plan and state["plan_path"] != args.plan:
         raise StateError("plan path mismatch")
     if args.open_attempt_id and state["open_attempt_id"] != args.open_attempt_id:
@@ -1513,8 +2000,11 @@ def check_gate(args: argparse.Namespace) -> None:
         for event in state["events"][latest_start + 1:]
         if event["candidate_lifecycle_digest"]
     ]
-    if recorded_lifecycle_digests and file_digest(Path(args.lifecycle_state)) != recorded_lifecycle_digests[-1]:
-        raise StateError("candidate lifecycle changed after the latest budget event")
+    if recorded_lifecycle_digests:
+        if not args.lifecycle_state:
+            raise StateError("candidate lifecycle is required after a lifecycle-bound event")
+        if file_digest(Path(args.lifecycle_state)) != recorded_lifecycle_digests[-1]:
+            raise StateError("candidate lifecycle changed after the latest budget event")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1541,6 +2031,8 @@ def parser() -> argparse.ArgumentParser:
     record.add_argument("--finding-severity", action="append", choices=("High", "Medium", "Low"))
     record.add_argument("--independent-review-receipt-digest")
     record.add_argument("--repair-evidence-file")
+    record.add_argument("--validation-report")
+    record.add_argument("--diagnosis-evidence-file")
     record.add_argument("--candidate-lifecycle-digest")
     record.add_argument("--lifecycle-state", required=True)
     record.add_argument("--elapsed-seconds", type=float, default=0.0)
@@ -1578,6 +2070,11 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--plan")
     check.add_argument("--lifecycle-state")
     check.add_argument("--open-attempt-id")
+    check.add_argument(
+        "--operation",
+        choices=("execution", "completion", "archive", "repair_plan", "diagnosis_read"),
+        default="execution",
+    )
     check.set_defaults(handler=check_gate)
     return root
 

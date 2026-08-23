@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -13,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import ModuleType
 
 
 class ValidationCommandError(ValueError):
@@ -365,8 +367,26 @@ def parse_validation_commands(
     ]
 
 
+def load_planlib() -> ModuleType:
+    candidate = Path(__file__).with_name("planlib.py")
+    if not candidate.is_file():
+        raise ValidationCommandError("could not locate managed planlib.py")
+    spec = importlib.util.spec_from_file_location("plan_validation_commands_planlib", candidate)
+    if spec is None or spec.loader is None:
+        raise ValidationCommandError("could not load managed planlib.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def check_plan(path: Path) -> list[ValidationCommand]:
-    return parse_validation_commands(extract_validation_commands(path))
+    commands = parse_validation_commands(extract_validation_commands(path))
+    planlib = load_planlib()
+    try:
+        planlib.validate_validation_witness_map(planlib.parse_manifest(path), plan_path=path)
+    except ValueError as exc:
+        raise ValidationCommandError(str(exc)) from exc
+    return commands
 
 
 def check_legacy_plan_for_lint(path: Path, repository_root: Path) -> list[ValidationCommand]:

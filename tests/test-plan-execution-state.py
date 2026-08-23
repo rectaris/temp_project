@@ -26,6 +26,7 @@ SCENARIOS = ROOT / "tests/fixtures/orchestration/plan-restructuring-scenarios.js
 HOLDOUT = ROOT / "tests/fixtures/orchestration/plan-restructuring-holdout.json"
 SEQUENCING_SCENARIOS = ROOT / "tests/fixtures/orchestration/review-sequencing-scenarios.json"
 SEQUENCING_HOLDOUT = ROOT / "tests/fixtures/orchestration/review-sequencing-holdout.json"
+DIAGNOSIS_SCENARIOS = ROOT / "tests/fixtures/orchestration/failure-diagnosis-scenarios.json"
 
 
 def load_state_module():
@@ -65,7 +66,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "write_scope:\n  - allowed.txt\n"
             "context_files:\n  - AGENTS.md\n"
             "required_specs:\n  - AGENTS.md\n"
-            "validation:\n  - true\n"
+            "validation:\n  - true\n  - git diff --check\n"
             "acceptance:\n  - Test acceptance.\n"
             "checked_summary_ja: fixture\n",
             encoding="utf-8",
@@ -116,16 +117,24 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
 
     def record(self, event_id: str, event_type: str, *extra: str, mode: str = "candidate") -> subprocess.CompletedProcess[str]:
-        self.lifecycle.write_text(event_id + "\n", encoding="utf-8")
+        if event_type != "repair_classification" or not self.lifecycle.exists():
+            self.lifecycle.write_text(event_id + "\n", encoding="utf-8")
+        lifecycle_content = self.lifecycle.read_text(encoding="utf-8")
         return self.run_cli(
             "record", str(self.state), "--run-id", "run-1", "--event-id", event_id,
             "--event-type", event_type, "--implementation-mode", mode,
-            "--candidate-lifecycle-digest", digest(event_id + "\n"),
+            "--candidate-lifecycle-digest", digest(lifecycle_content),
             "--lifecycle-state", str(self.lifecycle), *extra,
         )
 
     def payload(self) -> dict[str, object]:
         return json.loads(self.state.read_text(encoding="utf-8"))
+
+    def test_event_implementation_mode_must_match_ledger_mode(self) -> None:
+        mismatched = self.record("wrong-mode", "elapsed_checkpoint", mode="parent_direct")
+        self.assertNotEqual(mismatched.returncode, 0)
+        self.assertIn("implementation mode differs", mismatched.stderr)
+        self.assertEqual(self.payload()["events"], [])
 
     def test_legacy_v4_event_without_successor_genesis_remains_appendable(self) -> None:
         recorded = self.record(
@@ -144,12 +153,35 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(appended.returncode, 0, appended.stderr)
         self.assertEqual(len(self.payload()["events"]), 2)  # type: ignore[arg-type]
 
+    def test_failure_diagnosis_fixture_freezes_confirmation_and_fail_closed_cases(self) -> None:
+        fixture = json.loads(DIAGNOSIS_SCENARIOS.read_text(encoding="utf-8"))
+        self.assertEqual(fixture["schema_version"], 1)
+        scenarios = {item["id"]: item for item in fixture["scenarios"]}
+        self.assertEqual(
+            set(scenarios),
+            {
+                "confirmed-single-invariant",
+                "inconclusive-read-only-stop",
+                "disputed-read-only-stop",
+                "receipt-replay-rejected",
+                "failure-identity-mutation-rejected",
+                "validation-authority-drift-rejected",
+            },
+        )
+        self.assertEqual(
+            scenarios["confirmed-single-invariant"]["expected"]["next_action"],
+            "classify_repair_or_replan",
+        )
+        for scenario in scenarios.values():
+            self.assertEqual(scenario["expected"]["state"], "diagnosis_required")
+
     def initialize_execution(
         self,
         label: str,
         *,
         plan: Path | None = None,
         predecessor: Path | None = None,
+        mode: str = "candidate",
     ) -> tuple[Path, Path, str]:
         selected_plan = plan or self.plan
         run_id = f"run-{label}"
@@ -169,7 +201,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             ).strip(),
             "--primary-invariant-digest", digest(invariant),
             "--lifecycle-state", str(lifecycle),
-            "--implementation-mode", "candidate",
+            "--implementation-mode", mode,
         ]
         if predecessor is not None:
             arguments.extend(("--predecessor-state", str(predecessor)))
@@ -343,7 +375,10 @@ class PlanExecutionStateTest(unittest.TestCase):
             "primary_invariant_digest": state["primary_invariant_digest"],
             "affected_invariant_digests": [invariant],
             "candidate_lifecycle_identity_digest": state["candidate_lifecycle_identity_digest"],
-            "candidate_lifecycle_digest": digest(event_id + "\n"),
+            "candidate_lifecycle_digest": digest(
+                self.lifecycle.read_text(encoding="utf-8")
+                if self.lifecycle.exists() else event_id + "\n"
+            ),
             "independent_review_receipt_digest": receipt,
             "bounded_write_scope": True,
             "bounded_validation_scope": True,
@@ -359,6 +394,234 @@ class PlanExecutionStateTest(unittest.TestCase):
         evidence = self.base / f"{event_id}-repair-evidence.json"
         evidence.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         return evidence
+
+    def enter_confirmed_diagnosis(
+        self,
+        *,
+        state: Path | None = None,
+        lifecycle: Path | None = None,
+        run_id: str = "run-1",
+        invariant: str | None = None,
+        label: str = "confirmed",
+        results: tuple[str, ...] = ("confirmed",),
+        failure_kind: str = "command",
+        command_status: int = 7,
+        observed_exit_status: int = 7,
+        lifecycle_overrides: dict[str, object] | None = None,
+        report_overrides: dict[str, object] | None = None,
+        expected_rejection: str | None = None,
+    ) -> None:
+        selected_state = state or self.state
+        selected_lifecycle = lifecycle or self.lifecycle
+        affected = invariant or digest("one invariant")
+        attempt_id = f"{label}-attempt"
+        started = self.start_writable_attempt(
+            selected_state, selected_lifecycle, run_id, attempt_id
+        )
+        self.assertEqual(started.returncode, 0, started.stderr)
+        manifest_digest = hashlib.sha256(f"{label}-manifest".encode()).hexdigest()
+        patch_digest = hashlib.sha256(f"{label}-patch".encode()).hexdigest()
+        lifecycle_value = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "current_manifest_digest": manifest_digest,
+            "current_patch_digest": patch_digest,
+            "correction_round": 0,
+            "candidate_generations": 1,
+            "phase": "authoritative_failed",
+            "focused_required": False,
+            "focused_validation_count": 0,
+            "authoritative_validation_count": 1,
+            "parent_review_rejections": 0,
+        }
+        lifecycle_value.update(lifecycle_overrides or {})
+        lifecycle_content = json.dumps(lifecycle_value, sort_keys=True, indent=2) + "\n"
+        selected_lifecycle.write_text(lifecycle_content, encoding="utf-8")
+        authoritative = self.run_cli(
+            "record", str(selected_state), "--run-id", run_id,
+            "--event-id", f"{label}-authoritative",
+            "--event-type", "authoritative_validation",
+            "--implementation-mode", "candidate",
+            "--candidate-lifecycle-digest", digest(lifecycle_content),
+            "--lifecycle-state", str(selected_lifecycle),
+        )
+        self.assertEqual(authoritative.returncode, 0, authoritative.stderr)
+        argv = ["true"]
+        identity = {
+            "suite": "authoritative",
+            "kind": failure_kind,
+            "command_index": 0,
+            "argv": argv,
+        }
+        operation_digest = digest(json.dumps(identity, sort_keys=True, separators=(",", ":")))
+        report = {
+            "candidate_manifest_digest": manifest_digest,
+            "candidate_patch_digest": patch_digest,
+            "plan_execution_attempt_id": attempt_id,
+            "plan_path": "docs/plan/active/001-test.md",
+            "plan_digest": json.loads(selected_state.read_text(encoding="utf-8"))["plan_digest"],
+            "source_head": json.loads(selected_state.read_text(encoding="utf-8"))["source_head"],
+            "implementation_mode": "candidate",
+            "suite": "authoritative",
+            "passed": False,
+            "commands": [{"index": 0, "argv": argv, "returncode": command_status}],
+            "failure": {
+                "kind": failure_kind,
+                "command_index": 0,
+                "operation_digest": operation_digest,
+                "observed_exit_status": observed_exit_status,
+            },
+        }
+        report.update(report_overrides or {})
+        report_path = self.base / f"{label}-validation.json"
+        report_path.write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        failure = self.run_cli(
+            "record", str(selected_state), "--run-id", run_id,
+            "--event-id", f"{label}-failure",
+            "--event-type", "authoritative_failure",
+            "--implementation-mode", "candidate",
+            "--candidate-lifecycle-digest", digest(lifecycle_content),
+            "--validation-report", str(report_path),
+            "--lifecycle-state", str(selected_lifecycle),
+        )
+        if expected_rejection is not None:
+            self.assertNotEqual(failure.returncode, 0)
+            self.assertIn(expected_rejection, failure.stderr)
+            return
+        self.assertEqual(failure.returncode, 0, failure.stderr)
+        for index, result in enumerate(results, start=1):
+            payload = json.loads(selected_state.read_text(encoding="utf-8"))
+            failure_event = next(
+                event for event in payload["events"]
+                if event["event_type"] == "authoritative_failure"
+            )
+            receipt = digest(f"{label}-diagnosis-review-{index}")
+            diagnosis = {
+                "schema_version": 1,
+                "plan_path": payload["plan_path"],
+                "plan_digest": payload["plan_digest"],
+                "source_head": payload["source_head"],
+                "candidate_lifecycle_identity_digest": payload["candidate_lifecycle_identity_digest"],
+                "candidate_lifecycle_digest": digest(lifecycle_content),
+                "authoritative_failure_event_digest": failure_event["event_digest"],
+                "failure_evidence_digest": failure_event["failure_evidence_digest"],
+                "failed_operation_digest": failure_event["failure_evidence"]["failed_operation_digest"],
+                "observed_exit_status": observed_exit_status,
+                "affected_invariant_digest": affected if result == "confirmed" else "",
+                "independent_review_receipt_digest": receipt,
+                "reproduction_evidence_digest": digest(f"{label}-bounded-reproduction-{index}"),
+                "diagnosis_result": result,
+            }
+            diagnosis_path = self.base / f"{label}-diagnosis-{index}.json"
+            diagnosis_path.write_text(
+                json.dumps(diagnosis, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+            )
+            arguments = [
+                "record", str(selected_state), "--run-id", run_id,
+                "--event-id", f"{label}-diagnosis-{index}",
+                "--event-type", "failure_diagnosis",
+                "--implementation-mode", "candidate",
+                "--independent-review-receipt-digest", receipt,
+                "--candidate-lifecycle-digest", digest(lifecycle_content),
+                "--diagnosis-evidence-file", str(diagnosis_path),
+                "--lifecycle-state", str(selected_lifecycle),
+            ]
+            if result == "confirmed":
+                arguments.extend(("--invariant-digest", affected))
+            recorded = self.run_cli(*arguments)
+            self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        self.assertEqual(
+            json.loads(selected_state.read_text(encoding="utf-8"))["state"],
+            "diagnosis_required",
+        )
+
+    def test_authoritative_failure_binds_exact_candidate_leaf_and_status_shape(self) -> None:
+        cases = (
+            (
+                "lifecycle-schema",
+                {"unexpected": "field"},
+                None,
+                "invalid exact schema",
+                "command",
+                7,
+                7,
+            ),
+            (
+                "lifecycle-attempt",
+                {"plan_execution_attempt_id": "different-attempt"},
+                None,
+                "attempt identity mismatch",
+                "command",
+                7,
+                7,
+            ),
+            (
+                "lifecycle-counters",
+                {
+                    "correction_round": 1,
+                    "candidate_generations": 2,
+                    "parent_review_rejections": 1,
+                },
+                None,
+                "lineage differs from the execution ledger",
+                "command",
+                7,
+                7,
+            ),
+            (
+                "report-patch",
+                None,
+                {"candidate_patch_digest": "0" * 64},
+                "patch does not match",
+                "command",
+                7,
+                7,
+            ),
+            (
+                "report-attempt",
+                None,
+                {"plan_execution_attempt_id": "different-attempt"},
+                "report attempt does not match",
+                "command",
+                7,
+                7,
+            ),
+            (
+                "integrity-status",
+                None,
+                None,
+                "safety-check failure",
+                "dependency_integrity",
+                7,
+                1,
+            ),
+        )
+        for label, lifecycle_overrides, report_overrides, message, kind, status, observed in cases:
+            with self.subTest(label=label):
+                state, lifecycle, run_id = self.initialize_execution(label)
+                self.enter_confirmed_diagnosis(
+                    state=state,
+                    lifecycle=lifecycle,
+                    run_id=run_id,
+                    label=label,
+                    lifecycle_overrides=lifecycle_overrides,
+                    report_overrides=report_overrides,
+                    failure_kind=kind,
+                    command_status=status,
+                    observed_exit_status=observed,
+                    expected_rejection=message,
+                )
+
+        signal_state, signal_lifecycle, signal_run = self.initialize_execution("signal-status")
+        self.enter_confirmed_diagnosis(
+            state=signal_state,
+            lifecycle=signal_lifecycle,
+            run_id=signal_run,
+            label="signal-status",
+            command_status=-15,
+            observed_exit_status=-15,
+        )
 
     def test_two_rejected_corrections_stop_and_replay_is_rejected(self) -> None:
         self.assertEqual(self.record("generation-1", "candidate_generation").returncode, 0)
@@ -385,19 +648,33 @@ class PlanExecutionStateTest(unittest.TestCase):
 
     def test_parent_direct_budget_requires_independent_receipt(self) -> None:
         invariant = digest("one")
-        missing = self.record(
-            "parent-1", "parent_review", "--invariant-digest", invariant,
-            "--finding-severity", "Medium", mode="parent_direct",
+        state, lifecycle, run_id = self.initialize_execution(
+            "parent-budget", mode="parent_direct"
+        )
+
+        def parent_record(event_id: str, *extra: str) -> subprocess.CompletedProcess[str]:
+            lifecycle.write_text(event_id + "\n", encoding="utf-8")
+            return self.run_cli(
+                "record", str(state), "--run-id", run_id, "--event-id", event_id,
+                "--event-type", "parent_review", "--implementation-mode", "parent_direct",
+                "--candidate-lifecycle-digest", digest(event_id + "\n"),
+                "--lifecycle-state", str(lifecycle), *extra,
+            )
+
+        missing = parent_record(
+            "parent-1", "--invariant-digest", invariant, "--finding-severity", "Medium"
         )
         self.assertNotEqual(missing.returncode, 0)
         for index in (1, 2):
-            result = self.record(
-                f"parent-{index}", "parent_review", "--invariant-digest", invariant,
+            result = parent_record(
+                f"parent-{index}", "--invariant-digest", invariant,
                 "--finding-severity", "Medium", "--independent-review-receipt-digest",
-                digest(f"receipt-{index}"), mode="parent_direct",
+                digest(f"receipt-{index}"),
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.payload()["state"], "replan_required")
+        self.assertEqual(
+            json.loads(state.read_text(encoding="utf-8"))["state"], "replan_required"
+        )
 
     def test_multi_invariant_and_boundary_drift_trigger_immediately(self) -> None:
         result = self.record(
@@ -450,12 +727,241 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(self.record("design-1", "post_authoritative_design_change", *affected).returncode, 0)
         self.assertEqual(self.payload()["state"], "replan_required")
 
+    def test_parent_direct_authoritative_failure_enters_diagnosis_without_candidate_artifacts(self) -> None:
+        state = self.base / "parent-direct-execution.json"
+        lifecycle = self.base / "parent-direct-lifecycle.json"
+        run_id = "parent-direct-failure"
+        initialized = self.run_cli(
+            "init", str(state), "--run-id", run_id,
+            "--plan", "docs/plan/active/001-test.md",
+            "--plan-digest", digest(self.plan.read_text()),
+            "--source-head", self.head,
+            "--primary-invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        lifecycle_content = "parent-direct-authoritative-failed\n"
+        lifecycle.write_text(lifecycle_content, encoding="utf-8")
+        authoritative = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "parent-direct-authoritative",
+            "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest(lifecycle_content),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(authoritative.returncode, 0, authoritative.stderr)
+        identity = {
+            "suite": "authoritative",
+            "kind": "command",
+            "command_index": 0,
+            "argv": ["true"],
+        }
+        report = {
+            "plan_path": "docs/plan/active/001-test.md",
+            "plan_digest": digest(self.plan.read_text()),
+            "source_head": self.head,
+            "implementation_mode": "parent_direct",
+            "suite": "authoritative",
+            "passed": False,
+            "commands": [{"index": 0, "argv": ["true"], "returncode": 9}],
+            "failure": {
+                "kind": "command",
+                "command_index": 0,
+                "operation_digest": digest(
+                    json.dumps(identity, sort_keys=True, separators=(",", ":"))
+                ),
+                "observed_exit_status": 9,
+            },
+        }
+        report_path = self.base / "parent-direct-validation.json"
+        report_path.write_text(
+            json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+        failed = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "parent-direct-failure",
+            "--event-type", "authoritative_failure",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest(lifecycle_content),
+            "--validation-report", str(report_path),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(failed.returncode, 0, failed.stderr)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(payload["state"], "diagnosis_required")
+        failure_event = payload["events"][-1]
+        self.assertEqual(failure_event["failure_evidence"]["implementation_mode"], "parent_direct")
+        self.assertEqual(failure_event["failure_evidence"]["candidate_manifest_digest"], "")
+
+    def test_unconfirmed_failure_diagnosis_blocks_write_lifecycle_operations(self) -> None:
+        invariant = digest("one invariant")
+        active_repair_plan = self.run_cli(
+            "check", str(self.state), "--run-id", "run-1",
+            "--operation", "repair_plan", "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(active_repair_plan.returncode, 0)
+        self.assertIn("confirmed independent repair classification", active_repair_plan.stderr)
+        self.enter_confirmed_diagnosis(
+            invariant=invariant,
+            label="unconfirmed",
+            results=("inconclusive", "disputed"),
+        )
+        self.assertEqual(self.payload()["state"], "diagnosis_required")
+        readable = self.run_cli(
+            "check", str(self.state), "--run-id", "run-1",
+            "--operation", "diagnosis_read", "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertEqual(readable.returncode, 0, readable.stderr)
+        for operation in ("execution", "completion", "archive", "repair_plan"):
+            with self.subTest(operation=operation):
+                denied = self.run_cli(
+                    "check", str(self.state), "--run-id", "run-1",
+                    "--operation", operation, "--lifecycle-state", str(self.lifecycle),
+                )
+                self.assertNotEqual(denied.returncode, 0)
+                self.assertIn("pending confirmed failure diagnosis", denied.stderr)
+        repair_receipt = digest("premature-repair-review")
+        repair_evidence = self.write_repair_evidence(
+            "premature-repair", repair_receipt, invariant
+        )
+        premature = self.record(
+            "premature-repair", "repair_classification",
+            "--invariant-digest", invariant,
+            "--independent-review-receipt-digest", repair_receipt,
+            "--repair-evidence-file", str(repair_evidence),
+        )
+        self.assertNotEqual(premature.returncode, 0)
+        self.assertIn("confirmed failure diagnosis", premature.stderr)
+        common = [
+            "--orchestration-run-id", "run-1", "--lifecycle-state", str(self.lifecycle),
+            "--plan-execution-state", str(self.state),
+        ]
+        for command in (
+            ["run", self.source_path_for_runner(), *common, "--bwrap-bin", "missing-bwrap"],
+            ["correct", self.source_path_for_runner(), "missing-manifest", "missing-brief", *common],
+            ["validate", "missing-manifest", "--suite", "focused", "--output-dir", str(self.base / "validation"), *common],
+            ["apply", "missing-manifest", *common],
+            ["finalize-apply", "missing-manifest", *common],
+        ):
+            denied = subprocess.run(
+                [sys.executable, str(RUNNER), *command], cwd=self.repo,
+                check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("pending confirmed failure diagnosis", denied.stderr)
+            self.assertNotIn("missing-manifest", denied.stderr)
+
+    def test_diagnosis_replay_mutation_authority_drift_and_budget_fail_closed(self) -> None:
+        self.enter_confirmed_diagnosis(
+            label="bounded-diagnosis", results=("inconclusive",)
+        )
+        payload = self.payload()
+        failure = next(
+            event for event in payload["events"]
+            if event["event_type"] == "authoritative_failure"
+        )
+        first = next(
+            event for event in payload["events"]
+            if event["event_type"] == "failure_diagnosis"
+        )
+
+        def write_evidence(label: str, receipt: str, **overrides: object) -> Path:
+            value: dict[str, object] = {
+                **first["diagnosis_evidence"],
+                "independent_review_receipt_digest": receipt,
+                "reproduction_evidence_digest": digest(label),
+                "diagnosis_result": "disputed",
+            }
+            value.update(overrides)
+            path = self.base / f"{label}.json"
+            path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+            return path
+
+        replay_receipt = first["independent_review_receipt_digest"]
+        replay_path = write_evidence("diagnosis-replay", replay_receipt)
+        replay = self.run_cli(
+            "record", str(self.state), "--run-id", "run-1",
+            "--event-id", "diagnosis-replay", "--event-type", "failure_diagnosis",
+            "--implementation-mode", "candidate",
+            "--independent-review-receipt-digest", replay_receipt,
+            "--candidate-lifecycle-digest", first["candidate_lifecycle_digest"],
+            "--diagnosis-evidence-file", str(replay_path),
+            "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(replay.returncode, 0)
+        self.assertIn("receipt replay", replay.stderr)
+
+        mutation_receipt = digest("diagnosis-mutation-review")
+        mutation_path = write_evidence(
+            "diagnosis-mutation", mutation_receipt,
+            failed_operation_digest=digest("substituted operation"),
+        )
+        mutation = self.run_cli(
+            "record", str(self.state), "--run-id", "run-1",
+            "--event-id", "diagnosis-mutation", "--event-type", "failure_diagnosis",
+            "--implementation-mode", "candidate",
+            "--independent-review-receipt-digest", mutation_receipt,
+            "--candidate-lifecycle-digest", first["candidate_lifecycle_digest"],
+            "--diagnosis-evidence-file", str(mutation_path),
+            "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(mutation.returncode, 0)
+        self.assertIn("does not match the authoritative failure", mutation.stderr)
+
+        original_plan = self.plan.read_text(encoding="utf-8")
+        self.plan.write_text(original_plan.replace("  - true\n", "  - false\n"), encoding="utf-8")
+        drift_receipt = digest("diagnosis-authority-drift-review")
+        drift_path = write_evidence("diagnosis-authority-drift", drift_receipt)
+        drift = self.run_cli(
+            "record", str(self.state), "--run-id", "run-1",
+            "--event-id", "diagnosis-authority-drift", "--event-type", "failure_diagnosis",
+            "--implementation-mode", "candidate",
+            "--independent-review-receipt-digest", drift_receipt,
+            "--candidate-lifecycle-digest", first["candidate_lifecycle_digest"],
+            "--diagnosis-evidence-file", str(drift_path),
+            "--lifecycle-state", str(self.lifecycle),
+        )
+        self.plan.write_text(original_plan, encoding="utf-8")
+        self.assertNotEqual(drift.returncode, 0)
+        self.assertIn("plan digest differs", drift.stderr)
+
+        for index in (2, 3):
+            receipt = digest(f"bounded-diagnosis-review-{index}")
+            evidence = write_evidence(f"bounded-diagnosis-{index}", receipt)
+            recorded = self.run_cli(
+                "record", str(self.state), "--run-id", "run-1",
+                "--event-id", f"bounded-diagnosis-{index}",
+                "--event-type", "failure_diagnosis", "--implementation-mode", "candidate",
+                "--independent-review-receipt-digest", receipt,
+                "--candidate-lifecycle-digest", first["candidate_lifecycle_digest"],
+                "--diagnosis-evidence-file", str(evidence),
+                "--lifecycle-state", str(self.lifecycle),
+            )
+            self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        exhausted_receipt = digest("bounded-diagnosis-review-4")
+        exhausted_path = write_evidence("bounded-diagnosis-4", exhausted_receipt)
+        exhausted = self.run_cli(
+            "record", str(self.state), "--run-id", "run-1",
+            "--event-id", "bounded-diagnosis-4", "--event-type", "failure_diagnosis",
+            "--implementation-mode", "candidate",
+            "--independent-review-receipt-digest", exhausted_receipt,
+            "--candidate-lifecycle-digest", first["candidate_lifecycle_digest"],
+            "--diagnosis-evidence-file", str(exhausted_path),
+            "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(exhausted.returncode, 0)
+        self.assertIn("attempt budget is exhausted", exhausted.stderr)
+        self.assertEqual(self.payload()["state"], "diagnosis_required")
+
     def test_independent_repair_requires_bounded_evidence_and_stops_only_current_run(self) -> None:
         invariant_digest = digest("one invariant")
         invariant = ("--invariant-digest", invariant_digest)
         receipt_digest = digest("repair-review")
         receipt = ("--independent-review-receipt-digest", receipt_digest)
         self.assertNotEqual(self.record("repair-missing", "repair_classification", *invariant).returncode, 0)
+        self.enter_confirmed_diagnosis(invariant=invariant_digest)
         coupled_evidence = self.write_repair_evidence(
             "repair-coupled", receipt_digest, invariant_digest,
         )
@@ -470,6 +976,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         stale_lifecycle = self.write_repair_evidence(
             "repair-stale-lifecycle", receipt_digest, invariant_digest,
         )
+        confirmed_lifecycle = self.lifecycle.read_text(encoding="utf-8")
         self.lifecycle.write_text("different lifecycle\n", encoding="utf-8")
         stale = self.run_cli(
             "record", str(self.state), "--run-id", "run-1",
@@ -480,6 +987,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--lifecycle-state", str(self.lifecycle),
         )
         self.assertNotEqual(stale.returncode, 0)
+        self.lifecycle.write_text(confirmed_lifecycle, encoding="utf-8")
         evidence = self.write_repair_evidence("repair-1", receipt_digest, invariant_digest)
         accepted = self.record(
             "repair-1", "repair_classification", *invariant, *receipt,
@@ -490,6 +998,11 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(payload["state"], "repair_required")
         self.assertEqual(payload["repair_reason_codes"], ["independent_repair_required"])
         self.assertEqual(payload["replan_reason_codes"], [])
+        repair_plan_gate = self.run_cli(
+            "check", str(self.state), "--run-id", "run-1",
+            "--operation", "repair_plan", "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertEqual(repair_plan_gate.returncode, 0, repair_plan_gate.stderr)
         denied = self.run_cli(
             "check", str(self.state), "--run-id", "run-1", "--lifecycle-state", str(self.lifecycle),
         )
@@ -512,6 +1025,7 @@ class PlanExecutionStateTest(unittest.TestCase):
     def test_independent_repair_blocks_runner_before_prerequisites(self) -> None:
         invariant = digest("one invariant")
         receipt = digest("repair-review")
+        self.enter_confirmed_diagnosis(invariant=invariant)
         evidence = self.write_repair_evidence("repair-runner", receipt, invariant)
         accepted = self.record(
             "repair-runner", "repair_classification",
@@ -549,6 +1063,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         invariant = digest("one invariant")
         receipt = digest("repair-review")
+        self.enter_confirmed_diagnosis(invariant=invariant)
         evidence = self.write_repair_evidence(
             "repair-altered-authority", receipt, invariant,
             external_effect_authority_unchanged=False,
@@ -587,22 +1102,30 @@ class PlanExecutionStateTest(unittest.TestCase):
                 event_id = f"repair-{label}"
                 invariant = digest("one invariant")
                 receipt = digest(f"review-{label}")
-                lifecycle_path.write_text(event_id + "\n", encoding="utf-8")
+                self.enter_confirmed_diagnosis(
+                    state=state_path, lifecycle=lifecycle_path, run_id=run_id,
+                    invariant=invariant, label=f"diagnosis-{label}",
+                )
                 original_state = self.state
+                original_lifecycle = self.lifecycle
                 self.state = state_path
+                self.lifecycle = lifecycle_path
                 try:
                     evidence = self.write_repair_evidence(
                         event_id, receipt, invariant, **{predicate: False},
                     )
                 finally:
                     self.state = original_state
+                    self.lifecycle = original_lifecycle
                 classified = self.run_cli(
                     "record", str(state_path), "--run-id", run_id,
                     "--event-id", event_id, "--event-type", "repair_classification",
                     "--implementation-mode", "candidate",
                     "--invariant-digest", invariant,
                     "--independent-review-receipt-digest", receipt,
-                    "--candidate-lifecycle-digest", digest(event_id + "\n"),
+                    "--candidate-lifecycle-digest", digest(
+                        lifecycle_path.read_text(encoding="utf-8")
+                    ),
                     "--repair-evidence-file", str(evidence),
                     "--lifecycle-state", str(lifecycle_path),
                 )
@@ -615,6 +1138,7 @@ class PlanExecutionStateTest(unittest.TestCase):
     def test_recomputed_history_after_terminal_repair_event_is_rejected(self) -> None:
         invariant = digest("one invariant")
         receipt = digest("repair-review")
+        self.enter_confirmed_diagnosis(invariant=invariant)
         evidence = self.write_repair_evidence("repair-terminal", receipt, invariant)
         accepted = self.record(
             "repair-terminal", "repair_classification",
@@ -625,7 +1149,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         value = self.payload()
         event: dict[str, object] = {
-            "sequence": 2,
+            "sequence": len(value["events"]) + 1,  # type: ignore[arg-type]
             "event_id": "forged-after-terminal",
             "event_type": "elapsed_checkpoint",
             "implementation_mode": "candidate",
@@ -668,6 +1192,7 @@ class PlanExecutionStateTest(unittest.TestCase):
     def test_recomputed_repair_evidence_digest_tamper_is_rejected(self) -> None:
         invariant = digest("one invariant")
         receipt = digest("repair-review")
+        self.enter_confirmed_diagnosis(invariant=invariant)
         evidence = self.write_repair_evidence("repair-digest", receipt, invariant)
         accepted = self.record(
             "repair-digest", "repair_classification",
@@ -677,7 +1202,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         value = self.payload()
-        event = value["events"][0]  # type: ignore[index]
+        event = value["events"][-1]  # type: ignore[index]
         event["repair_evidence_digest"] = digest("different evidence")
         unsigned = {key: event[key] for key in event if key != "event_digest"}
         event["event_digest"] = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")))
@@ -798,6 +1323,11 @@ class PlanExecutionStateTest(unittest.TestCase):
         for index, scenario in enumerate(hard_scenarios, start=1):
             with self.subTest(scenario=scenario["id"]):
                 run_id = f"scenario-{index}"
+                reason = scenario["expected"]["reason_code"]
+                scenario_mode = (
+                    "parent_direct" if reason == "parent_remediation_budget_exhausted"
+                    else "candidate"
+                )
                 state = self.base / f"{run_id}.json"
                 lifecycle = self.base / f"{run_id}-lifecycle.json"
                 initialized = self.run_cli(
@@ -807,13 +1337,15 @@ class PlanExecutionStateTest(unittest.TestCase):
                     "--source-head", self.head,
                     "--primary-invariant-digest", digest("one invariant"),
                     "--lifecycle-state", str(lifecycle),
-                    "--implementation-mode", "candidate",
+                    "--implementation-mode", scenario_mode,
                 )
                 self.assertEqual(initialized.returncode, 0, initialized.stderr)
 
                 event_number = 0
 
-                def record_event(event_type: str, *extra: str, mode: str = "candidate") -> None:
+                def record_event(
+                    event_type: str, *extra: str, mode: str = scenario_mode
+                ) -> None:
                     nonlocal event_number
                     event_number += 1
                     event_id = f"{scenario['id']}-{event_number}"
@@ -827,7 +1359,6 @@ class PlanExecutionStateTest(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
 
-                reason = scenario["expected"]["reason_code"]
                 invariant = ("--invariant-digest", digest("one invariant"))
                 if reason == "multiple_independent_invariants":
                     record_event(

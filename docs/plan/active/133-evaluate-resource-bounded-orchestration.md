@@ -35,8 +35,8 @@ context_files:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/136-integrate-plan-bound-worker-contract.md
-  - docs/plan/active/155-integrate-structured-worker-completion-receipt.md
-  - docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md
+  - docs/plan/checked/2026/08/16-31/162-integrate-structured-worker-completion-receipt.md
+  - docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/active/130-map-acceptance-validation-witnesses.md
   - docs/plan/active/131-require-confirmed-failure-diagnosis.md
   - docs/plan/active/132-checkpoint-plan-session-resources.md
@@ -90,10 +90,32 @@ acceptance:
   - Record provider-observed input, cached input, output, reasoning, model-response, compaction, helper-turn, and tool-call measurements only when directly available, keep unavailable values as not_observed, store no prompts or output bodies, and use deterministic proxy counts without estimating tokens.
   - Give an independent reviewer only the unchanged plan, admitted diff, bounded receipts, and applicable specifications after the candidate is otherwise review-ready; permit one initial review and one bounded rereview per candidate before the existing strategy-change path, and do not reuse an accumulated general-purpose reviewer history across numbered plans.
   - Extend paired evaluation with a fixed generic workload structurally equivalent to the Plan 119 late-integration and speculative-repair sequence; require at least 30 percent lower median directly comparable input-token use when both sides expose it, otherwise keep token improvement not_observed and do not claim a usage reduction.
+validation_witness_schema: 1
+validation_witness_map:
+  - {"acceptance_sha256":"sha256:158d415534f8ba707df6e05f303514c377e4286f6f5128ae2f7174cbaf7473fe","stage":"static","witness":"resolved-context-files"}
+  - {"acceptance_sha256":"sha256:1c4d732d6a277114b68e0b6eca7618d03e5c2cc51f84da2abd8b1863c9f8a576","stage":"static","witness":"resolved-context-files"}
+  - {"acceptance_sha256":"sha256:fab81555f698b828c50e01aee3e0a5baf7a01c6c57f26cd4f5ef8b147ddcb7b5","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:7701247ddfbb9b6067289f4ec871bd2a2f971aa22354784e2657da5e44a6b4ed","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:fbc1c1c96eb6501b3b5d9f0216dbca4b9c9effaba938fef770699862afeeaa07","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:df74e7bc01e4446fee1049705e130abc21bd8a2176ce9dbd1d059ea0e971a525","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:250ec4c459a592ae9ba133ac4cac3a21cc59e23a01d086c925f2deb4510e644b","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:a7185b3b664461a636b4c2e17332ede1886308498304364dbccc95fc2d3ebddb","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:74676af1c3fd1ec6c706498604bbe8b3f2cbbcb4dd8a1ffaf172718f73726583","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:1573727361ca97cecd78c1402e5da1408485636d354b073d41538c0e6f7f1293","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:93709976edad8b54f41e89a815beb179fcdf85a17ac3a8a7205d89d7e6d91a2a","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:d5e7d033295d031afe5825359b3d986cea2182dccb3cafbed36972cfff29c735","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:089ede7f008b392e945178ad74cfb61e714a468f7a74ebb565f44f1343fc45e1","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
+  - {"acceptance_sha256":"sha256:edfc0aeac6285bab001c16d4b35fdf65c2cc81311b1adb3d012d5101aee64f9b","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+  - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+  - {"acceptance_sha256":"sha256:f01ccfa44e09342cbfeb4599282afbed2286a3e43524757881dd3163bb3b93e7","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py"}
+  - {"acceptance_sha256":"sha256:7ed675c8fc9df790c90252aa2b4ee1afd1063270c97e9adc9a204b62a7442bfa","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py"}
+  - {"acceptance_sha256":"sha256:cf0c0eaf1b20d2e1a87a62c8c9b82f72b208c16e7ed984058ce9f596df8d15a7","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py"}
+  - {"acceptance_sha256":"sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py"}
+  - {"acceptance_sha256":"sha256:3758070f0f3636a1edf9b06253cc357baabdb1901375edf08c8ab76026e154ba","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py --include-holdout"}
 replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
-  - plan 136 as the accepted successor for plan 113, plan 155 as the accepted integration successor for plan 114, and plan 115 must be checked and their context paths refreshed before paired evaluation
+  - plan 136 as the accepted successor for plan 113, plan 162 as the checked replacement successor for plan 155 and plan 114, and plan 115 must be checked and their context paths refreshed before paired evaluation
   - plans 130 through 132 must be checked and their exact checked archive paths must replace active context paths
   - add a second fixed regression workload structurally equivalent to one root session carrying diagnosis, proposal, an initial rejected implementation, replanning, three successor plans, context compactions, and full-history reviewer starts; keep product paths and conversation bodies out of the fixture
   - reject the staged side when it reuses a root-session identity across a numbered-plan boundary, substitutes compaction for a fresh session, starts a reviewer with inherited turns, or claims token improvement from proxy counts; keep the result `measurement_pending` when required outer-runtime identity or fork-mode evidence is unavailable

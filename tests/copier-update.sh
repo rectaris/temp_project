@@ -95,94 +95,18 @@ fixture_clone "$root" "$update_source"
 fixture_git "$update_source" fetch -q "$root" "$target_commit"
 fixture_git "$update_source" switch -q -c migration-target FETCH_HEAD
 fixture_git "$update_source" merge-base --is-ancestor v1.2.1 HEAD
-for candidate_path in \
-  copier.yml \
-  scripts/migrate-sequential-plan-worker.py \
-  scripts/validate-copier-update.py \
-  template/README.md.jinja \
-  template/.github/workflows/codex-ci-autofix.yml.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
-  template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
-  template/.project-agent-workflow/scripts/run-copier-update.sh \
-  template/.project-agent-workflow/scripts/update-from-copier.sh \
-  template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
-  template/.project-agent-workflow/scripts/validate-copier-update.py \
-  template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
-  template/.project-agent-workflow/scripts/check-external-service-policy.py \
-  template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
-  template/.project-agent-workflow/scripts/plan_validation_commands.py \
-  template/.project-agent-workflow/scripts/validate-changes.py \
-  template/.agents/skills/browser-ops/SKILL.md \
-  template/.agents/skills/verify-copier-update/SKILL.md \
-  template/.project-agent-workflow/AGENTS.md.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
-  template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
-  template/.project-agent-workflow/scripts/planlib.py \
-  template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
-  template/.project-agent-workflow/ownership.yaml \
-  template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
-  template/.project-agent-workflow/skills/browser-ops/SKILL.md \
-  template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-  template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-  template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
-  template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
-  template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
-  template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
-  template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-  template/.project-agent-workflow/skills/graph-memory/SKILL.md \
-  template/.project-agent-workflow/skills/linear-ops/SKILL.md \
-  template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
-  template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
-  template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
-  template/docs/agent/external-services.yaml.jinja \
-  template/docs/agent/git-retirement.yaml.jinja
-do
+copier_update_inventory="$root/tests/fixtures/orchestration/copier-update-source-inventory.txt"
+while IFS= read -r candidate_path || [ -n "$candidate_path" ]; do
+  case "$candidate_path" in
+    ""|/*|.|..|./*|../*|*/./*|*/../*|*/.|*/..|*//*|*\\*)
+      echo "invalid Copier update inventory path: $candidate_path" >&2
+      exit 1
+      ;;
+  esac
   mkdir -p "$(dirname "$update_source/$candidate_path")"
   cp "$root/$candidate_path" "$update_source/$candidate_path"
-done
-fixture_git "$update_source" add \
-  copier.yml \
-  scripts/migrate-sequential-plan-worker.py \
-  scripts/validate-copier-update.py \
-  template/README.md.jinja \
-  template/.github/workflows/codex-ci-autofix.yml.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
-  template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
-  template/.project-agent-workflow/scripts/run-copier-update.sh \
-  template/.project-agent-workflow/scripts/update-from-copier.sh \
-  template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
-  template/.project-agent-workflow/scripts/validate-copier-update.py \
-  template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
-  template/.project-agent-workflow/scripts/check-external-service-policy.py \
-  template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
-  template/.project-agent-workflow/scripts/plan_validation_commands.py \
-  template/.project-agent-workflow/scripts/validate-changes.py \
-  template/.agents/skills/browser-ops/SKILL.md \
-  template/.agents/skills/verify-copier-update/SKILL.md \
-  template/.project-agent-workflow/AGENTS.md.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
-  template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
-  template/.project-agent-workflow/scripts/planlib.py \
-  template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
-  template/.project-agent-workflow/ownership.yaml \
-  template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
-  template/.project-agent-workflow/skills/browser-ops/SKILL.md \
-  template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-  template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-  template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
-  template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
-  template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
-  template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
-  template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-  template/.project-agent-workflow/skills/graph-memory/SKILL.md \
-  template/.project-agent-workflow/skills/linear-ops/SKILL.md \
-  template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
-  template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
-  template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
-  template/docs/agent/external-services.yaml.jinja \
-  template/docs/agent/git-retirement.yaml.jinja
+  fixture_git "$update_source" add -- "$candidate_path"
+done < "$copier_update_inventory"
 fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
   commit --allow-empty -qm "Make Copier updates fail closed"
 fixture_git "$update_source" tag v1.2.2
@@ -847,6 +771,10 @@ validate_common_lane() {
     grep -q 'REVIEW_REASON_CODES' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
     grep -q 'def record_writable_attempt_start' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
     grep -q 'def record_attempt_close' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+    grep -q 'diagnosis_required' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+    grep -q 'def load_authoritative_failure' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+    grep -q 'def load_diagnosis_evidence' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+    grep -q 'def validation_failure_identity' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q 'worker_attempt_label' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q 'NEW_FILE_ROOT' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
     grep -q 'implementation_risk' "$out/.project-agent-workflow/scripts/planlib.py"

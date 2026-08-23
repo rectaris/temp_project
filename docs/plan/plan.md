@@ -1,7 +1,6 @@
 # Active Plan
 
 id	path	status
-131	docs/plan/active/131-require-confirmed-failure-diagnosis.md	in_progress
 132	docs/plan/active/132-checkpoint-plan-session-resources.md	in_progress
 133	docs/plan/active/133-evaluate-resource-bounded-orchestration.md	in_progress
 163	docs/plan/active/163-capture-validation-witness-migration-provenance.md	in_progress

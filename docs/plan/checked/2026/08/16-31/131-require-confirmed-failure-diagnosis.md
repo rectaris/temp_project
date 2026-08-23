@@ -1,6 +1,6 @@
 # Require confirmed failure diagnosis before repair planning
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -36,7 +36,7 @@ context_files:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/115-classify-review-outcomes-and-sequence-writes.md
+  - docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md
   - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md
   - docs/plan/checked/2026/08/16-31/121-bind-repair-classification-to-unchanged-boundaries.md
@@ -67,6 +67,9 @@ validation:
   - git diff --check
 acceptance:
   - After an authoritative failure, enter a parent-owned no-write condition that permits only bounded read-only reproduction and classification evidence; do not create a numbered repair plan until the exact failed operation and affected invariant are confirmed, then transition only to the existing independent-repair or hard-replan path.
+validation_witness_schema: 1
+validation_witness_map:
+  - {"acceptance_sha256":"sha256:f01ccfa44e09342cbfeb4599282afbed2286a3e43524757881dd3163bb3b93e7","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
 replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
 replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
 integration_gates:
@@ -91,13 +94,16 @@ checked_summary_ja: 権威検証の失敗後は読取専用の再現証拠で原
 
 ## Tasks
 
-- [ ] Define the diagnosis evidence schema and append-only ledger transitions.
-- [ ] Reject worker, correction, validation, apply, completion, archive, and repair-plan operations while diagnosis is incomplete.
-- [ ] Add exact confirmed, inconclusive, disputed, replay, mutation, and authority-drift tests.
-- [ ] Align root and generated policy, ledger, runner, fixtures, and Copier behavior.
-- [ ] Review the bounded parent diff, run focused validation, obtain independent review, run the authoritative suite once, and archive the accepted plan.
+- [x] Define the diagnosis evidence schema and append-only ledger transitions.
+- [x] Reject worker, correction, validation, apply, completion, archive, and repair-plan operations while diagnosis is incomplete.
+- [x] Add exact confirmed, inconclusive, disputed, replay, mutation, and authority-drift tests.
+- [x] Align root and generated policy, ledger, runner, fixtures, and Copier behavior.
+- [x] Review the bounded parent diff, run focused validation, obtain independent review, run the authoritative suite once, and archive the accepted plan.
 
 ## Validation Notes
 
 - The user approved the confirmed-diagnosis boundary on 2026-08-21.
 - The source Plan 116 acceptance text is preserved exactly.
+- Focused validation passed: the execution-ledger tests, sandboxed-runner tests, root-policy check, Copier static check, and `git diff --check`.
+- Independent review first identified High and Medium defects in the repair-plan gate, parent-direct admission, report sequence, lifecycle binding, and setup-failure persistence. The bounded parent remediation resolved them; the final review reported High 0 and Medium 0.
+- The authoritative validation suite ran exactly once on 2026-08-22 and passed all declared commands. `actionlint` was unavailable, so the repository lint and smoke scripts applied their existing documented skip behavior; both scripts still passed.

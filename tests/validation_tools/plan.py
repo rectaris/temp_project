@@ -1,5 +1,6 @@
 """Plan validation-command tests."""
 
+import hashlib
 import json
 import os
 import subprocess
@@ -12,6 +13,10 @@ from .support import PLANLIB, PLAN_COMMAND_MODULES, ROOT, load_module
 
 
 class PlanValidationCommandsTest(unittest.TestCase):
+    @staticmethod
+    def witness_digest(text: str) -> str:
+        return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
     def test_planlib_parses_optional_focused_validation_without_requiring_it(self) -> None:
         module = load_module(PLANLIB, "focused_validation_planlib")
         self.assertNotIn("focused_validation", module.LEGACY_REQUIRED_FIELDS)
@@ -57,6 +62,252 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(module.parse_manifest(plan)["validation_authority_scope"], ["tools/"])
+
+    def test_validation_witness_map_binds_acceptance_to_earliest_declared_stage(self) -> None:
+        module = load_module(PLANLIB, "validation_witness_planlib")
+        acceptance = "Preserve the bounded behavior."
+        digest = self.witness_digest(acceptance)
+        values = {
+            "status": "in_progress",
+            "validation_witness_schema": "1",
+            "integration_gates": ["the integration predecessor is checked"],
+            "acceptance": [acceptance],
+            "focused_validation": ["python3 -m pytest tests/focused.py"],
+            "validation": [
+                "python3 -m pytest tests/focused.py",
+                "git diff --check",
+            ],
+            "validation_witness_map": [
+                json.dumps(
+                    {
+                        "acceptance_sha256": digest,
+                        "stage": "focused",
+                        "witness": "python3 -m pytest tests/focused.py",
+                    },
+                    separators=(",", ":"),
+                )
+            ],
+        }
+        records = module.validate_validation_witness_map(values)
+        self.assertEqual(records[0]["acceptance_sha256"], digest)
+
+        values["validation_witness_map"] = [
+            json.dumps(
+                {
+                    "acceptance_sha256": digest,
+                    "stage": "authoritative",
+                    "witness": "git diff --check",
+                    "authoritative_only_reason": "requires the complete integrated candidate",
+                },
+                separators=(",", ":"),
+            )
+        ]
+        self.assertEqual(
+            module.validate_validation_witness_map(values)[0]["stage"],
+            "authoritative",
+        )
+
+    def test_validation_witness_map_rejects_missing_coverage_and_late_witnesses(self) -> None:
+        module = load_module(PLANLIB, "invalid_validation_witness_planlib")
+        acceptance = "Preserve the bounded behavior."
+        digest = self.witness_digest(acceptance)
+        base = {
+            "status": "in_progress",
+            "validation_witness_schema": "1",
+            "integration_gates": ["the integration predecessor is checked"],
+            "acceptance": [acceptance],
+            "focused_validation": ["python3 -m pytest tests/focused.py"],
+            "validation": ["python3 -m pytest tests/focused.py"],
+            "validation_witness_map": [],
+        }
+        invalid_maps = (
+            [],
+            ["not-json"],
+            [
+                json.dumps(
+                    {
+                        "acceptance_sha256": "sha256:" + "0" * 64,
+                        "stage": "focused",
+                        "witness": "python3 -m pytest tests/focused.py",
+                    }
+                )
+            ],
+            [
+                json.dumps(
+                    {
+                        "acceptance_sha256": digest,
+                        "stage": "authoritative",
+                        "witness": "python3 -m pytest tests/focused.py",
+                        "authoritative_only_reason": "complete suite only",
+                    }
+                )
+            ],
+            [
+                json.dumps(
+                    {
+                        "acceptance_sha256": digest,
+                        "stage": "authoritative",
+                        "witness": "git diff --check",
+                    }
+                )
+            ],
+        )
+        for witness_map in invalid_maps:
+            with self.subTest(witness_map=witness_map):
+                values = {**base, "validation_witness_map": witness_map}
+                with self.assertRaises(module.PlanError):
+                    module.validate_validation_witness_map(values)
+
+    def test_plan_command_check_rejects_open_integration_plan_without_witness_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = root / "docs/plan/active/991-integration.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text(
+                "status: in_progress\n"
+                "validation_witness_schema: 1\n"
+                "integration_gates:\n  - predecessor is checked\n"
+                "validation:\n  - git diff --check\n"
+                "acceptance:\n  - Preserve the integration.\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            for index, module_path in enumerate(PLAN_COMMAND_MODULES):
+                with self.subTest(module=module_path):
+                    command_module = load_module(module_path, f"missing_witness_commands_{index}")
+                    with self.assertRaises(command_module.ValidationCommandError):
+                        command_module.check_plan(plan)
+
+            legacy_text = (
+                "status: in_progress\n"
+                "replan_contract: docs/plan/replanned/contracts/990-source.json\n"
+                "integration_gates:\n  - preserved predecessor is checked\n"
+                "validation:\n  - git diff --check\n"
+                "acceptance:\n  - Preserve the pre-schema integration plan.\n\n## Tasks\n"
+            )
+            plan.write_text(legacy_text, encoding="utf-8")
+            archive = root / "docs/plan/replanned/2026/08/16-31/990-source.md"
+            archive.parent.mkdir(parents=True)
+            archive.write_text("status: replanned\n", encoding="utf-8")
+            contract = root / "docs/plan/replanned/contracts/990-source.json"
+            contract.parent.mkdir(parents=True)
+            contract.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "contract_path": "docs/plan/replanned/contracts/990-source.json",
+                        "archive_path": "docs/plan/replanned/2026/08/16-31/990-source.md",
+                        "successors": [
+                            {
+                                "path": "docs/plan/active/991-integration.md",
+                                "content_digest": self.witness_digest(legacy_text),
+                                "acceptance_digests": [
+                                    self.witness_digest("Preserve the pre-schema integration plan.")
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for index, module_path in enumerate(PLAN_COMMAND_MODULES):
+                with self.subTest(legacy_module=module_path):
+                    command_module = load_module(module_path, f"legacy_witness_commands_{index}")
+                    command_module.check_plan(plan)
+
+            plan.write_text(legacy_text.replace("Preserve", "Alter"), encoding="utf-8")
+            for index, module_path in enumerate(PLAN_COMMAND_MODULES):
+                with self.subTest(mutated_legacy_module=module_path):
+                    command_module = load_module(module_path, f"mutated_legacy_commands_{index}")
+                    with self.assertRaises(command_module.ValidationCommandError):
+                        command_module.check_plan(plan)
+
+    def test_static_witness_requires_its_concrete_context_predicate(self) -> None:
+        module = load_module(PLANLIB, "static_validation_witness_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "docs/plan/active/991-integration.md"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text("status: in_progress\n", encoding="utf-8")
+            context = root / "docs/agent/SPEC_PLAN_WORKFLOW.md"
+            context.parent.mkdir(parents=True)
+            context.write_text("policy\n", encoding="utf-8")
+            acceptance = "Use resolved context files."
+            record = {
+                "acceptance_sha256": self.witness_digest(acceptance),
+                "stage": "static",
+                "witness": "resolved-context-files",
+            }
+            values = {
+                "status": "in_progress",
+                "validation_witness_schema": "1",
+                "integration_gates": ["the context input is resolved"],
+                "context_files": ["docs/agent/SPEC_PLAN_WORKFLOW.md"],
+                "acceptance": [acceptance],
+                "focused_validation": [],
+                "validation": ["git diff --check"],
+                "validation_witness_map": [json.dumps(record, separators=(",", ":"))],
+            }
+            self.assertEqual(
+                module.validate_validation_witness_map(values, plan_path=plan_path)[0]["witness"],
+                "resolved-context-files",
+            )
+
+            record["witness"] = "plan-manifest"
+            values["validation_witness_map"] = [json.dumps(record, separators=(",", ":"))]
+            with self.assertRaises(module.PlanError):
+                module.validate_validation_witness_map(values, plan_path=plan_path)
+
+            record["witness"] = "resolved-context-files"
+            invalid_contexts = (
+                ["docs/agent/DOES_NOT_EXIST.md"],
+                ["docs/agent/../agent/SPEC_PLAN_WORKFLOW.md"],
+            )
+            for context_files in invalid_contexts:
+                with self.subTest(context_files=context_files):
+                    values["context_files"] = context_files
+                    values["validation_witness_map"] = [
+                        json.dumps(record, separators=(",", ":"))
+                    ]
+                    with self.assertRaises(module.PlanError):
+                        module.validate_validation_witness_map(values, plan_path=plan_path)
+
+            symlink = root / "docs/agent/LINK.md"
+            symlink.symlink_to(context.name)
+            values["context_files"] = ["docs/agent/LINK.md"]
+            with self.assertRaises(module.PlanError):
+                module.validate_validation_witness_map(values, plan_path=plan_path)
+
+            checked = root / "docs/plan/checked/2026/08/16-31/990-source.md"
+            checked.parent.mkdir(parents=True)
+            checked.write_text("status: in_progress\n", encoding="utf-8")
+            values["context_files"] = [
+                "docs/plan/checked/2026/08/16-31/990-source.md"
+            ]
+            with self.assertRaises(module.PlanError):
+                module.validate_validation_witness_map(values, plan_path=plan_path)
+
+    def test_copier_update_uses_one_copy_and_stage_inventory(self) -> None:
+        inventory_path = ROOT / "tests/fixtures/orchestration/copier-update-source-inventory.txt"
+        entries = inventory_path.read_text(encoding="utf-8").splitlines()
+        self.assertTrue(entries)
+        self.assertEqual(len(entries), len(set(entries)))
+        root = ROOT.resolve()
+        for entry in entries:
+            with self.subTest(entry=entry):
+                path = Path(entry)
+                self.assertTrue(entry)
+                self.assertEqual(entry, path.as_posix())
+                self.assertFalse(path.is_absolute())
+                self.assertNotIn("..", path.parts)
+                self.assertNotIn("\\", entry)
+                target = ROOT / path
+                self.assertTrue(target.is_file())
+                self.assertFalse(target.is_symlink())
+                target.resolve().relative_to(root)
+        script = (ROOT / "tests/copier-update.sh").read_text(encoding="utf-8")
+        self.assertEqual(script.count("copier-update-source-inventory.txt"), 1)
+        self.assertNotIn('fixture_git "$update_source" add \\\n', script)
+        self.assertIn('fixture_git "$update_source" add -- "$candidate_path"', script)
 
     def test_planlib_parses_optional_replan_lineage_without_requiring_it(self) -> None:
         module = load_module(PLANLIB, "replan_lineage_planlib")
