@@ -1,5 +1,6 @@
 """Hook logging and transcript behavior tests."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -140,6 +141,43 @@ class AgentLogEventTest(unittest.TestCase):
                 resources["metrics"]["provider_input_tokens"]["status"],
                 "not_observed",
             )
+
+    def test_review_packet_start_records_bounded_turn_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            packet_digest = "sha256:" + "a" * 64
+            run_hook(
+                AGENT_LOG,
+                {
+                    "session_id": "review-session",
+                    "hook_event_name": "ReviewPacketStart",
+                    "review_packet_digest": packet_digest,
+                    "inherited_turns": 0,
+                    "prompt": "must not persist",
+                },
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "review-turn-zero"},
+                args=["--event", "ReviewPacketStart"],
+            )
+            event_path = repo / ".agent-logs/review-turn-zero/raw/events.jsonl"
+            record = json.loads(event_path.read_text(encoding="utf-8"))
+            self.assertEqual(record["event"], "ReviewPacketStart")
+            self.assertEqual(record["payload"]["review_packet_digest"], packet_digest)
+            self.assertEqual(record["payload"]["inherited_turns"], 0)
+            self.assertEqual(record["payload"]["session_id"], "review-session")
+            self.assertNotIn("prompt", record["payload"])
+            checked = subprocess.run(
+                ["python3", str(MANIFEST_CHECKER), str(
+                    repo / ".agent-logs/review-turn-zero/manifest.json"
+                )],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(checked.returncode, 0, checked.stderr)
 
     def test_default_run_id_is_stable_for_runtime_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -395,6 +433,93 @@ class CodexTranscriptImportTest(unittest.TestCase):
             self.assertEqual(resources["metrics"]["provider_output_tokens"]["value"], 30)
             self.assertEqual(resources["metrics"]["provider_reasoning_tokens"]["value"], 10)
             self.assertEqual(resources["metrics"]["tool_call_count"]["value"], 1)
+
+    def test_importer_preserves_review_packet_turn_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            source = Path(tmp) / "review-session.jsonl"
+            packet_digest = "sha256:" + "b" * 64
+            source.write_text(json.dumps({
+                "timestamp": "2026-08-23T00:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "review_packet_start",
+                    "session_id": "review-session",
+                    "review_packet_digest": packet_digest,
+                    "inherited_turns": 0,
+                },
+            }) + "\n", encoding="utf-8")
+            result = subprocess.run(
+                ["python3", str(IMPORTER), str(source), "--run-id", "review-import"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            record = json.loads(
+                (repo / ".agent-logs/review-import/raw/transcript.jsonl").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(record["record_type"], "review_packet_start")
+            self.assertEqual(record["metadata"]["review_packet_digest"], packet_digest)
+            self.assertEqual(record["metadata"]["inherited_turns"], 0)
+            self.assertEqual(record["metadata"]["session_id"], "review-session")
+
+    def test_importer_overwrite_replaces_transcript_observations_from_normalized_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            source = Path(tmp) / "usage.jsonl"
+
+            def write_usage(value: int) -> None:
+                source.write_text(json.dumps({
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "internal_chat_message_metadata_passthrough": {
+                            "session_id": "passthrough-session"
+                        },
+                        "info": {"total_token_usage": {"input_tokens": value}},
+                    },
+                }) + "\n", encoding="utf-8")
+
+            write_usage(100)
+            subprocess.run(
+                ["python3", str(IMPORTER), str(source), "--run-id", "overwrite-run"],
+                cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            write_usage(5)
+            result = subprocess.run(
+                [
+                    "python3", str(IMPORTER), str(source), "--run-id", "overwrite-run",
+                    "--overwrite",
+                ],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            run_dir = repo / ".agent-logs/overwrite-run"
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            resources = manifest["resource_observations"]
+            self.assertEqual(resources["metrics"]["provider_input_tokens"]["value"], 5)
+            self.assertEqual(
+                resources["root_session_identity"]["digest"],
+                "sha256:" + hashlib.sha256(b"passthrough-session").hexdigest(),
+            )
+            normalized = run_dir / "raw/transcript.jsonl"
+            self.assertEqual(
+                resources["evidence_digests"]["external_transcript"],
+                "sha256:" + hashlib.sha256(normalized.read_bytes()).hexdigest(),
+            )
 
 
 class RootLoggingCliDelegationTest(unittest.TestCase):

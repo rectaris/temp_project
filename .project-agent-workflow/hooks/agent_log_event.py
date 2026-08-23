@@ -24,12 +24,24 @@ MAX_DICT = 200
 ALLOWED_METADATA_KEYS = {
     "cwd",
     "hook_event_name",
+    "inherited_turns",
+    "review_packet_digest",
     "session_id",
     "stop_hook_active",
     "tool",
     "tool_name",
 }
 OPERATIONAL_PAYLOAD_KEYS = {*ALLOWED_METADATA_KEYS, "transcript_path"}
+RESOURCE_METRICS = (
+    "provider_input_tokens",
+    "provider_cached_input_tokens",
+    "provider_output_tokens",
+    "provider_reasoning_tokens",
+    "model_response_count",
+    "compaction_count",
+    "helper_turn_count",
+    "tool_call_count",
+)
 
 
 def utc_now() -> str:
@@ -110,7 +122,7 @@ def load_payload() -> dict[str, Any]:
         return {"_parse_error": str(exc)}
 
 
-def event_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+def event_metadata(event: str, payload: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     for key in sorted(ALLOWED_METADATA_KEYS):
         value = payload.get(key)
@@ -122,6 +134,16 @@ def event_metadata(payload: dict[str, Any]) -> dict[str, Any]:
             metadata[key] = value[:512]
     if payload.get("transcript_path"):
         metadata["transcript_available"] = True
+    if (
+        event != "ReviewPacketStart"
+        or not isinstance(metadata.get("review_packet_digest"), str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", metadata["review_packet_digest"])
+        or isinstance(metadata.get("inherited_turns"), bool)
+        or not isinstance(metadata.get("inherited_turns"), int)
+        or metadata["inherited_turns"] < 0
+    ):
+        metadata.pop("review_packet_digest", None)
+        metadata.pop("inherited_turns", None)
     return metadata
 
 
@@ -129,6 +151,59 @@ def write_json(path: Path, value: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def hook_resource_observations(event_path: Path) -> dict[str, Any]:
+    session_id: str | None = None
+    compaction_count = 0
+    tool_call_count = 0
+    for line in event_path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        event = record.get("event")
+        payload = record.get("payload")
+        if event == "PreCompact":
+            compaction_count += 1
+        if event == "PreToolUse":
+            tool_call_count += 1
+        if isinstance(payload, dict) and isinstance(payload.get("session_id"), str):
+            session_id = payload["session_id"]
+    not_observed = {
+        "status": "not_observed",
+        "value": None,
+        "provenance": "not_observed",
+    }
+    metrics = {name: dict(not_observed) for name in RESOURCE_METRICS}
+    metrics["compaction_count"] = {
+        "status": "observed",
+        "value": compaction_count,
+        "provenance": "deterministic_proxy",
+    }
+    metrics["tool_call_count"] = {
+        "status": "observed",
+        "value": tool_call_count,
+        "provenance": "deterministic_proxy",
+    }
+    return {
+        "schema_version": 1,
+        "root_session_identity": (
+            {
+                "status": "observed",
+                "digest": "sha256:" + hashlib.sha256(session_id.encode()).hexdigest(),
+            }
+            if session_id
+            else {"status": "not_observed", "digest": None}
+        ),
+        "evidence_digests": {
+            "external_transcript": None,
+            "codex_hooks": "sha256:" + hashlib.sha256(event_path.read_bytes()).hexdigest(),
+        },
+        "metrics": metrics,
+    }
 
 
 def update_manifest(run_dir: Path, run: str, event_path: Path) -> None:
@@ -183,6 +258,22 @@ def update_manifest(run_dir: Path, run: str, event_path: Path) -> None:
     if not coverage["codex_hooks"]["present"]:
         missing_sources.append("codex_hooks")
     manifest["missing_sources"] = missing_sources
+    current_resources = manifest.get("resource_observations")
+    resources = hook_resource_observations(event_path)
+    if isinstance(current_resources, dict):
+        current_digests = current_resources.get("evidence_digests")
+        if isinstance(current_digests, dict):
+            resources["evidence_digests"]["external_transcript"] = current_digests.get(
+                "external_transcript"
+            )
+        current_metrics = current_resources.get("metrics")
+        if isinstance(current_metrics, dict):
+            for name in RESOURCE_METRICS:
+                if name in {"compaction_count", "tool_call_count"}:
+                    continue
+                if isinstance(current_metrics.get(name), dict):
+                    resources["metrics"][name] = current_metrics[name]
+    manifest["resource_observations"] = resources
     manifest["updated_at"] = utc_now()
     write_json(manifest_path, manifest)
 
@@ -219,7 +310,7 @@ def append_event(event: str, payload: dict[str, Any]) -> None:
         "event": event,
         "created_at": utc_now(),
         "cwd": str(Path.cwd()),
-        "payload": redact(event_metadata(payload)),
+        "payload": redact(event_metadata(event, payload)),
     }
     with (run_dir / ".events.lock").open("a", encoding="utf-8") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)

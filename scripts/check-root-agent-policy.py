@@ -966,6 +966,39 @@ def check_user_communication_contract() -> None:
         fail("write-for-reader holdout scenarios must remain outside tuning")
 
 
+def check_review_turn_zero_contract() -> None:
+    required = {
+        "docs/agent/SPEC_AGENT_LOGGING.md": (
+            "ReviewPacketStart",
+            "SessionStart` alone",
+            "inherited turn count",
+        ),
+        "docs/agent/SPEC_CONTEXT_COMPRESSION.md": (
+            "cannot establish staged-review turn zero",
+            "ReviewPacketStart",
+        ),
+        ".project-agent-workflow/hooks/agent_log_event.py": (
+            '"review_packet_digest"',
+            '"inherited_turns"',
+            '"ReviewPacketStart"',
+        ),
+        "template/.project-agent-workflow/scripts/import-codex-transcript.py": (
+            '"review_packet_start"',
+            '"review_packet_digest"',
+            '"inherited_turns"',
+        ),
+        "scripts/plan-execution-state.py": (
+            "review_turn_zero_from_manifest",
+            "--review-resource-manifest",
+        ),
+    }
+    for relative, markers in required.items():
+        text = read(relative)
+        for marker in markers:
+            if marker not in text:
+                fail(f"{relative} missing review turn-zero marker: {marker}")
+
+
 def check_namespaced_documentation_targets() -> None:
     required_target = "template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
     stale_target = "template/docs/agent/SPEC_JAPANESE_TECH_WRITING.md"
@@ -2693,6 +2726,7 @@ def main() -> int:
     check_external_service_policy()
     check_git_retirement_policy()
     check_user_communication_contract()
+    check_review_turn_zero_contract()
     check_namespaced_documentation_targets()
     check_orchestration_policy(include_holdout=args.include_holdout)
     check_active_plans()

@@ -79,3 +79,4 @@ If a compressed view is used to make a durable decision, include the run id and 
 
 Compaction is a diagnostic proxy only.
 A compacted or summarized continuation of the same conversation does not establish a fresh root session and cannot satisfy a numbered-plan session checkpoint.
+It also cannot establish staged-review turn zero; that requires the uncompressed runtime `ReviewPacketStart` source evidence.

@@ -135,3 +135,4 @@ id	path
 168	docs/plan/checked/2026/08/16-31/168-verify-runtime-session-resource-evidence.md
 169	docs/plan/checked/2026/08/16-31/169-linearize-session-checkpoint-lifecycle.md
 172	docs/plan/checked/2026/08/16-31/172-bind-review-to-candidate-leaf.md
+173	docs/plan/checked/2026/08/16-31/173-record-runtime-review-turn-zero.md

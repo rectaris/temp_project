@@ -1,6 +1,6 @@
 # Record runtime review turn zero
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -13,6 +13,7 @@ implementation_risk: high
 implementation_ambiguity: ordinary
 primary_invariant: review inheritance is observed only when runtime-produced transcript or hook evidence binds the reviewer session and bounded packet to inherited turn count zero
 write_scope:
+  - .project-agent-workflow/hooks/agent_log_event.py
   - docs/agent/SPEC_AGENT_LOGGING.md
   - docs/agent/SPEC_CONTEXT_COMPRESSION.md
   - scripts/agent-log-event.py
@@ -39,7 +40,7 @@ context_files:
   - docs/plan/checked/2026/08/16-31/168-verify-runtime-session-resource-evidence.md
   - docs/plan/checked/2026/08/16-31/169-linearize-session-checkpoint-lifecycle.md
   - docs/plan/replanned/2026/08/16-31/132-checkpoint-plan-session-resources.md
-  - docs/plan/active/172-bind-review-to-candidate-leaf.md
+  - docs/plan/checked/2026/08/16-31/172-bind-review-to-candidate-leaf.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -47,12 +48,12 @@ required_specs:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
 focused_validation:
-  - python3 -m pytest tests/hooks
+  - python3 -m unittest tests.hooks.logging
   - python3 tests/test-plan-execution-state.py
   - python3 scripts/check-copier-template.py
   - git diff --check
 validation:
-  - python3 -m pytest tests/hooks
+  - python3 -m unittest tests.hooks.logging
   - python3 tests/test-plan-execution-state.py
   - python3 scripts/check-root-agent-policy.py
   - python3 scripts/check-copier-template.py
@@ -64,7 +65,7 @@ acceptance:
   - Give an independent reviewer only the unchanged plan, admitted diff, bounded receipts, and applicable specifications after the candidate is otherwise review-ready; permit one initial review and one bounded rereview per candidate before the existing strategy-change path, and do not reuse an accumulated general-purpose reviewer history across numbered plans.
 validation_witness_schema: 1
 validation_witness_map:
-  - {"acceptance_sha256":"sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc","stage":"focused","witness":"python3 -m pytest tests/hooks"}
+  - {"acceptance_sha256":"sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc","stage":"focused","witness":"python3 -m unittest tests.hooks.logging"}
 replan_source: docs/plan/active/170-bind-review-context-to-candidate-lifecycle.md
 replan_contract: docs/plan/replanned/contracts/170-bind-review-context-to-candidate-lifecycle.json
 integration_gates:
@@ -88,13 +89,17 @@ checked_summary_ja: review packetが継承turn 0で渡された事実をruntime�
 
 ## Tasks
 
-- [ ] Extend transcript and hook observation schemas with an explicit bounded review-packet turn observation.
-- [ ] Verify source bytes and evidence digests before marking reviewer inheritance observed.
-- [ ] Bind the observation to the candidate review leaf and receipt packet digest.
-- [ ] Add rejection tests for SessionStart-only, caller-fabricated, mismatched packet, and changed evidence.
-- [ ] Align root and generated logging policy and validation.
-- [ ] Run focused validation, independent review, authoritative validation once, archive, and commit.
+- [x] Extend transcript and hook observation schemas with an explicit bounded review-packet turn observation.
+- [x] Verify source bytes and evidence digests before marking reviewer inheritance observed.
+- [x] Bind the observation to the candidate review leaf and receipt packet digest.
+- [x] Add rejection tests for SessionStart-only, caller-fabricated, mismatched packet, and changed evidence.
+- [x] Align root and generated logging policy and validation.
+- [x] Run focused validation, independent review, authoritative validation once, archive, and commit.
 
 ## Validation Notes
 
 - Plan 170 was restructured after its bounded rereview found unresolved candidate identity, runtime evidence, and reviewer-history boundaries.
+- Replaced the non-collecting pytest command with the executable `tests.hooks.logging` unittest module.
+- Focused validation passed with 20 logging tests, 57 execution-state tests, policy checks, and diff checks.
+- Independent review found missing root-hook observations and stale transcript-overwrite evidence; one bounded remediation round closed both.
+- Authoritative validation passed once with every declared command.

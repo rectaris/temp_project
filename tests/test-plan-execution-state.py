@@ -105,6 +105,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.repo, text=True).strip()
         self.state = self.base / "execution.json"
         self.lifecycle = self.base / "candidate-lifecycle.json"
+        self.review_manifests: dict[Path, Path] = {}
         self.run_cli("init", str(self.state), "--run-id", "run-1", "--plan", "docs/plan/active/001-test.md",
                  "--plan-digest", digest(self.plan.read_text()), "--source-head", self.head,
                  "--primary-invariant-digest", digest("one invariant"), "--lifecycle-state", str(self.lifecycle),
@@ -145,6 +146,23 @@ class PlanExecutionStateTest(unittest.TestCase):
             )
         }
         receipt_payload["packet_digest"] = STATE_MODULE.canonical_digest(packet)
+        review_manifest = self.review_manifests[receipt]
+        review_manifest_payload = json.loads(review_manifest.read_text(encoding="utf-8"))
+        event_path = review_manifest.parent / review_manifest_payload["hook_event_log"]
+        events = [
+            json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()
+        ]
+        events[-1]["payload"]["review_packet_digest"] = receipt_payload["packet_digest"]
+        event_path.write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n" for item in events),
+            encoding="utf-8",
+        )
+        evidence_digest = digest(event_path.read_bytes())
+        review_manifest_payload["resource_observations"]["evidence_digests"][
+            "codex_hooks"
+        ] = evidence_digest
+        review_manifest.write_text(json.dumps(review_manifest_payload), encoding="utf-8")
+        receipt_payload["inheritance_evidence_digest"] = evidence_digest
         receipt.write_text(json.dumps(receipt_payload), encoding="utf-8")
         identity = STATE_MODULE.review_candidate_identity_digest(
             payload["plan_execution_attempt_id"], candidate_digest, target
@@ -161,6 +179,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             finding_severity=finding_severities,
             lifecycle_state=str(lifecycle),
             elapsed_seconds=0.0,
+            review_resource_manifest=str(self.review_manifests[receipt]),
         )
         try:
             with (
@@ -239,6 +258,8 @@ class PlanExecutionStateTest(unittest.TestCase):
         *,
         observed_session: bool = True,
         session: str = "source-session",
+        review_packet_digest: str | None = None,
+        inherited_turns: int = 0,
     ) -> Path:
         run_dir = self.repo / ".agent-logs" / label
         raw_dir = run_dir / "raw"
@@ -251,8 +272,22 @@ class PlanExecutionStateTest(unittest.TestCase):
             "cwd": str(self.repo),
             "payload": {"session_id": session} if observed_session else {},
         }
+        events = [event]
+        if review_packet_digest is not None:
+            events.append({
+                "schema_version": 1,
+                "event": "ReviewPacketStart",
+                "created_at": "2026-08-23T00:00:01Z",
+                "cwd": str(self.repo),
+                "payload": {
+                    "session_id": session,
+                    "hook_event_name": "ReviewPacketStart",
+                    "review_packet_digest": review_packet_digest,
+                    "inherited_turns": inherited_turns,
+                },
+            })
         event_path.write_text(
-            json.dumps(event, sort_keys=True) + "\n",
+            "".join(json.dumps(item, sort_keys=True) + "\n" for item in events),
             encoding="utf-8",
         )
         evidence_digest = "sha256:" + hashlib.sha256(event_path.read_bytes()).hexdigest()
@@ -397,13 +432,45 @@ class PlanExecutionStateTest(unittest.TestCase):
             "reviewer_session_digest": digest(reviewer_session or label),
             "inherited_turns": inherited_turns,
             "inheritance_evidence": "observed",
-            "inheritance_evidence_digest": digest(f"{label}-inheritance"),
+            "inheritance_evidence_digest": "",
             "review_round": round_value,
             "packet_digest": STATE_MODULE.canonical_digest(packet),
         }
+        review_manifest = self.resource_manifest(
+            f"{label}-review-runtime",
+            session=reviewer_session or label,
+            review_packet_digest=receipt["packet_digest"],
+            inherited_turns=inherited_turns,
+        )
+        review_manifest_payload = json.loads(review_manifest.read_text(encoding="utf-8"))
+        receipt["inheritance_evidence_digest"] = review_manifest_payload[
+            "resource_observations"
+        ]["evidence_digests"]["codex_hooks"]
         path = self.base / f"{label}-review.json"
         path.write_text(json.dumps(receipt), encoding="utf-8")
+        self.review_manifests[path] = review_manifest
         return path
+
+    def rebind_review_runtime(self, receipt: Path) -> None:
+        receipt_payload = json.loads(receipt.read_text(encoding="utf-8"))
+        review_manifest = self.review_manifests[receipt]
+        manifest_payload = json.loads(review_manifest.read_text(encoding="utf-8"))
+        event_path = review_manifest.parent / manifest_payload["hook_event_log"]
+        events = [
+            json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()
+        ]
+        events[-1]["payload"]["review_packet_digest"] = receipt_payload["packet_digest"]
+        event_path.write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n" for item in events),
+            encoding="utf-8",
+        )
+        evidence_digest = digest(event_path.read_bytes())
+        manifest_payload["resource_observations"]["evidence_digests"][
+            "codex_hooks"
+        ] = evidence_digest
+        review_manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
+        receipt_payload["inheritance_evidence_digest"] = evidence_digest
+        receipt.write_text(json.dumps(receipt_payload), encoding="utf-8")
 
     def test_event_implementation_mode_must_match_ledger_mode(self) -> None:
         mismatched = self.record("wrong-mode", "elapsed_checkpoint", mode="parent_direct")
@@ -431,6 +498,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--event-id", "checkpoint-review",
             "--implementation-mode", "parent_direct",
             "--review-receipt", str(review),
+            "--review-resource-manifest", str(self.review_manifests[review]),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
         )
@@ -547,6 +615,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--event-id", "unobserved-review",
             "--implementation-mode", "parent_direct",
             "--review-receipt", str(review),
+            "--review-resource-manifest", str(self.review_manifests[review]),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
             check=True,
@@ -593,6 +662,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "review", str(state), "--run-id", run_id,
             "--event-id", "bad-review", "--implementation-mode", "parent_direct",
             "--review-receipt", str(bad), "--invariant-digest", invariant,
+            "--review-resource-manifest", str(self.review_manifests[bad]),
             "--lifecycle-state", str(lifecycle),
         )
         self.assertNotEqual(rejected.returncode, 0)
@@ -607,6 +677,7 @@ class PlanExecutionStateTest(unittest.TestCase):
                 "--event-id", f"review-{round_value}",
                 "--implementation-mode", "parent_direct",
                 "--review-receipt", str(receipt), "--invariant-digest", invariant,
+                "--review-resource-manifest", str(self.review_manifests[receipt]),
                 "--lifecycle-state", str(lifecycle),
             )
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
@@ -615,6 +686,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "review", str(state), "--run-id", run_id,
             "--event-id", "review-3", "--implementation-mode", "parent_direct",
             "--review-receipt", str(third), "--invariant-digest", invariant,
+            "--review-resource-manifest", str(self.review_manifests[third]),
             "--lifecycle-state", str(lifecycle),
         )
         self.assertNotEqual(exhausted.returncode, 0)
@@ -628,10 +700,107 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--event-id", "next-candidate-review",
             "--implementation-mode", "parent_direct",
             "--review-receipt", str(next_candidate), "--invariant-digest", invariant,
+            "--review-resource-manifest", str(self.review_manifests[next_candidate]),
             "--lifecycle-state", str(lifecycle),
         )
         self.assertNotEqual(restarted.returncode, 0)
         self.assertIn("differs from the admitted candidate diff", restarted.stderr)
+
+    def test_review_turn_zero_requires_matching_runtime_packet_evidence(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "runtime-review-evidence", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("runtime review\n", encoding="utf-8")
+        invariant = digest("one invariant")
+
+        session_start_only = self.review_receipt(
+            "session-start-only", digest(self.plan.read_text()), round_value=1
+        )
+        no_observation = self.resource_manifest(
+            "session-start-only-runtime", session="session-start-only"
+        )
+        no_observation_payload = json.loads(no_observation.read_text(encoding="utf-8"))
+        session_start_payload = json.loads(session_start_only.read_text(encoding="utf-8"))
+        session_start_payload["inheritance_evidence_digest"] = no_observation_payload[
+            "resource_observations"
+        ]["evidence_digests"]["codex_hooks"]
+        session_start_only.write_text(json.dumps(session_start_payload), encoding="utf-8")
+        missing = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "session-start-only", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(session_start_only),
+            "--review-resource-manifest", str(no_observation),
+            "--invariant-digest", invariant, "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("exactly one packet turn observation", missing.stderr)
+
+        fabricated = self.review_receipt(
+            "fabricated-runtime", digest(self.plan.read_text()), round_value=1
+        )
+        fabricated_payload = json.loads(fabricated.read_text(encoding="utf-8"))
+        fabricated_payload["inheritance_evidence_digest"] = digest("caller supplied")
+        fabricated.write_text(json.dumps(fabricated_payload), encoding="utf-8")
+        rejected_fabricated = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "fabricated-runtime", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(fabricated),
+            "--review-resource-manifest", str(self.review_manifests[fabricated]),
+            "--invariant-digest", invariant, "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected_fabricated.returncode, 0)
+        self.assertIn("not bound by the runtime manifest", rejected_fabricated.stderr)
+
+        mismatched = self.review_receipt(
+            "mismatched-packet", digest(self.plan.read_text()), round_value=1
+        )
+        review_manifest = self.review_manifests[mismatched]
+        manifest_payload = json.loads(review_manifest.read_text(encoding="utf-8"))
+        event_path = review_manifest.parent / manifest_payload["hook_event_log"]
+        records = [
+            json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()
+        ]
+        records[-1]["payload"]["review_packet_digest"] = digest("other packet")
+        event_path.write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n" for item in records),
+            encoding="utf-8",
+        )
+        changed_digest = digest(event_path.read_bytes())
+        manifest_payload["resource_observations"]["evidence_digests"][
+            "codex_hooks"
+        ] = changed_digest
+        review_manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
+        mismatched_payload = json.loads(mismatched.read_text(encoding="utf-8"))
+        mismatched_payload["inheritance_evidence_digest"] = changed_digest
+        mismatched.write_text(json.dumps(mismatched_payload), encoding="utf-8")
+        rejected_mismatch = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "mismatched-packet", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(mismatched),
+            "--review-resource-manifest", str(review_manifest),
+            "--invariant-digest", invariant, "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected_mismatch.returncode, 0)
+        self.assertIn("does not observe this review packet", rejected_mismatch.stderr)
+
+        changed = self.review_receipt(
+            "changed-runtime", digest(self.plan.read_text()), round_value=1
+        )
+        changed_manifest = self.review_manifests[changed]
+        changed_payload = json.loads(changed_manifest.read_text(encoding="utf-8"))
+        changed_event = changed_manifest.parent / changed_payload["hook_event_log"]
+        changed_event.write_text(
+            changed_event.read_text(encoding="utf-8") + "{}\n", encoding="utf-8"
+        )
+        rejected_changed = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "changed-runtime", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(changed),
+            "--review-resource-manifest", str(changed_manifest),
+            "--invariant-digest", invariant, "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected_changed.returncode, 0)
+        self.assertIn("does not match recomputed source file digest", rejected_changed.stderr)
 
     def test_execution_state_rejects_more_than_two_reviews_for_one_candidate_identity(self) -> None:
         state, lifecycle, run_id = self.initialize_execution("review-state-budget")
@@ -679,10 +848,12 @@ class PlanExecutionStateTest(unittest.TestCase):
         }
         payload["packet_digest"] = STATE_MODULE.canonical_digest(packet)
         bad_specs.write_text(json.dumps(payload), encoding="utf-8")
+        self.rebind_review_runtime(bad_specs)
         rejected_specs = self.run_cli(
             "review", str(state), "--run-id", run_id,
             "--event-id", "bad-specs", "--implementation-mode", "parent_direct",
             "--review-receipt", str(bad_specs),
+            "--review-resource-manifest", str(self.review_manifests[bad_specs]),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
         )
@@ -703,10 +874,12 @@ class PlanExecutionStateTest(unittest.TestCase):
         }
         payload["packet_digest"] = STATE_MODULE.canonical_digest(packet)
         bad_worker.write_text(json.dumps(payload), encoding="utf-8")
+        self.rebind_review_runtime(bad_worker)
         rejected_worker = self.run_cli(
             "review", str(state), "--run-id", run_id,
             "--event-id", "bad-worker", "--implementation-mode", "parent_direct",
             "--review-receipt", str(bad_worker),
+            "--review-resource-manifest", str(self.review_manifests[bad_worker]),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
         )
@@ -832,6 +1005,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "review", str(state), "--run-id", run_id,
             "--event-id", "unverified-candidate", "--implementation-mode", "candidate",
             "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
             "--candidate-manifest", str(manifest_path),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
@@ -1212,6 +1386,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--event-id", "post-review-mutation",
             "--implementation-mode", "parent_direct",
             "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
         )
@@ -1254,6 +1429,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--event-id", "out-of-scope-review",
             "--implementation-mode", "parent_direct",
             "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
         )
@@ -1296,6 +1472,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--event-id", "first-parent-review",
             "--implementation-mode", "parent_direct",
             "--review-receipt", str(first_receipt),
+            "--review-resource-manifest", str(self.review_manifests[first_receipt]),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
         )
@@ -1309,6 +1486,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--event-id", "final-parent-review",
             "--implementation-mode", "parent_direct",
             "--review-receipt", str(second_receipt),
+            "--review-resource-manifest", str(self.review_manifests[second_receipt]),
             "--invariant-digest", digest("one invariant"),
             "--lifecycle-state", str(lifecycle),
         )

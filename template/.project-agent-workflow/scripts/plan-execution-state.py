@@ -435,6 +435,75 @@ def validate_resource_identity_evidence(
         )
 
 
+def review_turn_zero_from_manifest(
+    path: Path,
+    reviewer_session_digest: str,
+    packet_digest: str,
+    inheritance_evidence_digest: str,
+) -> None:
+    observations = resource_observations_from_manifest(path)
+    identity = observations["root_session_identity"]
+    if identity != {"status": "observed", "digest": reviewer_session_digest}:
+        raise StateError("reviewer session differs from bound runtime evidence")
+    manifest = read_bounded_json(path, "review resource manifest", outside_repository=False)
+    run_dir = path.resolve().parent
+    matched_source = False
+    matched_observation = False
+    for source, manifest_field in RESOURCE_EVIDENCE_SOURCES.items():
+        source_digest = observations["evidence_digests"][source]
+        if source_digest != inheritance_evidence_digest:
+            continue
+        matched_source = True
+        declared_path = manifest.get(manifest_field)
+        if not isinstance(declared_path, str):
+            raise StateError(f"review resource manifest does not declare {manifest_field}")
+        evidence = read_bound_resource_evidence(
+            run_dir, declared_path, source, source_digest
+        )
+        try:
+            records = [
+                json.loads(line) for line in evidence.decode("utf-8").splitlines()
+                if line.strip()
+            ]
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StateError("review runtime evidence is invalid JSONL") from exc
+        observations_in_source = 0
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            if source == "codex_hooks":
+                if record.get("event") != "ReviewPacketStart":
+                    continue
+                payload = record.get("payload")
+            else:
+                if record.get("record_type") != "review_packet_start":
+                    continue
+                payload = record.get("metadata")
+            observations_in_source += 1
+            if not isinstance(payload, dict):
+                continue
+            session_id = payload.get("session_id")
+            inherited_turns = payload.get("inherited_turns")
+            if (
+                isinstance(session_id, str)
+                and digest(session_id) == reviewer_session_digest
+                and payload.get("review_packet_digest") == packet_digest
+                and inherited_turns == 0
+                and not isinstance(inherited_turns, bool)
+            ):
+                matched_observation = True
+        if observations_in_source != 1:
+            raise StateError(
+                "review runtime evidence must contain exactly one packet turn observation"
+            )
+    if not matched_source:
+        raise StateError("review inheritance evidence digest is not bound by the runtime manifest")
+    if not matched_observation:
+        raise StateError(
+            "runtime evidence does not observe this review packet at inherited turn zero"
+        )
+
+
 def validate_resource_observations(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {
         "schema_version", "root_session_identity", "evidence_digests", "metrics"
@@ -2482,6 +2551,7 @@ def record_bounded_review(args: argparse.Namespace) -> None:
         review_candidate_digest="",
         bounded_review=True,
         review_receipt=args.review_receipt,
+        review_resource_manifest=args.review_resource_manifest,
         candidate_manifest=args.candidate_manifest,
         predecessor_checkpoint=args.predecessor_checkpoint,
         lifecycle_state=args.lifecycle_state,
@@ -2560,6 +2630,12 @@ def record_event(args: argparse.Namespace) -> None:
                 or review_receipt["inherited_turns"] != 0
             ):
                 raise StateError("staged review requires observed zero inherited turns")
+            review_turn_zero_from_manifest(
+                Path(args.review_resource_manifest),
+                review_receipt["reviewer_session_digest"],
+                review_receipt["packet_digest"],
+                review_receipt["inheritance_evidence_digest"],
+            )
             if args.implementation_mode == "candidate":
                 (
                     review_target,
@@ -3314,6 +3390,7 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("--event-id", required=True)
     review.add_argument("--implementation-mode", choices=sorted(MODES), required=True)
     review.add_argument("--review-receipt", required=True)
+    review.add_argument("--review-resource-manifest", required=True)
     review.add_argument("--candidate-manifest")
     review.add_argument("--predecessor-checkpoint")
     review.add_argument("--invariant-digest", action="append", required=True)

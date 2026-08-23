@@ -133,6 +133,50 @@ def normalize_record(raw: dict[str, Any], run_id: str, line_number: int) -> dict
         metadata["call_id"] = str(payload["call_id"])
     if payload.get("id"):
         metadata["item_id"] = str(payload["id"])
+    for candidate in (raw.get("session_id"), payload.get("session_id")):
+        if isinstance(candidate, str) and candidate:
+            metadata["session_id"] = candidate
+    passthrough = payload.get("internal_chat_message_metadata_passthrough")
+    if isinstance(passthrough, dict) and isinstance(passthrough.get("session_id"), str):
+        metadata["session_id"] = passthrough["session_id"]
+    provider_keys = {
+        "provider_input_tokens": {"input_tokens"},
+        "provider_cached_input_tokens": {"cached_input_tokens", "cached_tokens"},
+        "provider_output_tokens": {"output_tokens"},
+        "provider_reasoning_tokens": {"reasoning_tokens", "reasoning_output_tokens"},
+    }
+    usage_containers = provider_usage_containers(payload)
+    if payload_type == "token_count" and isinstance(payload.get("info"), dict):
+        usage_containers.append(payload["info"])
+    provider_usage = {
+        metric: max(values)
+        for metric, names in provider_keys.items()
+        if (values := [
+            number
+            for usage in usage_containers
+            for number in find_numeric_values(usage, names)
+        ])
+    }
+    if provider_usage:
+        metadata["provider_usage"] = provider_usage
+    if payload_type == "review_packet_start":
+        packet_digest = payload.get("review_packet_digest")
+        inherited_turns = payload.get("inherited_turns")
+        session_id = payload.get("session_id")
+        if (
+            isinstance(packet_digest, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", packet_digest)
+            and isinstance(inherited_turns, int)
+            and not isinstance(inherited_turns, bool)
+            and inherited_turns >= 0
+            and isinstance(session_id, str)
+            and session_id
+        ):
+            metadata.update({
+                "review_packet_digest": packet_digest,
+                "inherited_turns": inherited_turns,
+                "session_id": session_id,
+            })
 
     if top_type == "response_item" and payload_type == "message":
         role = str(payload.get("role") or "system_event")
@@ -158,6 +202,10 @@ def normalize_record(raw: dict[str, Any], run_id: str, line_number: int) -> dict
         role = "user"
         record_type = "message"
         content = content_text(payload.get("message", ""))
+    elif payload_type == "review_packet_start":
+        role = "system_event"
+        record_type = "review_packet_start"
+        content = ""
     else:
         role = "system_event"
         record_type = "system_event"
@@ -239,6 +287,23 @@ def source_resource_observations(source: Path) -> dict[str, Any]:
             continue
         raw = json.loads(line)
         if not isinstance(raw, dict):
+            continue
+        if "record_type" in raw:
+            metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+            if isinstance(metadata.get("session_id"), str):
+                session_id = metadata["session_id"]
+            if raw.get("role") == "assistant" and raw.get("record_type") == "message":
+                model_response_count += 1
+            if raw.get("record_type") == "tool_call":
+                tool_call_count += 1
+            if metadata.get("payload_type") in {"context_compacted", "compacted", "compact"}:
+                compaction_count += 1
+            usage = metadata.get("provider_usage")
+            if isinstance(usage, dict):
+                for metric in provider_keys:
+                    value = usage.get(metric)
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                        provider_values[metric].append(value)
             continue
         payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
         assert isinstance(payload, dict)
@@ -345,7 +410,7 @@ def import_transcript(source: Path, run_dir: Path, run_id: str, redaction_status
         run_dir,
         run_id,
         redaction_status,
-        source_resource_observations(source),
+        source_resource_observations(target),
     )
     update_redaction_report(run_dir, redaction_status)
     return target

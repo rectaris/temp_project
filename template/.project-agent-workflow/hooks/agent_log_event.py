@@ -27,6 +27,8 @@ MAX_DICT = 200
 ALLOWED_METADATA_KEYS = {
     "cwd",
     "hook_event_name",
+    "inherited_turns",
+    "review_packet_digest",
     "session_id",
     "stop_hook_active",
     "tool",
@@ -113,7 +115,7 @@ def load_payload() -> dict[str, Any]:
         return {"_parse_error": str(exc)}
 
 
-def event_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+def event_metadata(event: str, payload: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     for key in sorted(ALLOWED_METADATA_KEYS):
         value = payload.get(key)
@@ -125,6 +127,16 @@ def event_metadata(payload: dict[str, Any]) -> dict[str, Any]:
             metadata[key] = value[:512]
     if payload.get("transcript_path"):
         metadata["transcript_available"] = True
+    if (
+        event != "ReviewPacketStart"
+        or not isinstance(metadata.get("review_packet_digest"), str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", metadata["review_packet_digest"])
+        or isinstance(metadata.get("inherited_turns"), bool)
+        or not isinstance(metadata.get("inherited_turns"), int)
+        or metadata["inherited_turns"] < 0
+    ):
+        metadata.pop("review_packet_digest", None)
+        metadata.pop("inherited_turns", None)
     return metadata
 
 
@@ -195,7 +207,7 @@ def append_event(event: str, payload: dict[str, Any]) -> None:
         "event": event,
         "created_at": utc_now(),
         "cwd": str(Path.cwd()),
-        "payload": redact(event_metadata(payload)),
+        "payload": redact(event_metadata(event, payload)),
     }
     with (run_dir / ".events.lock").open("a", encoding="utf-8") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)

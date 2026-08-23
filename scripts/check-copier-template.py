@@ -1121,6 +1121,39 @@ def require_context_compression_boundary() -> None:
             fail(f"generated context compression is missing normative path refusal: {marker}")
 
 
+def require_review_turn_zero_contract() -> None:
+    required = {
+        "template/.project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md": (
+            "ReviewPacketStart",
+            "SessionStart` alone",
+        ),
+        "template/.project-agent-workflow/docs/agent/SPEC_CONTEXT_COMPRESSION.md": (
+            "cannot establish staged-review turn zero",
+        ),
+        "template/.project-agent-workflow/hooks/agent_log_event.py": (
+            '"review_packet_digest"',
+            '"inherited_turns"',
+        ),
+        "template/.project-agent-workflow/scripts/import-codex-transcript.py": (
+            '"review_packet_start"',
+            '"review_packet_digest"',
+        ),
+        "template/.project-agent-workflow/scripts/check-agent-log-manifest.py": (
+            "review_packet_start",
+            "ReviewPacketStart",
+        ),
+        "template/.project-agent-workflow/scripts/plan-execution-state.py": (
+            "review_turn_zero_from_manifest",
+            "--review-resource-manifest",
+        ),
+    }
+    for relative, markers in required.items():
+        text = read(relative)
+        for marker in markers:
+            if marker not in text:
+                fail(f"{relative} missing review turn-zero marker: {marker}")
+
+
 def require_agent_profile_task() -> None:
     copier_yml = read("copier.yml")
     required = (
@@ -1806,6 +1839,7 @@ def main() -> int:
     require_japanese_prompts(copier_yml)
     require_update_boundaries(copier_yml)
     require_context_compression_boundary()
+    require_review_turn_zero_contract()
     require_agent_profile_task()
     require_copier_documentation_contract()
     require_ci_autofix_root_boundaries()

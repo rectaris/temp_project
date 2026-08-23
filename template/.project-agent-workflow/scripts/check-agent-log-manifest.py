@@ -219,6 +219,71 @@ def validate_transcript(run_dir: Path, manifest: dict[str, Any]) -> None:
             raise ValidationError(f"transcript_log line {lineno} has unsupported role: {record['role']}")
         if record["run_id"] != manifest.get("run_id"):
             raise ValidationError(f"transcript_log line {lineno} run_id does not match manifest")
+        if record["record_type"] == "review_packet_start":
+            metadata = record["metadata"]
+            if not isinstance(metadata, dict) or set(metadata) < {
+                "review_packet_digest", "inherited_turns", "session_id"
+            }:
+                raise ValidationError(
+                    f"transcript_log line {lineno} has incomplete review packet observation"
+                )
+            packet_digest = metadata["review_packet_digest"]
+            if (
+                not isinstance(packet_digest, str)
+                or len(packet_digest) != 71
+                or not packet_digest.startswith("sha256:")
+            ):
+                raise ValidationError(
+                    f"transcript_log line {lineno} has invalid review packet digest"
+                )
+            if (
+                isinstance(metadata["inherited_turns"], bool)
+                or not isinstance(metadata["inherited_turns"], int)
+                or metadata["inherited_turns"] < 0
+                or not isinstance(metadata["session_id"], str)
+                or not metadata["session_id"]
+            ):
+                raise ValidationError(
+                    f"transcript_log line {lineno} has invalid review turn observation"
+                )
+
+
+def validate_hook_events(run_dir: Path, manifest: dict[str, Any]) -> None:
+    path = resolve_declared_path(run_dir, manifest.get("hook_event_log"), "hook_event_log")
+    if path is None or not path.is_file():
+        return
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except Exception as exc:
+            raise ValidationError(f"hook_event_log line {lineno} is invalid JSON: {exc}") from exc
+        if not isinstance(record, dict):
+            raise ValidationError(f"hook_event_log line {lineno} must be an object")
+        if record.get("event") != "ReviewPacketStart":
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            raise ValidationError(
+                f"hook_event_log line {lineno} review packet payload must be an object"
+            )
+        packet_digest = payload.get("review_packet_digest")
+        inherited_turns = payload.get("inherited_turns")
+        session_id = payload.get("session_id")
+        if (
+            not isinstance(packet_digest, str)
+            or len(packet_digest) != 71
+            or not packet_digest.startswith("sha256:")
+            or isinstance(inherited_turns, bool)
+            or not isinstance(inherited_turns, int)
+            or inherited_turns < 0
+            or not isinstance(session_id, str)
+            or not session_id
+        ):
+            raise ValidationError(
+                f"hook_event_log line {lineno} has invalid review turn observation"
+            )
 
 
 def validate_resource_observations(value: Any, run_dir: Path, manifest: dict[str, Any]) -> None:
@@ -329,6 +394,7 @@ def validate_manifest(path: Path, require_transcript: bool = False, require_hook
     if sorted(actual_missing_sources) != expected_missing_sources:
         raise ValidationError(f"missing_sources must be {expected_missing_sources}")
     validate_transcript(run_dir, manifest)
+    validate_hook_events(run_dir, manifest)
     if "resource_observations" in manifest:
         validate_resource_observations(manifest["resource_observations"], run_dir, manifest)
     if require_transcript and "external_transcript" in computed_missing_sources:

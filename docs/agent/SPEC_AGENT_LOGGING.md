@@ -76,6 +76,8 @@ Generated projects include `.codex/hooks/agent_log_event.py` and use it through 
 
 The hook records observable payloads for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop` events.
 
+For staged review, a runtime may emit `ReviewPacketStart` with the reviewer session id, the canonical review packet digest, and the inherited turn count. Only this explicit runtime event, or its normalized external-transcript equivalent, may establish review turn zero. `SessionStart` alone and caller-authored receipt fields do not establish it.
+
 Hook logs are written to:
 
 ```text
@@ -154,6 +156,7 @@ Run manifests keep one bounded `resource_observations` object.
 - Keep every unavailable value as `not_observed`; never estimate tokens or convert proxy counts into token claims.
 - Store only the digest of a directly observed root-session identity.
 - Bind each observation to the SHA-256 digest of the source evidence file that produced it. The `evidence_digests` object maps `external_transcript` and `codex_hooks` to the SHA-256 of the raw source file at the time observations were derived. The verifier recomputes each declared digest and rejects mismatches. Observed identity or metrics without at least one bound evidence digest are rejected.
+- Bind a review turn-zero claim to one `ReviewPacketStart` observation whose session id, packet digest, inherited turn count, and source-file digest match the review receipt.
 - Do not store prompts, response bodies, reasoning bodies, command bodies, environment values, or credentials in resource observations.
 
 ## Retention

@@ -78,6 +78,8 @@ Generated projects include `.codex/hooks.json` only when `codex_hooks_mode` is `
 
 When Codex hooks are enabled, the hook records allowlisted metadata for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop` events.
 
+For staged review, a runtime may emit `ReviewPacketStart` with the reviewer session id, the canonical review packet digest, and the inherited turn count. Only this explicit runtime event, or its normalized external-transcript equivalent, may establish review turn zero. `SessionStart` alone and caller-authored receipt fields do not establish it.
+
 Events with the same runtime session identifier use one stable run id unless `CODEX_AGENT_LOG_RUN_ID` or `AGENT_LOG_RUN_ID` explicitly overrides it.
 
 Hook logs are written to:
@@ -153,6 +155,8 @@ Validation may require complete transcript or hook coverage by using `.project-a
 ## Resource Observations
 
 Run manifests keep one bounded `resource_observations` object.
+
+A review turn-zero claim must bind one `ReviewPacketStart` observation whose session id, packet digest, inherited turn count, and source-file digest match the review receipt.
 
 - Store provider token values only when the provider transcript directly reports input, cached input, output, or reasoning tokens.
 - Store model-response, compaction, helper-turn, and tool-call counts only from directly observable records or deterministic proxy counting.

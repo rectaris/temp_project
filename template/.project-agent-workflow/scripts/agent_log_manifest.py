@@ -125,6 +125,45 @@ def file_digest(path: Path) -> str | None:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def hook_resource_observations(run_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    observations = not_observed_resource_observations()
+    hook_rel = manifest.get("hook_event_log")
+    if not isinstance(hook_rel, str):
+        return observations
+    hook_path = run_dir / hook_rel
+    try:
+        lines = hook_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return observations
+    session_id: str | None = None
+    compaction_count = 0
+    tool_call_count = 0
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        event = record.get("event")
+        payload = record.get("payload")
+        if event == "PreCompact":
+            compaction_count += 1
+        if event == "PreToolUse":
+            tool_call_count += 1
+        if isinstance(payload, dict) and isinstance(payload.get("session_id"), str):
+            session_id = payload["session_id"]
+    observations["root_session_identity"] = observed_session_identity(session_id)
+    observations["evidence_digests"]["codex_hooks"] = file_digest(hook_path)
+    observations["metrics"]["compaction_count"] = observed_metric(
+        compaction_count, "deterministic_proxy"
+    )
+    observations["metrics"]["tool_call_count"] = observed_metric(
+        tool_call_count, "deterministic_proxy"
+    )
+    return observations
+
+
 def merge_resource_observations(current: Any, incoming: Any) -> dict[str, Any]:
     merged = current if isinstance(current, dict) else not_observed_resource_observations()
     if not isinstance(merged.get("metrics"), dict):
@@ -289,8 +328,11 @@ def record_transcript(
         coverage["external_transcript"] = source_coverage(TRANSCRIPT_REL, True, redaction_status)
         manifest["coverage"] = coverage
         manifest["resource_observations"] = merge_resource_observations(
-            manifest.get("resource_observations"),
-            resource_observations,
+            merge_resource_observations(
+                not_observed_resource_observations(),
+                resource_observations,
+            ),
+            hook_resource_observations(run_dir, manifest),
         )
         finalize_manifest(run_dir, manifest)
 
