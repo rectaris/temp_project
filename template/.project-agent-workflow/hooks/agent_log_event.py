@@ -148,6 +148,41 @@ def ensure_redaction_report(run_dir: Path) -> None:
     )
 
 
+def hook_resource_observations(event_path: Path) -> dict[str, Any]:
+    session_id: str | None = None
+    compaction_count = 0
+    tool_call_count = 0
+    try:
+        lines = event_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        event = record.get("event")
+        payload = record.get("payload")
+        if event == "PreCompact":
+            compaction_count += 1
+        if event == "PreToolUse":
+            tool_call_count += 1
+        if isinstance(payload, dict) and isinstance(payload.get("session_id"), str):
+            session_id = payload["session_id"]
+    observations = agent_log_manifest.not_observed_resource_observations()
+    observations["root_session_identity"] = agent_log_manifest.observed_session_identity(session_id)
+    observations["evidence_digests"]["codex_hooks"] = agent_log_manifest.file_digest(event_path)
+    observations["metrics"]["compaction_count"] = agent_log_manifest.observed_metric(
+        compaction_count, "deterministic_proxy"
+    )
+    observations["metrics"]["tool_call_count"] = agent_log_manifest.observed_metric(
+        tool_call_count, "deterministic_proxy"
+    )
+    return observations
+
+
 def append_event(event: str, payload: dict[str, Any]) -> None:
     root = repo_root()
     run = run_id(payload)
@@ -167,7 +202,12 @@ def append_event(event: str, payload: dict[str, Any]) -> None:
         try:
             with event_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-            agent_log_manifest.record_hook(run_dir, run, event_path)
+            agent_log_manifest.record_hook(
+                run_dir,
+                run,
+                event_path,
+                hook_resource_observations(event_path),
+            )
             ensure_redaction_report(run_dir)
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)

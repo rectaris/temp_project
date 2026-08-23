@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 import tempfile
@@ -16,6 +17,16 @@ from typing import Any
 
 TRANSCRIPT_REL = "raw/transcript.jsonl"
 HOOK_REL = "raw/events.jsonl"
+RESOURCE_METRICS = (
+    "provider_input_tokens",
+    "provider_cached_input_tokens",
+    "provider_output_tokens",
+    "provider_reasoning_tokens",
+    "model_response_count",
+    "compaction_count",
+    "helper_turn_count",
+    "tool_call_count",
+)
 
 
 def utc_now() -> str:
@@ -61,6 +72,92 @@ def source_coverage(path: str | None, present: bool, redaction_status: str) -> d
     }
 
 
+def not_observed_resource_observations() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "root_session_identity": {
+            "status": "not_observed",
+            "digest": None,
+        },
+        "evidence_digests": {
+            "external_transcript": None,
+            "codex_hooks": None,
+        },
+        "metrics": {
+            metric: {
+                "status": "not_observed",
+                "value": None,
+                "provenance": "not_observed",
+            }
+            for metric in RESOURCE_METRICS
+        },
+    }
+
+
+def observed_session_identity(value: str | None) -> dict[str, Any]:
+    if not isinstance(value, str) or not value:
+        return {"status": "not_observed", "digest": None}
+    return {
+        "status": "observed",
+        "digest": "sha256:" + hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest(),
+    }
+
+
+def observed_metric(value: int | None, provenance: str) -> dict[str, Any]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return {
+            "status": "not_observed",
+            "value": None,
+            "provenance": "not_observed",
+        }
+    return {
+        "status": "observed",
+        "value": value,
+        "provenance": provenance,
+    }
+
+
+def file_digest(path: Path) -> str | None:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def merge_resource_observations(current: Any, incoming: Any) -> dict[str, Any]:
+    merged = current if isinstance(current, dict) else not_observed_resource_observations()
+    if not isinstance(merged.get("metrics"), dict):
+        merged = not_observed_resource_observations()
+    if not isinstance(incoming, dict):
+        return merged
+    identity = incoming.get("root_session_identity")
+    if isinstance(identity, dict) and identity.get("status") == "observed":
+        merged["root_session_identity"] = identity
+    incoming_digests = incoming.get("evidence_digests")
+    if isinstance(incoming_digests, dict):
+        merged_digests = merged.setdefault("evidence_digests", {"external_transcript": None, "codex_hooks": None})
+        for source_key in ("external_transcript", "codex_hooks"):
+            candidate = incoming_digests.get(source_key)
+            if isinstance(candidate, str) and candidate.startswith("sha256:"):
+                merged_digests[source_key] = candidate
+    incoming_metrics = incoming.get("metrics")
+    if not isinstance(incoming_metrics, dict):
+        return merged
+    for metric in RESOURCE_METRICS:
+        candidate = incoming_metrics.get(metric)
+        if not isinstance(candidate, dict) or candidate.get("status") != "observed":
+            continue
+        existing = merged["metrics"].get(metric)
+        if (
+            not isinstance(existing, dict)
+            or existing.get("status") != "observed"
+            or candidate.get("value", -1) >= existing.get("value", -1)
+        ):
+            merged["metrics"][metric] = candidate
+    return merged
+
+
 def ensure_compression_redaction_report(run_dir: Path, source: Path) -> None:
     report = run_dir / "redaction-report.md"
     if report.exists():
@@ -103,6 +200,7 @@ def load_manifest(run_dir: Path, run_id: str, task: str) -> dict[str, Any]:
     manifest.setdefault("pinned", False)
     manifest.setdefault("coverage", {})
     manifest.setdefault("missing_sources", [])
+    manifest.setdefault("resource_observations", not_observed_resource_observations())
     for field in ("plans", "raw_logs", "artifacts", "compressed_outputs", "missing_sources"):
         if not isinstance(manifest[field], list):
             manifest[field] = []
@@ -115,6 +213,10 @@ def load_manifest(run_dir: Path, run_id: str, task: str) -> dict[str, Any]:
         manifest["redaction_report"] = "redaction-report.md"
     if not isinstance(manifest["pinned"], bool):
         manifest["pinned"] = False
+    manifest["resource_observations"] = merge_resource_observations(
+        not_observed_resource_observations(),
+        manifest["resource_observations"],
+    )
     return manifest
 
 
@@ -146,7 +248,12 @@ def finalize_manifest(run_dir: Path, manifest: dict[str, Any]) -> None:
     write_json(run_dir / "manifest.json", manifest)
 
 
-def record_hook(run_dir: Path, run_id: str, event_path: Path) -> None:
+def record_hook(
+    run_dir: Path,
+    run_id: str,
+    event_path: Path,
+    resource_observations: dict[str, Any] | None = None,
+) -> None:
     with manifest_lock(run_dir):
         manifest = load_manifest(run_dir, run_id, "codex hook event log")
         hook_rel = relative_to_run(run_dir, event_path)
@@ -159,10 +266,19 @@ def record_hook(run_dir: Path, run_id: str, event_path: Path) -> None:
         coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
         coverage["codex_hooks"] = source_coverage(hook_rel, True, "pending_review")
         manifest["coverage"] = coverage
+        manifest["resource_observations"] = merge_resource_observations(
+            manifest.get("resource_observations"),
+            resource_observations,
+        )
         finalize_manifest(run_dir, manifest)
 
 
-def record_transcript(run_dir: Path, run_id: str, redaction_status: str) -> None:
+def record_transcript(
+    run_dir: Path,
+    run_id: str,
+    redaction_status: str,
+    resource_observations: dict[str, Any] | None = None,
+) -> None:
     with manifest_lock(run_dir):
         manifest = load_manifest(run_dir, run_id, "codex transcript import")
         manifest["transcript_log"] = TRANSCRIPT_REL
@@ -172,6 +288,10 @@ def record_transcript(run_dir: Path, run_id: str, redaction_status: str) -> None
         coverage = manifest.get("coverage") if isinstance(manifest.get("coverage"), dict) else {}
         coverage["external_transcript"] = source_coverage(TRANSCRIPT_REL, True, redaction_status)
         manifest["coverage"] = coverage
+        manifest["resource_observations"] = merge_resource_observations(
+            manifest.get("resource_observations"),
+            resource_observations,
+        )
         finalize_manifest(run_dir, manifest)
 
 

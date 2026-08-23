@@ -10,6 +10,7 @@ from hooks.gates import PreToolHardeningGateTest, StopReviewGateTest
 from hooks.logging import (
     AgentLogEventTest,
     CodexTranscriptImportTest,
+    EvidenceDigestValidationTest,
     RootLoggingCliDelegationTest,
 )
 from hooks.semantic import SemanticGuardAdvisoryTest

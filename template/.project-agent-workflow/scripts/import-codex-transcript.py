@@ -192,6 +192,95 @@ def load_source_records(source: Path, run_id: str) -> list[dict[str, Any]]:
     return records
 
 
+def find_numeric_values(value: Any, names: set[str]) -> list[int]:
+    found: list[int] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in names and isinstance(item, int) and not isinstance(item, bool) and item >= 0:
+                found.append(item)
+            found.extend(find_numeric_values(item, names))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(find_numeric_values(item, names))
+    return found
+
+
+def provider_usage_containers(payload: dict[str, Any]) -> list[Any]:
+    containers: list[Any] = []
+    stack: list[Any] = [payload]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"usage", "token_usage", "total_token_usage", "last_token_usage"}:
+                    containers.append(item)
+                elif isinstance(item, (dict, list)):
+                    stack.append(item)
+        elif isinstance(value, list):
+            stack.extend(value)
+    return containers
+
+
+def source_resource_observations(source: Path) -> dict[str, Any]:
+    observations = agent_log_manifest.not_observed_resource_observations()
+    session_id: str | None = None
+    model_response_count = 0
+    compaction_count = 0
+    tool_call_count = 0
+    provider_keys = {
+        "provider_input_tokens": {"input_tokens"},
+        "provider_cached_input_tokens": {"cached_input_tokens", "cached_tokens"},
+        "provider_output_tokens": {"output_tokens"},
+        "provider_reasoning_tokens": {"reasoning_tokens", "reasoning_output_tokens"},
+    }
+    provider_values: dict[str, list[int]] = {key: [] for key in provider_keys}
+    for line in source.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        raw = json.loads(line)
+        if not isinstance(raw, dict):
+            continue
+        payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+        assert isinstance(payload, dict)
+        metadata = payload.get("internal_chat_message_metadata_passthrough")
+        if isinstance(metadata, dict) and isinstance(metadata.get("session_id"), str):
+            session_id = metadata["session_id"]
+        for candidate in (raw.get("session_id"), payload.get("session_id")):
+            if isinstance(candidate, str) and candidate:
+                session_id = candidate
+        top_type = str(raw.get("type") or "")
+        payload_type = str(payload.get("type") or top_type)
+        if top_type == "response_item" and payload_type == "message" and payload.get("role") == "assistant":
+            model_response_count += 1
+        if top_type == "response_item" and payload_type == "function_call":
+            tool_call_count += 1
+        if payload_type in {"context_compacted", "compacted", "compact"}:
+            compaction_count += 1
+        usage_containers = provider_usage_containers(payload)
+        if payload_type == "token_count" and isinstance(payload.get("info"), dict):
+            usage_containers.append(payload["info"])
+        for metric, names in provider_keys.items():
+            for usage in usage_containers:
+                provider_values[metric].extend(find_numeric_values(usage, names))
+    observations["root_session_identity"] = agent_log_manifest.observed_session_identity(session_id)
+    observations["evidence_digests"]["external_transcript"] = agent_log_manifest.file_digest(source)
+    for metric, values in provider_values.items():
+        observations["metrics"][metric] = agent_log_manifest.observed_metric(
+            max(values) if values else None,
+            "provider",
+        )
+    observations["metrics"]["model_response_count"] = agent_log_manifest.observed_metric(
+        model_response_count, "deterministic_proxy"
+    )
+    observations["metrics"]["compaction_count"] = agent_log_manifest.observed_metric(
+        compaction_count, "deterministic_proxy"
+    )
+    observations["metrics"]["tool_call_count"] = agent_log_manifest.observed_metric(
+        tool_call_count, "deterministic_proxy"
+    )
+    return observations
+
+
 def write_json(path: Path, value: Any) -> None:
     write_text_atomic(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
@@ -242,12 +331,22 @@ def import_transcript(source: Path, run_dir: Path, run_id: str, redaction_status
     raw_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / TRANSCRIPT_REL
     if target.exists() and not overwrite:
-        agent_log_manifest.record_transcript(run_dir, run_id, redaction_status)
+        agent_log_manifest.record_transcript(
+            run_dir,
+            run_id,
+            redaction_status,
+            source_resource_observations(target),
+        )
         update_redaction_report(run_dir, redaction_status)
         return target
     records = load_source_records(source, run_id)
     write_jsonl(target, records)
-    agent_log_manifest.record_transcript(run_dir, run_id, redaction_status)
+    agent_log_manifest.record_transcript(
+        run_dir,
+        run_id,
+        redaction_status,
+        source_resource_observations(source),
+    )
     update_redaction_report(run_dir, redaction_status)
     return target
 

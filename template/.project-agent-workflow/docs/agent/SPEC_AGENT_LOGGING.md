@@ -150,6 +150,17 @@ If a run is referenced by `docs/plan`, treat it as pinned.
 Missing transcript or hook sources are warnings by default.
 Validation may require complete transcript or hook coverage by using `.project-agent-workflow/scripts/check-agent-log-manifest.py --require-transcript` or `.project-agent-workflow/scripts/check-agent-log-manifest.py --require-hooks`.
 
+## Resource Observations
+
+Run manifests keep one bounded `resource_observations` object.
+
+- Store provider token values only when the provider transcript directly reports input, cached input, output, or reasoning tokens.
+- Store model-response, compaction, helper-turn, and tool-call counts only from directly observable records or deterministic proxy counting.
+- Keep every unavailable value as `not_observed`; never estimate tokens or convert proxy counts into token claims.
+- Store only the digest of a directly observed root-session identity.
+- Bind each observation to the SHA-256 digest of the source evidence file that produced it. The `evidence_digests` object maps `external_transcript` and `codex_hooks` to the SHA-256 of the raw source file at the time observations were derived. The verifier recomputes each declared digest and rejects mismatches. Observed identity or metrics without at least one bound evidence digest are rejected.
+- Do not store prompts, response bodies, reasoning bodies, command bodies, environment values, or credentials in resource observations.
+
 ## Retention
 
 Keep raw logs by default. Do not add an automatic retention deadline.

@@ -126,6 +126,20 @@ class AgentLogEventTest(unittest.TestCase):
             self.assertEqual(manifest["coverage"]["codex_hooks"]["status"], "present")
             self.assertEqual(manifest["coverage"]["codex_hooks"]["redaction_status"], "pending_review")
             self.assertEqual(manifest["missing_sources"], ["external_transcript"])
+            resources = manifest["resource_observations"]
+            self.assertEqual(resources["root_session_identity"]["status"], "observed")
+            self.assertEqual(
+                resources["metrics"]["tool_call_count"],
+                {
+                    "status": "observed",
+                    "value": 0,
+                    "provenance": "deterministic_proxy",
+                },
+            )
+            self.assertEqual(
+                resources["metrics"]["provider_input_tokens"]["status"],
+                "not_observed",
+            )
 
     def test_default_run_id_is_stable_for_runtime_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -308,6 +322,79 @@ class CodexTranscriptImportTest(unittest.TestCase):
             manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["coverage"]["external_transcript"]["redaction_status"], "pending_review")
             self.assertEqual(manifest["missing_sources"], ["codex_hooks"])
+            resources = manifest["resource_observations"]
+            self.assertEqual(
+                resources["metrics"]["model_response_count"]["value"],
+                1,
+            )
+            self.assertEqual(
+                resources["metrics"]["tool_call_count"]["value"],
+                0,
+            )
+            self.assertEqual(
+                resources["metrics"]["provider_input_tokens"]["status"],
+                "not_observed",
+            )
+
+    def test_importer_records_only_direct_provider_usage_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            source = Path(tmp) / "usage-session.jsonl"
+            source.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "event_msg",
+                                "payload": {
+                                    "type": "token_count",
+                                    "session_id": "usage-session",
+                                    "info": {
+                                        "total_token_usage": {
+                                            "input_tokens": 120,
+                                            "cached_input_tokens": 40,
+                                            "output_tokens": 30,
+                                            "reasoning_output_tokens": 10,
+                                        }
+                                    },
+                                },
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "response_item",
+                                "payload": {
+                                    "type": "function_call",
+                                    "name": "example",
+                                    "arguments": json.dumps({"input_tokens": 999999}),
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["python3", str(IMPORTER), str(source), "--run-id", "usage-run"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            resources = json.loads(
+                (repo / ".agent-logs/usage-run/manifest.json").read_text(encoding="utf-8")
+            )["resource_observations"]
+            self.assertEqual(resources["root_session_identity"]["status"], "observed")
+            self.assertEqual(resources["metrics"]["provider_input_tokens"]["value"], 120)
+            self.assertEqual(resources["metrics"]["provider_cached_input_tokens"]["value"], 40)
+            self.assertEqual(resources["metrics"]["provider_output_tokens"]["value"], 30)
+            self.assertEqual(resources["metrics"]["provider_reasoning_tokens"]["value"], 10)
+            self.assertEqual(resources["metrics"]["tool_call_count"]["value"], 1)
 
 
 class RootLoggingCliDelegationTest(unittest.TestCase):
@@ -364,6 +451,111 @@ class RootLoggingCliDelegationTest(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(check.returncode, 0, check.stderr)
+
+
+class EvidenceDigestValidationTest(unittest.TestCase):
+    def test_hook_binds_evidence_digest_to_source_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            run_hook(
+                AGENT_LOG,
+                {"session_id": "evidence-session"},
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "evidence-run"},
+                args=["--event", "PreToolUse"],
+            )
+            manifest = json.loads(
+                (repo / ".agent-logs/evidence-run/manifest.json").read_text(encoding="utf-8")
+            )
+            resources = manifest["resource_observations"]
+            self.assertIn("evidence_digests", resources)
+            self.assertIsNotNone(resources["evidence_digests"]["codex_hooks"])
+            self.assertTrue(resources["evidence_digests"]["codex_hooks"].startswith("sha256:"))
+            self.assertIsNone(resources["evidence_digests"]["external_transcript"])
+
+    def test_importer_binds_evidence_digest_to_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            source = Path(tmp) / "session.jsonl"
+            write_sample_codex_transcript(source)
+            subprocess.run(
+                ["python3", str(IMPORTER), str(source), "--run-id", "digest-run"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            manifest = json.loads(
+                (repo / ".agent-logs/digest-run/manifest.json").read_text(encoding="utf-8")
+            )
+            resources = manifest["resource_observations"]
+            self.assertIsNotNone(resources["evidence_digests"]["external_transcript"])
+            self.assertTrue(resources["evidence_digests"]["external_transcript"].startswith("sha256:"))
+
+    def test_checker_rejects_fabricated_identity_without_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            run_hook(
+                AGENT_LOG,
+                {"session_id": "fabricated-session"},
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "fabricated-run"},
+                args=["--event", "SessionStart"],
+            )
+            manifest_path = repo / ".agent-logs/fabricated-run/manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["resource_observations"]["evidence_digests"] = {
+                "external_transcript": None,
+                "codex_hooks": None,
+            }
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["python3", str(MANIFEST_CHECKER), str(manifest_path)],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("bound evidence digest", result.stderr)
+
+    def test_checker_rejects_mismatched_evidence_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+            run_hook(
+                AGENT_LOG,
+                {"session_id": "mismatch-session"},
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "mismatch-run"},
+                args=["--event", "SessionStart"],
+            )
+            manifest_path = repo / ".agent-logs/mismatch-run/manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["resource_observations"]["evidence_digests"]["codex_hooks"] = "sha256:" + "f" * 64
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["python3", str(MANIFEST_CHECKER), str(manifest_path)],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("recomputed source file digest", result.stderr)
 
 
 
