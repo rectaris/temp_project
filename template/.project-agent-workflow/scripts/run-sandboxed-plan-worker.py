@@ -3622,16 +3622,28 @@ def begin_plan_execution_attempt(
     predecessor_state = getattr(args, "predecessor_plan_execution_state", None)
     predecessor_checkpoint = getattr(args, "predecessor_session_checkpoint", None)
     root_session_manifest = getattr(args, "root_session_manifest", None)
-    if (predecessor_checkpoint or root_session_manifest) and not predecessor_state:
+    reviewer_registry = getattr(args, "reviewer_registry", None)
+    if (
+        predecessor_checkpoint
+        or root_session_manifest
+        or reviewer_registry
+    ) and not predecessor_state:
         raise RunnerError(
             "session checkpoint controls require --predecessor-plan-execution-state"
         )
     if predecessor_state:
         command.extend(("--predecessor-state", predecessor_state))
-        if bool(predecessor_checkpoint) != bool(root_session_manifest):
+        if len([
+            item for item in (
+                predecessor_checkpoint,
+                root_session_manifest,
+                reviewer_registry,
+            )
+            if item
+        ]) not in {0, 3}:
             raise RunnerError(
-                "predecessor session checkpoint and root session manifest "
-                "must be supplied together"
+                "predecessor session checkpoint, root session manifest, and reviewer "
+                "registry must be supplied together"
             )
         if predecessor_checkpoint:
             command.extend((
@@ -3639,6 +3651,8 @@ def begin_plan_execution_attempt(
                 predecessor_checkpoint,
                 "--root-session-manifest",
                 root_session_manifest,
+                "--reviewer-registry",
+                reviewer_registry,
             ))
     if prior_candidate_digest is not None:
         command.extend(("--prior-candidate-digest", prior_candidate_digest))
@@ -5525,6 +5539,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--root-session-manifest",
         help="run manifest containing the directly observed root-session identity",
+    )
+    run_parser.add_argument(
+        "--reviewer-registry",
+        help="external append-only reviewer session registry bound to checkpoint claims",
     )
     run_parser.add_argument("--worker-binary", help="override the default Codex worker with a custom executable")
     run_parser.add_argument("--worker-arg", action="append", default=[], help="append one argument for --worker-binary")

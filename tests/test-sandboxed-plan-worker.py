@@ -929,6 +929,37 @@ def write_fake_codex(path: Path) -> None:
 
 
 class SandboxedPlanWorkerTests(unittest.TestCase):
+    def test_dependent_attempt_forwards_reviewer_registry(self) -> None:
+        args = argparse.Namespace(
+            plan_execution_state="/tmp/execution.json",
+            orchestration_run_id="run-1",
+            plan="docs/plan/active/001-test.md",
+            lifecycle_state="/tmp/lifecycle.json",
+            predecessor_plan_execution_state="/tmp/predecessor.json",
+            predecessor_session_checkpoint="/tmp/checkpoint.json",
+            root_session_manifest="/tmp/root-manifest.json",
+            reviewer_registry="/tmp/reviewer-registry.jsonl",
+        )
+        with mock.patch.object(
+            RUNNER.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, b"", b""),
+        ) as run:
+            RUNNER.begin_plan_execution_attempt(args, attempt_kind="initial")
+        command = run.call_args.args[0]
+        self.assertIn("--reviewer-registry", command)
+        self.assertEqual(
+            command[command.index("--reviewer-registry") + 1],
+            args.reviewer_registry,
+        )
+
+        args.reviewer_registry = None
+        with self.assertRaisesRegex(
+            RUNNER.RunnerError,
+            "reviewer registry must be supplied together",
+        ):
+            RUNNER.begin_plan_execution_attempt(args, attempt_kind="initial")
+
     maxDiff = None
 
     @classmethod
@@ -2028,7 +2059,8 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             cwd=repo, check=False, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        self.assertEqual(closed.returncode, 0, closed.stderr)
+        self.assertNotEqual(closed.returncode, 0)
+        self.assertIn("accepted candidate identity lacks a bounded review", closed.stderr)
 
     def test_malformed_completion_claims_fail_closed_without_retaining_prohibited_content(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])

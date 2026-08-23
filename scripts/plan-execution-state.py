@@ -25,13 +25,17 @@ from typing import Any
 
 SCHEMA_VERSION = 4
 MAX_BYTES = 65_536
+EXECUTION_STATE_MAX_BYTES = 131_072
 CANDIDATE_MANIFEST_MAX_BYTES = 1024 * 1024
 MAX_EVENTS = 64
+MAX_MIGRATION_COMPATIBILITY_EVENTS = 3
 MAX_CORRECTIONS = 2
 MAX_PARENT_REMEDIATIONS = 2
 MAX_DIAGNOSIS_ATTEMPTS = 3
-SESSION_CHECKPOINT_SCHEMA_VERSION = 1
+SESSION_CHECKPOINT_SCHEMA_VERSION = 2
 REVIEW_RECEIPT_SCHEMA_VERSION = 1
+REVIEWER_REGISTRY_SCHEMA_VERSION = 1
+MAX_REGISTRY_RECORD_BYTES = 4096
 SESSION_BOUNDARIES = {
     "checked",
     "replanned",
@@ -83,6 +87,8 @@ EVENT_TYPES = {
     "successor_claimed",
     "session_checkpoint_emitted",
     "session_checkpoint_claimed",
+    "session_checkpoint_migrated",
+    "predecessor_checkpoint_bound",
 }
 RECORD_EVENT_TYPES = EVENT_TYPES - {"writable_attempt_started", "attempt_closed"}
 EXACT_KEYS = {
@@ -168,8 +174,26 @@ RESOURCE_EVIDENCE_SOURCES = {
 SESSION_CHECKPOINT_KEYS = {
     "schema_version", "plan_path", "plan_digest", "source_head", "run_id",
     "execution_state", "execution_event_chain_digest", "boundary",
+    "root_session_identity", "resource_observations", "reviewer_registry",
+    "checkpoint_digest", "successor_claim",
+}
+LEGACY_SESSION_CHECKPOINT_KEYS = {
+    "schema_version", "plan_path", "plan_digest", "source_head", "run_id",
+    "execution_state", "execution_event_chain_digest", "boundary",
     "root_session_identity", "resource_observations", "reviewer_session_digests",
     "checkpoint_digest", "successor_claim",
+}
+REVIEWER_REGISTRY_REFERENCE_KEYS = {
+    "registry_id", "path_digest", "event_count", "event_chain_digest",
+}
+REVIEWER_REGISTRY_HEADER_KEYS = {
+    "record_type", "schema_version", "registry_id", "path_digest", "genesis_digest",
+}
+REVIEWER_REGISTRY_EVENT_KEYS = {
+    "record_type", "schema_version", "sequence", "registry_id",
+    "reviewer_session_digest", "plan_digest", "run_id", "event_id",
+    "execution_genesis_digest", "review_receipt_digest",
+    "previous_event_digest", "event_digest",
 }
 SUCCESSOR_CLAIM_KEYS = {
     "run_id", "plan_digest", "source_head", "primary_invariant_digest", "genesis_digest",
@@ -648,11 +672,17 @@ def validate_session_checkpoint(value: Any) -> dict[str, Any]:
     elif identity != {"status": "not_observed", "digest": None}:
         raise StateError("unavailable checkpoint root-session identity must remain not_observed")
     validate_resource_observations(value["resource_observations"])
-    reviewers = value["reviewer_session_digests"]
-    if not isinstance(reviewers, list) or len(reviewers) > 2 or len(reviewers) != len(set(reviewers)):
-        raise StateError("checkpoint reviewer sessions must be a bounded unique list")
-    for reviewer in reviewers:
-        require_digest(reviewer, "reviewer_session_digest")
+    registry = value["reviewer_registry"]
+    if not isinstance(registry, dict) or set(registry) != REVIEWER_REGISTRY_REFERENCE_KEYS:
+        raise StateError("checkpoint reviewer registry has an invalid exact shape")
+    for field in ("registry_id", "path_digest", "event_chain_digest"):
+        require_digest(registry[field], field)
+    if (
+        isinstance(registry["event_count"], bool)
+        or not isinstance(registry["event_count"], int)
+        or registry["event_count"] < 0
+    ):
+        raise StateError("checkpoint reviewer registry event count is invalid")
     claim = value["successor_claim"]
     if claim is not None:
         if not isinstance(claim, dict) or set(claim) != SUCCESSOR_CLAIM_KEYS:
@@ -677,6 +707,47 @@ def read_session_checkpoint(path: Path) -> dict[str, Any]:
         return validate_session_checkpoint(json.loads(data))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise StateError(f"invalid session checkpoint JSON: {exc}") from exc
+
+
+def validate_legacy_session_checkpoint(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != LEGACY_SESSION_CHECKPOINT_KEYS:
+        raise StateError("legacy session checkpoint has an invalid exact field shape")
+    if value["schema_version"] != 1:
+        raise StateError("legacy session checkpoint has an unsupported schema version")
+    reviewers = value["reviewer_session_digests"]
+    if (
+        not isinstance(reviewers, list)
+        or len(reviewers) > 2
+        or len(reviewers) != len(set(reviewers))
+    ):
+        raise StateError("legacy checkpoint reviewer sessions must be a bounded unique list")
+    for reviewer in reviewers:
+        require_digest(reviewer, "legacy reviewer_session_digest")
+    if checkpoint_payload_digest(value) != value["checkpoint_digest"]:
+        raise StateError("legacy session checkpoint digest mismatch")
+    synthetic = dict(value)
+    synthetic["schema_version"] = SESSION_CHECKPOINT_SCHEMA_VERSION
+    synthetic.pop("reviewer_session_digests")
+    synthetic["reviewer_registry"] = {
+        "registry_id": digest("legacy validation registry"),
+        "path_digest": digest("legacy validation path"),
+        "event_count": 0,
+        "event_chain_digest": digest(b""),
+    }
+    synthetic["checkpoint_digest"] = checkpoint_payload_digest(synthetic)
+    validate_session_checkpoint(synthetic)
+    return value
+
+
+def read_legacy_session_checkpoint(path: Path) -> dict[str, Any]:
+    require_outside_repository(path, "legacy session checkpoint")
+    _, data = open_read(path)
+    if len(data) > MAX_BYTES:
+        raise StateError("legacy session checkpoint exceeds size limit")
+    try:
+        return validate_legacy_session_checkpoint(json.loads(data))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError(f"invalid legacy session checkpoint JSON: {exc}") from exc
 
 
 def require_repository_baseline(state: dict[str, Any]) -> None:
@@ -730,13 +801,13 @@ def require_digest(value: Any, label: str, *, allow_empty: bool = False) -> str:
     return value
 
 
-def open_read(path: Path) -> tuple[int, bytes]:
+def open_read(path: Path, maximum_bytes: int = MAX_BYTES) -> tuple[int, bytes]:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise StateError("execution state must be a regular file")
-        data = os.read(descriptor, MAX_BYTES + 1)
+        data = os.read(descriptor, maximum_bytes + 1)
         return metadata.st_mode & 0o777, data
     finally:
         os.close(descriptor)
@@ -1131,6 +1202,45 @@ def load_diagnosis_evidence(
     return evidence, digest(data)
 
 
+def validate_event_budget(events: Any) -> None:
+    if (
+        not isinstance(events, list)
+        or len(events) > MAX_EVENTS + MAX_MIGRATION_COMPATIBILITY_EVENTS
+    ):
+        raise StateError("invalid event list")
+    if len(events) <= MAX_EVENTS:
+        return
+    allowed_compatibility_types = [
+        "session_checkpoint_migrated",
+        "session_checkpoint_claimed",
+        "successor_claimed",
+    ]
+    migration_indices = [
+        index for index, event in enumerate(events)
+        if isinstance(event, dict)
+        and event.get("event_type") == "session_checkpoint_migrated"
+    ]
+    if len(migration_indices) != 1:
+        raise StateError(
+            "event-budget compatibility suffix must be migration, checkpoint "
+            "claim, then successor claim"
+        )
+    migration_index = migration_indices[0]
+    compatibility_types = [
+        event.get("event_type") if isinstance(event, dict) else None
+        for event in events[migration_index:]
+    ]
+    if (
+        migration_index < MAX_EVENTS - 2
+        or compatibility_types
+        != allowed_compatibility_types[:len(compatibility_types)]
+    ):
+        raise StateError(
+            "event-budget compatibility suffix must be migration, checkpoint "
+            "claim, then successor claim"
+        )
+
+
 def validate_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != EXACT_KEYS:
         raise StateError("execution state has an invalid exact schema")
@@ -1226,8 +1336,7 @@ def validate_state(value: Any) -> dict[str, Any]:
     if reasons and repair_reasons:
         raise StateError("repair and replan reasons cannot be combined")
     events = value["events"]
-    if not isinstance(events, list) or len(events) > MAX_EVENTS:
-        raise StateError("invalid event list")
+    validate_event_budget(events)
     seen_ids: set[str] = set()
     seen_review_receipts: set[str] = set()
     bounded_review_counts: dict[str, int] = {}
@@ -1279,6 +1388,16 @@ def validate_state(value: Any) -> dict[str, Any]:
                 )
                 and not any(
                     prior["event_type"] == "session_checkpoint_claimed"
+                    for prior in validated_events
+                )
+            ) or (
+                event["event_type"] == "session_checkpoint_migrated"
+                and any(
+                    prior["event_type"] == "session_checkpoint_emitted"
+                    for prior in validated_events
+                )
+                and not any(
+                    prior["event_type"] == "session_checkpoint_migrated"
                     for prior in validated_events
                 )
             )
@@ -1341,7 +1460,8 @@ def validate_state(value: Any) -> dict[str, Any]:
         require_digest(review_target_digest, "review_target_digest", allow_empty=True)
         if event["event_type"] not in {
             "parent_review", "attempt_closed",
-            "session_checkpoint_emitted", "session_checkpoint_claimed"
+            "session_checkpoint_emitted", "session_checkpoint_claimed",
+            "session_checkpoint_migrated", "predecessor_checkpoint_bound",
         } and review_target_digest:
             raise StateError("only a parent review may bind a review target")
         event_predecessors = [
@@ -1476,7 +1596,8 @@ def validate_state(value: Any) -> dict[str, Any]:
                     *event_predecessors, event_predecessor_source, event_accepted_source)):
                 raise StateError("successor claim contains unrelated attempt data")
         elif event["event_type"] in {
-            "session_checkpoint_emitted", "session_checkpoint_claimed"
+            "session_checkpoint_emitted", "session_checkpoint_claimed",
+            "session_checkpoint_migrated", "predecessor_checkpoint_bound",
         }:
             if not event["candidate_digest"] or not review_target_digest:
                 raise StateError("session checkpoint event lacks checkpoint identity")
@@ -1491,9 +1612,19 @@ def validate_state(value: Any) -> dict[str, Any]:
                 successor_run_id, event["successor_plan_digest"], successor_source,
                 event["successor_primary_invariant_digest"], successor_genesis_digest,
             )
-            if event["event_type"] == "session_checkpoint_emitted" and any(successor_values):
+            if (
+                event["event_type"] in {
+                    "session_checkpoint_emitted", "session_checkpoint_migrated",
+                }
+                and any(successor_values)
+            ):
                 raise StateError("checkpoint issuance cannot contain successor identity")
-            if event["event_type"] == "session_checkpoint_claimed" and not all(successor_values):
+            if (
+                event["event_type"] in {
+                    "session_checkpoint_claimed", "predecessor_checkpoint_bound",
+                }
+                and not all(successor_values)
+            ):
                 raise StateError("checkpoint claim has incomplete successor identity")
         elif any((attempt_id, event["attempt_kind"], event["candidate_digest"],
                   event["review_outcome"], event["review_reason_code"],
@@ -1777,8 +1908,8 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
 
 def read_state(path: Path) -> dict[str, Any]:
     reject_symlink_ancestors(path, include_target=True)
-    _, data = open_read(path)
-    if len(data) > MAX_BYTES:
+    _, data = open_read(path, EXECUTION_STATE_MAX_BYTES)
+    if len(data) > EXECUTION_STATE_MAX_BYTES:
         raise StateError("execution state exceeds size limit")
     try:
         return validate_state(json.loads(data))
@@ -1816,6 +1947,16 @@ def successor_identity(state: dict[str, Any]) -> dict[str, str]:
         "successor_source_head": state["source_head"],
         "successor_primary_invariant_digest": state["primary_invariant_digest"],
         "successor_genesis_digest": state["genesis_digest"],
+    }
+
+
+def checkpoint_successor_claim(state: dict[str, Any]) -> dict[str, str]:
+    return {
+        "run_id": state["run_id"],
+        "plan_digest": state["plan_digest"],
+        "source_head": state["source_head"],
+        "primary_invariant_digest": state["primary_invariant_digest"],
+        "genesis_digest": state["genesis_digest"],
     }
 
 
@@ -1914,7 +2055,7 @@ def require_predecessor_ancestry(accepted_source_head: str, successor_source_hea
 def atomic_write(path: Path, value: dict[str, Any]) -> None:
     reject_symlink_ancestors(path, include_target=False)
     data = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
-    if len(data) > MAX_BYTES:
+    if len(data) > EXECUTION_STATE_MAX_BYTES:
         raise StateError("execution state exceeds size limit")
     path.parent.mkdir(parents=True, exist_ok=True)
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
@@ -1967,6 +2108,246 @@ def with_lock(path: Path):
     finally:
         os.close(directory_descriptor)
     return os.fdopen(descriptor, "a", encoding="utf-8")
+
+
+def reviewer_registry_path_digest(path: Path) -> str:
+    return digest(str(path.absolute()))
+
+
+def canonical_registry_record(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def initialize_reviewer_registry(args: argparse.Namespace) -> None:
+    path = Path(args.output)
+    require_outside_repository(path, "reviewer session registry")
+    reject_symlink_ancestors(path, include_target=True)
+    if path.exists() or path.is_symlink():
+        raise StateError("reviewer session registry already exists")
+    registry_id = digest(secrets.token_bytes(32))
+    identity = {
+        "record_type": "reviewer_session_registry",
+        "schema_version": REVIEWER_REGISTRY_SCHEMA_VERSION,
+        "registry_id": registry_id,
+        "path_digest": reviewer_registry_path_digest(path),
+    }
+    header = {
+        **identity,
+        "genesis_digest": canonical_digest(identity),
+    }
+    data = canonical_registry_record(header)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    directory_descriptor = os.open(
+        path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fsync(directory_descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory_descriptor)
+
+
+def read_reviewer_registry(path: Path) -> dict[str, Any]:
+    require_outside_repository(path, "reviewer session registry")
+    reject_symlink_ancestors(path, include_target=True)
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    records: list[dict[str, Any]] = []
+    with os.fdopen(descriptor, "rb") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if len(line) > MAX_REGISTRY_RECORD_BYTES:
+                raise StateError("reviewer session registry record exceeds size limit")
+            if not line.endswith(b"\n"):
+                raise StateError("reviewer session registry has a truncated record")
+            try:
+                record = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise StateError("reviewer session registry contains invalid JSON") from exc
+            if not isinstance(record, dict) or canonical_registry_record(record) != line:
+                raise StateError("reviewer session registry record is not canonical")
+            records.append(record)
+    if not records:
+        raise StateError("reviewer session registry is empty")
+    header = records[0]
+    if set(header) != REVIEWER_REGISTRY_HEADER_KEYS:
+        raise StateError("reviewer session registry header has an invalid exact shape")
+    if (
+        header["record_type"] != "reviewer_session_registry"
+        or header["schema_version"] != REVIEWER_REGISTRY_SCHEMA_VERSION
+    ):
+        raise StateError("reviewer session registry header is unsupported")
+    require_digest(header["registry_id"], "reviewer registry id")
+    require_digest(header["path_digest"], "reviewer registry path digest")
+    if header["path_digest"] != reviewer_registry_path_digest(path):
+        raise StateError("reviewer session registry was copied to another path")
+    identity = {
+        key: header[key] for key in REVIEWER_REGISTRY_HEADER_KEYS - {"genesis_digest"}
+    }
+    if header["genesis_digest"] != canonical_digest(identity):
+        raise StateError("reviewer session registry genesis digest mismatch")
+    previous_digest = header["genesis_digest"]
+    reviewers: dict[str, dict[str, Any]] = {}
+    events: list[dict[str, Any]] = []
+    for sequence, event in enumerate(records[1:], start=1):
+        if set(event) != REVIEWER_REGISTRY_EVENT_KEYS:
+            raise StateError("reviewer session registry event has an invalid exact shape")
+        if (
+            event["record_type"] != "reviewer_session_admission"
+            or event["schema_version"] != REVIEWER_REGISTRY_SCHEMA_VERSION
+            or event["sequence"] != sequence
+            or isinstance(event["sequence"], bool)
+            or event["registry_id"] != header["registry_id"]
+        ):
+            raise StateError("reviewer session registry event identity mismatch")
+        for field in (
+            "reviewer_session_digest", "plan_digest", "execution_genesis_digest",
+            "review_receipt_digest", "previous_event_digest", "event_digest",
+        ):
+            require_digest(event[field], field)
+        if not ID_RE.fullmatch(event["run_id"]) or not ID_RE.fullmatch(event["event_id"]):
+            raise StateError("reviewer session registry event id is invalid")
+        if event["previous_event_digest"] != previous_digest:
+            raise StateError("reviewer session registry event chain mismatch")
+        unsigned = {key: event[key] for key in event if key != "event_digest"}
+        if event["event_digest"] != canonical_digest(unsigned):
+            raise StateError("reviewer session registry event digest mismatch")
+        if event["reviewer_session_digest"] in reviewers:
+            raise StateError("reviewer session registry contains a replay")
+        reviewers[event["reviewer_session_digest"]] = event
+        events.append(event)
+        previous_digest = event["event_digest"]
+    return {
+        "header": header,
+        "events": events,
+        "reviewers": reviewers,
+        "event_chain_digest": previous_digest,
+    }
+
+
+def reviewer_registry_reference(registry: dict[str, Any]) -> dict[str, Any]:
+    header = registry["header"]
+    return {
+        "registry_id": header["registry_id"],
+        "path_digest": header["path_digest"],
+        "event_count": len(registry["events"]),
+        "event_chain_digest": registry["event_chain_digest"],
+    }
+
+
+def validate_reviewer_registry_reference(
+    reference: Any,
+    registry: dict[str, Any],
+    *,
+    exact: bool,
+) -> None:
+    if not isinstance(reference, dict) or set(reference) != REVIEWER_REGISTRY_REFERENCE_KEYS:
+        raise StateError("reviewer registry reference has an invalid exact shape")
+    for field in ("registry_id", "path_digest", "event_chain_digest"):
+        require_digest(reference[field], field)
+    count = reference["event_count"]
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise StateError("reviewer registry event count is invalid")
+    current = reviewer_registry_reference(registry)
+    if any(reference[field] != current[field] for field in ("registry_id", "path_digest")):
+        raise StateError("reviewer registry identity differs from the checkpoint")
+    if exact:
+        if reference != current:
+            raise StateError("reviewer registry advanced or diverged from the checkpoint")
+        return
+    if count > len(registry["events"]):
+        raise StateError("reviewer registry is older than the checkpoint")
+    prefix_digest = (
+        registry["header"]["genesis_digest"]
+        if count == 0
+        else registry["events"][count - 1]["event_digest"]
+    )
+    if prefix_digest != reference["event_chain_digest"]:
+        raise StateError("reviewer registry does not contain the checkpoint chain")
+
+
+def snapshot_reviewer_registry(path: Path) -> dict[str, Any]:
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        return read_reviewer_registry(path)
+
+
+def admit_reviewer_session(
+    path: Path,
+    *,
+    reviewer_session_digest: str,
+    plan_digest: str,
+    run_id: str,
+    event_id: str,
+    execution_genesis_digest: str,
+    review_receipt_digest: str,
+    predecessor_reference: dict[str, Any] | None,
+) -> dict[str, Any]:
+    for value, label in (
+        (reviewer_session_digest, "reviewer_session_digest"),
+        (plan_digest, "plan_digest"),
+        (execution_genesis_digest, "execution_genesis_digest"),
+        (review_receipt_digest, "review_receipt_digest"),
+    ):
+        require_digest(value, label)
+    if not ID_RE.fullmatch(run_id) or not ID_RE.fullmatch(event_id):
+        raise StateError("reviewer session admission id is invalid")
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        registry = read_reviewer_registry(path)
+        if predecessor_reference is not None:
+            validate_reviewer_registry_reference(
+                predecessor_reference,
+                registry,
+                exact=False,
+            )
+        admission_identity = {
+            "reviewer_session_digest": reviewer_session_digest,
+            "plan_digest": plan_digest,
+            "run_id": run_id,
+            "event_id": event_id,
+            "execution_genesis_digest": execution_genesis_digest,
+            "review_receipt_digest": review_receipt_digest,
+        }
+        prior = registry["reviewers"].get(reviewer_session_digest)
+        if prior is not None:
+            if all(prior[key] == value for key, value in admission_identity.items()):
+                return prior
+            raise StateError("reviewer session cannot be reused across numbered plans")
+        event = {
+            "record_type": "reviewer_session_admission",
+            "schema_version": REVIEWER_REGISTRY_SCHEMA_VERSION,
+            "sequence": len(registry["events"]) + 1,
+            "registry_id": registry["header"]["registry_id"],
+            **admission_identity,
+            "previous_event_digest": registry["event_chain_digest"],
+            "event_digest": "",
+        }
+        event["event_digest"] = canonical_digest(
+            {key: event[key] for key in event if key != "event_digest"}
+        )
+        data = canonical_registry_record(event)
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_APPEND | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        with os.fdopen(descriptor, "ab") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return event
 
 
 def init_state(args: argparse.Namespace) -> None:
@@ -2043,9 +2424,17 @@ def init_state(args: argparse.Namespace) -> None:
     state["genesis_digest"] = state_genesis_digest(state)
     state["event_chain_digest"] = state["genesis_digest"]
     validate_state(state)
-    if bool(args.predecessor_checkpoint) != bool(args.root_session_manifest):
+    if len([
+        item for item in (
+            args.predecessor_checkpoint,
+            args.root_session_manifest,
+            args.reviewer_registry,
+        )
+        if item
+    ]) not in {0, 3}:
         raise StateError(
-            "predecessor checkpoint and root session manifest must be supplied together"
+            "predecessor checkpoint, root session manifest, and reviewer registry "
+            "must be supplied together"
         )
     if predecessor_checkpoint_emitted and not args.predecessor_checkpoint:
         raise StateError(
@@ -2062,7 +2451,13 @@ def init_state(args: argparse.Namespace) -> None:
             Path(args.predecessor_state),
             state,
             successor_resources["root_session_identity"],
+            Path(args.reviewer_registry),
         )
+        bind_checkpoint_to_successor_state(
+            state,
+            read_session_checkpoint(Path(args.predecessor_checkpoint)),
+        )
+        validate_state(state)
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         if path.exists() or path.is_symlink():
@@ -2090,6 +2485,7 @@ def append_checkpoint_event(
     event_type: str,
     checkpoint: dict[str, Any],
     successor: dict[str, str] | None = None,
+    migration_source_digest: str = "",
 ) -> None:
     successor = successor or {
         "run_id": "",
@@ -2101,11 +2497,16 @@ def append_checkpoint_event(
     monotonic_ns = max(time.monotonic_ns(), state["last_monotonic_ns"] + 1)
     event = {
         "sequence": len(state["events"]) + 1,
-        "event_id": (
-            f"checkpoint:{checkpoint['checkpoint_digest'][7:23]}"
-            if event_type == "session_checkpoint_emitted"
-            else f"checkpoint-claim:{successor['run_id']}"
-        ),
+        "event_id": {
+            "session_checkpoint_emitted":
+                f"checkpoint:{checkpoint['checkpoint_digest'][7:23]}",
+            "session_checkpoint_claimed":
+                f"checkpoint-claim:{successor['run_id']}",
+            "session_checkpoint_migrated":
+                f"checkpoint-migrate:{checkpoint['checkpoint_digest'][7:23]}",
+            "predecessor_checkpoint_bound":
+                f"checkpoint-bound:{checkpoint['checkpoint_digest'][7:23]}",
+        }[event_type],
         "event_type": event_type,
         "implementation_mode": state["implementation_mode"],
         "invariant_digests": [],
@@ -2121,7 +2522,9 @@ def append_checkpoint_event(
         "review_reason_code": "",
         "review_author": "",
         "review_evidence_digest": "",
-        "review_target_digest": checkpoint["checkpoint_digest"],
+        "review_target_digest": (
+            migration_source_digest or checkpoint["checkpoint_digest"]
+        ),
         "predecessor_plan_digest": "",
         "predecessor_accepted_candidate_digest": "",
         "predecessor_closing_event_digest": "",
@@ -2147,7 +2550,42 @@ def append_checkpoint_event(
     validate_state(state)
 
 
+def bind_checkpoint_to_successor_state(
+    state: dict[str, Any],
+    checkpoint: dict[str, Any],
+) -> None:
+    claims = [
+        event for event in state["events"]
+        if event["event_type"] == "predecessor_checkpoint_bound"
+    ]
+    if claims:
+        if (
+            len(claims) != 1
+            or claims[0]["candidate_digest"] != checkpoint["checkpoint_digest"]
+        ):
+            raise StateError("execution ledger is already bound to another checkpoint")
+        return
+    append_checkpoint_event(
+        state,
+        event_type="predecessor_checkpoint_bound",
+        checkpoint=checkpoint,
+        successor=checkpoint_successor_claim(state),
+    )
+
+
 def create_session_checkpoint(args: argparse.Namespace) -> None:
+    state_path = Path(args.state)
+    registry_path = Path(args.reviewer_registry)
+    with (
+        with_lock(state_path) as state_lock,
+        with_lock(registry_path) as registry_lock,
+    ):
+        fcntl.flock(state_lock.fileno(), fcntl.LOCK_EX)
+        fcntl.flock(registry_lock.fileno(), fcntl.LOCK_SH)
+        create_session_checkpoint_locked(args)
+
+
+def create_session_checkpoint_locked(args: argparse.Namespace) -> None:
     state_path = Path(args.state)
     state = read_state(state_path)
     if state["run_id"] != args.run_id:
@@ -2157,6 +2595,10 @@ def create_session_checkpoint(args: argparse.Namespace) -> None:
         for event in state["events"]
     ):
         raise StateError("execution boundary already emitted a session checkpoint")
+    if len(state["events"]) > MAX_EVENTS - 3:
+        raise StateError(
+            "session checkpoint requires reserved event capacity for emission and claims"
+        )
     checkpoint_source_head = state["source_head"]
     if args.boundary == "checked":
         root = repository_root()
@@ -2241,6 +2683,40 @@ def create_session_checkpoint(args: argparse.Namespace) -> None:
     ]
     if review_receipt_digests != recorded_review_receipts:
         raise StateError("checkpoint review receipts differ from the execution review history")
+    registry = read_reviewer_registry(Path(args.reviewer_registry))
+    all_review_events = [
+        event for event in state["events"]
+        if event["event_type"] == "parent_review"
+        and event["independent_review_receipt_digest"]
+    ]
+    registry_events = [
+        event for event in registry["events"]
+        if event["plan_digest"] == state["plan_digest"]
+        and event["run_id"] == state["run_id"]
+        and event["execution_genesis_digest"] == state["genesis_digest"]
+    ]
+    if len(registry_events) != len(all_review_events):
+        raise StateError("reviewer registry differs from the execution review history")
+    registry_by_receipt = {
+        event["review_receipt_digest"]: event for event in registry_events
+    }
+    for review_event in all_review_events:
+        admission = registry_by_receipt.get(
+            review_event["independent_review_receipt_digest"]
+        )
+        if admission is None or admission["event_id"] != review_event["event_id"]:
+            raise StateError("reviewer registry admission differs from the bounded review")
+    for receipt_digest, reviewer_session in zip(
+        review_receipt_digests,
+        reviewer_sessions,
+        strict=True,
+    ):
+        admission = registry_by_receipt.get(receipt_digest)
+        if (
+            admission is None
+            or admission["reviewer_session_digest"] != reviewer_session
+        ):
+            raise StateError("reviewer registry admission differs from the bounded review")
     if args.boundary == "checked" and state["implementation_mode"] == "parent_direct":
         if not review_events or digest(final_patch) != review_events[-1]["review_target_digest"]:
             raise StateError("checked parent-direct diff differs from the reviewed target")
@@ -2263,7 +2739,7 @@ def create_session_checkpoint(args: argparse.Namespace) -> None:
         "boundary": args.boundary,
         "root_session_identity": checkpoint_identity,
         "resource_observations": resources,
-        "reviewer_session_digests": reviewer_sessions,
+        "reviewer_registry": reviewer_registry_reference(registry),
         "checkpoint_digest": "",
         "successor_claim": None,
     }
@@ -2271,30 +2747,30 @@ def create_session_checkpoint(args: argparse.Namespace) -> None:
     validate_session_checkpoint(checkpoint)
     output = Path(args.output)
     require_outside_repository(output, "session checkpoint")
+    current = read_state(state_path)
+    if current["event_chain_digest"] != checkpoint["execution_event_chain_digest"]:
+        raise StateError("execution ledger changed while issuing the session checkpoint")
+    if any(
+        event["event_type"] == "successor_claimed"
+        for event in current["events"]
+    ):
+        raise StateError("execution boundary is already claimed by a successor")
+    if any(
+        event["event_type"] == "session_checkpoint_emitted"
+        for event in current["events"]
+    ):
+        raise StateError("execution boundary already emitted a session checkpoint")
+    append_checkpoint_event(
+        current,
+        event_type="session_checkpoint_emitted",
+        checkpoint=checkpoint,
+    )
     if output.exists() or output.is_symlink():
-        raise StateError("session checkpoint output already exists")
-    atomic_write(output, checkpoint)
-    with with_lock(state_path) as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        current = read_state(state_path)
-        if current["event_chain_digest"] != checkpoint["execution_event_chain_digest"]:
-            raise StateError("execution ledger changed while issuing the session checkpoint")
-        if any(
-            event["event_type"] == "successor_claimed"
-            for event in current["events"]
-        ):
-            raise StateError("execution boundary is already claimed by a successor")
-        if any(
-            event["event_type"] == "session_checkpoint_emitted"
-            for event in current["events"]
-        ):
-            raise StateError("execution boundary already emitted a session checkpoint")
-        append_checkpoint_event(
-            current,
-            event_type="session_checkpoint_emitted",
-            checkpoint=checkpoint,
-        )
-        atomic_write(state_path, current)
+        if read_session_checkpoint(output) != checkpoint:
+            raise StateError("session checkpoint output already exists with other bytes")
+    else:
+        atomic_write(output, checkpoint)
+    atomic_write(state_path, current)
 
 
 def verify_session_checkpoint(args: argparse.Namespace) -> None:
@@ -2302,12 +2778,146 @@ def verify_session_checkpoint(args: argparse.Namespace) -> None:
     state = read_state(Path(args.state))
     issued = [
         event for event in state["events"]
-        if event["event_type"] == "session_checkpoint_emitted"
+        if event["event_type"] in {
+            "session_checkpoint_emitted", "session_checkpoint_migrated",
+        }
         and event["candidate_digest"] == checkpoint["checkpoint_digest"]
-        and event["previous_event_digest"] == checkpoint["execution_event_chain_digest"]
+        and (
+            event["previous_event_digest"] == checkpoint["execution_event_chain_digest"]
+            or event["event_type"] == "session_checkpoint_migrated"
+        )
     ]
     if len(issued) != 1:
         raise StateError("session checkpoint is not issued by the execution ledger")
+
+
+def migrate_session_checkpoint(args: argparse.Namespace) -> None:
+    state_path = Path(args.state)
+    registry_path = Path(args.reviewer_registry)
+    legacy = read_legacy_session_checkpoint(Path(args.legacy_checkpoint))
+    if legacy["successor_claim"] is not None:
+        raise StateError("claimed legacy checkpoint cannot be migrated")
+    output = Path(args.output)
+    require_outside_repository(output, "migrated session checkpoint")
+    with with_lock(state_path) as state_lock:
+        fcntl.flock(state_lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(state_path)
+        if (
+            legacy["plan_path"] != state["plan_path"]
+            or legacy["plan_digest"] != state["plan_digest"]
+            or legacy["run_id"] != state["run_id"]
+        ):
+            raise StateError("legacy checkpoint differs from the execution ledger")
+        legacy_issuance = [
+            event for event in state["events"]
+            if event["event_type"] == "session_checkpoint_emitted"
+            and event["candidate_digest"] == legacy["checkpoint_digest"]
+            and event["previous_event_digest"] == legacy["execution_event_chain_digest"]
+        ]
+        if len(legacy_issuance) != 1:
+            raise StateError("legacy checkpoint lacks one ledger issuance event")
+        if any(
+            event["event_type"] == "session_checkpoint_claimed"
+            and event["candidate_digest"] == legacy["checkpoint_digest"]
+            for event in state["events"]
+        ):
+            raise StateError("claimed legacy checkpoint cannot be migrated")
+        receipt_paths = [Path(path) for path in args.review_receipt]
+        receipts = [
+            validate_review_receipt(
+                read_bounded_json(path, "review receipt", outside_repository=True),
+                state["plan_digest"],
+            )
+            for path in receipt_paths
+        ]
+        receipt_digests = [file_digest(path) for path in receipt_paths]
+        all_review_events = [
+            event for event in state["events"]
+            if event["event_type"] == "parent_review"
+            and event["independent_review_receipt_digest"]
+        ]
+        if (
+            len(all_review_events) != len(receipt_digests)
+            or [event["independent_review_receipt_digest"] for event in all_review_events]
+            != receipt_digests
+        ):
+            raise StateError(
+                "legacy checkpoint migration requires every recorded review receipt in order"
+            )
+        checkpoint_receipt_paths = [
+            Path(path) for path in args.checkpoint_review_receipt
+        ]
+        checkpoint_receipts = [
+            validate_review_receipt(
+                read_bounded_json(path, "checkpoint review receipt", outside_repository=True),
+                state["plan_digest"],
+            )
+            for path in checkpoint_receipt_paths
+        ]
+        checkpoint_receipt_digests = [
+            file_digest(path) for path in checkpoint_receipt_paths
+        ]
+        if any(
+            digest_value not in set(receipt_digests)
+            for digest_value in checkpoint_receipt_digests
+        ):
+            raise StateError("checkpoint review receipts are absent from complete review history")
+        if [
+            receipt["reviewer_session_digest"] for receipt in checkpoint_receipts
+        ] != legacy["reviewer_session_digests"]:
+            raise StateError(
+                "legacy checkpoint reviewer sessions differ from checkpoint receipts"
+            )
+        for receipt, receipt_digest, event in zip(
+            receipts,
+            receipt_digests,
+            all_review_events,
+            strict=True,
+        ):
+            admit_reviewer_session(
+                registry_path,
+                reviewer_session_digest=receipt["reviewer_session_digest"],
+                plan_digest=state["plan_digest"],
+                run_id=state["run_id"],
+                event_id=event["event_id"],
+                execution_genesis_digest=state["genesis_digest"],
+                review_receipt_digest=receipt_digest,
+                predecessor_reference=None,
+            )
+        registry = snapshot_reviewer_registry(registry_path)
+        migrated = {
+            key: value for key, value in legacy.items()
+            if key not in {"schema_version", "reviewer_session_digests", "checkpoint_digest"}
+        }
+        migrated["schema_version"] = SESSION_CHECKPOINT_SCHEMA_VERSION
+        migrated["reviewer_registry"] = reviewer_registry_reference(registry)
+        migrated["checkpoint_digest"] = ""
+        migrated["checkpoint_digest"] = checkpoint_payload_digest(migrated)
+        validate_session_checkpoint(migrated)
+        if output.exists() or output.is_symlink():
+            if read_session_checkpoint(output) != migrated:
+                raise StateError("migrated checkpoint output already exists with other bytes")
+        else:
+            atomic_write(output, migrated)
+        migrations = [
+            event for event in state["events"]
+            if event["event_type"] == "session_checkpoint_migrated"
+        ]
+        if migrations:
+            if (
+                len(migrations) != 1
+                or migrations[0]["candidate_digest"] != migrated["checkpoint_digest"]
+                or migrations[0]["review_target_digest"] != legacy["checkpoint_digest"]
+            ):
+                raise StateError("execution ledger contains another checkpoint migration")
+            return
+        append_checkpoint_event(
+            state,
+            event_type="session_checkpoint_migrated",
+            checkpoint=migrated,
+            migration_source_digest=legacy["checkpoint_digest"],
+        )
+        atomic_write(state_path, state)
 
 
 def claim_session_checkpoint(
@@ -2315,6 +2925,7 @@ def claim_session_checkpoint(
     predecessor_state_path: Path,
     successor: dict[str, Any],
     successor_root_session: dict[str, Any],
+    reviewer_registry_path: Path,
 ) -> None:
     if successor_root_session["status"] != "observed":
         raise StateError("successor root-session identity is not observed")
@@ -2322,6 +2933,12 @@ def claim_session_checkpoint(
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         predecessor_state = read_state(predecessor_state_path)
         checkpoint = read_session_checkpoint(path)
+        registry = snapshot_reviewer_registry(reviewer_registry_path)
+        validate_reviewer_registry_reference(
+            checkpoint["reviewer_registry"],
+            registry,
+            exact=True,
+        )
         if (
             checkpoint["plan_digest"] != predecessor_state["plan_digest"]
             or checkpoint["plan_path"] != predecessor_state["plan_path"]
@@ -2335,13 +2952,7 @@ def claim_session_checkpoint(
         if checkpoint["plan_path"] == successor["plan_path"]:
             raise StateError("session checkpoint must cross a numbered-plan boundary")
         require_predecessor_ancestry(checkpoint["source_head"], successor["source_head"])
-        claim = {
-            "run_id": successor["run_id"],
-            "plan_digest": successor["plan_digest"],
-            "source_head": successor["source_head"],
-            "primary_invariant_digest": successor["primary_invariant_digest"],
-            "genesis_digest": successor["genesis_digest"],
-        }
+        claim = checkpoint_successor_claim(successor)
         checkpoint_claims = [
             event for event in predecessor_state["events"]
             if event["event_type"] == "session_checkpoint_claimed"
@@ -2361,9 +2972,14 @@ def claim_session_checkpoint(
             return
         emitted = [
             event for event in predecessor_state["events"]
-            if event["event_type"] == "session_checkpoint_emitted"
+            if event["event_type"] in {
+                "session_checkpoint_emitted", "session_checkpoint_migrated",
+            }
             and event["candidate_digest"] == checkpoint["checkpoint_digest"]
-            and event["previous_event_digest"] == checkpoint["execution_event_chain_digest"]
+            and (
+                event["previous_event_digest"] == checkpoint["execution_event_chain_digest"]
+                or event["event_type"] == "session_checkpoint_migrated"
+            )
         ]
         if len(emitted) != 1:
             raise StateError("session checkpoint lacks one ledger issuance event")
@@ -2374,6 +2990,30 @@ def claim_session_checkpoint(
             successor=claim,
         )
         atomic_write(predecessor_state_path, predecessor_state)
+
+
+def require_claimed_session_checkpoint(
+    checkpoint: dict[str, Any],
+    predecessor_state_path: Path,
+    successor: dict[str, Any],
+) -> None:
+    with with_lock(predecessor_state_path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        predecessor = read_state(predecessor_state_path)
+    if (
+        checkpoint["plan_digest"] != predecessor["plan_digest"]
+        or checkpoint["plan_path"] != predecessor["plan_path"]
+    ):
+        raise StateError("review predecessor checkpoint differs from its execution ledger")
+    identity = successor_identity(successor)
+    matching_claims = [
+        event for event in predecessor["events"]
+        if event["event_type"] == "session_checkpoint_claimed"
+        and event["candidate_digest"] == checkpoint["checkpoint_digest"]
+        and all(event[field] == value for field, value in identity.items())
+    ]
+    if len(matching_claims) != 1:
+        raise StateError("review predecessor checkpoint is not claimed by this execution")
 
 
 def plan_list_field(state: dict[str, Any], field: str) -> list[str]:
@@ -2553,7 +3193,9 @@ def record_bounded_review(args: argparse.Namespace) -> None:
         review_receipt=args.review_receipt,
         review_resource_manifest=args.review_resource_manifest,
         candidate_manifest=args.candidate_manifest,
+        predecessor_state=args.predecessor_state,
         predecessor_checkpoint=args.predecessor_checkpoint,
+        reviewer_registry=args.reviewer_registry,
         lifecycle_state=args.lifecycle_state,
         elapsed_seconds=args.elapsed_seconds,
     ))
@@ -2613,8 +3255,27 @@ def record_event(args: argparse.Namespace) -> None:
             raise StateError(stopped_message(state))
         if any(event["event_id"] == args.event_id for event in state["events"]):
             raise StateError("event replay is not allowed")
+        if not ID_RE.fullmatch(args.event_id):
+            raise StateError("invalid event_id")
         if len(state["events"]) >= MAX_EVENTS:
             raise StateError("event budget exhausted")
+        invariants = args.invariant_digest or []
+        if len(invariants) != len(set(invariants)):
+            raise StateError("invariant digests must be unique")
+        for invariant in invariants:
+            require_digest(invariant, "invariant_digest")
+        severities = args.finding_severity or []
+        if len(severities) != len(set(severities)) or any(
+            severity not in {"High", "Medium", "Low"} for severity in severities
+        ):
+            raise StateError("invalid finding severities")
+        if (
+            not isinstance(args.elapsed_seconds, (int, float))
+            or isinstance(args.elapsed_seconds, bool)
+            or not math.isfinite(args.elapsed_seconds)
+            or args.elapsed_seconds < 0
+        ):
+            raise StateError("elapsed_seconds must be finite and nonnegative")
         if getattr(args, "bounded_review", False):
             receipt_path = Path(args.review_receipt)
             review_receipt = validate_review_receipt(
@@ -2696,34 +3357,63 @@ def record_event(args: argparse.Namespace) -> None:
                     "review budget permits one initial review and one bounded rereview"
                 )
             has_predecessor = bool(state["predecessor_plan_digest"])
-            if has_predecessor and not args.predecessor_checkpoint:
+            checkpoint_claims = [
+                event for event in state["events"]
+                if event["event_type"] == "predecessor_checkpoint_bound"
+            ]
+            if (has_predecessor or checkpoint_claims) and not (
+                args.predecessor_state and args.predecessor_checkpoint
+            ):
                 raise StateError(
-                    "dependent plan review requires the predecessor session checkpoint"
+                    "dependent plan review requires the predecessor state and session checkpoint"
                 )
+            predecessor_reference = None
             if args.predecessor_checkpoint:
+                if not args.predecessor_state:
+                    raise StateError(
+                        "review predecessor checkpoint requires the predecessor execution state"
+                    )
                 checkpoint = read_session_checkpoint(Path(args.predecessor_checkpoint))
-                if checkpoint["plan_digest"] != state["predecessor_plan_digest"]:
+                if (
+                    state["predecessor_plan_digest"]
+                    and checkpoint["plan_digest"] != state["predecessor_plan_digest"]
+                ):
                     raise StateError(
                         "review predecessor checkpoint differs from the execution ledger"
                     )
+                require_claimed_session_checkpoint(
+                    checkpoint,
+                    Path(args.predecessor_state),
+                    state,
+                )
                 if (
-                    review_receipt["reviewer_session_digest"]
-                    in checkpoint["reviewer_session_digests"]
+                    checkpoint_claims
+                    and (
+                        len(checkpoint_claims) != 1
+                        or checkpoint_claims[0]["candidate_digest"]
+                        != checkpoint["checkpoint_digest"]
+                    )
                 ):
                     raise StateError(
-                        "reviewer session cannot be reused across numbered plans"
+                        "review predecessor checkpoint differs from the claimed checkpoint"
                     )
-            args.independent_review_receipt_digest = file_digest(receipt_path)
+                predecessor_reference = checkpoint["reviewer_registry"]
+            receipt_digest = file_digest(receipt_path)
+            admit_reviewer_session(
+                Path(args.reviewer_registry),
+                reviewer_session_digest=review_receipt["reviewer_session_digest"],
+                plan_digest=state["plan_digest"],
+                run_id=state["run_id"],
+                event_id=args.event_id,
+                execution_genesis_digest=state["genesis_digest"],
+                review_receipt_digest=receipt_digest,
+                predecessor_reference=predecessor_reference,
+            )
+            args.independent_review_receipt_digest = receipt_digest
             args.candidate_lifecycle_digest = review_identity
             args.review_target_digest = review_target
             args.review_attempt_id = review_attempt_id
             args.review_candidate_digest = review_candidate_digest
-        invariants = args.invariant_digest or []
-        if len(invariants) != len(set(invariants)):
-            raise StateError("invariant digests must be unique")
-        for invariant in invariants:
-            require_digest(invariant, "invariant_digest")
-        severities = args.finding_severity or []
         receipt = args.independent_review_receipt_digest or ""
         repair_classification: dict[str, Any] = {}
         repair_evidence = ""
@@ -2921,9 +3611,17 @@ def record_writable_attempt_start(args: argparse.Namespace) -> None:
         if args.attempt_kind == "initial" and any(predecessor.values()):
             if not args.predecessor_state:
                 raise StateError("dependent writable start requires predecessor execution state")
-            if bool(args.predecessor_checkpoint) != bool(args.root_session_manifest):
+            if len([
+                item for item in (
+                    args.predecessor_checkpoint,
+                    args.root_session_manifest,
+                    args.reviewer_registry,
+                )
+                if item
+            ]) not in {0, 3}:
                 raise StateError(
-                    "predecessor checkpoint and root session manifest must be supplied together"
+                    "predecessor checkpoint, root session manifest, and reviewer registry "
+                    "must be supplied together"
                 )
             predecessor_path = Path(args.predecessor_state)
             if predecessor_path.absolute() == path.absolute():
@@ -2943,12 +3641,18 @@ def record_writable_attempt_start(args: argparse.Namespace) -> None:
                     predecessor_path,
                     state,
                     successor_resources["root_session_identity"],
+                    Path(args.reviewer_registry),
+                )
+                bind_checkpoint_to_successor_state(
+                    state,
+                    read_session_checkpoint(Path(args.predecessor_checkpoint)),
                 )
         elif (
             args.attempt_kind == "initial"
             and args.predecessor_state
             and args.predecessor_checkpoint
             and args.root_session_manifest
+            and args.reviewer_registry
         ):
             successor_resources = resource_observations_from_manifest(
                 Path(args.root_session_manifest)
@@ -2958,11 +3662,17 @@ def record_writable_attempt_start(args: argparse.Namespace) -> None:
                 Path(args.predecessor_state),
                 state,
                 successor_resources["root_session_identity"],
+                Path(args.reviewer_registry),
+            )
+            bind_checkpoint_to_successor_state(
+                state,
+                read_session_checkpoint(Path(args.predecessor_checkpoint)),
             )
         elif (
             args.predecessor_state
             or args.predecessor_checkpoint
             or args.root_session_manifest
+            or args.reviewer_registry
         ):
             raise StateError(
                 "predecessor execution state, checkpoint, and root session manifest "
@@ -3302,6 +4012,9 @@ def check_gate(args: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser()
     sub = root.add_subparsers(dest="command", required=True)
+    registry_init = sub.add_parser("registry-init")
+    registry_init.add_argument("--output", required=True)
+    registry_init.set_defaults(handler=initialize_reviewer_registry)
     init = sub.add_parser("init")
     init.add_argument("state")
     init.add_argument("--run-id", required=True)
@@ -3313,6 +4026,7 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--predecessor-state")
     init.add_argument("--predecessor-checkpoint")
     init.add_argument("--root-session-manifest")
+    init.add_argument("--reviewer-registry")
     init.add_argument("--implementation-mode", choices=sorted(MODES), required=True)
     init.set_defaults(handler=init_state)
     record = sub.add_parser("record")
@@ -3340,6 +4054,7 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("--predecessor-state")
     start.add_argument("--predecessor-checkpoint")
     start.add_argument("--root-session-manifest")
+    start.add_argument("--reviewer-registry")
     start.add_argument("--prior-candidate-digest")
     start.add_argument("--lifecycle-state", required=True)
     start.add_argument("--elapsed-seconds", type=float, default=0.0)
@@ -3379,7 +4094,20 @@ def parser() -> argparse.ArgumentParser:
     checkpoint.add_argument("--boundary", choices=sorted(SESSION_BOUNDARIES), required=True)
     checkpoint.add_argument("--resource-manifest", required=True)
     checkpoint.add_argument("--review-receipt", action="append")
+    checkpoint.add_argument("--reviewer-registry", required=True)
     checkpoint.set_defaults(handler=create_session_checkpoint)
+    migrate_checkpoint = sub.add_parser("migrate-checkpoint")
+    migrate_checkpoint.add_argument("--legacy-checkpoint", required=True)
+    migrate_checkpoint.add_argument("--state", required=True)
+    migrate_checkpoint.add_argument("--reviewer-registry", required=True)
+    migrate_checkpoint.add_argument("--review-receipt", action="append", default=[])
+    migrate_checkpoint.add_argument(
+        "--checkpoint-review-receipt",
+        action="append",
+        default=[],
+    )
+    migrate_checkpoint.add_argument("--output", required=True)
+    migrate_checkpoint.set_defaults(handler=migrate_session_checkpoint)
     verify_checkpoint = sub.add_parser("verify-checkpoint")
     verify_checkpoint.add_argument("checkpoint")
     verify_checkpoint.add_argument("--state", required=True)
@@ -3392,7 +4120,9 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("--review-receipt", required=True)
     review.add_argument("--review-resource-manifest", required=True)
     review.add_argument("--candidate-manifest")
+    review.add_argument("--predecessor-state")
     review.add_argument("--predecessor-checkpoint")
+    review.add_argument("--reviewer-registry", required=True)
     review.add_argument("--invariant-digest", action="append", required=True)
     review.add_argument("--finding-severity", action="append", choices=("High", "Medium", "Low"))
     review.add_argument("--lifecycle-state", required=True)

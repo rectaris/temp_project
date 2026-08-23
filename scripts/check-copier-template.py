@@ -763,6 +763,12 @@ def require_sandboxed_plan_worker_alignment() -> None:
         '"authoritative_failure"', '"failure_diagnosis"',
         "def load_authoritative_failure", "def load_diagnosis_evidence",
         '"diagnosis_read"', '"repair_plan"',
+        "def initialize_reviewer_registry", "def admit_reviewer_session",
+        '"registry-init"', '"--reviewer-registry"',
+        '"reviewer_registry"', '"event_chain_digest"',
+        '"execution_genesis_digest"', '"predecessor_checkpoint_bound"',
+        '"migrate-checkpoint"', '"session_checkpoint_migrated"',
+        "MAX_MIGRATION_COMPATIBILITY_EVENTS", "reserved event capacity",
     ):
         if marker not in execution_state_text:
             fail(f"plan execution state missing confirmed-diagnosis marker: {marker}")
@@ -915,6 +921,13 @@ def require_hook_logging_parity() -> None:
     }
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)
+        subprocess.run(
+            ["git", "init", "-q"],
+            cwd=repo,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         root_record = run_hook_payload(".project-agent-workflow/hooks/agent_log_event.py", "root-parity", payload, repo)
         template_record = run_hook_payload("template/.project-agent-workflow/hooks/agent_log_event.py", "template-parity", payload, repo)
     if root_record.get("event") != template_record.get("event"):

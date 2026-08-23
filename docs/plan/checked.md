@@ -136,3 +136,5 @@ id	path
 169	docs/plan/checked/2026/08/16-31/169-linearize-session-checkpoint-lifecycle.md
 172	docs/plan/checked/2026/08/16-31/172-bind-review-to-candidate-leaf.md
 173	docs/plan/checked/2026/08/16-31/173-record-runtime-review-turn-zero.md
+174	docs/plan/checked/2026/08/16-31/174-linearize-reviewer-session-registry.md
+175	docs/plan/checked/2026/08/16-31/175-integrate-candidate-review-boundaries.md

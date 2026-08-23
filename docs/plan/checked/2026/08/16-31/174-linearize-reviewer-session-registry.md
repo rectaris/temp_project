@@ -1,6 +1,6 @@
 # Linearize reviewer session registry
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -26,6 +26,7 @@ write_scope:
   - template/.project-agent-workflow/scripts/plan-execution-state.py
   - template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md
   - tests/test-plan-execution-state.py
+  - tests/test-sandboxed-plan-worker.py
 context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -95,16 +96,22 @@ checked_summary_ja: reviewer sessionの再利用を外部registryで全plan横�
 
 ## Tasks
 
-- [ ] Define the bounded registry schema, event chain, lock, and checkpoint reference.
-- [ ] Require exact membership rejection before recording a review event.
-- [ ] Carry registry identity through checkpoint issuance and successor claim.
-- [ ] Add long-chain, copied-checkpoint, crash-recovery, omitted-registry, and reviewer-reuse tests.
-- [ ] Align root and generated policy and Skill guidance.
-- [ ] Reconcile the checked Plan 172 and 173 mechanisms with the registry and run the complete focused suite.
-- [ ] Obtain one fresh independent review and run authoritative validation exactly once for the complete Plan 170 acceptance.
-- [ ] Update Plan 171 to consume the checked Plan 174 archive, close Plan 175 without product changes, archive, and commit.
+- [x] Define the bounded registry schema, event chain, lock, and checkpoint reference.
+- [x] Require exact membership rejection before recording a review event.
+- [x] Carry registry identity through checkpoint issuance and successor claim.
+- [x] Add long-chain, copied-checkpoint, crash-recovery, omitted-registry, and reviewer-reuse tests.
+- [x] Align root and generated policy and Skill guidance.
+- [x] Reconcile the checked Plan 172 and 173 mechanisms with the registry and run the complete focused suite.
+- [x] Obtain one fresh independent review and run authoritative validation exactly once for the complete Plan 170 acceptance.
+- [x] Prepare Plan 171 to consume the checked Plan 174 archive and Plan 175 for no-change closure.
 
 ## Validation Notes
 
 - Plan 170 was restructured after its bounded rereview found unresolved candidate identity, runtime evidence, and reviewer-history boundaries.
 - On 2026-08-23 the user approved consolidating the remaining Plan 174 and 175 implementation work to prevent integration-plan priority inversion.
+- The external canonical JSONL registry binds each reviewer session to one execution genesis and rejects copied paths, reuse, and non-identical crash recovery.
+- Session checkpoints carry the registry identity, event count, and chain digest; child ledgers bind inbound checkpoints separately from predecessor-ledger outbound claims.
+- Schema-1 checkpoints migrate without rewriting history by verifying all review receipts, backfilling every historical reviewer, and appending one linked migration event.
+- Focused validation passed: 20 hook logging tests, 66 execution-state tests, 96 sandboxed worker tests, root policy checks, Copier template checks, and `git diff --check`.
+- Fresh independent review completed with no unresolved High or Medium findings after bounded rereviews closed registry substitution, lock, runner propagation, migration, and event-capacity defects.
+- Authoritative validation passed exactly once: validation tools, hook logging, execution state, sandboxed worker, worker self-test, root policy with holdout, Copier checks, all-change validation, lint, smoke, and `git diff --check`.

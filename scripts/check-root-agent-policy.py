@@ -327,6 +327,12 @@ def check_sandboxed_worker_fallback() -> None:
         "def review_candidate_identity_digest", "def candidate_review_identity",
         '"--candidate-manifest"',
         "checked parent-direct diff differs from the reviewed target",
+        "def initialize_reviewer_registry", "def admit_reviewer_session",
+        '"registry-init"', '"--reviewer-registry"',
+        '"reviewer_registry"', '"event_chain_digest"',
+        '"execution_genesis_digest"', '"predecessor_checkpoint_bound"',
+        '"migrate-checkpoint"', '"session_checkpoint_migrated"',
+        "MAX_MIGRATION_COMPATIBILITY_EVENTS", "reserved event capacity",
     ):
         if marker not in execution_state:
             fail(f"plan execution state missing confirmed-diagnosis marker: {marker}")
@@ -340,7 +346,11 @@ def check_sandboxed_worker_fallback() -> None:
         for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
             if marker not in text:
                 fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
-        for marker in ("admitted patch digest", "mutable lifecycle"):
+        for marker in (
+            "admitted patch digest", "mutable lifecycle",
+            "reviewer session registry", "event-chain digest", "execution genesis",
+            "schema-1 checkpoint",
+        ):
             if marker not in text:
                 fail(f"{relative} missing candidate review identity marker: {marker}")
 

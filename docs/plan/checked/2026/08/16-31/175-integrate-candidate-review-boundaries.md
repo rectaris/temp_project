@@ -1,6 +1,6 @@
 # Integrate candidate review boundaries
 
-status: deferred
+status: checked
 task_types:
   - planning_docs
   - security
@@ -25,7 +25,7 @@ context_files:
   - docs/plan/replanned/2026/08/16-31/132-checkpoint-plan-session-resources.md
   - docs/plan/checked/2026/08/16-31/172-bind-review-to-candidate-leaf.md
   - docs/plan/checked/2026/08/16-31/173-record-runtime-review-turn-zero.md
-  - docs/plan/active/174-linearize-reviewer-session-registry.md
+  - docs/plan/checked/2026/08/16-31/174-linearize-reviewer-session-registry.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -46,7 +46,7 @@ validation_witness_map:
 replan_source: docs/plan/active/170-bind-review-context-to-candidate-lifecycle.md
 replan_contract: docs/plan/replanned/contracts/170-bind-review-context-to-candidate-lifecycle.json
 integration_gates:
-  - Plan 174 must be checked and its exact archive must replace the active context path
+  - Plan 174 is checked and consumed through its exact archive path
   - The checked Plan 174 record must preserve and validate the complete unchanged Plan 170 acceptance
   - Make no product, policy, template, script, or test change under this plan
   - Do not run a second independent review or authoritative validation; record the Plan 174 evidence and archive this durable successor
@@ -67,13 +67,15 @@ checked_summary_ja: Plan 174の統合検証を参照し、追加実装なしでP
 
 ## Tasks
 
-- [ ] Wait for Plan 174 to be checked.
-- [ ] Replace the active Plan 174 context with its exact checked archive.
-- [ ] Confirm that the checked Plan 174 record preserves the unchanged acceptance digest and records successful focused, independent-review, and authoritative evidence.
-- [ ] Confirm that Plan 171 consumes the checked Plan 174 archive.
-- [ ] Archive this plan without product changes or another validation cycle.
+- [x] Wait for Plan 174 to be checked.
+- [x] Replace the active Plan 174 context with its exact checked archive.
+- [x] Confirm that the checked Plan 174 record preserves the unchanged acceptance digest and records successful focused, independent-review, and authoritative evidence.
+- [x] Confirm that Plan 171 consumes the checked Plan 174 archive.
+- [x] Archive this plan without product changes or another validation cycle.
 
 ## Validation Notes
 
 - Plan 170 was restructured after its bounded rereview found unresolved candidate identity, runtime evidence, and reviewer-history boundaries.
 - On 2026-08-23 the user approved removing this plan from the implementation priority chain while retaining it as the durable successor record required by the existing restructuring contract.
+- Plan 174 completed the combined implementation, fresh independent review, and authoritative validation for the unchanged Plan 170 acceptance. This plan adds no product or policy change and records that checked evidence only.
+- Closure checks passed with `python3 scripts/restructure-plan.py --verify` and `git diff --check`.

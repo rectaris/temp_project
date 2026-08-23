@@ -1,6 +1,6 @@
 # Integrate session resource boundaries
 
-status: deferred
+status: in_progress
 task_types:
   - planning_docs
   - security
@@ -53,7 +53,7 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/168-verify-runtime-session-resource-evidence.md
   - docs/plan/checked/2026/08/16-31/169-linearize-session-checkpoint-lifecycle.md
-  - docs/plan/active/174-linearize-reviewer-session-registry.md
+  - docs/plan/checked/2026/08/16-31/174-linearize-reviewer-session-registry.md
   - docs/plan/replanned/2026/08/16-31/132-checkpoint-plan-session-resources.md
 required_specs:
   - docs/agent/SPEC_AGENT_LOGGING.md
@@ -97,7 +97,7 @@ validation_witness_map:
 replan_source: docs/plan/active/132-checkpoint-plan-session-resources.md
 replan_contract: docs/plan/replanned/contracts/132-checkpoint-plan-session-resources.json
 integration_gates:
-  - Plan 174 must be checked and its exact archive must replace the active context path before implementation
+  - Plan 174 is checked and consumed through its exact archive path
   - run the complete parent-owned focused suite before one fresh independent review and the authoritative suite exactly once
   - update Plan 133 to consume only checked Plan 168 through 171 evidence
 successor_plans:
@@ -124,7 +124,7 @@ checked_summary_ja: runtime証拠、checkpoint lifecycle、review lifecycleを�
 
 ## Tasks
 
-- [ ] Replace the active Plan 174 context path with its exact checked archive.
+- [x] Replace the active Plan 174 context path with its exact checked archive.
 - [ ] Reconcile root and generated policy, scripts, tests, and Copier inventories.
 - [ ] Run the complete focused suite and obtain one fresh independent review.
 - [ ] Run the authoritative suite exactly once.

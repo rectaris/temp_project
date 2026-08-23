@@ -105,7 +105,9 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.repo, text=True).strip()
         self.state = self.base / "execution.json"
         self.lifecycle = self.base / "candidate-lifecycle.json"
+        self.registry = self.base / "reviewer-registry.jsonl"
         self.review_manifests: dict[Path, Path] = {}
+        self.run_cli("registry-init", "--output", str(self.registry), check=True)
         self.run_cli("init", str(self.state), "--run-id", "run-1", "--plan", "docs/plan/active/001-test.md",
                  "--plan-digest", digest(self.plan.read_text()), "--source-head", self.head,
                  "--primary-invariant-digest", digest("one invariant"), "--lifecycle-state", str(self.lifecycle),
@@ -115,8 +117,22 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def run_cli(self, *arguments: str, check: bool = False) -> subprocess.CompletedProcess[str]:
+        command = list(arguments)
+        if (
+            command
+            and command[0] in {"review", "checkpoint"}
+            and "--reviewer-registry" not in command
+        ):
+            command.extend(["--reviewer-registry", str(self.registry)])
+        if (
+            command
+            and command[0] in {"init", "start"}
+            and "--predecessor-checkpoint" in command
+            and "--reviewer-registry" not in command
+        ):
+            command.extend(["--reviewer-registry", str(self.registry)])
         return subprocess.run(
-            [sys.executable, str(STATE_SCRIPT), *arguments], cwd=self.repo, check=check,
+            [sys.executable, str(STATE_SCRIPT), *command], cwd=self.repo, check=check,
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
 
@@ -174,7 +190,9 @@ class PlanExecutionStateTest(unittest.TestCase):
             implementation_mode="candidate",
             review_receipt=str(receipt),
             candidate_manifest=str(manifest),
+            predecessor_state=None,
             predecessor_checkpoint=None,
+            reviewer_registry=str(self.registry),
             invariant_digest=[invariant],
             finding_severity=finding_severities,
             lifecycle_state=str(lifecycle),
@@ -551,14 +569,15 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertIn("cannot start in the checkpointed root session", same.stderr)
 
         child_state = self.base / "fresh-session.json"
+        child_lifecycle = self.base / "fresh-lifecycle.json"
         fresh = self.run_cli(
             "init", str(child_state), "--run-id", "fresh-session",
             "--plan", self.child_plan.relative_to(self.repo).as_posix(),
             "--plan-digest", digest(self.child_plan.read_text()),
             "--source-head", checked_head,
             "--primary-invariant-digest", digest("child invariant"),
-            "--lifecycle-state", str(self.base / "fresh-lifecycle.json"),
-            "--implementation-mode", "candidate",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
             "--predecessor-state", str(state),
             "--predecessor-checkpoint", str(checkpoint),
             "--root-session-manifest", str(
@@ -566,6 +585,69 @@ class PlanExecutionStateTest(unittest.TestCase):
             ),
         )
         self.assertEqual(fresh.returncode, 0, fresh.stderr)
+        child_payload = json.loads(child_state.read_text(encoding="utf-8"))
+        original_checkpoint = STATE_MODULE.read_session_checkpoint(checkpoint)
+        STATE_MODULE.require_claimed_session_checkpoint(
+            original_checkpoint,
+            state,
+            child_payload,
+        )
+        STATE_MODULE.append_checkpoint_event(
+            child_payload,
+            event_type="session_checkpoint_emitted",
+            checkpoint=original_checkpoint,
+        )
+        STATE_MODULE.append_checkpoint_event(
+            child_payload,
+            event_type="session_checkpoint_claimed",
+            checkpoint=original_checkpoint,
+            successor={
+                "run_id": "grandchild",
+                "plan_digest": digest("grandchild plan"),
+                "source_head": checked_head,
+                "primary_invariant_digest": digest("grandchild invariant"),
+                "genesis_digest": digest("grandchild genesis"),
+            },
+        )
+        STATE_MODULE.validate_state(child_payload)
+        alternate_registry = self.base / "alternate-registry.jsonl"
+        self.run_cli("registry-init", "--output", str(alternate_registry), check=True)
+        (self.repo / "allowed.txt").write_text("child review\n", encoding="utf-8")
+        child_review = self.review_receipt(
+            "child-without-checkpoint",
+            digest(self.child_plan.read_text()),
+            round_value=1,
+            source_head=checked_head,
+        )
+        switched = self.run_cli(
+            "review", str(child_state), "--run-id", "fresh-session",
+            "--event-id", "child-without-checkpoint",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(child_review),
+            "--review-resource-manifest", str(self.review_manifests[child_review]),
+            "--reviewer-registry", str(alternate_registry),
+            "--invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(child_lifecycle),
+        )
+        self.assertNotEqual(switched.returncode, 0)
+        self.assertIn("requires the predecessor state and session checkpoint", switched.stderr)
+        (self.repo / "allowed.txt").write_text("checkpoint candidate\n", encoding="utf-8")
+        forged_checkpoint = json.loads(checkpoint.read_text(encoding="utf-8"))
+        forged_checkpoint["reviewer_registry"] = STATE_MODULE.reviewer_registry_reference(
+            STATE_MODULE.read_reviewer_registry(alternate_registry)
+        )
+        forged_checkpoint["checkpoint_digest"] = STATE_MODULE.checkpoint_payload_digest(
+            forged_checkpoint
+        )
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "not claimed by this execution",
+        ):
+            STATE_MODULE.require_claimed_session_checkpoint(
+                forged_checkpoint,
+                state,
+                child_payload,
+            )
 
         replay = self.run_cli(
             "init", str(self.base / "replay.json"), "--run-id", "replay-session",
@@ -705,6 +787,600 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertNotEqual(restarted.returncode, 0)
         self.assertIn("differs from the admitted candidate diff", restarted.stderr)
+
+    def test_reviewer_registry_is_required_for_review_and_checkpoint(self) -> None:
+        review = subprocess.run(
+            [
+                sys.executable, str(STATE_SCRIPT), "review", str(self.state),
+                "--run-id", "run-1", "--event-id", "missing-registry",
+                "--implementation-mode", "candidate",
+                "--review-receipt", "missing-receipt",
+                "--review-resource-manifest", "missing-manifest",
+                "--candidate-manifest", "missing-candidate",
+                "--invariant-digest", digest("one invariant"),
+                "--lifecycle-state", str(self.lifecycle),
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(review.returncode, 0)
+        self.assertIn("--reviewer-registry", review.stderr)
+
+        checkpoint = subprocess.run(
+            [
+                sys.executable, str(STATE_SCRIPT), "checkpoint", str(self.state),
+                "--run-id", "run-1", "--output", str(self.base / "missing.json"),
+                "--boundary", "checked", "--resource-manifest", "missing-manifest",
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(checkpoint.returncode, 0)
+        self.assertIn("--reviewer-registry", checkpoint.stderr)
+
+    def test_reviewer_registry_supports_long_chains_and_rejects_copies(self) -> None:
+        for index in range(80):
+            STATE_MODULE.admit_reviewer_session(
+                self.registry,
+                reviewer_session_digest=digest(f"reviewer-{index}"),
+                plan_digest=digest(f"plan-{index}"),
+                run_id=f"run-{index}",
+                event_id=f"review-{index}",
+                execution_genesis_digest=digest(f"genesis-{index}"),
+                review_receipt_digest=digest(f"receipt-{index}"),
+                predecessor_reference=None,
+            )
+        registry = STATE_MODULE.read_reviewer_registry(self.registry)
+        self.assertEqual(len(registry["events"]), 80)
+        self.assertEqual(
+            STATE_MODULE.reviewer_registry_reference(registry)["event_count"],
+            80,
+        )
+
+        copied = self.base / "copied-registry.jsonl"
+        shutil.copyfile(self.registry, copied)
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "copied to another path",
+        ):
+            STATE_MODULE.read_reviewer_registry(copied)
+
+    def test_reviewer_registry_recovers_an_admission_without_a_ledger_event(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "registry-crash-recovery", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("registry recovery\n", encoding="utf-8")
+        receipt = self.review_receipt(
+            "registry-recovery",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        receipt_payload = json.loads(receipt.read_text(encoding="utf-8"))
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        STATE_MODULE.admit_reviewer_session(
+            self.registry,
+            reviewer_session_digest=receipt_payload["reviewer_session_digest"],
+            plan_digest=digest(self.plan.read_text()),
+            run_id=run_id,
+            event_id="registry-recovery",
+            execution_genesis_digest=state_payload["genesis_digest"],
+            review_receipt_digest=digest(receipt.read_bytes()),
+            predecessor_reference=None,
+        )
+        recovered = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "registry-recovery",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        registry = STATE_MODULE.read_reviewer_registry(self.registry)
+        self.assertEqual(len(registry["events"]), 1)
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "reviewer session cannot be reused across numbered plans",
+        ):
+            STATE_MODULE.admit_reviewer_session(
+                self.registry,
+                reviewer_session_digest=receipt_payload["reviewer_session_digest"],
+                plan_digest=digest(self.plan.read_text()),
+                run_id=run_id,
+                event_id="registry-recovery",
+                execution_genesis_digest=digest("different-ledger-genesis"),
+                review_receipt_digest=digest(receipt.read_bytes()),
+                predecessor_reference=None,
+            )
+
+    def test_invalid_review_event_does_not_modify_the_registry(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "invalid-registry-event", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("invalid registry event\n", encoding="utf-8")
+        receipt = self.review_receipt(
+            "invalid-registry-event",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        rejected = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "invalid/event",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid event_id", rejected.stderr)
+        registry = STATE_MODULE.read_reviewer_registry(self.registry)
+        self.assertEqual(registry["events"], [])
+
+    def test_checkpoint_binds_registry_and_rejects_reviewer_reuse(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "registry-parent", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("registry parent\n", encoding="utf-8")
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "authoritative", "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        review = self.review_receipt(
+            "registry-shared",
+            digest(self.plan.read_text()),
+            round_value=1,
+            reviewer_session="shared-reviewer",
+        )
+        self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "registry-shared",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(review),
+            "--review-resource-manifest", str(self.review_manifests[review]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "registry parent"], cwd=self.repo, check=True)
+        checkpoint = self.base / "registry-checkpoint.json"
+        self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(checkpoint), "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("registry-parent")),
+            "--review-receipt", str(review),
+            check=True,
+        )
+        checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(checkpoint_payload["reviewer_registry"]),
+            STATE_MODULE.REVIEWER_REGISTRY_REFERENCE_KEYS,
+        )
+        self.assertNotIn("reviewer_session_digests", checkpoint_payload)
+
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "reviewer session cannot be reused across numbered plans",
+        ):
+            STATE_MODULE.admit_reviewer_session(
+                self.registry,
+                reviewer_session_digest=digest("shared-reviewer"),
+                plan_digest=digest(self.child_plan.read_text()),
+                run_id="registry-child",
+                event_id="registry-child-review",
+                execution_genesis_digest=digest("registry-child-genesis"),
+                review_receipt_digest=digest("child-receipt"),
+                predecessor_reference=checkpoint_payload["reviewer_registry"],
+            )
+
+    def test_checkpoint_claim_rejects_a_registry_advanced_after_issuance(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "stale-registry-checkpoint", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("stale registry\n", encoding="utf-8")
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "authoritative", "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        review = self.review_receipt(
+            "stale-registry-review",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "stale-registry-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(review),
+            "--review-resource-manifest", str(self.review_manifests[review]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "stale registry"], cwd=self.repo, check=True)
+        checked_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        checkpoint = self.base / "stale-registry-checkpoint.json"
+        self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(checkpoint), "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("stale-registry")),
+            "--review-receipt", str(review),
+            check=True,
+        )
+        STATE_MODULE.admit_reviewer_session(
+            self.registry,
+            reviewer_session_digest=digest("later-reviewer"),
+            plan_digest=digest("later-plan"),
+            run_id="later-run",
+            event_id="later-review",
+            execution_genesis_digest=digest("later-genesis"),
+            review_receipt_digest=digest("later-receipt"),
+            predecessor_reference=None,
+        )
+        rejected = self.run_cli(
+            "init", str(self.base / "stale-child.json"),
+            "--run-id", "stale-child",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text()),
+            "--source-head", checked_head,
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(self.base / "stale-child-lifecycle.json"),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(state),
+            "--predecessor-checkpoint", str(checkpoint),
+            "--root-session-manifest", str(
+                self.resource_manifest("stale-child", session="stale-child")
+            ),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("advanced or diverged", rejected.stderr)
+
+    def test_normal_checkpoint_reserves_capacity_before_writing_output(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "checkpoint-capacity", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("checkpoint capacity\n", encoding="utf-8")
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "authoritative", "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        review = self.review_receipt(
+            "checkpoint-capacity-review",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "checkpoint-capacity-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(review),
+            "--review-resource-manifest", str(self.review_manifests[review]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "checkpoint capacity"], cwd=self.repo, check=True)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        while len(payload["events"]) < STATE_MODULE.MAX_EVENTS - 2:
+            last = payload["events"][-1]
+            event = dict(payload["events"][0])
+            sequence = len(payload["events"]) + 1
+            event.update({
+                "sequence": sequence,
+                "event_id": f"capacity-padding-{sequence}",
+                "event_type": "elapsed_checkpoint",
+                "invariant_digests": [],
+                "finding_severities": [],
+                "independent_review_receipt_digest": "",
+                "candidate_lifecycle_digest": "",
+                "elapsed_seconds": 0.0,
+                "monotonic_ns": last["monotonic_ns"] + 1,
+                "previous_event_digest": last["event_digest"],
+            })
+            event["event_digest"] = digest(json.dumps(
+                {key: value for key, value in event.items() if key != "event_digest"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ))
+            payload["events"].append(event)
+        payload["last_monotonic_ns"] = payload["events"][-1]["monotonic_ns"]
+        payload["event_chain_digest"] = payload["events"][-1]["event_digest"]
+        STATE_MODULE.validate_state(payload)
+        state.write_text(json.dumps(payload), encoding="utf-8")
+        output = self.base / "capacity-checkpoint.json"
+        rejected = self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(output), "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("checkpoint-capacity")),
+            "--review-receipt", str(review),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("reserved event capacity", rejected.stderr)
+        self.assertFalse(output.exists())
+
+    def test_migration_compatibility_suffix_crosses_each_budget_boundary(self) -> None:
+        sequence = [
+            "session_checkpoint_migrated",
+            "session_checkpoint_claimed",
+            "successor_claimed",
+        ]
+        for migration_sequence in (62, 63, 64):
+            with self.subTest(migration_sequence=migration_sequence):
+                events = [
+                    {"event_type": "elapsed_checkpoint"}
+                    for _ in range(migration_sequence - 1)
+                ]
+                events.extend({"event_type": event_type} for event_type in sequence)
+                STATE_MODULE.validate_event_budget(events)
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "compatibility suffix",
+        ):
+            STATE_MODULE.validate_event_budget(
+                [{"event_type": "elapsed_checkpoint"} for _ in range(64)]
+                + [{"event_type": "session_checkpoint_claimed"}]
+            )
+
+    def test_legacy_checkpoint_migrates_into_the_reviewer_registry(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "legacy-checkpoint", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("legacy checkpoint\n", encoding="utf-8")
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "authoritative", "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        review = self.review_receipt(
+            "legacy-checkpoint-review",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "legacy-checkpoint-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(review),
+            "--review-resource-manifest", str(self.review_manifests[review]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "legacy checkpoint"], cwd=self.repo, check=True)
+        current_checkpoint = self.base / "current-checkpoint.json"
+        self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(current_checkpoint), "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("legacy-checkpoint")),
+            "--review-receipt", str(review),
+            check=True,
+        )
+        current = json.loads(current_checkpoint.read_text(encoding="utf-8"))
+        legacy = {
+            key: value for key, value in current.items()
+            if key not in {"schema_version", "reviewer_registry", "checkpoint_digest"}
+        }
+        legacy["schema_version"] = 1
+        legacy["reviewer_session_digests"] = [
+            json.loads(review.read_text(encoding="utf-8"))["reviewer_session_digest"]
+        ]
+        legacy["checkpoint_digest"] = ""
+        legacy["checkpoint_digest"] = STATE_MODULE.checkpoint_payload_digest(legacy)
+        legacy_path = self.base / "legacy-checkpoint.json"
+        legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        issuance = state_payload["events"][-1]
+        self.assertEqual(issuance["event_type"], "session_checkpoint_emitted")
+        issuance["candidate_digest"] = legacy["checkpoint_digest"]
+        issuance["review_target_digest"] = legacy["checkpoint_digest"]
+        issuance["event_digest"] = digest(json.dumps(
+            {key: value for key, value in issuance.items() if key != "event_digest"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ))
+        prior_events = state_payload["events"][:-1]
+        padded_events = list(prior_events)
+        for index in range(
+            len(prior_events) + 1,
+            STATE_MODULE.MAX_EVENTS,
+        ):
+            elapsed = dict(prior_events[0])
+            elapsed.update({
+                "sequence": index,
+                "event_id": f"legacy-padding-{index}",
+                "event_type": "elapsed_checkpoint",
+                "invariant_digests": [],
+                "finding_severities": [],
+                "independent_review_receipt_digest": "",
+                "candidate_lifecycle_digest": "",
+                "elapsed_seconds": 0.0,
+                "monotonic_ns": padded_events[-1]["monotonic_ns"] + 1,
+                "previous_event_digest": padded_events[-1]["event_digest"],
+            })
+            elapsed["event_digest"] = digest(json.dumps(
+                {key: value for key, value in elapsed.items() if key != "event_digest"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ))
+            padded_events.append(elapsed)
+        legacy["execution_event_chain_digest"] = padded_events[-1]["event_digest"]
+        legacy["checkpoint_digest"] = ""
+        legacy["checkpoint_digest"] = STATE_MODULE.checkpoint_payload_digest(legacy)
+        legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+        issuance["candidate_digest"] = legacy["checkpoint_digest"]
+        issuance["review_target_digest"] = legacy["checkpoint_digest"]
+        issuance["sequence"] = STATE_MODULE.MAX_EVENTS
+        issuance["monotonic_ns"] = padded_events[-1]["monotonic_ns"] + 1
+        issuance["previous_event_digest"] = padded_events[-1]["event_digest"]
+        issuance["event_digest"] = digest(json.dumps(
+            {key: value for key, value in issuance.items() if key != "event_digest"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ))
+        padded_events.append(issuance)
+        state_payload["events"] = padded_events
+        state_payload["last_monotonic_ns"] = issuance["monotonic_ns"]
+        state_payload["event_chain_digest"] = issuance["event_digest"]
+        state.write_text(json.dumps(state_payload), encoding="utf-8")
+        STATE_MODULE.validate_state(state_payload)
+
+        claimed_state = self.base / "claimed-legacy-state.json"
+        claimed_payload = json.loads(json.dumps(state_payload))
+        claimed_issuance = dict(claimed_payload["events"][-1])
+        claimed_payload["events"] = claimed_payload["events"][:2]
+        claimed_legacy = dict(legacy)
+        claimed_legacy["execution_event_chain_digest"] = claimed_payload["events"][-1][
+            "event_digest"
+        ]
+        claimed_legacy["checkpoint_digest"] = ""
+        claimed_legacy["checkpoint_digest"] = STATE_MODULE.checkpoint_payload_digest(
+            claimed_legacy
+        )
+        claimed_legacy_path = self.base / "claimed-legacy-checkpoint.json"
+        claimed_legacy_path.write_text(json.dumps(claimed_legacy), encoding="utf-8")
+        claimed_issuance["sequence"] = 3
+        claimed_issuance["monotonic_ns"] = (
+            claimed_payload["events"][-1]["monotonic_ns"] + 1
+        )
+        claimed_issuance["previous_event_digest"] = claimed_payload["events"][-1][
+            "event_digest"
+        ]
+        claimed_issuance["candidate_digest"] = claimed_legacy["checkpoint_digest"]
+        claimed_issuance["review_target_digest"] = claimed_legacy["checkpoint_digest"]
+        claimed_issuance["event_digest"] = digest(json.dumps(
+            {
+                key: value for key, value in claimed_issuance.items()
+                if key != "event_digest"
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ))
+        claimed_payload["events"].append(claimed_issuance)
+        claimed_payload["last_monotonic_ns"] = claimed_issuance["monotonic_ns"]
+        claimed_payload["event_chain_digest"] = claimed_issuance["event_digest"]
+        STATE_MODULE.append_checkpoint_event(
+            claimed_payload,
+            event_type="session_checkpoint_claimed",
+            checkpoint=claimed_legacy,
+            successor={
+                "run_id": "claimed-child",
+                "plan_digest": digest("claimed child plan"),
+                "source_head": subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+                ).strip(),
+                "primary_invariant_digest": digest("claimed child invariant"),
+                "genesis_digest": digest("claimed child genesis"),
+            },
+        )
+        claimed_state.write_text(json.dumps(claimed_payload), encoding="utf-8")
+        claimed = self.run_cli(
+            "migrate-checkpoint",
+            "--legacy-checkpoint", str(claimed_legacy_path),
+            "--state", str(claimed_state),
+            "--reviewer-registry", str(self.registry),
+            "--review-receipt", str(review),
+            "--checkpoint-review-receipt", str(review),
+            "--output", str(self.base / "claimed-migration.json"),
+        )
+        self.assertNotEqual(claimed.returncode, 0)
+        self.assertIn("claimed legacy checkpoint cannot be migrated", claimed.stderr)
+
+        migrated = self.base / "migrated-checkpoint.json"
+        result = self.run_cli(
+            "migrate-checkpoint",
+            "--legacy-checkpoint", str(legacy_path),
+            "--state", str(state),
+            "--reviewer-registry", str(self.registry),
+            "--review-receipt", str(review),
+            "--checkpoint-review-receipt", str(review),
+            "--output", str(migrated),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        migrated_payload = json.loads(migrated.read_text(encoding="utf-8"))
+        self.assertEqual(
+            migrated_payload["schema_version"],
+            STATE_MODULE.SESSION_CHECKPOINT_SCHEMA_VERSION,
+        )
+        self.assertIn("reviewer_registry", migrated_payload)
+        verified = self.run_cli(
+            "verify-checkpoint", str(migrated), "--state", str(state)
+        )
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        accepted_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        child_state = self.base / "legacy-migration-child.json"
+        child_lifecycle = self.base / "legacy-migration-child-lifecycle.json"
+        child_manifest = self.resource_manifest(
+            "legacy-migration-child",
+            session="legacy-migration-child",
+        )
+        initialized = self.run_cli(
+            "init", str(child_state), "--run-id", "legacy-migration-child",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text()),
+            "--source-head", accepted_head,
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(state),
+            "--predecessor-checkpoint", str(migrated),
+            "--root-session-manifest", str(child_manifest),
+        )
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        parent_after_claim = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [event["event_type"] for event in parent_after_claim["events"][-2:]],
+            ["session_checkpoint_migrated", "session_checkpoint_claimed"],
+        )
+        started = self.run_cli(
+            "start", str(child_state), "--run-id", "legacy-migration-child",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--attempt-id", "legacy-migration-child-attempt",
+            "--attempt-kind", "initial",
+            "--predecessor-state", str(state),
+            "--predecessor-checkpoint", str(migrated),
+            "--root-session-manifest", str(child_manifest),
+            "--lifecycle-state", str(child_lifecycle),
+        )
+        self.assertEqual(started.returncode, 0, started.stderr)
+
+        parsed = STATE_MODULE.parser().parse_args([
+            "migrate-checkpoint",
+            "--legacy-checkpoint", str(legacy_path),
+            "--state", str(state),
+            "--reviewer-registry", str(self.registry),
+            "--output", str(self.base / "zero-review-migration.json"),
+        ])
+        self.assertEqual(parsed.review_receipt, [])
+        self.assertEqual(parsed.checkpoint_review_receipt, [])
 
     def test_review_turn_zero_requires_matching_runtime_packet_evidence(self) -> None:
         state, lifecycle, run_id = self.initialize_execution(
