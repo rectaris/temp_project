@@ -23,7 +23,8 @@ context_files:
   - docs/agent/SPEC_REFERENT_FIRST.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/176-establish-live-validation-witness-provenance.md
+  - docs/plan/active/180-admit-live-validation-witness-guardian.md
+  - docs/plan/active/181-verify-plan176-successor-acceptance.md
   - docs/plan/replanned/2026/08/16-31/163-capture-validation-witness-migration-provenance.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -46,7 +47,7 @@ validation_witness_map:
 replan_source: docs/plan/active/163-capture-validation-witness-migration-provenance.md
 replan_contract: docs/plan/replanned/contracts/163-capture-validation-witness-migration-provenance.json
 integration_gates:
-  - Plan 176 must be checked and its exact checked archive path must replace the active context path before implementation
+  - Plans 180 and 181 must be checked and their exact checked archive paths must replace the active context paths before implementation
   - generated policy must preserve the same concrete lifecycle and must not broaden the guardian security guarantee
   - Plan 178 must not start until this plan is checked and its exact checked archive path replaces this active dependency
 successor_plans:
@@ -60,7 +61,7 @@ checked_summary_ja: guardian、snapshot、attempt state、復旧条件、脅威�
 
 ## Decisions
 
-- Use only the controlled terms fixed by Plan 176 and define each term at its first normative use.
+- Use only the controlled terms accepted by Plan 180 and define each term at its first normative use.
 - Require the before-stage guardian to remain live through the matching after-stage request; a durable snapshot or Git-local attempt state alone never authorizes compatibility.
 - Document prepared, pending, consumed, same-live-attempt resume, and verified pre-boundary stale recovery without introducing a second lifecycle.
 - Preserve non-destructive Copier ownership: the migration snapshot is compatibility evidence, not product acceptance evidence, and no update may overwrite unrelated project-owned state.
@@ -68,11 +69,11 @@ checked_summary_ja: guardian、snapshot、attempt state、復旧条件、脅威�
 
 ## Tasks
 
-- [ ] Review the preserved policy candidate against the accepted Plan 176 protocol and remove static-receipt claims.
+- [ ] Review the preserved policy candidate against the accepted Plan 180 protocol and Plan 181 successor acceptance, and remove static-receipt claims.
 - [ ] Align root AGENTS and orchestration reference with generated AGENTS and SPEC_ORCHESTRATION.
 - [ ] Extend the root policy checker with deterministic markers for capability commitment, challenge-response, lifecycle, recovery, one-hour timeout, and threat boundary.
 - [ ] Run focused validation and independent read-only review; archive and commit only after zero unresolved High or Medium findings.
 
 ## Validation Notes
 
-- This plan changes prose and policy markers only; Plan 176 remains the executable protocol authority.
+- This plan changes prose and policy markers only; checked Plan 180 is the executable protocol authority and checked Plan 181 is the dependency gate.

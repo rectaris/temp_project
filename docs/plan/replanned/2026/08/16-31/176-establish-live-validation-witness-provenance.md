@@ -1,7 +1,8 @@
 # Establish live validation-witness migration provenance
 
-status: in_progress
-primary_invariant: a post-update compatibility decision is authorized only by the same bounded live process that observed the exact clean committed source before the update
+status: replanned
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 task_types:
   - planning_docs
   - security
@@ -39,16 +40,14 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"pytest tests/test-copier-migration.py"}
-replan_source: docs/plan/active/163-capture-validation-witness-migration-provenance.md
-replan_contract: docs/plan/replanned/contracts/163-capture-validation-witness-migration-provenance.json
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/176-establish-live-validation-witness-provenance.md
+replan_contract: docs/plan/replanned/contracts/176-establish-live-validation-witness-provenance.json
 integration_gates:
-  - the validation-witness-migration-guardian must be listening before the durable snapshot and pending attempt state become authoritative
-  - Plan 177 must not start until this plan is checked and its exact checked archive path replaces this active dependency
+  - combined successors must satisfy every source acceptance item
 successor_plans:
-  - docs/plan/active/176-establish-live-validation-witness-provenance.md
-  - docs/plan/active/177-align-validation-witness-provenance-policy.md
-  - docs/plan/active/178-wire-validation-witness-copier-transition.md
-  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
+  - docs/plan/active/180-admit-live-validation-witness-guardian.md
+  - docs/plan/active/181-verify-plan176-successor-acceptance.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
 checked_summary_ja: 更新前の同一live processだけが旧形式witnessの更新後検証を許可できる状態遷移を実装する。
@@ -82,3 +81,6 @@ checked_summary_ja: 更新前の同一live processだけが旧形式witnessの�
 - Reuse only candidate hunks that satisfy this state machine. The existing static receipt is not acceptance evidence.
 - This plan does not edit Copier policy or the authoritative fixture.
 - One disposable downstream Git project copied at v1.4.4 and updated to a synthetic v1.4.5 target that includes the snapshot script in the single copy-and-stage inventory. This concrete authoritative transition is delegated to Plan 179.
+- Parent-direct execution ledger `/tmp/plan176-execution-state.json` entered `replan_required` after two independently reviewed remediation rounds, with `parent_remediation_budget_exhausted` as the reason code.
+- The final narrow rereview reported zero unresolved High or Medium findings for the preserved script and test candidate, but the stopped ledger run cannot be reopened or used to authorize validation, completion, archival, or commit.
+- Preserve the current dirty product work without applying, committing, stashing, resetting, or deleting it while successor ownership and ordering are reconstructed.
