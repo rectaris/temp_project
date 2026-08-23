@@ -139,3 +139,4 @@ id	path
 174	docs/plan/checked/2026/08/16-31/174-linearize-reviewer-session-registry.md
 175	docs/plan/checked/2026/08/16-31/175-integrate-candidate-review-boundaries.md
 171	docs/plan/checked/2026/08/16-31/171-integrate-session-resource-boundaries.md
+180	docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md

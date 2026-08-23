@@ -25,7 +25,7 @@ context_files:
   - docs/agent/SPEC_REFERENT_FIRST.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/180-admit-live-validation-witness-guardian.md
+  - docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
   - docs/plan/replanned/2026/08/16-31/176-establish-live-validation-witness-provenance.md
   - docs/plan/replanned/2026/08/16-31/163-capture-validation-witness-migration-provenance.md
   - docs/plan/replanned/contracts/163-capture-validation-witness-migration-provenance.json

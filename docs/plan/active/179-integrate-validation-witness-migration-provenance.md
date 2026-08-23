@@ -20,7 +20,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/180-admit-live-validation-witness-guardian.md
+  - docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
   - docs/plan/active/181-verify-plan176-successor-acceptance.md
   - docs/plan/active/177-align-validation-witness-provenance-policy.md
   - docs/plan/active/178-wire-validation-witness-copier-transition.md
