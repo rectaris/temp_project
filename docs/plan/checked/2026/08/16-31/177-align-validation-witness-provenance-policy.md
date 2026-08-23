@@ -1,6 +1,6 @@
 # Align validation-witness migration provenance policy
 
-status: in_progress
+status: checked
 primary_invariant: root and generated policy describe one identical guardian, snapshot, attempt-state, recovery, and threat boundary
 task_types:
   - planning_docs
@@ -69,11 +69,16 @@ checked_summary_ja: guardian、snapshot、attempt state、復旧条件、脅威�
 
 ## Tasks
 
-- [ ] Review the preserved policy candidate against the accepted Plan 180 protocol and Plan 181 successor acceptance, and remove static-receipt claims.
-- [ ] Align root AGENTS and orchestration reference with generated AGENTS and SPEC_ORCHESTRATION.
-- [ ] Extend the root policy checker with deterministic markers for capability commitment, challenge-response, lifecycle, recovery, one-hour timeout, and threat boundary.
-- [ ] Run focused validation and independent read-only review; archive and commit only after zero unresolved High or Medium findings.
+- [x] Review the preserved policy candidate against the accepted Plan 180 protocol and Plan 181 successor acceptance, and remove static-receipt claims.
+- [x] Align root AGENTS and orchestration reference with generated AGENTS and SPEC_ORCHESTRATION.
+- [x] Extend the root policy checker with deterministic markers for capability commitment, challenge-response, lifecycle, recovery, one-hour timeout, and threat boundary.
+- [x] Run focused validation and independent read-only review; archive and commit only after zero unresolved High or Medium findings.
 
 ## Validation Notes
 
 - This plan changes prose and policy markers only; checked Plan 180 is the executable protocol authority and checked Plan 181 is the dependency gate.
+- Parent-direct execution ledger `/tmp/plan177-execution-state.json` records the reviewed Plan 177 diff, one focused validation event, and one authoritative validation event.
+- Independent review round 1 reported High 0, Medium 2, and Low 0 for expiry recovery and socket-identity overclaims. Bounded remediation aligned the prose with partial-publication recovery and capability-based guardian proof.
+- Independent review round 2 reported Accept with High 0, Medium 0, and Low 0.
+- Focused and authoritative validation each passed `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, and `git diff --check`.
+- Repository completion validation passed `scripts/lint-project-workflow.sh` and `tests/smoke.sh`; actionlint was unavailable and the repository scripts reported its configured skip.
