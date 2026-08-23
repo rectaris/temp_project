@@ -1,6 +1,6 @@
 # Evaluate resource-bounded plan orchestration before default rollout
 
-status: in_progress
+status: deferred
 task_types:
   - planning_docs
   - referent_first
