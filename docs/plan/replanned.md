@@ -23,3 +23,4 @@ id	path	contract
 155	docs/plan/replanned/2026/08/16-31/155-integrate-structured-worker-completion-receipt.md	docs/plan/replanned/contracts/155-integrate-structured-worker-completion-receipt.json
 130	docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md	docs/plan/replanned/contracts/130-map-acceptance-validation-witnesses.json
 132	docs/plan/replanned/2026/08/16-31/132-checkpoint-plan-session-resources.md	docs/plan/replanned/contracts/132-checkpoint-plan-session-resources.json
+170	docs/plan/replanned/2026/08/16-31/170-bind-review-context-to-candidate-lifecycle.md	docs/plan/replanned/contracts/170-bind-review-context-to-candidate-lifecycle.json

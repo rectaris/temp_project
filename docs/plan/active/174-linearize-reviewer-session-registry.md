@@ -1,4 +1,4 @@
-# Bind review context to candidate lifecycle
+# Linearize reviewer session registry
 
 status: in_progress
 task_types:
@@ -11,10 +11,10 @@ human_design_required: yes
 human_approval_status: approved
 implementation_risk: high
 implementation_ambiguity: ordinary
-primary_invariant: each admitted candidate receives at most one initial review and one rereview from runtime-proven zero-inheritance reviewer sessions not reused across numbered plans
+primary_invariant: each runtime-proven reviewer session is admitted once across an unbounded numbered-plan chain through one append-only parent-owned registry
 write_scope:
   - AGENTS.md
-  - .codex/skills/sequential-plan-orchestrator/
+  - .codex/skills/sequential-plan-orchestrator/SKILL.md
   - references/orchestration.md
   - scripts/check-copier-template.py
   - scripts/check-root-agent-policy.py
@@ -22,7 +22,7 @@ write_scope:
   - template/.project-agent-workflow/AGENTS.md.jinja
   - template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
   - template/.project-agent-workflow/scripts/plan-execution-state.py
-  - template/.project-agent-workflow/skills/sequential-plan-orchestrator/
+  - template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md
   - tests/test-plan-execution-state.py
 context_files:
   - docs/agent/spec-index.yaml
@@ -30,9 +30,11 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/168-verify-runtime-session-resource-evidence.md
-  - docs/plan/active/169-linearize-session-checkpoint-lifecycle.md
+  - docs/plan/checked/2026/08/16-31/168-verify-runtime-session-resource-evidence.md
+  - docs/plan/checked/2026/08/16-31/169-linearize-session-checkpoint-lifecycle.md
   - docs/plan/replanned/2026/08/16-31/132-checkpoint-plan-session-resources.md
+  - docs/plan/active/172-bind-review-to-candidate-leaf.md
+  - docs/plan/active/173-record-runtime-review-turn-zero.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -57,37 +59,36 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
-replan_source: docs/plan/active/132-checkpoint-plan-session-resources.md
-replan_contract: docs/plan/replanned/contracts/132-checkpoint-plan-session-resources.json
+replan_source: docs/plan/active/170-bind-review-context-to-candidate-lifecycle.md
+replan_contract: docs/plan/replanned/contracts/170-bind-review-context-to-candidate-lifecycle.json
 integration_gates:
-  - Plans 168 and 169 must be checked and their exact checked archives must replace active context paths before implementation
-  - derive the review target from the admitted candidate lifecycle rather than a receipt-selected digest
-  - Plan 171 must start in a different directly observed root session after this plan is checked
+  - Plans 172 and 173 must be checked and their exact archives must replace active context paths
+  - The registry remains outside the repository and stores only reviewer-session digests and bounded event metadata
+  - Plan 175 revalidates the complete source acceptance
 successor_plans:
-  - docs/plan/active/168-verify-runtime-session-resource-evidence.md
-  - docs/plan/active/169-linearize-session-checkpoint-lifecycle.md
-  - docs/plan/active/170-bind-review-context-to-candidate-lifecycle.md
-  - docs/plan/active/171-integrate-session-resource-boundaries.md
+  - docs/plan/active/172-bind-review-to-candidate-leaf.md
+  - docs/plan/active/173-record-runtime-review-turn-zero.md
+  - docs/plan/active/174-linearize-reviewer-session-registry.md
+  - docs/plan/active/175-integrate-candidate-review-boundaries.md
 inherited_acceptance_digests:
   - sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc
-checked_summary_ja: reviewerの限定入力、継承turn 0、候補単位の2回上限を実行台帳へ結合する。
+checked_summary_ja: reviewer sessionの再利用を外部append-only registryで全plan横断に拒否する。
 
 ## Decisions
 
-- Derive review identity from the admitted candidate lifecycle and diff digest, not from reviewer-supplied labels.
-- Verify zero inherited turns through the runtime evidence accepted by Plan 168.
-- Carry complete reviewer-session history through every terminal checkpoint boundary.
-- Permit one initial review and one rereview for each admitted candidate lifecycle.
+- reviewer-session-registry means the append-only parent-owned external record used for exact cross-plan reviewer-session membership checks.
+- Check membership and append under one exclusive lock; copied checkpoints or registries cannot authorize a second admission.
+- Bind checkpoint records to the registry event-chain digest and entry count instead of copying a cumulative digest list.
 
 ## Tasks
 
-- [ ] Define the candidate-bound review receipt and runtime inheritance evidence.
-- [ ] Enforce per-candidate review rounds and cross-plan reviewer-session non-reuse.
-- [ ] Carry complete reviewer history at every checkpoint boundary.
-- [ ] Add rejection tests for fabricated inheritance, target reset, omitted history, and reviewer reuse.
+- [ ] Define the bounded registry schema, event chain, lock, and checkpoint reference.
+- [ ] Require exact membership rejection before recording a review event.
+- [ ] Carry registry identity through checkpoint issuance and successor claim.
+- [ ] Add long-chain, copied-checkpoint, crash-recovery, omitted-registry, and reviewer-reuse tests.
 - [ ] Align root and generated policy and Skill guidance.
 - [ ] Run focused validation, independent review, authoritative validation once, archive, and commit.
 
 ## Validation Notes
 
-- Plan 132 rereview proved that a receipt-selected target digest and optional predecessor checkpoint do not enforce the review budget.
+- Plan 170 was restructured after its bounded rereview found unresolved candidate identity, runtime evidence, and reviewer-history boundaries.

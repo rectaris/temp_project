@@ -1,6 +1,6 @@
 # Integrate session resource boundaries
 
-status: in_progress
+status: deferred
 task_types:
   - planning_docs
   - security
@@ -51,9 +51,9 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/168-verify-runtime-session-resource-evidence.md
-  - docs/plan/active/169-linearize-session-checkpoint-lifecycle.md
-  - docs/plan/active/170-bind-review-context-to-candidate-lifecycle.md
+  - docs/plan/checked/2026/08/16-31/168-verify-runtime-session-resource-evidence.md
+  - docs/plan/checked/2026/08/16-31/169-linearize-session-checkpoint-lifecycle.md
+  - docs/plan/active/175-integrate-candidate-review-boundaries.md
   - docs/plan/replanned/2026/08/16-31/132-checkpoint-plan-session-resources.md
 required_specs:
   - docs/agent/SPEC_AGENT_LOGGING.md
@@ -97,7 +97,7 @@ validation_witness_map:
 replan_source: docs/plan/active/132-checkpoint-plan-session-resources.md
 replan_contract: docs/plan/replanned/contracts/132-checkpoint-plan-session-resources.json
 integration_gates:
-  - Plans 168 through 170 must be checked and their exact checked archives must replace active context paths before implementation
+  - Plan 175 must be checked and its exact archive must replace the active context path before implementation
   - run the complete parent-owned focused suite before one fresh independent review and the authoritative suite exactly once
   - update Plan 133 to consume only checked Plan 168 through 171 evidence
 successor_plans:
@@ -117,14 +117,14 @@ checked_summary_ja: runtime証拠、checkpoint lifecycle、review lifecycleを�
 - session-checkpoint-lifecycle means the predecessor-ledger issuance and single-successor consumption records for one checkpoint identity.
 - candidate-review-lifecycle means the admitted-candidate records that bind review target, reviewer-session history, and the one-initial-plus-one-rereview budget.
 - session-resource-boundary-integration means the final acceptance condition over checked runtime evidence, checkpoint lifecycle, and candidate review lifecycle outputs.
-- Integrate only checked outputs from Plans 168 through 170.
+- Integrate only checked outputs from Plans 168, 169, and 175.
 - Reject staged promotion when runtime identity or reviewer inheritance remains `not_observed`.
 - Preserve existing default behavior until Plan 133 completes paired evaluation.
 - Keep final acceptance, authoritative validation, archive, and commit in the parent session.
 
 ## Tasks
 
-- [ ] Refresh predecessor context paths to exact checked archives.
+- [ ] Replace the active Plan 175 context path with its exact checked archive.
 - [ ] Reconcile root and generated policy, scripts, tests, and Copier inventories.
 - [ ] Run the complete focused suite and obtain one fresh independent review.
 - [ ] Run the authoritative suite exactly once.
