@@ -77,7 +77,7 @@ checked_summary_ja: guardian、snapshot、attempt state、復旧条件、脅威�
 ## Validation Notes
 
 - This plan changes prose and policy markers only; checked Plan 180 is the executable protocol authority and checked Plan 181 is the dependency gate.
-- Parent-direct execution ledger `/tmp/plan177-execution-state.json` records the reviewed Plan 177 diff, one focused validation event, and one authoritative validation event.
+- Parent-direct execution ledger `/tmp/plan177-execution-state.json` records two independent-review receipt digests, one focused validation event, and one authoritative validation event.
 - Independent review round 1 reported High 0, Medium 2, and Low 0 for expiry recovery and socket-identity overclaims. Bounded remediation aligned the prose with partial-publication recovery and capability-based guardian proof.
 - Independent review round 2 reported Accept with High 0, Medium 0, and Low 0.
 - Focused and authoritative validation each passed `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, and `git diff --check`.
