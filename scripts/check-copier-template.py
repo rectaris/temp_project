@@ -208,6 +208,9 @@ def require_orchestration_policy_markers() -> None:
         "run-sandboxed-plan-worker.py run",
         "read-only",
         "worker completion receipt",
+        "admitted patch digest",
+        "mutable lifecycle",
+        "candidate-manifest",
     )
     for marker in shared_markers:
         if marker not in template_spec:

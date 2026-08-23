@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -18,6 +19,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 
@@ -197,6 +199,9 @@ class StateError(ValueError):
     pass
 
 
+_SANDBOXED_WORKER_MODULE: ModuleType | None = None
+
+
 def sanitized_git_environment() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
@@ -221,6 +226,20 @@ def file_digest(path: Path) -> str:
         return "sha256:" + hasher.hexdigest()
     finally:
         os.close(descriptor)
+
+
+def load_sandboxed_worker_module() -> ModuleType:
+    global _SANDBOXED_WORKER_MODULE
+    if _SANDBOXED_WORKER_MODULE is not None:
+        return _SANDBOXED_WORKER_MODULE
+    path = Path(__file__).with_name("run-sandboxed-plan-worker.py")
+    spec = importlib.util.spec_from_file_location("plan_execution_state_worker", path)
+    if spec is None or spec.loader is None:
+        raise StateError("could not load the sandboxed plan worker verifier")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _SANDBOXED_WORKER_MODULE = module
+    return module
 
 
 def lifecycle_identity_digest(run_id: str, lifecycle_path: Path) -> str:
@@ -1142,6 +1161,8 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("invalid event list")
     seen_ids: set[str] = set()
     seen_review_receipts: set[str] = set()
+    bounded_review_counts: dict[str, int] = {}
+    candidate_attempt_reviews: dict[str, tuple[str, str, str]] = {}
     validated_events: list[dict[str, Any]] = []
     previous_ns = 0
     require_digest(value["genesis_digest"], "genesis_digest")
@@ -1217,7 +1238,11 @@ def validate_state(value: Any) -> dict[str, Any]:
         receipt_required = event["event_type"] in {
             "repair_classification", "failure_diagnosis"
         } or (
-            event["event_type"] == "parent_review" and event["implementation_mode"] == "parent_direct"
+            event["event_type"] == "parent_review"
+            and (
+                event["implementation_mode"] == "parent_direct"
+                or bool(event.get("review_target_digest", ""))
+            )
         )
         if receipt_required:
             if not receipt_digest:
@@ -1246,7 +1271,8 @@ def validate_state(value: Any) -> dict[str, Any]:
         review_target_digest = event.get("review_target_digest", "")
         require_digest(review_target_digest, "review_target_digest", allow_empty=True)
         if event["event_type"] not in {
-            "parent_review", "session_checkpoint_emitted", "session_checkpoint_claimed"
+            "parent_review", "attempt_closed",
+            "session_checkpoint_emitted", "session_checkpoint_claimed"
         } and review_target_digest:
             raise StateError("only a parent review may bind a review target")
         event_predecessors = [
@@ -1280,7 +1306,48 @@ def validate_state(value: Any) -> dict[str, Any]:
             successor_source and not re.fullmatch(r"[0-9a-f]{40}", successor_source)
         ):
             raise StateError("event has an invalid successor source HEAD")
-        if event["event_type"] == "writable_attempt_started":
+        if event["event_type"] == "parent_review" and review_target_digest:
+            if (
+                not review_target_digest
+                or not event["candidate_lifecycle_digest"]
+                or event["review_outcome"]
+                or event["review_reason_code"]
+                or event["review_author"]
+                or event["review_evidence_digest"]
+                or event_accepted_source
+                or any(event_predecessors)
+                or event_predecessor_source
+                or successor_run_id
+                or event["successor_plan_digest"]
+                or successor_source
+                or event["successor_primary_invariant_digest"]
+                or successor_genesis_digest
+            ):
+                raise StateError("parent review has invalid candidate identity data")
+            if event["implementation_mode"] == "candidate":
+                if not attempt_id or not event["candidate_digest"]:
+                    raise StateError("candidate review lacks admitted candidate identity")
+                candidate_identity = (
+                    event["candidate_lifecycle_digest"],
+                    event["candidate_digest"],
+                    review_target_digest,
+                )
+                prior_identity = candidate_attempt_reviews.setdefault(
+                    attempt_id, candidate_identity
+                )
+                if prior_identity != candidate_identity:
+                    raise StateError(
+                        "writable attempt reviews bind different admitted candidates"
+                    )
+            elif attempt_id or event["candidate_digest"]:
+                raise StateError("parent-direct review cannot claim a writable candidate")
+            identity = event["candidate_lifecycle_digest"]
+            bounded_review_counts[identity] = bounded_review_counts.get(identity, 0) + 1
+            if bounded_review_counts[identity] > 2:
+                raise StateError(
+                    "review budget permits one initial review and one bounded rereview"
+                )
+        elif event["event_type"] == "writable_attempt_started":
             if not attempt_id or not event["attempt_kind"]:
                 raise StateError("writable attempt start is missing its identifier or kind")
             if any((event["candidate_digest"], event["review_outcome"], event["review_reason_code"],
@@ -1302,8 +1369,23 @@ def validate_state(value: Any) -> dict[str, Any]:
                 raise StateError("attempt closure must identify affected invariants")
             if event["review_outcome"] == "accepted":
                 if (not event["candidate_digest"] or event["review_reason_code"]
-                        or not event_accepted_source):
+                        or not event_accepted_source or not review_target_digest):
                     raise StateError("accepted attempt closure has invalid candidate or reason data")
+                accepted_identity = review_candidate_identity_digest(
+                    attempt_id, event["candidate_digest"], review_target_digest
+                )
+                matching_reviews = [
+                    prior for prior in validated_events
+                    if prior["event_type"] == "parent_review"
+                    and prior["candidate_lifecycle_digest"] == accepted_identity
+                    and prior["attempt_id"] == attempt_id
+                    and prior["candidate_digest"] == event["candidate_digest"]
+                    and prior.get("review_target_digest", "") == review_target_digest
+                ]
+                if not matching_reviews:
+                    raise StateError("accepted candidate identity lacks a bounded review")
+                if set(matching_reviews[-1]["finding_severities"]) & {"High", "Medium"}:
+                    raise StateError("accepted candidate review has unresolved findings")
             elif not event["review_reason_code"] or event_accepted_source:
                 raise StateError("non-accepted attempt closure requires a review reason code")
             if any(event_predecessors) or event_predecessor_source:
@@ -2026,6 +2108,33 @@ def create_session_checkpoint(args: argparse.Namespace) -> None:
         raise StateError("session checkpoint requires one resource manifest")
     resources = resource_observations_from_manifest(Path(args.resource_manifest))
     checkpoint_identity = resources["root_session_identity"]
+    review_events = [
+        event for event in state["events"]
+        if event["event_type"] == "parent_review"
+    ]
+    accepted_identity = ""
+    required_review_target = ""
+    final_patch = b""
+    if args.boundary == "checked" and state["implementation_mode"] == "candidate":
+        accepted = next(
+            event for event in reversed(state["events"])
+            if event["event_type"] == "attempt_closed"
+            and event["review_outcome"] == "accepted"
+        )
+        required_review_target = accepted["review_target_digest"]
+        accepted_identity = review_candidate_identity_digest(
+            accepted["attempt_id"],
+            accepted["candidate_digest"],
+            required_review_target,
+        )
+    elif args.boundary == "checked" and state["implementation_mode"] == "parent_direct":
+        final_patch = require_commit_within_write_scope(
+            root,
+            state["source_head"],
+            checkpoint_source_head,
+            plan_write_scope(state),
+        )
+        required_review_target = digest(final_patch)
     reviewer_sessions: list[str] = []
     review_receipt_digests: list[str] = []
     checkpoint_review_target = ""
@@ -2041,6 +2150,8 @@ def create_session_checkpoint(args: argparse.Namespace) -> None:
         )
         if checkpoint_review_target and receipt["review_target_digest"] != checkpoint_review_target:
             raise StateError("checkpoint review receipts must describe one accepted candidate")
+        if required_review_target and receipt["review_target_digest"] != required_review_target:
+            raise StateError("checkpoint review receipt differs from the checked target")
         checkpoint_review_target = receipt["review_target_digest"]
         reviewer_sessions.append(receipt["reviewer_session_digest"])
         review_receipt_digests.append(file_digest(receipt_file))
@@ -2053,10 +2164,25 @@ def create_session_checkpoint(args: argparse.Namespace) -> None:
         for event in state["events"]
         if event["event_type"] == "parent_review"
         and event["independent_review_receipt_digest"]
-        and event.get("review_target_digest", "") == checkpoint_review_target
+        and (
+            event["candidate_lifecycle_digest"] == accepted_identity
+            if accepted_identity
+            else event.get("review_target_digest", "") == checkpoint_review_target
+        )
     ]
     if review_receipt_digests != recorded_review_receipts:
         raise StateError("checkpoint review receipts differ from the execution review history")
+    if args.boundary == "checked" and state["implementation_mode"] == "parent_direct":
+        if not review_events or digest(final_patch) != review_events[-1]["review_target_digest"]:
+            raise StateError("checked parent-direct diff differs from the reviewed target")
+        if set(review_events[-1]["finding_severities"]) & {"High", "Medium"}:
+            raise StateError("checked parent-direct review has unresolved findings")
+    if args.boundary == "checked" and state["implementation_mode"] == "candidate":
+        if not any(
+            event["candidate_lifecycle_digest"] == accepted_identity
+            for event in review_events
+        ):
+            raise StateError("accepted candidate identity lacks a bounded review")
     checkpoint = {
         "schema_version": SESSION_CHECKPOINT_SCHEMA_VERSION,
         "plan_path": state["plan_path"],
@@ -2181,37 +2307,163 @@ def claim_session_checkpoint(
         atomic_write(predecessor_state_path, predecessor_state)
 
 
-def record_bounded_review(args: argparse.Namespace) -> None:
-    state = read_state(Path(args.state))
-    receipt_path = Path(args.review_receipt)
-    receipt = validate_review_receipt(
-        read_bounded_json(
-            receipt_path,
-            "review receipt",
-            outside_repository=True,
-        ),
-        state["plan_digest"],
+def plan_list_field(state: dict[str, Any], field: str) -> list[str]:
+    plan = repository_root() / state["plan_path"]
+    lines = plan.read_text(encoding="utf-8").splitlines()
+    try:
+        start = lines.index(f"{field}:") + 1
+    except ValueError as exc:
+        raise StateError(f"execution plan lacks {field}") from exc
+    paths: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("  - "):
+            paths.append(line[4:])
+            continue
+        if line and not line.startswith(" "):
+            break
+        if line.strip():
+            raise StateError(f"execution plan {field} has invalid structure")
+    if not paths or len(paths) != len(set(paths)):
+        raise StateError(f"execution plan {field} must be a nonempty unique list")
+    return paths
+
+
+def plan_write_scope(state: dict[str, Any]) -> list[str]:
+    return plan_list_field(state, "write_scope")
+
+
+def applicable_specification_digests(state: dict[str, Any]) -> list[str]:
+    root = repository_root()
+    return [file_digest(root / path) for path in plan_list_field(state, "required_specs")]
+
+
+def path_is_in_write_scope(path: str, write_scope: list[str]) -> bool:
+    return any(
+        path == allowed.rstrip("/") or path.startswith(allowed.rstrip("/") + "/")
+        for allowed in write_scope
     )
-    if receipt["inheritance_evidence"] != "observed" or receipt["inherited_turns"] != 0:
-        raise StateError("staged review requires observed zero inherited turns")
-    prior_reviews = [
-        event for event in state["events"]
-        if event["event_type"] == "parent_review"
-        and event["independent_review_receipt_digest"]
-        and event.get("review_target_digest", "") == receipt["review_target_digest"]
+
+
+def require_commit_within_write_scope(
+    root: Path, baseline: str, checked_head: str, write_scope: list[str]
+) -> bytes:
+    changed = git_output(
+        root, "diff", "--name-only", "-z", baseline, checked_head, "--"
+    ).decode("utf-8").split("\0")
+    outside = [
+        path for path in changed if path and not path_is_in_write_scope(path, write_scope)
     ]
-    if receipt["review_round"] != len(prior_reviews) + 1 or len(prior_reviews) >= 2:
-        raise StateError("review budget permits one initial review and one bounded rereview")
-    has_predecessor = bool(state["predecessor_plan_digest"])
-    if has_predecessor and not args.predecessor_checkpoint:
-        raise StateError("dependent plan review requires the predecessor session checkpoint")
-    if args.predecessor_checkpoint:
-        checkpoint = read_session_checkpoint(Path(args.predecessor_checkpoint))
-        if checkpoint["plan_digest"] != state["predecessor_plan_digest"]:
-            raise StateError("review predecessor checkpoint differs from the execution ledger")
-        if receipt["reviewer_session_digest"] in checkpoint["reviewer_session_digests"]:
-            raise StateError("reviewer session cannot be reused across numbered plans")
-    review_digest = file_digest(receipt_path)
+    if outside:
+        raise StateError(
+            "checked parent-direct commit changes paths outside write_scope: "
+            + ", ".join(outside)
+        )
+    return git_output(
+        root, "diff", "--binary", "--full-index", baseline, checked_head, "--"
+    )
+
+
+def review_candidate_identity_digest(
+    attempt_id: str, candidate_manifest_digest: str, admitted_diff_digest: str
+) -> str:
+    if not ID_RE.fullmatch(attempt_id):
+        raise StateError("review candidate attempt identifier is invalid")
+    require_digest(candidate_manifest_digest, "review candidate manifest digest")
+    require_digest(admitted_diff_digest, "review admitted diff digest")
+    return canonical_digest({
+        "attempt_id": attempt_id,
+        "candidate_manifest_digest": candidate_manifest_digest,
+        "admitted_diff_digest": admitted_diff_digest,
+    })
+
+
+def parent_direct_review_identity(
+    state: dict[str, Any],
+) -> tuple[str, str]:
+    root = repository_root()
+    require_repository_baseline(state)
+    patch = git_output(
+        root,
+        "diff",
+        "--binary",
+        "--full-index",
+        state["source_head"],
+        "--",
+        *plan_write_scope(state),
+    )
+    if not patch:
+        raise StateError("parent-direct review requires an admitted write-scope diff")
+    target = digest(patch)
+    identity = canonical_digest({
+        "implementation_mode": "parent_direct",
+        "source_head": state["source_head"],
+        "admitted_diff_digest": target,
+    })
+    return target, identity
+
+
+def candidate_review_identity(
+    state: dict[str, Any], lifecycle_path: Path, manifest_path: Path
+) -> tuple[str, str, str, str, list[str]]:
+    attempt_id = state["open_attempt_id"]
+    if not attempt_id:
+        raise StateError("candidate review requires one open writable attempt")
+    raw = read_external_artifact(lifecycle_path, "candidate lifecycle state")
+    lifecycle_digest = digest(raw)
+    try:
+        candidate_digest = f"sha256:{json.loads(raw)['current_manifest_digest']}"
+    except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError("candidate lifecycle state is invalid JSON") from exc
+    lifecycle = load_candidate_lifecycle_for_close(
+        lifecycle_path,
+        state["run_id"],
+        attempt_id,
+        lifecycle_digest,
+        candidate_digest,
+    )
+    if lifecycle["phase"] != "admitted":
+        raise StateError("candidate review requires the admitted lifecycle phase")
+    worker = load_sandboxed_worker_module()
+    try:
+        verified = worker.verify_candidate_manifest(
+            repo_root=repository_root(),
+            git_bin="git",
+            planlib=worker.load_planlib(),
+            manifest_path=manifest_path,
+            expected_plan=state["plan_path"],
+            require_applicable=True,
+            require_clean=True,
+        )
+    except worker.RunnerError as exc:
+        raise StateError(f"candidate manifest failed admission verification: {exc}") from exc
+    if verified["manifest_digest"] != candidate_digest.removeprefix("sha256:"):
+        raise StateError("verified candidate manifest differs from the lifecycle leaf")
+    manifest = verified["manifest"]
+    if manifest.get("plan_execution_attempt_id") != attempt_id:
+        raise StateError("verified candidate manifest attempt differs from the open attempt")
+    if lifecycle["current_patch_digest"] != verified["patch_digest"]:
+        raise StateError("verified candidate patch differs from the lifecycle leaf")
+    target = f"sha256:{verified['patch_digest']}"
+    identity = review_candidate_identity_digest(
+        attempt_id,
+        candidate_digest,
+        target,
+    )
+    return (
+        target,
+        identity,
+        attempt_id,
+        candidate_digest,
+        [f"sha256:{verified['worker_completion_receipt_digest']}"],
+    )
+
+
+def record_bounded_review(args: argparse.Namespace) -> None:
+    if args.implementation_mode == "candidate":
+        if not args.candidate_manifest:
+            raise StateError("candidate review requires the admitted candidate manifest")
+    elif args.candidate_manifest:
+        raise StateError("parent-direct review cannot use a candidate manifest")
     record_event(argparse.Namespace(
         state=args.state,
         run_id=args.run_id,
@@ -2220,12 +2472,18 @@ def record_bounded_review(args: argparse.Namespace) -> None:
         implementation_mode=args.implementation_mode,
         invariant_digest=args.invariant_digest,
         finding_severity=args.finding_severity,
-        independent_review_receipt_digest=review_digest,
+        independent_review_receipt_digest="",
         repair_evidence_file=None,
         validation_report=None,
         diagnosis_evidence_file=None,
-        candidate_lifecycle_digest=None,
-        review_target_digest=receipt["review_target_digest"],
+        candidate_lifecycle_digest="",
+        review_target_digest="",
+        review_attempt_id="",
+        review_candidate_digest="",
+        bounded_review=True,
+        review_receipt=args.review_receipt,
+        candidate_manifest=args.candidate_manifest,
+        predecessor_checkpoint=args.predecessor_checkpoint,
         lifecycle_state=args.lifecycle_state,
         elapsed_seconds=args.elapsed_seconds,
     ))
@@ -2287,6 +2545,103 @@ def record_event(args: argparse.Namespace) -> None:
             raise StateError("event replay is not allowed")
         if len(state["events"]) >= MAX_EVENTS:
             raise StateError("event budget exhausted")
+        if getattr(args, "bounded_review", False):
+            receipt_path = Path(args.review_receipt)
+            review_receipt = validate_review_receipt(
+                read_bounded_json(
+                    receipt_path,
+                    "review receipt",
+                    outside_repository=True,
+                ),
+                state["plan_digest"],
+            )
+            if (
+                review_receipt["inheritance_evidence"] != "observed"
+                or review_receipt["inherited_turns"] != 0
+            ):
+                raise StateError("staged review requires observed zero inherited turns")
+            if args.implementation_mode == "candidate":
+                (
+                    review_target,
+                    review_identity,
+                    review_attempt_id,
+                    review_candidate_digest,
+                    expected_worker_receipts,
+                ) = candidate_review_identity(
+                    state,
+                    Path(args.lifecycle_state),
+                    Path(args.candidate_manifest),
+                )
+                attempt_reviews = [
+                    event for event in state["events"]
+                    if event["event_type"] == "parent_review"
+                    and event["attempt_id"] == review_attempt_id
+                    and event["review_target_digest"]
+                ]
+                if any(
+                    event["candidate_lifecycle_digest"] != review_identity
+                    or event["candidate_digest"] != review_candidate_digest
+                    or event["review_target_digest"] != review_target
+                    for event in attempt_reviews
+                ):
+                    raise StateError(
+                        "writable attempt is already bound to another admitted candidate"
+                    )
+            else:
+                review_target, review_identity = parent_direct_review_identity(state)
+                review_attempt_id = ""
+                review_candidate_digest = ""
+                expected_worker_receipts = []
+            if (
+                review_receipt["review_target_digest"] != review_target
+                or review_receipt["admitted_diff_digest"] != review_target
+            ):
+                raise StateError("review receipt target differs from the admitted candidate diff")
+            if review_receipt["worker_receipt_digests"] != expected_worker_receipts:
+                raise StateError("review receipt does not bind the verified worker receipt")
+            if (
+                review_receipt["applicable_specification_digests"]
+                != applicable_specification_digests(state)
+            ):
+                raise StateError(
+                    "review receipt does not bind the applicable specifications"
+                )
+            prior_reviews = [
+                event for event in state["events"]
+                if event["event_type"] == "parent_review"
+                and event["independent_review_receipt_digest"]
+                and event["candidate_lifecycle_digest"] == review_identity
+            ]
+            if (
+                review_receipt["review_round"] != len(prior_reviews) + 1
+                or len(prior_reviews) >= 2
+            ):
+                raise StateError(
+                    "review budget permits one initial review and one bounded rereview"
+                )
+            has_predecessor = bool(state["predecessor_plan_digest"])
+            if has_predecessor and not args.predecessor_checkpoint:
+                raise StateError(
+                    "dependent plan review requires the predecessor session checkpoint"
+                )
+            if args.predecessor_checkpoint:
+                checkpoint = read_session_checkpoint(Path(args.predecessor_checkpoint))
+                if checkpoint["plan_digest"] != state["predecessor_plan_digest"]:
+                    raise StateError(
+                        "review predecessor checkpoint differs from the execution ledger"
+                    )
+                if (
+                    review_receipt["reviewer_session_digest"]
+                    in checkpoint["reviewer_session_digests"]
+                ):
+                    raise StateError(
+                        "reviewer session cannot be reused across numbered plans"
+                    )
+            args.independent_review_receipt_digest = file_digest(receipt_path)
+            args.candidate_lifecycle_digest = review_identity
+            args.review_target_digest = review_target
+            args.review_attempt_id = review_attempt_id
+            args.review_candidate_digest = review_candidate_digest
         invariants = args.invariant_digest or []
         if len(invariants) != len(set(invariants)):
             raise StateError("invariant digests must be unique")
@@ -2301,7 +2656,9 @@ def record_event(args: argparse.Namespace) -> None:
         diagnosis_evidence: dict[str, Any] = {}
         diagnosis_evidence_digest = ""
         lifecycle = args.candidate_lifecycle_digest or ""
-        if args.implementation_mode == "parent_direct" and args.event_type == "parent_review":
+        if args.event_type == "parent_review" and (
+            args.implementation_mode == "parent_direct" or receipt
+        ):
             require_digest(receipt, "independent_review_receipt_digest")
             if any(event["independent_review_receipt_digest"] == receipt for event in state["events"]):
                 raise StateError("independent review receipt replay is not allowed")
@@ -2389,9 +2746,9 @@ def record_event(args: argparse.Namespace) -> None:
             "repair_classification": repair_classification,
             "repair_evidence_digest": repair_evidence,
             "candidate_lifecycle_digest": lifecycle,
-            "attempt_id": "",
+            "attempt_id": getattr(args, "review_attempt_id", ""),
             "attempt_kind": "",
-            "candidate_digest": "",
+            "candidate_digest": getattr(args, "review_candidate_digest", ""),
             "review_outcome": "",
             "review_reason_code": "",
             "review_author": "",
@@ -2735,7 +3092,8 @@ def record_attempt_close(args: argparse.Namespace) -> None:
         if candidate_digest:
             require_digest(candidate_digest, "candidate_digest")
             if any(
-                event["candidate_digest"] == candidate_digest
+                event["event_type"] == "attempt_closed"
+                and event["candidate_digest"] == candidate_digest
                 for event in state["events"]
                 if event["candidate_digest"]
             ):
@@ -2756,6 +3114,22 @@ def record_attempt_close(args: argparse.Namespace) -> None:
             if manifest is None or not accepted_source_head:
                 raise StateError("accepted closure requires candidate and source-commit evidence")
             require_accepted_candidate_commit(state, manifest, accepted_source_head)
+            accepted_target = f"sha256:{manifest['patch_digest']}"
+            accepted_identity = review_candidate_identity_digest(
+                args.attempt_id, candidate_digest, accepted_target
+            )
+            matching_reviews = [
+                event for event in state["events"]
+                if event["event_type"] == "parent_review"
+                and event["candidate_lifecycle_digest"] == accepted_identity
+                and event["attempt_id"] == args.attempt_id
+                and event["candidate_digest"] == candidate_digest
+                and event["review_target_digest"] == accepted_target
+            ]
+            if not matching_reviews:
+                raise StateError("accepted candidate identity lacks a bounded review")
+            if set(matching_reviews[-1]["finding_severities"]) & {"High", "Medium"}:
+                raise StateError("accepted candidate review has unresolved findings")
         else:
             if accepted_source_head:
                 raise StateError("only an accepted closure may record an accepted source HEAD")
@@ -2779,7 +3153,9 @@ def record_attempt_close(args: argparse.Namespace) -> None:
             "review_reason_code": reason,
             "review_author": "parent",
             "review_evidence_digest": evidence_digest,
-            "review_target_digest": "",
+            "review_target_digest": (
+                f"sha256:{manifest['patch_digest']}" if manifest is not None else ""
+            ),
             "predecessor_plan_digest": "",
             "predecessor_accepted_candidate_digest": "",
             "predecessor_closing_event_digest": "",
@@ -2938,6 +3314,7 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("--event-id", required=True)
     review.add_argument("--implementation-mode", choices=sorted(MODES), required=True)
     review.add_argument("--review-receipt", required=True)
+    review.add_argument("--candidate-manifest")
     review.add_argument("--predecessor-checkpoint")
     review.add_argument("--invariant-digest", action="append", required=True)
     review.add_argument("--finding-severity", action="append", choices=("High", "Medium", "Low"))

@@ -1,6 +1,6 @@
 # Bind review to candidate leaf
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -80,13 +80,16 @@ checked_summary_ja: review対象と回数上限を不変な候補leafへ結合�
 
 ## Tasks
 
-- [ ] Replace raw lifecycle-file review identity with the immutable candidate leaf identity.
-- [ ] Enforce one initial review and one rereview per candidate leaf, including same-patch correction leaves.
-- [ ] Require the accepted candidate or checked parent-direct commit to match the reviewed target.
-- [ ] Add phase-change, reserialization, target-reset, and post-review mutation rejection tests.
-- [ ] Align root and generated policy and Skill guidance.
-- [ ] Run focused validation, independent review, authoritative validation once, archive, and commit.
+- [x] Replace raw lifecycle-file review identity with the immutable candidate leaf identity.
+- [x] Enforce one initial review and one rereview per candidate leaf, including same-patch correction leaves.
+- [x] Require the accepted candidate or checked parent-direct commit to match the reviewed target.
+- [x] Add phase-change, reserialization, target-reset, and post-review mutation rejection tests.
+- [x] Align root and generated policy and Skill guidance.
+- [x] Run focused validation, independent review, authoritative validation once, archive, and commit.
 
 ## Validation Notes
 
 - Plan 170 was restructured after its bounded rereview found unresolved candidate identity, runtime evidence, and reviewer-history boundaries.
+- Focused validation passed with 56 execution-state tests plus root policy, Copier template, and diff checks.
+- Independent review found candidate admission, close, lock, checkpoint, packet-binding, and unresolved-finding gaps; two bounded remediation rounds closed them.
+- Authoritative validation passed once with every declared command.

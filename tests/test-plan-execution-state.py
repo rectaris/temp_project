@@ -17,6 +17,7 @@ import unittest
 from unittest import mock
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,8 +42,9 @@ def load_state_module():
 STATE_MODULE = load_state_module()
 
 
-def digest(text: str) -> str:
-    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+def digest(value: str | bytes) -> str:
+    data = value.encode() if isinstance(value, str) else value
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 class PlanExecutionStateTest(unittest.TestCase):
@@ -116,6 +118,106 @@ class PlanExecutionStateTest(unittest.TestCase):
             [sys.executable, str(STATE_SCRIPT), *arguments], cwd=self.repo, check=check,
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
+
+    def run_candidate_review(
+        self,
+        state: Path,
+        lifecycle: Path,
+        run_id: str,
+        event_id: str,
+        receipt: Path,
+        manifest: Path,
+        invariant: str,
+        *,
+        finding_severities: list[str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        candidate_digest = digest(manifest.read_bytes())
+        target = f"sha256:{payload['patch_digest']}"
+        worker_receipt_digest = digest(f"worker receipt:{candidate_digest}")
+        receipt_payload = json.loads(receipt.read_text(encoding="utf-8"))
+        receipt_payload["worker_receipt_digests"] = [worker_receipt_digest]
+        packet = {
+            key: receipt_payload[key]
+            for key in (
+                "plan_digest", "review_target_digest", "admitted_diff_digest",
+                "worker_receipt_digests", "applicable_specification_digests",
+            )
+        }
+        receipt_payload["packet_digest"] = STATE_MODULE.canonical_digest(packet)
+        receipt.write_text(json.dumps(receipt_payload), encoding="utf-8")
+        identity = STATE_MODULE.review_candidate_identity_digest(
+            payload["plan_execution_attempt_id"], candidate_digest, target
+        )
+        args = SimpleNamespace(
+            state=str(state),
+            run_id=run_id,
+            event_id=event_id,
+            implementation_mode="candidate",
+            review_receipt=str(receipt),
+            candidate_manifest=str(manifest),
+            predecessor_checkpoint=None,
+            invariant_digest=[invariant],
+            finding_severity=finding_severities,
+            lifecycle_state=str(lifecycle),
+            elapsed_seconds=0.0,
+        )
+        try:
+            with (
+                mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+                mock.patch.object(
+                    STATE_MODULE,
+                    "candidate_review_identity",
+                    return_value=(
+                        target,
+                        identity,
+                        payload["plan_execution_attempt_id"],
+                        candidate_digest,
+                        [worker_receipt_digest],
+                    ),
+                ),
+            ):
+                STATE_MODULE.record_bounded_review(args)
+        except (OSError, UnicodeError, STATE_MODULE.StateError) as exc:
+            return subprocess.CompletedProcess([], 1, "", f"{exc}\n")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    def append_candidate_review_fixture(
+        self,
+        state: Path,
+        lifecycle: Path,
+        run_id: str,
+        attempt_id: str,
+        candidate_digest: str,
+        patch_digest: str,
+        invariant: str,
+        *,
+        label: str | None = None,
+        finding_severities: list[str] | None = None,
+    ) -> None:
+        target = f"sha256:{patch_digest}"
+        event_label = label or attempt_id
+        STATE_MODULE.record_event(SimpleNamespace(
+            state=str(state),
+            run_id=run_id,
+            event_id=f"fixture-review:{event_label}",
+            event_type="parent_review",
+            implementation_mode="candidate",
+            invariant_digest=[invariant],
+            finding_severity=finding_severities,
+            independent_review_receipt_digest=digest(f"fixture-receipt:{event_label}"),
+            repair_evidence_file=None,
+            validation_report=None,
+            diagnosis_evidence_file=None,
+            candidate_lifecycle_digest=STATE_MODULE.review_candidate_identity_digest(
+                attempt_id, candidate_digest, target
+            ),
+            review_target_digest=target,
+            review_attempt_id=attempt_id,
+            review_candidate_digest=candidate_digest,
+            lifecycle_state=str(lifecycle),
+            elapsed_seconds=0.0,
+        ))
 
     def record(self, event_id: str, event_type: str, *extra: str, mode: str = "candidate") -> subprocess.CompletedProcess[str]:
         if event_type != "repair_classification" or not self.lifecycle.exists():
@@ -268,14 +370,26 @@ class PlanExecutionStateTest(unittest.TestCase):
         round_value: int,
         inherited_turns: int = 0,
         reviewer_session: str | None = None,
-        review_target: str = "target",
+        review_target: str | None = None,
+        source_head: str | None = None,
     ) -> Path:
+        target_digest = review_target or digest(
+            subprocess.check_output(
+                [
+                    "git", "diff", "--binary", "--full-index",
+                    source_head or self.head, "--", "allowed.txt",
+                ],
+                cwd=self.repo,
+            )
+        )
         packet = {
             "plan_digest": plan_digest,
-            "review_target_digest": digest(review_target),
-            "admitted_diff_digest": digest(review_target),
+            "review_target_digest": target_digest,
+            "admitted_diff_digest": target_digest,
             "worker_receipt_digests": [],
-            "applicable_specification_digests": [digest("spec")],
+            "applicable_specification_digests": [
+                digest((self.repo / "AGENTS.md").read_bytes())
+            ],
         }
         receipt = {
             "schema_version": 1,
@@ -299,6 +413,7 @@ class PlanExecutionStateTest(unittest.TestCase):
 
     def test_session_checkpoint_requires_a_different_observed_root_and_is_claimed_once(self) -> None:
         state, lifecycle, run_id = self.initialize_execution("checkpoint", mode="parent_direct")
+        (self.repo / "allowed.txt").write_text("checkpoint candidate\n", encoding="utf-8")
         lifecycle.write_text("authoritative\n", encoding="utf-8")
         recorded = self.run_cli(
             "record", str(state), "--run-id", run_id,
@@ -320,6 +435,11 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--lifecycle-state", str(lifecycle),
         )
         self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "checkpoint candidate"], cwd=self.repo, check=True)
+        checked_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
         checkpoint = self.base / "session-checkpoint.json"
         created = self.run_cli(
             "checkpoint", str(state), "--run-id", run_id,
@@ -349,7 +469,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "init", str(same_state), "--run-id", "same-session",
             "--plan", self.child_plan.relative_to(self.repo).as_posix(),
             "--plan-digest", digest(self.child_plan.read_text()),
-            "--source-head", self.head,
+            "--source-head", checked_head,
             "--primary-invariant-digest", digest("child invariant"),
             "--lifecycle-state", str(self.base / "same-lifecycle.json"),
             "--implementation-mode", "candidate",
@@ -367,7 +487,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "init", str(child_state), "--run-id", "fresh-session",
             "--plan", self.child_plan.relative_to(self.repo).as_posix(),
             "--plan-digest", digest(self.child_plan.read_text()),
-            "--source-head", self.head,
+            "--source-head", checked_head,
             "--primary-invariant-digest", digest("child invariant"),
             "--lifecycle-state", str(self.base / "fresh-lifecycle.json"),
             "--implementation-mode", "candidate",
@@ -383,7 +503,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "init", str(self.base / "replay.json"), "--run-id", "replay-session",
             "--plan", self.child_plan.relative_to(self.repo).as_posix(),
             "--plan-digest", digest(self.child_plan.read_text()),
-            "--source-head", self.head,
+            "--source-head", checked_head,
             "--primary-invariant-digest", digest("child invariant"),
             "--lifecycle-state", str(self.base / "replay-lifecycle.json"),
             "--implementation-mode", "candidate",
@@ -409,6 +529,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             STATE_MODULE.validate_resource_observations(observations)
 
         state, lifecycle, run_id = self.initialize_execution("unobserved", mode="parent_direct")
+        (self.repo / "allowed.txt").write_text("unobserved candidate\n", encoding="utf-8")
         lifecycle.write_text("authoritative\n", encoding="utf-8")
         self.run_cli(
             "record", str(state), "--run-id", run_id,
@@ -430,6 +551,11 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--lifecycle-state", str(lifecycle),
             check=True,
         )
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "unobserved candidate"], cwd=self.repo, check=True)
+        checked_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
         checkpoint = self.base / "unobserved-checkpoint.json"
         self.run_cli(
             "checkpoint", str(state), "--run-id", run_id,
@@ -442,7 +568,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "init", str(self.base / "blocked-child.json"), "--run-id", "blocked-child",
             "--plan", self.child_plan.relative_to(self.repo).as_posix(),
             "--plan-digest", digest(self.child_plan.read_text()),
-            "--source-head", self.head,
+            "--source-head", checked_head,
             "--primary-invariant-digest", digest("child invariant"),
             "--lifecycle-state", str(self.base / "blocked-lifecycle.json"),
             "--implementation-mode", "candidate",
@@ -457,6 +583,7 @@ class PlanExecutionStateTest(unittest.TestCase):
 
     def test_bounded_review_requires_zero_inheritance_and_two_round_budget(self) -> None:
         state, lifecycle, run_id = self.initialize_execution("bounded-review", mode="parent_direct")
+        (self.repo / "allowed.txt").write_text("bounded candidate\n", encoding="utf-8")
         plan_digest = digest(self.plan.read_text())
         invariant = digest("one invariant")
         bad = self.review_receipt(
@@ -494,7 +621,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertIn("one initial review and one bounded rereview", exhausted.stderr)
 
         next_candidate = self.review_receipt(
-            "next-candidate", plan_digest, round_value=1, review_target="next-target"
+            "next-candidate", plan_digest, round_value=1, review_target=digest("next-target")
         )
         restarted = self.run_cli(
             "review", str(state), "--run-id", run_id,
@@ -503,7 +630,712 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--review-receipt", str(next_candidate), "--invariant-digest", invariant,
             "--lifecycle-state", str(lifecycle),
         )
-        self.assertEqual(restarted.returncode, 0, restarted.stderr)
+        self.assertNotEqual(restarted.returncode, 0)
+        self.assertIn("differs from the admitted candidate diff", restarted.stderr)
+
+    def test_execution_state_rejects_more_than_two_reviews_for_one_candidate_identity(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("review-state-budget")
+        attempt_id = "review-state-budget-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, attempt_id).returncode,
+            0,
+        )
+        candidate_digest = digest("candidate")
+        patch_digest = hashlib.sha256(b"patch").hexdigest()
+        invariant = digest("one invariant")
+        self.append_candidate_review_fixture(
+            state, lifecycle, run_id, attempt_id, candidate_digest, patch_digest,
+            invariant, label="review-budget-1",
+        )
+        self.append_candidate_review_fixture(
+            state, lifecycle, run_id, attempt_id, candidate_digest, patch_digest,
+            invariant, label="review-budget-2",
+        )
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "one initial review and one bounded rereview",
+        ):
+            self.append_candidate_review_fixture(
+                state, lifecycle, run_id, attempt_id, candidate_digest, patch_digest,
+                invariant, label="review-budget-3",
+            )
+
+    def test_review_receipt_must_bind_applicable_specs_and_worker_receipts(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "review-packet", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("review packet\n", encoding="utf-8")
+        bad_specs = self.review_receipt(
+            "bad-specs", digest(self.plan.read_text()), round_value=1
+        )
+        payload = json.loads(bad_specs.read_text(encoding="utf-8"))
+        payload["applicable_specification_digests"] = [digest("wrong spec")]
+        packet = {
+            key: payload[key]
+            for key in (
+                "plan_digest", "review_target_digest", "admitted_diff_digest",
+                "worker_receipt_digests", "applicable_specification_digests",
+            )
+        }
+        payload["packet_digest"] = STATE_MODULE.canonical_digest(packet)
+        bad_specs.write_text(json.dumps(payload), encoding="utf-8")
+        rejected_specs = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "bad-specs", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(bad_specs),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected_specs.returncode, 0)
+        self.assertIn("applicable specifications", rejected_specs.stderr)
+
+        bad_worker = self.review_receipt(
+            "bad-worker", digest(self.plan.read_text()), round_value=1
+        )
+        payload = json.loads(bad_worker.read_text(encoding="utf-8"))
+        payload["worker_receipt_digests"] = [digest("unexpected worker")]
+        packet = {
+            key: payload[key]
+            for key in (
+                "plan_digest", "review_target_digest", "admitted_diff_digest",
+                "worker_receipt_digests", "applicable_specification_digests",
+            )
+        }
+        payload["packet_digest"] = STATE_MODULE.canonical_digest(packet)
+        bad_worker.write_text(json.dumps(payload), encoding="utf-8")
+        rejected_worker = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "bad-worker", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(bad_worker),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected_worker.returncode, 0)
+        self.assertIn("verified worker receipt", rejected_worker.stderr)
+
+    def test_candidate_review_identity_survives_phase_and_serialization_changes(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("candidate-review")
+        attempt_id = "candidate-review-attempt"
+        started = self.start_writable_attempt(state, lifecycle, run_id, attempt_id)
+        self.assertEqual(started.returncode, 0, started.stderr)
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        patch_digest = hashlib.sha256(b"candidate patch").hexdigest()
+        manifest = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "plan_path": state_payload["plan_path"],
+            "plan_digest": state_payload["plan_digest"].removeprefix("sha256:"),
+            "source_head": state_payload["source_head"],
+            "patch_digest": patch_digest,
+        }
+        manifest_content = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+        manifest_path = self.base / "candidate-review-manifest.json"
+        manifest_path.write_text(manifest_content, encoding="utf-8")
+        lifecycle_payload = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "current_manifest_digest": hashlib.sha256(
+                manifest_content.encode()
+            ).hexdigest(),
+            "current_patch_digest": patch_digest,
+            "correction_round": 0,
+            "candidate_generations": 1,
+            "phase": "admitted",
+            "focused_required": True,
+            "focused_validation_count": 0,
+            "authoritative_validation_count": 0,
+            "parent_review_rejections": 0,
+        }
+        lifecycle.write_text(json.dumps(lifecycle_payload), encoding="utf-8")
+        review_target = f"sha256:{patch_digest}"
+        first = self.review_receipt(
+            "candidate-review-1",
+            digest(self.plan.read_text()),
+            round_value=1,
+            review_target=review_target,
+        )
+        reviewed = self.run_candidate_review(
+            state, lifecycle, run_id, "candidate-review-1", first, manifest_path,
+            digest("one invariant"),
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        lifecycle.write_text(
+            json.dumps(lifecycle_payload, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        second = self.review_receipt(
+            "candidate-review-2",
+            digest(self.plan.read_text()),
+            round_value=2,
+            review_target=review_target,
+        )
+        rereviewed = self.run_candidate_review(
+            state, lifecycle, run_id, "candidate-review-2", second, manifest_path,
+            digest("one invariant"),
+        )
+        self.assertEqual(rereviewed.returncode, 0, rereviewed.stderr)
+        reset = self.review_receipt(
+            "candidate-review-reset",
+            digest(self.plan.read_text()),
+            round_value=1,
+            review_target=review_target,
+        )
+        reset_result = self.run_candidate_review(
+            state, lifecycle, run_id, "candidate-review-reset", reset, manifest_path,
+            digest("one invariant"),
+        )
+        self.assertNotEqual(reset_result.returncode, 0)
+        self.assertIn("one initial review and one bounded rereview", reset_result.stderr)
+
+    def test_candidate_review_rejects_a_manifest_without_runner_admission_evidence(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("unverified-candidate")
+        attempt_id = "unverified-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, attempt_id).returncode,
+            0,
+        )
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        patch_digest = hashlib.sha256(b"candidate patch").hexdigest()
+        manifest = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "plan_path": state_payload["plan_path"],
+            "plan_digest": state_payload["plan_digest"].removeprefix("sha256:"),
+            "source_head": state_payload["source_head"],
+            "patch_digest": patch_digest,
+        }
+        content = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+        manifest_path = self.base / "unverified-manifest.json"
+        manifest_path.write_text(content, encoding="utf-8")
+        lifecycle.write_text(json.dumps({
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "current_manifest_digest": hashlib.sha256(content.encode()).hexdigest(),
+            "current_patch_digest": patch_digest,
+            "correction_round": 0,
+            "candidate_generations": 1,
+            "phase": "admitted",
+            "focused_required": False,
+            "focused_validation_count": 0,
+            "authoritative_validation_count": 0,
+            "parent_review_rejections": 0,
+        }), encoding="utf-8")
+        receipt = self.review_receipt(
+            "unverified-candidate", digest(self.plan.read_text()), round_value=1,
+            review_target=f"sha256:{patch_digest}",
+        )
+        rejected = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "unverified-candidate", "--implementation-mode", "candidate",
+            "--review-receipt", str(receipt),
+            "--candidate-manifest", str(manifest_path),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("failed admission verification", rejected.stderr)
+
+    def test_candidate_review_rejects_manifest_substitution_for_one_attempt(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("candidate-substitution")
+        attempt_id = "candidate-substitution-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, attempt_id).returncode,
+            0,
+        )
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        patch_digest = hashlib.sha256(b"candidate patch").hexdigest()
+
+        def write_manifest(label: str) -> Path:
+            path = self.base / f"{label}.json"
+            path.write_text(json.dumps({
+                "schema_version": 2,
+                "orchestration_run_id": run_id,
+                "plan_execution_attempt_id": attempt_id,
+                "plan_path": state_payload["plan_path"],
+                "plan_digest": state_payload["plan_digest"].removeprefix("sha256:"),
+                "source_head": state_payload["source_head"],
+                "patch_digest": patch_digest,
+                "label": label,
+            }, sort_keys=True), encoding="utf-8")
+            lifecycle.write_text(json.dumps({
+                "schema_version": 2,
+                "orchestration_run_id": run_id,
+                "plan_execution_attempt_id": attempt_id,
+                "current_manifest_digest": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "current_patch_digest": patch_digest,
+                "correction_round": 0,
+                "candidate_generations": 1,
+                "phase": "admitted",
+                "focused_required": False,
+                "focused_validation_count": 0,
+                "authoritative_validation_count": 0,
+                "parent_review_rejections": 0,
+            }), encoding="utf-8")
+            return path
+
+        first_manifest = write_manifest("first-candidate")
+        first_receipt = self.review_receipt(
+            "first-candidate", digest(self.plan.read_text()), round_value=1,
+            review_target=f"sha256:{patch_digest}",
+        )
+        self.assertEqual(
+            self.run_candidate_review(
+                state, lifecycle, run_id, "first-candidate", first_receipt,
+                first_manifest, digest("one invariant"),
+            ).returncode,
+            0,
+        )
+        replacement_manifest = write_manifest("replacement-candidate")
+        replacement_receipt = self.review_receipt(
+            "replacement-candidate", digest(self.plan.read_text()), round_value=1,
+            review_target=f"sha256:{patch_digest}",
+        )
+        rejected = self.run_candidate_review(
+            state, lifecycle, run_id, "replacement-candidate", replacement_receipt,
+            replacement_manifest, digest("one invariant"),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("already bound to another admitted candidate", rejected.stderr)
+
+    def test_same_patch_correction_has_a_distinct_candidate_review_identity(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("same-patch-correction")
+        invariant = digest("one invariant")
+        first_attempt = "first-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, first_attempt).returncode,
+            0,
+        )
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        original = (self.repo / "allowed.txt").read_text(encoding="utf-8")
+        accepted_content = "same reviewed patch\n"
+        (self.repo / "allowed.txt").write_text(accepted_content, encoding="utf-8")
+        patch = subprocess.check_output(
+            ["git", "diff", "--binary", "--full-index", self.head, "--", "allowed.txt"],
+            cwd=self.repo,
+        )
+        patch_digest = hashlib.sha256(patch).hexdigest()
+        (self.repo / "allowed.txt").write_text(original, encoding="utf-8")
+
+        def candidate(attempt_id: str, round_value: int) -> tuple[Path, str]:
+            manifest = {
+                "schema_version": 2,
+                "orchestration_run_id": run_id,
+                "plan_execution_attempt_id": attempt_id,
+                "plan_path": state_payload["plan_path"],
+                "plan_digest": state_payload["plan_digest"].removeprefix("sha256:"),
+                "source_head": state_payload["source_head"],
+                "patch_digest": patch_digest,
+            }
+            content = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+            path = self.base / f"{attempt_id}-manifest.json"
+            path.write_text(content, encoding="utf-8")
+            lifecycle.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "orchestration_run_id": run_id,
+                        "plan_execution_attempt_id": attempt_id,
+                        "current_manifest_digest": hashlib.sha256(content.encode()).hexdigest(),
+                        "current_patch_digest": patch_digest,
+                        "correction_round": round_value,
+                        "candidate_generations": round_value + 1,
+                        "phase": "admitted",
+                        "focused_required": False,
+                        "focused_validation_count": 0,
+                        "authoritative_validation_count": 0,
+                        "parent_review_rejections": round_value,
+                    },
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return path, digest(content)
+
+        first_manifest, first_digest = candidate(first_attempt, 0)
+        first_receipt = self.review_receipt(
+            "same-patch-first", digest(self.plan.read_text()), round_value=1,
+            review_target=f"sha256:{patch_digest}",
+        )
+        self.assertEqual(
+            self.run_candidate_review(
+                state, lifecycle, run_id, "same-patch-first", first_receipt,
+                first_manifest, invariant,
+            ).returncode,
+            0,
+        )
+        first_rereceipt = self.review_receipt(
+            "same-patch-first-rereview", digest(self.plan.read_text()), round_value=2,
+            review_target=f"sha256:{patch_digest}",
+        )
+        self.assertEqual(
+            self.run_candidate_review(
+                state, lifecycle, run_id, "same-patch-first-rereview", first_rereceipt,
+                first_manifest, invariant,
+            ).returncode,
+            0,
+        )
+        first_lifecycle_digest = digest(lifecycle.read_bytes())
+        closed = self.run_cli(
+            "close", str(state), "--run-id", run_id, "--attempt-id", first_attempt,
+            "--outcome", "correction_requested", "--review-author", "parent",
+            "--review-reason-code", "acceptance_unmet",
+            "--review-evidence-digest", digest("correction"),
+            "--invariant-digest", invariant, "--candidate-digest", first_digest,
+            "--candidate-manifest", str(first_manifest),
+            "--candidate-lifecycle-digest", first_lifecycle_digest,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        second_attempt = "second-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(
+                state, lifecycle, run_id, second_attempt, kind="correction"
+            ).returncode,
+            0,
+        )
+        second_manifest, _ = candidate(second_attempt, 1)
+        second_receipt = self.review_receipt(
+            "same-patch-second", digest(self.plan.read_text()), round_value=1,
+            review_target=f"sha256:{patch_digest}",
+        )
+        second_review = self.run_candidate_review(
+            state, lifecycle, run_id, "same-patch-second", second_receipt,
+            second_manifest, invariant,
+        )
+        self.assertEqual(second_review.returncode, 0, second_review.stderr)
+        second_manifest_content = second_manifest.read_text(encoding="utf-8")
+        lifecycle_payload = json.loads(lifecycle.read_text(encoding="utf-8"))
+        lifecycle_payload.update({
+            "phase": "applied",
+            "authoritative_validation_count": 1,
+        })
+        lifecycle_content = json.dumps(lifecycle_payload, sort_keys=True, indent=2) + "\n"
+        lifecycle.write_text(lifecycle_content, encoding="utf-8")
+        (self.repo / "allowed.txt").write_text(accepted_content, encoding="utf-8")
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "accept same patch correction"], cwd=self.repo, check=True)
+        accepted_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        accepted = self.run_cli(
+            "close", str(state), "--run-id", run_id, "--attempt-id", second_attempt,
+            "--outcome", "accepted", "--review-author", "parent",
+            "--review-evidence-digest", digest("accepted correction"),
+            "--invariant-digest", invariant,
+            "--candidate-digest", digest(second_manifest_content),
+            "--candidate-manifest", str(second_manifest),
+            "--candidate-lifecycle-digest", digest(lifecycle_content),
+            "--accepted-source-head", accepted_head,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        checkpoint = self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(self.base / "same-patch-checkpoint.json"),
+            "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("same-patch")),
+            "--review-receipt", str(second_receipt),
+        )
+        self.assertEqual(checkpoint.returncode, 0, checkpoint.stderr)
+
+    def test_checked_candidate_matches_the_reviewed_leaf_after_apply(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("accepted-review-leaf")
+        attempt_id = "accepted-review-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, attempt_id).returncode,
+            0,
+        )
+        target = self.repo / "allowed.txt"
+        target.write_text("reviewed accepted candidate\n", encoding="utf-8")
+        patch = subprocess.check_output(
+            ["git", "diff", "--binary", "--full-index", self.head, "--", "allowed.txt"],
+            cwd=self.repo,
+        )
+        patch_digest = hashlib.sha256(patch).hexdigest()
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        manifest = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "plan_path": state_payload["plan_path"],
+            "plan_digest": state_payload["plan_digest"].removeprefix("sha256:"),
+            "source_head": state_payload["source_head"],
+            "patch_digest": patch_digest,
+        }
+        manifest_content = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+        manifest_path = self.base / "accepted-review-manifest.json"
+        manifest_path.write_text(manifest_content, encoding="utf-8")
+        lifecycle_payload = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "current_manifest_digest": hashlib.sha256(manifest_content.encode()).hexdigest(),
+            "current_patch_digest": patch_digest,
+            "correction_round": 0,
+            "candidate_generations": 1,
+            "phase": "admitted",
+            "focused_required": False,
+            "focused_validation_count": 0,
+            "authoritative_validation_count": 0,
+            "parent_review_rejections": 0,
+        }
+        lifecycle.write_text(
+            json.dumps(lifecycle_payload, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        receipt = self.review_receipt(
+            "accepted-review",
+            digest(self.plan.read_text()),
+            round_value=1,
+            review_target=f"sha256:{patch_digest}",
+        )
+        reviewed = self.run_candidate_review(
+            state, lifecycle, run_id, "accepted-review", receipt, manifest_path,
+            digest("one invariant"),
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        lifecycle_payload.update({
+            "phase": "applied",
+            "authoritative_validation_count": 1,
+        })
+        lifecycle_content = json.dumps(lifecycle_payload, sort_keys=True, indent=2) + "\n"
+        lifecycle.write_text(lifecycle_content, encoding="utf-8")
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "accept reviewed candidate"], cwd=self.repo, check=True)
+        accepted_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        closed = self.run_cli(
+            "close", str(state), "--run-id", run_id, "--attempt-id", attempt_id,
+            "--outcome", "accepted", "--review-author", "parent",
+            "--review-evidence-digest", digest("accepted review"),
+            "--invariant-digest", digest("one invariant"),
+            "--candidate-digest", digest(manifest_content),
+            "--candidate-manifest", str(manifest_path),
+            "--candidate-lifecycle-digest", digest(lifecycle_content),
+            "--accepted-source-head", accepted_head,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        checkpoint = self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(self.base / "accepted-review-checkpoint.json"),
+            "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("accepted-review")),
+            "--review-receipt", str(receipt),
+        )
+        self.assertEqual(checkpoint.returncode, 0, checkpoint.stderr)
+
+    def test_accepted_candidate_closure_requires_a_matching_review(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("accepted-without-review")
+        attempt_id = "accepted-without-review-attempt"
+        self.assertEqual(
+            self.start_writable_attempt(state, lifecycle, run_id, attempt_id).returncode,
+            0,
+        )
+        target = self.repo / "allowed.txt"
+        target.write_text("unreviewed accepted candidate\n", encoding="utf-8")
+        patch = subprocess.check_output(
+            ["git", "diff", "--binary", "--full-index", self.head, "--", "allowed.txt"],
+            cwd=self.repo,
+        )
+        patch_digest = hashlib.sha256(patch).hexdigest()
+        state_payload = json.loads(state.read_text(encoding="utf-8"))
+        manifest = {
+            "schema_version": 2,
+            "orchestration_run_id": run_id,
+            "plan_execution_attempt_id": attempt_id,
+            "plan_path": state_payload["plan_path"],
+            "plan_digest": state_payload["plan_digest"].removeprefix("sha256:"),
+            "source_head": state_payload["source_head"],
+            "patch_digest": patch_digest,
+        }
+        manifest_content = json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+        manifest_path = self.base / "accepted-without-review-manifest.json"
+        manifest_path.write_text(manifest_content, encoding="utf-8")
+        candidate_digest = digest(manifest_content)
+        lifecycle_digest = self.write_applied_lifecycle(
+            lifecycle, run_id, attempt_id, candidate_digest, patch_digest
+        )
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "accept without review"], cwd=self.repo, check=True)
+        accepted_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        rejected = self.run_cli(
+            "close", str(state), "--run-id", run_id, "--attempt-id", attempt_id,
+            "--outcome", "accepted", "--review-author", "parent",
+            "--review-evidence-digest", digest("unreviewed"),
+            "--invariant-digest", digest("one invariant"),
+            "--candidate-digest", candidate_digest,
+            "--candidate-manifest", str(manifest_path),
+            "--candidate-lifecycle-digest", lifecycle_digest,
+            "--accepted-source-head", accepted_head,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("lacks a bounded review", rejected.stderr)
+        self.append_candidate_review_fixture(
+            state, lifecycle, run_id, attempt_id, candidate_digest, patch_digest,
+            digest("one invariant"), finding_severities=["High"],
+        )
+        unresolved = self.run_cli(
+            "close", str(state), "--run-id", run_id, "--attempt-id", attempt_id,
+            "--outcome", "accepted", "--review-author", "parent",
+            "--review-evidence-digest", digest("unresolved"),
+            "--invariant-digest", digest("one invariant"),
+            "--candidate-digest", candidate_digest,
+            "--candidate-manifest", str(manifest_path),
+            "--candidate-lifecycle-digest", lifecycle_digest,
+            "--accepted-source-head", accepted_head,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(unresolved.returncode, 0)
+        self.assertIn("unresolved findings", unresolved.stderr)
+
+    def test_checked_parent_direct_diff_must_equal_reviewed_target(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "post-review-mutation", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("reviewed candidate\n", encoding="utf-8")
+        receipt = self.review_receipt(
+            "post-review-mutation", digest(self.plan.read_text()), round_value=1
+        )
+        reviewed = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "post-review-mutation",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        self.assertEqual(
+            self.run_cli(
+                "record", str(state), "--run-id", run_id,
+                "--event-id", "authoritative",
+                "--event-type", "authoritative_validation",
+                "--implementation-mode", "parent_direct",
+                "--candidate-lifecycle-digest", digest("authoritative\n"),
+                "--lifecycle-state", str(lifecycle),
+            ).returncode,
+            0,
+        )
+        (self.repo / "allowed.txt").write_text("mutated after review\n", encoding="utf-8")
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "mutate reviewed candidate"], cwd=self.repo, check=True)
+        checkpoint = self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(self.base / "mutated-checkpoint.json"),
+            "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("mutated-checkpoint")),
+            "--review-receipt", str(receipt),
+        )
+        self.assertNotEqual(checkpoint.returncode, 0)
+        self.assertIn("differs from the checked target", checkpoint.stderr)
+
+    def test_checked_parent_direct_commit_rejects_out_of_scope_changes(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "out-of-scope-commit", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("reviewed candidate\n", encoding="utf-8")
+        receipt = self.review_receipt(
+            "out-of-scope-commit", digest(self.plan.read_text()), round_value=1
+        )
+        reviewed = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "out-of-scope-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        self.assertEqual(
+            self.run_cli(
+                "record", str(state), "--run-id", run_id,
+                "--event-id", "out-of-scope-authoritative",
+                "--event-type", "authoritative_validation",
+                "--implementation-mode", "parent_direct",
+                "--candidate-lifecycle-digest", digest("authoritative\n"),
+                "--lifecycle-state", str(lifecycle),
+            ).returncode,
+            0,
+        )
+        (self.repo / "AGENTS.md").write_text("unreviewed policy change\n", encoding="utf-8")
+        subprocess.run(["git", "add", "allowed.txt", "AGENTS.md"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "commit out of scope"], cwd=self.repo, check=True)
+        rejected = self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(self.base / "out-of-scope-checkpoint.json"),
+            "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("out-of-scope")),
+            "--review-receipt", str(receipt),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("outside write_scope", rejected.stderr)
+
+    def test_parent_direct_checkpoint_requires_receipts_for_final_reviewed_patch(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "final-parent-review", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text("first review\n", encoding="utf-8")
+        first_receipt = self.review_receipt(
+            "first-parent-review", digest(self.plan.read_text()), round_value=1
+        )
+        first = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "first-parent-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(first_receipt),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        (self.repo / "allowed.txt").write_text("final review\n", encoding="utf-8")
+        second_receipt = self.review_receipt(
+            "final-parent-review", digest(self.plan.read_text()), round_value=1
+        )
+        second = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "final-parent-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(second_receipt),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        self.assertEqual(
+            self.run_cli(
+                "record", str(state), "--run-id", run_id,
+                "--event-id", "final-parent-authoritative",
+                "--event-type", "authoritative_validation",
+                "--implementation-mode", "parent_direct",
+                "--candidate-lifecycle-digest", digest("authoritative\n"),
+                "--lifecycle-state", str(lifecycle),
+            ).returncode,
+            0,
+        )
+        subprocess.run(["git", "add", "allowed.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "commit final reviewed patch"], cwd=self.repo, check=True)
+        rejected = self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(self.base / "wrong-parent-receipt-checkpoint.json"),
+            "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("wrong-parent-receipt")),
+            "--review-receipt", str(first_receipt),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("differs from the checked target", rejected.stderr)
 
     def test_legacy_v4_event_without_successor_genesis_remains_appendable(self) -> None:
         recorded = self.record(
@@ -693,6 +1525,20 @@ class PlanExecutionStateTest(unittest.TestCase):
             lifecycle_digest = self.write_applied_lifecycle(
                 lifecycle, run_id, attempt_id, candidate, patch_digest
             )
+            if outcome == "accepted":
+                current = json.loads(state.read_text(encoding="utf-8"))
+                identity = STATE_MODULE.review_candidate_identity_digest(
+                    attempt_id, candidate, f"sha256:{patch_digest}"
+                )
+                if not any(
+                    event["event_type"] == "parent_review"
+                    and event["candidate_lifecycle_digest"] == identity
+                    for event in current["events"]
+                ):
+                    self.append_candidate_review_fixture(
+                        state, lifecycle, run_id, attempt_id, candidate, patch_digest,
+                        invariant,
+                    )
         arguments = [
             "close", str(state), "--run-id", run_id,
             "--attempt-id", attempt_id, "--outcome", outcome,

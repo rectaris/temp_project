@@ -324,6 +324,9 @@ def check_sandboxed_worker_fallback() -> None:
         '"authoritative_failure"', '"failure_diagnosis"',
         "def load_authoritative_failure", "def load_diagnosis_evidence",
         '"diagnosis_read"', '"repair_plan"',
+        "def review_candidate_identity_digest", "def candidate_review_identity",
+        '"--candidate-manifest"',
+        "checked parent-direct diff differs from the reviewed target",
     ):
         if marker not in execution_state:
             fail(f"plan execution state missing confirmed-diagnosis marker: {marker}")
@@ -337,6 +340,9 @@ def check_sandboxed_worker_fallback() -> None:
         for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
             if marker not in text:
                 fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
+        for marker in ("admitted patch digest", "mutable lifecycle"):
+            if marker not in text:
+                fail(f"{relative} missing candidate review identity marker: {marker}")
 
 
 def check_reusable_skill_parity() -> None:
