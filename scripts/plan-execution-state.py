@@ -14,6 +14,7 @@ import secrets
 import shlex
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -27,6 +28,15 @@ MAX_EVENTS = 64
 MAX_CORRECTIONS = 2
 MAX_PARENT_REMEDIATIONS = 2
 MAX_DIAGNOSIS_ATTEMPTS = 3
+SESSION_CHECKPOINT_SCHEMA_VERSION = 1
+REVIEW_RECEIPT_SCHEMA_VERSION = 1
+SESSION_BOUNDARIES = {
+    "checked",
+    "replanned",
+    "repair_required",
+    "replan_required",
+    "authoritative_failure",
+}
 ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 PLAN_RE = re.compile(r"docs/plan/active/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
@@ -69,6 +79,8 @@ EVENT_TYPES = {
     "writable_attempt_started",
     "attempt_closed",
     "successor_claimed",
+    "session_checkpoint_emitted",
+    "session_checkpoint_claimed",
 }
 RECORD_EVENT_TYPES = EVENT_TYPES - {"writable_attempt_started", "attempt_closed"}
 EXACT_KEYS = {
@@ -91,16 +103,26 @@ EVENT_KEYS = {
     "candidate_lifecycle_digest",
     "attempt_id", "attempt_kind", "candidate_digest", "review_outcome",
     "review_reason_code", "review_author", "review_evidence_digest",
+    "review_target_digest",
     "predecessor_plan_digest", "predecessor_accepted_candidate_digest",
     "predecessor_closing_event_digest", "predecessor_accepted_source_head",
     "accepted_source_head", "successor_run_id", "successor_plan_digest",
     "successor_source_head", "successor_primary_invariant_digest", "successor_genesis_digest",
     "elapsed_seconds", "monotonic_ns", "previous_event_digest", "event_digest",
 }
-LEGACY_EVENT_KEYS = EVENT_KEYS - {"successor_genesis_digest"}
+PRE_REVIEW_TARGET_EVENT_KEYS = EVENT_KEYS - {"review_target_digest"}
+PRE_SUCCESSOR_GENESIS_EVENT_KEYS = EVENT_KEYS - {"successor_genesis_digest"}
+LEGACY_EVENT_KEYS = EVENT_KEYS - {"successor_genesis_digest", "review_target_digest"}
 DIAGNOSIS_EVENT_KEYS = EVENT_KEYS | {
     "failure_evidence", "failure_evidence_digest", "diagnosis_evidence",
     "diagnosis_evidence_digest",
+}
+PRE_REVIEW_TARGET_DIAGNOSIS_EVENT_KEYS = DIAGNOSIS_EVENT_KEYS - {"review_target_digest"}
+PRE_SUCCESSOR_GENESIS_DIAGNOSIS_EVENT_KEYS = DIAGNOSIS_EVENT_KEYS - {
+    "successor_genesis_digest"
+}
+LEGACY_DIAGNOSIS_EVENT_KEYS = DIAGNOSIS_EVENT_KEYS - {
+    "successor_genesis_digest", "review_target_digest"
 }
 REPAIR_CLASSIFICATION_KEYS = {
     "schema_version", "plan_path", "plan_digest", "source_head", "primary_invariant_digest",
@@ -127,6 +149,36 @@ DIAGNOSIS_EVIDENCE_KEYS = {
     "diagnosis_result",
 }
 DIAGNOSIS_RESULTS = {"confirmed", "inconclusive", "disputed"}
+RESOURCE_METRICS = {
+    "provider_input_tokens",
+    "provider_cached_input_tokens",
+    "provider_output_tokens",
+    "provider_reasoning_tokens",
+    "model_response_count",
+    "compaction_count",
+    "helper_turn_count",
+    "tool_call_count",
+}
+RESOURCE_EVIDENCE_SOURCES = {
+    "external_transcript": "transcript_log",
+    "codex_hooks": "hook_event_log",
+}
+SESSION_CHECKPOINT_KEYS = {
+    "schema_version", "plan_path", "plan_digest", "source_head", "run_id",
+    "execution_state", "execution_event_chain_digest", "boundary",
+    "root_session_identity", "resource_observations", "reviewer_session_digests",
+    "checkpoint_digest", "successor_claim",
+}
+SUCCESSOR_CLAIM_KEYS = {
+    "run_id", "plan_digest", "source_head", "primary_invariant_digest", "genesis_digest",
+}
+REVIEW_RECEIPT_KEYS = {
+    "schema_version", "plan_digest", "review_target_digest", "admitted_diff_digest",
+    "worker_receipt_digests", "applicable_specification_digests",
+    "reviewer_session_digest", "inherited_turns", "inheritance_evidence",
+    "inheritance_evidence_digest",
+    "review_round", "packet_digest",
+}
 VALIDATION_FAILURE_KINDS = {
     "command", "dependency_integrity", "runtime_integrity",
     "head_immutability", "ref_immutability", "runner_setup", "source_integrity",
@@ -218,6 +270,327 @@ def require_clean_repository(root: Path) -> None:
         raise StateError("accepted closure requires a clean repository")
 
 
+def canonical_digest(value: Any) -> str:
+    return digest(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def root_session_identity(value: str | None) -> dict[str, Any]:
+    if not isinstance(value, str) or not value:
+        return {"status": "not_observed", "digest": None}
+    return {"status": "observed", "digest": digest(value)}
+
+
+def resource_observations_from_manifest(path: Path) -> dict[str, Any]:
+    root = repository_root()
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise StateError("resource manifest must be inside the current repository") from exc
+    if (
+        len(relative.parts) != 3
+        or relative.parts[0] != ".agent-logs"
+        or relative.name != "manifest.json"
+    ):
+        raise StateError("resource manifest must be .agent-logs/<run-id>/manifest.json")
+    checker = Path(__file__).with_name("check-agent-log-manifest.py")
+    completed = subprocess.run(
+        [sys.executable, os.fspath(checker), os.fspath(resolved)],
+        cwd=root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=sanitized_git_environment(),
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip()
+        raise StateError(detail or "resource manifest validation failed")
+    manifest = read_bounded_json(path, "resource manifest", outside_repository=False)
+    if not isinstance(manifest, dict):
+        raise StateError("resource manifest must be an object")
+    observations = validate_resource_observations(manifest.get("resource_observations"))
+    validate_resource_identity_evidence(resolved.parent, manifest, observations)
+    return observations
+
+
+def source_session_digests(data: bytes, source: str) -> set[str]:
+    session_digests: set[str] = set()
+    try:
+        lines = data.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise StateError(f"resource {source} evidence is not UTF-8") from exc
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise StateError(
+                f"resource {source} evidence line {line_number} is invalid JSON"
+            ) from exc
+        if not isinstance(record, dict):
+            raise StateError(
+                f"resource {source} evidence line {line_number} must be an object"
+            )
+        candidates: list[Any] = []
+        if source == "codex_hooks":
+            payload = record.get("payload")
+            if isinstance(payload, dict):
+                candidates.append(payload.get("session_id"))
+        else:
+            metadata = record.get("metadata")
+            if isinstance(metadata, dict):
+                candidates.extend(
+                    (metadata.get("session_id"), metadata.get("root_session_id"))
+                )
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate:
+                session_digests.add(digest(candidate))
+    return session_digests
+
+
+def read_bound_resource_evidence(
+    run_dir: Path,
+    declared_path: str,
+    source: str,
+    expected_digest: str,
+) -> bytes:
+    relative = Path(declared_path)
+    if not declared_path or relative.is_absolute() or ".." in relative.parts:
+        raise StateError(f"resource {source} evidence path is not safe")
+    path = run_dir / relative
+    try:
+        path.resolve().relative_to(run_dir.resolve())
+    except ValueError as exc:
+        raise StateError(f"resource {source} evidence resolves outside the run directory") from exc
+    reject_symlink_ancestors(path, include_target=True)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise StateError(f"resource {source} evidence must be a regular file")
+        data = os.read(descriptor, CANDIDATE_MANIFEST_MAX_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    if len(data) > CANDIDATE_MANIFEST_MAX_BYTES:
+        raise StateError(f"resource {source} evidence exceeds size limit")
+    if digest(data) != expected_digest:
+        raise StateError(
+            f"resource {source} evidence digest changed after manifest validation"
+        )
+    return data
+
+
+def validate_resource_identity_evidence(
+    run_dir: Path,
+    manifest: dict[str, Any],
+    observations: dict[str, Any],
+) -> None:
+    identity = observations["root_session_identity"]
+    if identity["status"] != "observed":
+        return
+    evidence_digests = observations["evidence_digests"]
+    derived: set[str] = set()
+    for source, manifest_field in RESOURCE_EVIDENCE_SOURCES.items():
+        if evidence_digests[source] is None:
+            continue
+        declared_path = manifest.get(manifest_field)
+        if not isinstance(declared_path, str):
+            raise StateError(f"resource manifest does not declare {manifest_field}")
+        evidence = read_bound_resource_evidence(
+            run_dir,
+            declared_path,
+            source,
+            evidence_digests[source],
+        )
+        derived.update(source_session_digests(evidence, source))
+    if not derived:
+        raise StateError(
+            "observed resource root-session identity is not derived from bound runtime evidence"
+        )
+    if len(derived) != 1:
+        raise StateError("bound runtime evidence contains conflicting root-session identities")
+    if identity["digest"] not in derived:
+        raise StateError(
+            "resource root-session identity does not match bound runtime evidence"
+        )
+
+
+def validate_resource_observations(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version", "root_session_identity", "evidence_digests", "metrics"
+    }:
+        raise StateError("resource observations have an invalid exact field shape")
+    if value["schema_version"] != 1:
+        raise StateError("resource observations have an unsupported schema version")
+    evidence_digests = value["evidence_digests"]
+    if (
+        not isinstance(evidence_digests, dict)
+        or set(evidence_digests) != set(RESOURCE_EVIDENCE_SOURCES)
+    ):
+        raise StateError("resource evidence digests have an invalid exact field shape")
+    for source, evidence_digest in evidence_digests.items():
+        if evidence_digest is not None:
+            require_digest(evidence_digest, f"resource {source} evidence digest")
+    has_bound_evidence = any(
+        evidence_digest is not None for evidence_digest in evidence_digests.values()
+    )
+    identity = value["root_session_identity"]
+    if not isinstance(identity, dict) or set(identity) != {"status", "digest"}:
+        raise StateError("resource root-session identity has an invalid exact field shape")
+    if identity["status"] == "observed":
+        require_digest(identity["digest"], "resource root-session identity digest")
+        if not has_bound_evidence:
+            raise StateError(
+                "observed resource root-session identity requires bound runtime evidence"
+            )
+    elif identity != {"status": "not_observed", "digest": None}:
+        raise StateError("unavailable resource root-session identity must remain not_observed")
+    metrics = value["metrics"]
+    if not isinstance(metrics, dict) or set(metrics) != RESOURCE_METRICS:
+        raise StateError("resource metrics have an invalid exact field shape")
+    for name, observation in metrics.items():
+        if not isinstance(observation, dict) or set(observation) != {
+            "status", "value", "provenance"
+        }:
+            raise StateError(f"resource metric {name} has an invalid exact field shape")
+        if observation["status"] == "observed":
+            metric_value = observation["value"]
+            if isinstance(metric_value, bool) or not isinstance(metric_value, int) or metric_value < 0:
+                raise StateError(f"resource metric {name} must be a nonnegative integer")
+            expected = "provider" if name.startswith("provider_") else "deterministic_proxy"
+            if observation["provenance"] != expected:
+                raise StateError(f"resource metric {name} has invalid provenance")
+            if not has_bound_evidence:
+                raise StateError(
+                    f"observed resource metric {name} requires bound runtime evidence"
+                )
+        elif observation != {
+            "status": "not_observed",
+            "value": None,
+            "provenance": "not_observed",
+        }:
+            raise StateError(f"unavailable resource metric {name} must remain not_observed")
+    return value
+
+
+def validate_review_receipt(value: Any, expected_plan_digest: str | None = None) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != REVIEW_RECEIPT_KEYS:
+        raise StateError("review receipt has an invalid exact field shape")
+    if value["schema_version"] != REVIEW_RECEIPT_SCHEMA_VERSION:
+        raise StateError("review receipt has an unsupported schema version")
+    for field in (
+        "plan_digest", "review_target_digest", "admitted_diff_digest",
+        "reviewer_session_digest", "packet_digest",
+    ):
+        require_digest(value[field], field)
+    if expected_plan_digest and value["plan_digest"] != expected_plan_digest:
+        raise StateError("review receipt plan digest mismatch")
+    if value["review_target_digest"] != value["admitted_diff_digest"]:
+        raise StateError("review target must be the admitted diff digest")
+    for field in ("worker_receipt_digests", "applicable_specification_digests"):
+        entries = value[field]
+        if not isinstance(entries, list) or len(entries) > 64 or len(entries) != len(set(entries)):
+            raise StateError(f"{field} must be a bounded unique list")
+        for entry in entries:
+            require_digest(entry, field)
+    inherited_turns = value["inherited_turns"]
+    inheritance_evidence = value["inheritance_evidence"]
+    inheritance_digest = value["inheritance_evidence_digest"]
+    if inheritance_evidence == "observed":
+        if isinstance(inherited_turns, bool) or not isinstance(inherited_turns, int):
+            raise StateError("observed review inherited_turns must be an integer")
+        require_digest(inheritance_digest, "inheritance_evidence_digest")
+    elif (
+        inheritance_evidence != "not_observed"
+        or inherited_turns is not None
+        or inheritance_digest is not None
+    ):
+        raise StateError("unavailable review inheritance must remain not_observed")
+    if value["review_round"] not in {1, 2}:
+        raise StateError("review_round must be one or two")
+    packet = {
+        key: value[key]
+        for key in (
+            "plan_digest", "review_target_digest", "admitted_diff_digest",
+            "worker_receipt_digests", "applicable_specification_digests",
+        )
+    }
+    if canonical_digest(packet) != value["packet_digest"]:
+        raise StateError("review packet digest mismatch")
+    return value
+
+
+def checkpoint_payload_digest(value: dict[str, Any]) -> str:
+    return canonical_digest({
+        key: item for key, item in value.items()
+        if key not in {"checkpoint_digest", "successor_claim"}
+    })
+
+
+def validate_session_checkpoint(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != SESSION_CHECKPOINT_KEYS:
+        raise StateError("session checkpoint has an invalid exact field shape")
+    if value["schema_version"] != SESSION_CHECKPOINT_SCHEMA_VERSION:
+        raise StateError("session checkpoint has an unsupported schema version")
+    if not PLAN_RE.fullmatch(value["plan_path"]):
+        raise StateError("session checkpoint plan path is invalid")
+    for field in ("plan_digest", "execution_event_chain_digest", "checkpoint_digest"):
+        require_digest(value[field], field)
+    if not re.fullmatch(r"[0-9a-f]{40}", value["source_head"]):
+        raise StateError("session checkpoint source HEAD is invalid")
+    if not ID_RE.fullmatch(value["run_id"]):
+        raise StateError("session checkpoint run id is invalid")
+    if value["boundary"] not in SESSION_BOUNDARIES:
+        raise StateError("session checkpoint boundary is invalid")
+    boundary_states = {
+        "checked": {"active", "accepted"},
+        "replanned": {"replan_required"},
+        "replan_required": {"replan_required"},
+        "repair_required": {"repair_required"},
+        "authoritative_failure": {"diagnosis_required"},
+    }
+    if value["execution_state"] not in boundary_states[value["boundary"]]:
+        raise StateError("session checkpoint state does not match its boundary")
+    identity = value["root_session_identity"]
+    if not isinstance(identity, dict) or set(identity) != {"status", "digest"}:
+        raise StateError("checkpoint root-session identity has an invalid exact field shape")
+    if identity["status"] == "observed":
+        require_digest(identity["digest"], "checkpoint root-session identity digest")
+    elif identity != {"status": "not_observed", "digest": None}:
+        raise StateError("unavailable checkpoint root-session identity must remain not_observed")
+    validate_resource_observations(value["resource_observations"])
+    reviewers = value["reviewer_session_digests"]
+    if not isinstance(reviewers, list) or len(reviewers) > 2 or len(reviewers) != len(set(reviewers)):
+        raise StateError("checkpoint reviewer sessions must be a bounded unique list")
+    for reviewer in reviewers:
+        require_digest(reviewer, "reviewer_session_digest")
+    claim = value["successor_claim"]
+    if claim is not None:
+        if not isinstance(claim, dict) or set(claim) != SUCCESSOR_CLAIM_KEYS:
+            raise StateError("checkpoint successor claim has an invalid exact field shape")
+        if not ID_RE.fullmatch(claim["run_id"]):
+            raise StateError("checkpoint successor run id is invalid")
+        for field in ("plan_digest", "primary_invariant_digest", "genesis_digest"):
+            require_digest(claim[field], field)
+        if not re.fullmatch(r"[0-9a-f]{40}", claim["source_head"]):
+            raise StateError("checkpoint successor source HEAD is invalid")
+    if checkpoint_payload_digest(value) != value["checkpoint_digest"]:
+        raise StateError("session checkpoint digest mismatch")
+    return value
+
+
+def read_session_checkpoint(path: Path) -> dict[str, Any]:
+    require_outside_repository(path, "session checkpoint")
+    _, data = open_read(path)
+    if len(data) > MAX_BYTES:
+        raise StateError("session checkpoint exceeds size limit")
+    try:
+        return validate_session_checkpoint(json.loads(data))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError(f"invalid session checkpoint JSON: {exc}") from exc
+
+
 def require_repository_baseline(state: dict[str, Any]) -> None:
     root = repository_root()
     if current_head(root) != state["source_head"]:
@@ -296,6 +669,26 @@ def read_external_artifact(
         return data
     finally:
         os.close(descriptor)
+
+
+def read_bounded_json(path: Path, label: str, *, outside_repository: bool) -> Any:
+    if outside_repository:
+        data = read_external_artifact(path, label)
+    else:
+        reject_symlink_ancestors(path, include_target=True)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise StateError(f"{label} must be a regular file")
+            data = os.read(descriptor, MAX_BYTES + 1)
+            if len(data) > MAX_BYTES:
+                raise StateError(f"{label} exceeds size limit")
+        finally:
+            os.close(descriptor)
+    try:
+        return json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError(f"{label} is invalid JSON") from exc
 
 
 def classify_repair(value: dict[str, Any]) -> str:
@@ -757,8 +1150,12 @@ def validate_state(value: Any) -> dict[str, Any]:
     previous_digest = value["genesis_digest"]
     for index, event in enumerate(events, start=1):
         allowed_event_keys = {
-            frozenset(EVENT_KEYS), frozenset(LEGACY_EVENT_KEYS),
+            frozenset(EVENT_KEYS), frozenset(PRE_REVIEW_TARGET_EVENT_KEYS),
+            frozenset(PRE_SUCCESSOR_GENESIS_EVENT_KEYS), frozenset(LEGACY_EVENT_KEYS),
             frozenset(DIAGNOSIS_EVENT_KEYS),
+            frozenset(PRE_REVIEW_TARGET_DIAGNOSIS_EVENT_KEYS),
+            frozenset(PRE_SUCCESSOR_GENESIS_DIAGNOSIS_EVENT_KEYS),
+            frozenset(LEGACY_DIAGNOSIS_EVENT_KEYS),
         }
         if not isinstance(event, dict) or frozenset(event) not in allowed_event_keys:
             raise StateError("event has an invalid exact schema")
@@ -777,13 +1174,29 @@ def validate_state(value: Any) -> dict[str, Any]:
             successor_is_allowed = (
                 prior_summary["state"] == "accepted"
                 and event["event_type"] == "successor_claimed"
-                and not prior_summary["successor_claim_digest"]
+            )
+            checkpoint_event_allowed = (
+                event["event_type"] == "session_checkpoint_emitted"
+                and not any(
+                    prior["event_type"] == "session_checkpoint_emitted"
+                    for prior in validated_events
+                )
+            ) or (
+                event["event_type"] == "session_checkpoint_claimed"
+                and any(
+                    prior["event_type"] == "session_checkpoint_emitted"
+                    for prior in validated_events
+                )
+                and not any(
+                    prior["event_type"] == "session_checkpoint_claimed"
+                    for prior in validated_events
+                )
             )
             diagnosis_is_allowed = (
                 prior_summary["state"] == "diagnosis_required"
                 and event["event_type"] in {"failure_diagnosis", "repair_classification"}
             )
-            if not successor_is_allowed and not diagnosis_is_allowed:
+            if not successor_is_allowed and not diagnosis_is_allowed and not checkpoint_event_allowed:
                 raise StateError("event history continues after a terminal execution state")
         invariants = event["invariant_digests"]
         if not isinstance(invariants, list) or len(invariants) != len(set(invariants)) or any(
@@ -830,6 +1243,12 @@ def validate_state(value: Any) -> dict[str, Any]:
         if event["review_author"] not in {"", "parent"}:
             raise StateError("review outcome reason must be parent-authored")
         require_digest(event["review_evidence_digest"], "review_evidence_digest", allow_empty=True)
+        review_target_digest = event.get("review_target_digest", "")
+        require_digest(review_target_digest, "review_target_digest", allow_empty=True)
+        if event["event_type"] not in {
+            "parent_review", "session_checkpoint_emitted", "session_checkpoint_claimed"
+        } and review_target_digest:
+            raise StateError("only a parent review may bind a review target")
         event_predecessors = [
             require_digest(event[key], key, allow_empty=True) for key in predecessor_fields
         ]
@@ -905,6 +1324,26 @@ def validate_state(value: Any) -> dict[str, Any]:
                     event["review_author"], event["review_evidence_digest"],
                     *event_predecessors, event_predecessor_source, event_accepted_source)):
                 raise StateError("successor claim contains unrelated attempt data")
+        elif event["event_type"] in {
+            "session_checkpoint_emitted", "session_checkpoint_claimed"
+        }:
+            if not event["candidate_digest"] or not review_target_digest:
+                raise StateError("session checkpoint event lacks checkpoint identity")
+            if any((
+                attempt_id, event["attempt_kind"], event["review_outcome"],
+                event["review_reason_code"], event["review_author"],
+                event["review_evidence_digest"], *event_predecessors,
+                event_predecessor_source, event_accepted_source,
+            )):
+                raise StateError("session checkpoint event contains unrelated attempt data")
+            successor_values = (
+                successor_run_id, event["successor_plan_digest"], successor_source,
+                event["successor_primary_invariant_digest"], successor_genesis_digest,
+            )
+            if event["event_type"] == "session_checkpoint_emitted" and any(successor_values):
+                raise StateError("checkpoint issuance cannot contain successor identity")
+            if event["event_type"] == "session_checkpoint_claimed" and not all(successor_values):
+                raise StateError("checkpoint claim has incomplete successor identity")
         elif any((attempt_id, event["attempt_kind"], event["candidate_digest"],
                   event["review_outcome"], event["review_reason_code"],
                   event["review_author"], event["review_evidence_digest"], *event_predecessors,
@@ -1207,12 +1646,16 @@ def predecessor_acceptance_from_state(predecessor: dict[str, Any]) -> dict[str, 
     }
 
 
-def read_predecessor_acceptance(path: Path) -> dict[str, str]:
+def read_predecessor_acceptance(path: Path) -> tuple[dict[str, str], bool]:
     require_outside_repository(path, "predecessor execution state")
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
         predecessor = read_state(path)
-    return predecessor_acceptance_from_state(predecessor)
+    checkpoint_emitted = any(
+        event["event_type"] == "session_checkpoint_emitted"
+        for event in predecessor["events"]
+    )
+    return predecessor_acceptance_from_state(predecessor), checkpoint_emitted
 
 
 def successor_identity(state: dict[str, Any]) -> dict[str, str]:
@@ -1239,6 +1682,23 @@ def claim_predecessor_for_successor(
         if observed != expected:
             raise StateError("predecessor acceptance proof is stale or mismatched")
         identity = successor_identity(successor)
+        emitted_checkpoints = [
+            event for event in predecessor["events"]
+            if event["event_type"] == "session_checkpoint_emitted"
+        ]
+        if emitted_checkpoints:
+            matching_claims = [
+                event for event in predecessor["events"]
+                if event["event_type"] == "session_checkpoint_claimed"
+                and all(
+                    event[field] == value
+                    for field, value in identity.items()
+                )
+            ]
+            if len(matching_claims) != 1:
+                raise StateError(
+                    "issued session checkpoint is not claimed by this successor"
+                )
         prior_claims = [
             event for event in predecessor["events"]
             if event["event_type"] == "successor_claimed"
@@ -1267,6 +1727,7 @@ def claim_predecessor_for_successor(
             "review_reason_code": "",
             "review_author": "",
             "review_evidence_digest": "",
+            "review_target_digest": "",
             "predecessor_plan_digest": "",
             "predecessor_accepted_candidate_digest": "",
             "predecessor_closing_event_digest": "",
@@ -1384,11 +1845,19 @@ def init_state(args: argparse.Namespace) -> None:
         "predecessor_closing_event_digest": "",
         "predecessor_accepted_source_head": "",
     }
+    predecessor_checkpoint_emitted = False
     if args.predecessor_state:
-        predecessor = read_predecessor_acceptance(Path(args.predecessor_state))
-        require_predecessor_ancestry(
-            predecessor["predecessor_accepted_source_head"], args.source_head
-        )
+        try:
+            predecessor, predecessor_checkpoint_emitted = read_predecessor_acceptance(
+                Path(args.predecessor_state)
+            )
+        except StateError:
+            if not args.predecessor_checkpoint:
+                raise
+        if predecessor["predecessor_accepted_source_head"]:
+            require_predecessor_ancestry(
+                predecessor["predecessor_accepted_source_head"], args.source_head
+            )
     state = {
         "schema_version": SCHEMA_VERSION,
         "run_id": args.run_id,
@@ -1423,11 +1892,343 @@ def init_state(args: argparse.Namespace) -> None:
     state["genesis_digest"] = state_genesis_digest(state)
     state["event_chain_digest"] = state["genesis_digest"]
     validate_state(state)
+    if bool(args.predecessor_checkpoint) != bool(args.root_session_manifest):
+        raise StateError(
+            "predecessor checkpoint and root session manifest must be supplied together"
+        )
+    if predecessor_checkpoint_emitted and not args.predecessor_checkpoint:
+        raise StateError(
+            "issued predecessor session checkpoint requires checkpoint and root-session evidence"
+        )
+    if args.predecessor_checkpoint:
+        if not args.predecessor_state:
+            raise StateError("predecessor checkpoint requires predecessor execution state")
+        successor_resources = resource_observations_from_manifest(
+            Path(args.root_session_manifest)
+        )
+        claim_session_checkpoint(
+            Path(args.predecessor_checkpoint),
+            Path(args.predecessor_state),
+            state,
+            successor_resources["root_session_identity"],
+        )
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         if path.exists() or path.is_symlink():
             raise StateError("execution state already exists")
         atomic_write(path, state)
+
+
+def checkpoint_boundary_matches(state: dict[str, Any], boundary: str) -> bool:
+    if boundary == "checked":
+        return (
+            state["implementation_mode"] == "parent_direct"
+            and state["state"] == "active"
+            and state["authoritative_validation_events"] == 1
+        ) or state["state"] == "accepted"
+    if boundary in {"replanned", "replan_required"}:
+        return state["state"] == "replan_required"
+    if boundary == "repair_required":
+        return state["state"] == "repair_required"
+    return state["state"] == "diagnosis_required"
+
+
+def append_checkpoint_event(
+    state: dict[str, Any],
+    *,
+    event_type: str,
+    checkpoint: dict[str, Any],
+    successor: dict[str, str] | None = None,
+) -> None:
+    successor = successor or {
+        "run_id": "",
+        "plan_digest": "",
+        "source_head": "",
+        "primary_invariant_digest": "",
+        "genesis_digest": "",
+    }
+    monotonic_ns = max(time.monotonic_ns(), state["last_monotonic_ns"] + 1)
+    event = {
+        "sequence": len(state["events"]) + 1,
+        "event_id": (
+            f"checkpoint:{checkpoint['checkpoint_digest'][7:23]}"
+            if event_type == "session_checkpoint_emitted"
+            else f"checkpoint-claim:{successor['run_id']}"
+        ),
+        "event_type": event_type,
+        "implementation_mode": state["implementation_mode"],
+        "invariant_digests": [],
+        "finding_severities": [],
+        "independent_review_receipt_digest": "",
+        "repair_classification": {},
+        "repair_evidence_digest": "",
+        "candidate_lifecycle_digest": "",
+        "attempt_id": "",
+        "attempt_kind": "",
+        "candidate_digest": checkpoint["checkpoint_digest"],
+        "review_outcome": "",
+        "review_reason_code": "",
+        "review_author": "",
+        "review_evidence_digest": "",
+        "review_target_digest": checkpoint["checkpoint_digest"],
+        "predecessor_plan_digest": "",
+        "predecessor_accepted_candidate_digest": "",
+        "predecessor_closing_event_digest": "",
+        "predecessor_accepted_source_head": "",
+        "accepted_source_head": "",
+        "successor_run_id": successor["run_id"],
+        "successor_plan_digest": successor["plan_digest"],
+        "successor_source_head": successor["source_head"],
+        "successor_primary_invariant_digest": successor["primary_invariant_digest"],
+        "successor_genesis_digest": successor["genesis_digest"],
+        "elapsed_seconds": 0.0,
+        "monotonic_ns": monotonic_ns,
+        "previous_event_digest": state["event_chain_digest"],
+    }
+    event["event_digest"] = digest(
+        json.dumps(event, sort_keys=True, separators=(",", ":"))
+    )
+    state["events"].append(event)
+    state["last_monotonic_ns"] = monotonic_ns
+    state["event_chain_digest"] = event["event_digest"]
+    for key, value in derive_summary(state["events"]).items():
+        state[key] = value
+    validate_state(state)
+
+
+def create_session_checkpoint(args: argparse.Namespace) -> None:
+    state_path = Path(args.state)
+    state = read_state(state_path)
+    if state["run_id"] != args.run_id:
+        raise StateError("run_id mismatch")
+    if any(
+        event["event_type"] == "session_checkpoint_emitted"
+        for event in state["events"]
+    ):
+        raise StateError("execution boundary already emitted a session checkpoint")
+    checkpoint_source_head = state["source_head"]
+    if args.boundary == "checked":
+        root = repository_root()
+        plan = root / state["plan_path"]
+        if digest(plan.read_bytes()) != state["plan_digest"]:
+            raise StateError("execution plan differs from the checkpoint baseline")
+        require_clean_repository(root)
+        checkpoint_source_head = current_head(root)
+        if state["implementation_mode"] == "parent_direct":
+            require_predecessor_ancestry(state["source_head"], checkpoint_source_head)
+        elif checkpoint_source_head != state["accepted_source_head"]:
+            raise StateError("accepted candidate source HEAD differs from the checkpoint source")
+    else:
+        require_repository_baseline(state)
+    if not checkpoint_boundary_matches(state, args.boundary):
+        raise StateError("execution state does not match the requested checkpoint boundary")
+    if not args.resource_manifest:
+        raise StateError("session checkpoint requires one resource manifest")
+    resources = resource_observations_from_manifest(Path(args.resource_manifest))
+    checkpoint_identity = resources["root_session_identity"]
+    reviewer_sessions: list[str] = []
+    review_receipt_digests: list[str] = []
+    checkpoint_review_target = ""
+    for receipt_path in args.review_receipt or []:
+        receipt_file = Path(receipt_path)
+        receipt = validate_review_receipt(
+            read_bounded_json(
+                receipt_file,
+                "review receipt",
+                outside_repository=True,
+            ),
+            state["plan_digest"],
+        )
+        if checkpoint_review_target and receipt["review_target_digest"] != checkpoint_review_target:
+            raise StateError("checkpoint review receipts must describe one accepted candidate")
+        checkpoint_review_target = receipt["review_target_digest"]
+        reviewer_sessions.append(receipt["reviewer_session_digest"])
+        review_receipt_digests.append(file_digest(receipt_file))
+    if len(reviewer_sessions) != len(set(reviewer_sessions)):
+        raise StateError("reviewer session replay is not allowed")
+    if args.boundary == "checked" and not reviewer_sessions:
+        raise StateError("checked checkpoint requires at least one bounded review receipt")
+    recorded_review_receipts = [
+        event["independent_review_receipt_digest"]
+        for event in state["events"]
+        if event["event_type"] == "parent_review"
+        and event["independent_review_receipt_digest"]
+        and event.get("review_target_digest", "") == checkpoint_review_target
+    ]
+    if review_receipt_digests != recorded_review_receipts:
+        raise StateError("checkpoint review receipts differ from the execution review history")
+    checkpoint = {
+        "schema_version": SESSION_CHECKPOINT_SCHEMA_VERSION,
+        "plan_path": state["plan_path"],
+        "plan_digest": state["plan_digest"],
+        "source_head": checkpoint_source_head,
+        "run_id": state["run_id"],
+        "execution_state": state["state"],
+        "execution_event_chain_digest": state["event_chain_digest"],
+        "boundary": args.boundary,
+        "root_session_identity": checkpoint_identity,
+        "resource_observations": resources,
+        "reviewer_session_digests": reviewer_sessions,
+        "checkpoint_digest": "",
+        "successor_claim": None,
+    }
+    checkpoint["checkpoint_digest"] = checkpoint_payload_digest(checkpoint)
+    validate_session_checkpoint(checkpoint)
+    output = Path(args.output)
+    require_outside_repository(output, "session checkpoint")
+    if output.exists() or output.is_symlink():
+        raise StateError("session checkpoint output already exists")
+    atomic_write(output, checkpoint)
+    with with_lock(state_path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        current = read_state(state_path)
+        if current["event_chain_digest"] != checkpoint["execution_event_chain_digest"]:
+            raise StateError("execution ledger changed while issuing the session checkpoint")
+        if any(
+            event["event_type"] == "successor_claimed"
+            for event in current["events"]
+        ):
+            raise StateError("execution boundary is already claimed by a successor")
+        if any(
+            event["event_type"] == "session_checkpoint_emitted"
+            for event in current["events"]
+        ):
+            raise StateError("execution boundary already emitted a session checkpoint")
+        append_checkpoint_event(
+            current,
+            event_type="session_checkpoint_emitted",
+            checkpoint=checkpoint,
+        )
+        atomic_write(state_path, current)
+
+
+def verify_session_checkpoint(args: argparse.Namespace) -> None:
+    checkpoint = read_session_checkpoint(Path(args.checkpoint))
+    state = read_state(Path(args.state))
+    issued = [
+        event for event in state["events"]
+        if event["event_type"] == "session_checkpoint_emitted"
+        and event["candidate_digest"] == checkpoint["checkpoint_digest"]
+        and event["previous_event_digest"] == checkpoint["execution_event_chain_digest"]
+    ]
+    if len(issued) != 1:
+        raise StateError("session checkpoint is not issued by the execution ledger")
+
+
+def claim_session_checkpoint(
+    path: Path,
+    predecessor_state_path: Path,
+    successor: dict[str, Any],
+    successor_root_session: dict[str, Any],
+) -> None:
+    if successor_root_session["status"] != "observed":
+        raise StateError("successor root-session identity is not observed")
+    with with_lock(predecessor_state_path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        predecessor_state = read_state(predecessor_state_path)
+        checkpoint = read_session_checkpoint(path)
+        if (
+            checkpoint["plan_digest"] != predecessor_state["plan_digest"]
+            or checkpoint["plan_path"] != predecessor_state["plan_path"]
+        ):
+            raise StateError("session checkpoint differs from the predecessor execution ledger")
+        predecessor_identity = checkpoint["root_session_identity"]
+        if predecessor_identity["status"] != "observed":
+            raise StateError("predecessor root-session identity is not observed")
+        if predecessor_identity["digest"] == successor_root_session["digest"]:
+            raise StateError("successor plan cannot start in the checkpointed root session")
+        if checkpoint["plan_path"] == successor["plan_path"]:
+            raise StateError("session checkpoint must cross a numbered-plan boundary")
+        require_predecessor_ancestry(checkpoint["source_head"], successor["source_head"])
+        claim = {
+            "run_id": successor["run_id"],
+            "plan_digest": successor["plan_digest"],
+            "source_head": successor["source_head"],
+            "primary_invariant_digest": successor["primary_invariant_digest"],
+            "genesis_digest": successor["genesis_digest"],
+        }
+        checkpoint_claims = [
+            event for event in predecessor_state["events"]
+            if event["event_type"] == "session_checkpoint_claimed"
+            and event["candidate_digest"] == checkpoint["checkpoint_digest"]
+        ]
+        if checkpoint_claims:
+            prior = checkpoint_claims[0]
+            prior_claim = {
+                "run_id": prior["successor_run_id"],
+                "plan_digest": prior["successor_plan_digest"],
+                "source_head": prior["successor_source_head"],
+                "primary_invariant_digest": prior["successor_primary_invariant_digest"],
+                "genesis_digest": prior["successor_genesis_digest"],
+            }
+            if prior_claim != claim:
+                raise StateError("session checkpoint is already claimed by another successor")
+            return
+        emitted = [
+            event for event in predecessor_state["events"]
+            if event["event_type"] == "session_checkpoint_emitted"
+            and event["candidate_digest"] == checkpoint["checkpoint_digest"]
+            and event["previous_event_digest"] == checkpoint["execution_event_chain_digest"]
+        ]
+        if len(emitted) != 1:
+            raise StateError("session checkpoint lacks one ledger issuance event")
+        append_checkpoint_event(
+            predecessor_state,
+            event_type="session_checkpoint_claimed",
+            checkpoint=checkpoint,
+            successor=claim,
+        )
+        atomic_write(predecessor_state_path, predecessor_state)
+
+
+def record_bounded_review(args: argparse.Namespace) -> None:
+    state = read_state(Path(args.state))
+    receipt_path = Path(args.review_receipt)
+    receipt = validate_review_receipt(
+        read_bounded_json(
+            receipt_path,
+            "review receipt",
+            outside_repository=True,
+        ),
+        state["plan_digest"],
+    )
+    if receipt["inheritance_evidence"] != "observed" or receipt["inherited_turns"] != 0:
+        raise StateError("staged review requires observed zero inherited turns")
+    prior_reviews = [
+        event for event in state["events"]
+        if event["event_type"] == "parent_review"
+        and event["independent_review_receipt_digest"]
+        and event.get("review_target_digest", "") == receipt["review_target_digest"]
+    ]
+    if receipt["review_round"] != len(prior_reviews) + 1 or len(prior_reviews) >= 2:
+        raise StateError("review budget permits one initial review and one bounded rereview")
+    has_predecessor = bool(state["predecessor_plan_digest"])
+    if has_predecessor and not args.predecessor_checkpoint:
+        raise StateError("dependent plan review requires the predecessor session checkpoint")
+    if args.predecessor_checkpoint:
+        checkpoint = read_session_checkpoint(Path(args.predecessor_checkpoint))
+        if checkpoint["plan_digest"] != state["predecessor_plan_digest"]:
+            raise StateError("review predecessor checkpoint differs from the execution ledger")
+        if receipt["reviewer_session_digest"] in checkpoint["reviewer_session_digests"]:
+            raise StateError("reviewer session cannot be reused across numbered plans")
+    review_digest = file_digest(receipt_path)
+    record_event(argparse.Namespace(
+        state=args.state,
+        run_id=args.run_id,
+        event_id=args.event_id,
+        event_type="parent_review",
+        implementation_mode=args.implementation_mode,
+        invariant_digest=args.invariant_digest,
+        finding_severity=args.finding_severity,
+        independent_review_receipt_digest=review_digest,
+        repair_evidence_file=None,
+        validation_report=None,
+        diagnosis_evidence_file=None,
+        candidate_lifecycle_digest=None,
+        review_target_digest=receipt["review_target_digest"],
+        lifecycle_state=args.lifecycle_state,
+        elapsed_seconds=args.elapsed_seconds,
+    ))
 
 
 def trigger(state: dict[str, Any], reason: str) -> None:
@@ -1595,6 +2396,7 @@ def record_event(args: argparse.Namespace) -> None:
             "review_reason_code": "",
             "review_author": "",
             "review_evidence_digest": "",
+            "review_target_digest": getattr(args, "review_target_digest", ""),
             "predecessor_plan_digest": "",
             "predecessor_accepted_candidate_digest": "",
             "predecessor_closing_event_digest": "",
@@ -1686,6 +2488,10 @@ def record_writable_attempt_start(args: argparse.Namespace) -> None:
         if args.attempt_kind == "initial" and any(predecessor.values()):
             if not args.predecessor_state:
                 raise StateError("dependent writable start requires predecessor execution state")
+            if bool(args.predecessor_checkpoint) != bool(args.root_session_manifest):
+                raise StateError(
+                    "predecessor checkpoint and root session manifest must be supplied together"
+                )
             predecessor_path = Path(args.predecessor_state)
             if predecessor_path.absolute() == path.absolute():
                 raise StateError("predecessor execution state cannot be the current ledger")
@@ -1695,8 +2501,40 @@ def record_writable_attempt_start(args: argparse.Namespace) -> None:
             claim_predecessor_for_successor(
                 predecessor_path, predecessor, state, args.elapsed_seconds
             )
-        elif args.predecessor_state:
-            raise StateError("predecessor execution state is valid only for an initial dependent start")
+            if args.predecessor_checkpoint:
+                successor_resources = resource_observations_from_manifest(
+                    Path(args.root_session_manifest)
+                )
+                claim_session_checkpoint(
+                    Path(args.predecessor_checkpoint),
+                    predecessor_path,
+                    state,
+                    successor_resources["root_session_identity"],
+                )
+        elif (
+            args.attempt_kind == "initial"
+            and args.predecessor_state
+            and args.predecessor_checkpoint
+            and args.root_session_manifest
+        ):
+            successor_resources = resource_observations_from_manifest(
+                Path(args.root_session_manifest)
+            )
+            claim_session_checkpoint(
+                Path(args.predecessor_checkpoint),
+                Path(args.predecessor_state),
+                state,
+                successor_resources["root_session_identity"],
+            )
+        elif (
+            args.predecessor_state
+            or args.predecessor_checkpoint
+            or args.root_session_manifest
+        ):
+            raise StateError(
+                "predecessor execution state, checkpoint, and root session manifest "
+                "are valid only for an initial dependent start"
+            )
         monotonic_ns = max(time.monotonic_ns(), state["last_monotonic_ns"] + 1)
         event = {
             "sequence": len(state["events"]) + 1,
@@ -1716,6 +2554,7 @@ def record_writable_attempt_start(args: argparse.Namespace) -> None:
             "review_reason_code": "",
             "review_author": "",
             "review_evidence_digest": "",
+            "review_target_digest": "",
             **predecessor,
             "accepted_source_head": "",
             "successor_run_id": "",
@@ -1940,6 +2779,7 @@ def record_attempt_close(args: argparse.Namespace) -> None:
             "review_reason_code": reason,
             "review_author": "parent",
             "review_evidence_digest": evidence_digest,
+            "review_target_digest": "",
             "predecessor_plan_digest": "",
             "predecessor_accepted_candidate_digest": "",
             "predecessor_closing_event_digest": "",
@@ -2019,6 +2859,8 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--primary-invariant-digest", required=True)
     init.add_argument("--lifecycle-state", required=True)
     init.add_argument("--predecessor-state")
+    init.add_argument("--predecessor-checkpoint")
+    init.add_argument("--root-session-manifest")
     init.add_argument("--implementation-mode", choices=sorted(MODES), required=True)
     init.set_defaults(handler=init_state)
     record = sub.add_parser("record")
@@ -2044,6 +2886,8 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("--attempt-id", required=True)
     start.add_argument("--attempt-kind", choices=sorted(ATTEMPT_KINDS), required=True)
     start.add_argument("--predecessor-state")
+    start.add_argument("--predecessor-checkpoint")
+    start.add_argument("--root-session-manifest")
     start.add_argument("--prior-candidate-digest")
     start.add_argument("--lifecycle-state", required=True)
     start.add_argument("--elapsed-seconds", type=float, default=0.0)
@@ -2076,6 +2920,30 @@ def parser() -> argparse.ArgumentParser:
         default="execution",
     )
     check.set_defaults(handler=check_gate)
+    checkpoint = sub.add_parser("checkpoint")
+    checkpoint.add_argument("state")
+    checkpoint.add_argument("--run-id", required=True)
+    checkpoint.add_argument("--output", required=True)
+    checkpoint.add_argument("--boundary", choices=sorted(SESSION_BOUNDARIES), required=True)
+    checkpoint.add_argument("--resource-manifest", required=True)
+    checkpoint.add_argument("--review-receipt", action="append")
+    checkpoint.set_defaults(handler=create_session_checkpoint)
+    verify_checkpoint = sub.add_parser("verify-checkpoint")
+    verify_checkpoint.add_argument("checkpoint")
+    verify_checkpoint.add_argument("--state", required=True)
+    verify_checkpoint.set_defaults(handler=verify_session_checkpoint)
+    review = sub.add_parser("review")
+    review.add_argument("state")
+    review.add_argument("--run-id", required=True)
+    review.add_argument("--event-id", required=True)
+    review.add_argument("--implementation-mode", choices=sorted(MODES), required=True)
+    review.add_argument("--review-receipt", required=True)
+    review.add_argument("--predecessor-checkpoint")
+    review.add_argument("--invariant-digest", action="append", required=True)
+    review.add_argument("--finding-severity", action="append", choices=("High", "Medium", "Low"))
+    review.add_argument("--lifecycle-state", required=True)
+    review.add_argument("--elapsed-seconds", type=float, default=0.0)
+    review.set_defaults(handler=record_bounded_review)
     return root
 
 

@@ -1,6 +1,6 @@
 # Linearize session checkpoint lifecycle
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -70,12 +70,15 @@ checked_summary_ja: checkpointの発行と消費を先行実行台帳へ一度�
 
 ## Tasks
 
-- [ ] Define ledger events and replay-safe checkpoint identity.
-- [ ] Enforce one issuance and one successor claim across copied checkpoint files.
-- [ ] Gate candidate and parent-direct successor starts on verified distinct root sessions.
-- [ ] Add terminal-boundary, crash-recovery, copy-replay, same-session, and not-observed tests.
-- [ ] Run focused validation, independent review, authoritative validation once, archive, and commit.
+- [x] Define ledger events and replay-safe checkpoint identity.
+- [x] Enforce one issuance and one successor claim across copied checkpoint files.
+- [x] Gate candidate and parent-direct successor starts on verified distinct root sessions.
+- [x] Add terminal-boundary, crash-recovery, copy-replay, same-session, and not-observed tests.
+- [x] Run focused validation, independent review, authoritative validation once, archive, and commit.
 
 ## Validation Notes
 
 - Plan 132 rereview proved that mutable per-file claims do not prevent copied checkpoints from being consumed twice.
+- Focused validation passed with 45 plan-execution-state tests, 95 sandboxed-worker tests, and `git diff --check`.
+- Independent review found two High and one Medium fail-closed defects; parent-direct remediation bound identity to recomputed evidence bytes and required every issued checkpoint to be claimed by the matching successor.
+- Authoritative validation passed once with both focused test commands, the sandboxed-worker self-test, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check`.

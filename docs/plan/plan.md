@@ -8,6 +8,5 @@ id	path	status
 166	docs/plan/active/166-unify-copier-update-source-inventory.md	in_progress
 167	docs/plan/active/167-integrate-validation-witness-enforcement.md	in_progress
 168	docs/plan/active/168-verify-runtime-session-resource-evidence.md	in_progress
-169	docs/plan/active/169-linearize-session-checkpoint-lifecycle.md	in_progress
 170	docs/plan/active/170-bind-review-context-to-candidate-lifecycle.md	in_progress
 171	docs/plan/active/171-integrate-session-resource-boundaries.md	in_progress

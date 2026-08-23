@@ -133,3 +133,4 @@ id	path
 115	docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
 131	docs/plan/checked/2026/08/16-31/131-require-confirmed-failure-diagnosis.md
 168	docs/plan/checked/2026/08/16-31/168-verify-runtime-session-resource-evidence.md
+169	docs/plan/checked/2026/08/16-31/169-linearize-session-checkpoint-lifecycle.md

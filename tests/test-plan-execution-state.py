@@ -54,6 +54,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
         subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=self.repo, check=True)
+        (self.repo / ".git/info/exclude").write_text(".agent-logs/\n", encoding="utf-8")
         self.plan = self.repo / "docs/plan/active/001-test.md"
         self.plan.parent.mkdir(parents=True)
         self.plan.write_text(
@@ -130,11 +131,379 @@ class PlanExecutionStateTest(unittest.TestCase):
     def payload(self) -> dict[str, object]:
         return json.loads(self.state.read_text(encoding="utf-8"))
 
+    def resource_manifest(
+        self,
+        label: str,
+        *,
+        observed_session: bool = True,
+        session: str = "source-session",
+    ) -> Path:
+        run_dir = self.repo / ".agent-logs" / label
+        raw_dir = run_dir / "raw"
+        raw_dir.mkdir(parents=True)
+        event_path = raw_dir / "events.jsonl"
+        event = {
+            "schema_version": 1,
+            "event": "SessionStart",
+            "created_at": "2026-08-23T00:00:00Z",
+            "cwd": str(self.repo),
+            "payload": {"session_id": session} if observed_session else {},
+        }
+        event_path.write_text(
+            json.dumps(event, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        evidence_digest = "sha256:" + hashlib.sha256(event_path.read_bytes()).hexdigest()
+        (run_dir / "redaction-report.md").write_text(
+            "# Redaction Report\n",
+            encoding="utf-8",
+        )
+        metrics = {
+            name: {
+                "status": "not_observed",
+                "value": None,
+                "provenance": "not_observed",
+            }
+            for name in STATE_MODULE.RESOURCE_METRICS
+        }
+        metrics["tool_call_count"] = {
+            "status": "observed",
+            "value": 3,
+            "provenance": "deterministic_proxy",
+        }
+        path = run_dir / "manifest.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "run_id": label,
+                    "created_at": "2026-08-23T00:00:00Z",
+                    "task": "test resource evidence",
+                    "plans": [],
+                    "raw_logs": ["raw/events.jsonl"],
+                    "artifacts": [],
+                    "compressed_outputs": [],
+                    "redaction_report": "redaction-report.md",
+                    "pinned": False,
+                    "transcript_log": None,
+                    "hook_event_log": "raw/events.jsonl",
+                    "coverage": {
+                        "external_transcript": {
+                            "present": False,
+                            "path": None,
+                            "status": "missing",
+                            "redaction_status": "not_applicable",
+                        },
+                        "codex_hooks": {
+                            "present": True,
+                            "path": "raw/events.jsonl",
+                            "status": "present",
+                            "redaction_status": "automatic_redaction",
+                        },
+                    },
+                    "missing_sources": ["external_transcript"],
+                    "resource_observations": {
+                        "schema_version": 1,
+                        "root_session_identity": (
+                            {"status": "observed", "digest": digest(session)}
+                            if observed_session
+                            else {"status": "not_observed", "digest": None}
+                        ),
+                        "evidence_digests": {
+                            "external_transcript": None,
+                            "codex_hooks": evidence_digest,
+                        },
+                        "metrics": metrics,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_resource_identity_must_match_bound_runtime_evidence(self) -> None:
+        path = self.resource_manifest("forged-identity", session="observed-session")
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["resource_observations"]["root_session_identity"]["digest"] = digest(
+            "fabricated-session"
+        )
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            self.assertRaisesRegex(
+                STATE_MODULE.StateError,
+                "does not match bound runtime evidence",
+            ),
+        ):
+            STATE_MODULE.resource_observations_from_manifest(path)
+
+    def test_resource_evidence_change_after_manifest_check_is_rejected(self) -> None:
+        path = self.resource_manifest("changed-evidence", session="observed-session")
+        event_path = path.parent / "raw/events.jsonl"
+
+        def mutate_evidence(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            event_path.write_text(
+                event_path.read_text(encoding="utf-8")
+                + json.dumps({"payload": {"session_id": "replacement-session"}})
+                + "\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(STATE_MODULE.subprocess, "run", side_effect=mutate_evidence),
+            self.assertRaisesRegex(
+                STATE_MODULE.StateError,
+                "evidence digest changed after manifest validation",
+            ),
+        ):
+            STATE_MODULE.resource_observations_from_manifest(path)
+
+    def review_receipt(
+        self,
+        label: str,
+        plan_digest: str,
+        *,
+        round_value: int,
+        inherited_turns: int = 0,
+        reviewer_session: str | None = None,
+        review_target: str = "target",
+    ) -> Path:
+        packet = {
+            "plan_digest": plan_digest,
+            "review_target_digest": digest(review_target),
+            "admitted_diff_digest": digest(review_target),
+            "worker_receipt_digests": [],
+            "applicable_specification_digests": [digest("spec")],
+        }
+        receipt = {
+            "schema_version": 1,
+            **packet,
+            "reviewer_session_digest": digest(reviewer_session or label),
+            "inherited_turns": inherited_turns,
+            "inheritance_evidence": "observed",
+            "inheritance_evidence_digest": digest(f"{label}-inheritance"),
+            "review_round": round_value,
+            "packet_digest": STATE_MODULE.canonical_digest(packet),
+        }
+        path = self.base / f"{label}-review.json"
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+        return path
+
     def test_event_implementation_mode_must_match_ledger_mode(self) -> None:
         mismatched = self.record("wrong-mode", "elapsed_checkpoint", mode="parent_direct")
         self.assertNotEqual(mismatched.returncode, 0)
         self.assertIn("implementation mode differs", mismatched.stderr)
         self.assertEqual(self.payload()["events"], [])
+
+    def test_session_checkpoint_requires_a_different_observed_root_and_is_claimed_once(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("checkpoint", mode="parent_direct")
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        recorded = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "authoritative", "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        review = self.review_receipt(
+            "checkpoint-review", digest(self.plan.read_text()), round_value=1
+        )
+        reviewed = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "checkpoint-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(review),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        checkpoint = self.base / "session-checkpoint.json"
+        created = self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(checkpoint), "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("checkpoint")),
+            "--review-receipt", str(review),
+        )
+        self.assertEqual(created.returncode, 0, created.stderr)
+        self.assertEqual(
+            self.run_cli(
+                "verify-checkpoint", str(checkpoint), "--state", str(state)
+            ).returncode,
+            0,
+        )
+        duplicate = self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(self.base / "duplicate-checkpoint.json"),
+            "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("duplicate-checkpoint")),
+            "--review-receipt", str(review),
+        )
+        self.assertNotEqual(duplicate.returncode, 0)
+        self.assertIn("already emitted", duplicate.stderr)
+
+        same_state = self.base / "same-session.json"
+        same = self.run_cli(
+            "init", str(same_state), "--run-id", "same-session",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text()),
+            "--source-head", self.head,
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(self.base / "same-lifecycle.json"),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(state),
+            "--predecessor-checkpoint", str(checkpoint),
+            "--root-session-manifest", str(
+                self.resource_manifest("same-session", session="source-session")
+            ),
+        )
+        self.assertNotEqual(same.returncode, 0)
+        self.assertIn("cannot start in the checkpointed root session", same.stderr)
+
+        child_state = self.base / "fresh-session.json"
+        fresh = self.run_cli(
+            "init", str(child_state), "--run-id", "fresh-session",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text()),
+            "--source-head", self.head,
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(self.base / "fresh-lifecycle.json"),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(state),
+            "--predecessor-checkpoint", str(checkpoint),
+            "--root-session-manifest", str(
+                self.resource_manifest("different-session", session="different-session")
+            ),
+        )
+        self.assertEqual(fresh.returncode, 0, fresh.stderr)
+
+        replay = self.run_cli(
+            "init", str(self.base / "replay.json"), "--run-id", "replay-session",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text()),
+            "--source-head", self.head,
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(self.base / "replay-lifecycle.json"),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(state),
+            "--predecessor-checkpoint", str(checkpoint),
+            "--root-session-manifest", str(
+                self.resource_manifest("third-session", session="third-session")
+            ),
+        )
+        self.assertNotEqual(replay.returncode, 0)
+        self.assertIn("already claimed", replay.stderr)
+
+    def test_not_observed_checkpoint_and_proxy_token_claim_fail_closed(self) -> None:
+        observations = json.loads(
+            self.resource_manifest("invalid-proxy", observed_session=False).read_text()
+        )["resource_observations"]
+        observations["metrics"]["provider_input_tokens"] = {
+            "status": "observed",
+            "value": 10,
+            "provenance": "deterministic_proxy",
+        }
+        with self.assertRaises(STATE_MODULE.StateError):
+            STATE_MODULE.validate_resource_observations(observations)
+
+        state, lifecycle, run_id = self.initialize_execution("unobserved", mode="parent_direct")
+        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "authoritative", "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        review = self.review_receipt(
+            "unobserved-review", digest(self.plan.read_text()), round_value=1
+        )
+        self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "unobserved-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(review),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+            check=True,
+        )
+        checkpoint = self.base / "unobserved-checkpoint.json"
+        self.run_cli(
+            "checkpoint", str(state), "--run-id", run_id,
+            "--output", str(checkpoint), "--boundary", "checked",
+            "--resource-manifest", str(self.resource_manifest("unobserved", observed_session=False)),
+            "--review-receipt", str(review),
+            check=True,
+        )
+        child = self.run_cli(
+            "init", str(self.base / "blocked-child.json"), "--run-id", "blocked-child",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text()),
+            "--source-head", self.head,
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(self.base / "blocked-lifecycle.json"),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(state),
+            "--predecessor-checkpoint", str(checkpoint),
+            "--root-session-manifest", str(
+                self.resource_manifest("blocked-session", session="different-session")
+            ),
+        )
+        self.assertNotEqual(child.returncode, 0)
+        self.assertIn("predecessor root-session identity is not observed", child.stderr)
+
+    def test_bounded_review_requires_zero_inheritance_and_two_round_budget(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution("bounded-review", mode="parent_direct")
+        plan_digest = digest(self.plan.read_text())
+        invariant = digest("one invariant")
+        bad = self.review_receipt(
+            "full-history", plan_digest, round_value=1, inherited_turns=4
+        )
+        rejected = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "bad-review", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(bad), "--invariant-digest", invariant,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("zero inherited turns", rejected.stderr)
+
+        for round_value in (1, 2):
+            receipt = self.review_receipt(
+                f"review-{round_value}", plan_digest, round_value=round_value
+            )
+            accepted = self.run_cli(
+                "review", str(state), "--run-id", run_id,
+                "--event-id", f"review-{round_value}",
+                "--implementation-mode", "parent_direct",
+                "--review-receipt", str(receipt), "--invariant-digest", invariant,
+                "--lifecycle-state", str(lifecycle),
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        third = self.review_receipt("review-3", plan_digest, round_value=2)
+        exhausted = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "review-3", "--implementation-mode", "parent_direct",
+            "--review-receipt", str(third), "--invariant-digest", invariant,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(exhausted.returncode, 0)
+        self.assertIn("one initial review and one bounded rereview", exhausted.stderr)
+
+        next_candidate = self.review_receipt(
+            "next-candidate", plan_digest, round_value=1, review_target="next-target"
+        )
+        restarted = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "next-candidate-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(next_candidate), "--invariant-digest", invariant,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(restarted.returncode, 0, restarted.stderr)
 
     def test_legacy_v4_event_without_successor_genesis_remains_appendable(self) -> None:
         recorded = self.record(
@@ -358,6 +727,48 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertEqual(closed.returncode, 0, closed.stderr)
         return state, lifecycle, run_id
+
+    def test_issued_checkpoint_cannot_be_omitted_by_init_or_start(self) -> None:
+        predecessor, _, _ = self.accepted_execution("issued-checkpoint")
+        child_state, child_lifecycle, child_run = self.initialize_execution(
+            "pre-issued-child",
+            plan=self.child_plan,
+            predecessor=predecessor,
+        )
+        predecessor_payload = STATE_MODULE.read_state(predecessor)
+        STATE_MODULE.append_checkpoint_event(
+            predecessor_payload,
+            event_type="session_checkpoint_emitted",
+            checkpoint={"checkpoint_digest": digest("issued-checkpoint")},
+        )
+        STATE_MODULE.atomic_write(predecessor, predecessor_payload)
+
+        denied_init = self.run_cli(
+            "init", str(self.base / "omitted-checkpoint.json"),
+            "--run-id", "omitted-checkpoint",
+            "--plan", self.child_plan.relative_to(self.repo).as_posix(),
+            "--plan-digest", digest(self.child_plan.read_text(encoding="utf-8")),
+            "--source-head", subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+            ).strip(),
+            "--primary-invariant-digest", digest("child invariant"),
+            "--lifecycle-state", str(self.base / "omitted-lifecycle.json"),
+            "--implementation-mode", "candidate",
+            "--predecessor-state", str(predecessor),
+        )
+        self.assertNotEqual(denied_init.returncode, 0)
+        self.assertIn("requires checkpoint and root-session evidence", denied_init.stderr)
+
+        denied_start = self.start_writable_attempt(
+            child_state,
+            child_lifecycle,
+            child_run,
+            "omitted-attempt",
+            plan=self.child_plan,
+            predecessor=predecessor,
+        )
+        self.assertNotEqual(denied_start.returncode, 0)
+        self.assertIn("is not claimed by this successor", denied_start.stderr)
 
     def write_repair_evidence(
         self,
@@ -1920,6 +2331,36 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertTrue(child_payload["open_attempt_id"])
         predecessor_payload = json.loads(predecessor.read_text(encoding="utf-8"))
         self.assertTrue(predecessor_payload["successor_claim_digest"])
+
+    def test_runner_rejects_checkpoint_controls_without_predecessor_state(self) -> None:
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.invalid/test/repo.git"],
+            cwd=self.repo, check=True,
+        )
+        state, lifecycle, run_id = self.initialize_execution(
+            "runner-checkpoint-controls", plan=self.child_plan
+        )
+        result = subprocess.run(
+            [
+                sys.executable, str(RUNNER), "run",
+                self.child_plan.relative_to(self.repo).as_posix(),
+                "--orchestration-run-id", run_id,
+                "--lifecycle-state", str(lifecycle),
+                "--plan-execution-state", str(state),
+                "--predecessor-session-checkpoint", str(self.base / "checkpoint.json"),
+                "--root-session-manifest", str(
+                    self.resource_manifest("runner-current", session="runner-current")
+                ),
+                "--bwrap-bin", "definitely-missing-bwrap",
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "require --predecessor-plan-execution-state",
+            result.stderr,
+        )
 
     def test_atomic_ledger_replace_fsyncs_file_and_parent_directory(self) -> None:
         target = self.base / "durable-state.json"
