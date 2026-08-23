@@ -1,7 +1,8 @@
 # Wire the validation-witness Copier transition
 
-status: in_progress
-primary_invariant: the genuine v1.4.4-to-v1.4.5 Copier transition can run the accepted before and after protocol from source paths copied and staged through one inventory
+status: replanned
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 task_types:
   - template_workflow
   - security
@@ -45,17 +46,15 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
-replan_source: docs/plan/active/163-capture-validation-witness-migration-provenance.md
-replan_contract: docs/plan/replanned/contracts/163-capture-validation-witness-migration-provenance.json
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/178-wire-validation-witness-copier-transition.md
+replan_contract: docs/plan/replanned/contracts/178-wire-validation-witness-copier-transition.json
 integration_gates:
-  - Plans 180, 181, and 177 must be checked and their exact checked archive paths must replace active context paths before implementation
-  - this slice may add only the source and fixture entries required for the v1.4.5 transition and must preserve Plan 166 ownership of general inventory unification
-  - do not run the complete Copier fixture until Plan 179 focused validation and independent review have passed
+  - combined successors must satisfy every source acceptance item
 successor_plans:
-  - docs/plan/active/176-establish-live-validation-witness-provenance.md
-  - docs/plan/active/177-align-validation-witness-provenance-policy.md
-  - docs/plan/active/178-wire-validation-witness-copier-transition.md
-  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
+  - docs/plan/active/182-admit-v145-copier-wiring.md
+  - docs/plan/active/183-build-bounded-copier-transition-fixture.md
+  - docs/plan/active/184-verify-plan178-successor-acceptance.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
 checked_summary_ja: v1.4.4からv1.4.5へのCopier更新でguardian protocolを単一inventoryから実行できるようにする。

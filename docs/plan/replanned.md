@@ -26,3 +26,4 @@ id	path	contract
 170	docs/plan/replanned/2026/08/16-31/170-bind-review-context-to-candidate-lifecycle.md	docs/plan/replanned/contracts/170-bind-review-context-to-candidate-lifecycle.json
 163	docs/plan/replanned/2026/08/16-31/163-capture-validation-witness-migration-provenance.md	docs/plan/replanned/contracts/163-capture-validation-witness-migration-provenance.json
 176	docs/plan/replanned/2026/08/16-31/176-establish-live-validation-witness-provenance.md	docs/plan/replanned/contracts/176-establish-live-validation-witness-provenance.json
+178	docs/plan/replanned/2026/08/16-31/178-wire-validation-witness-copier-transition.md	docs/plan/replanned/contracts/178-wire-validation-witness-copier-transition.json
