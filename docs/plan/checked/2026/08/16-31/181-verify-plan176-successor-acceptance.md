@@ -1,6 +1,6 @@
 # Verify Plan 176 successor acceptance
 
-status: in_progress
+status: checked
 primary_invariant: Plans 177 through 179 resume only after the checked guardian implementation and both durable replan contracts prove the unchanged Plan 176 acceptance boundary
 task_types:
   - planning_docs
@@ -72,13 +72,18 @@ checked_summary_ja: checked済みguardian実装と二段の再計画契約を確
 
 ## Tasks
 
-- [ ] Replace the active Plan 180 context with its exact checked archive path and confirm its accepted commit contains only the reviewed script-and-test implementation.
-- [ ] Verify the Plan 176 contract, the ancestor Plan 163 contract, and every active, checked, or replanned successor identity without changing product files.
-- [ ] Confirm the six preservation-only dirty paths remain unstaged and continue to match their Plan 177 or Plan 178 ownership.
-- [ ] Complete fresh independent review and focused validation with zero unresolved High or Medium findings, then archive and commit only plan lifecycle changes.
+- [x] Replace the active Plan 180 context with its exact checked archive path and confirm its accepted commit contains only the reviewed script-and-test implementation.
+- [x] Verify the Plan 176 contract, the ancestor Plan 163 contract, and every active, checked, or replanned successor identity without changing product files.
+- [x] Confirm the six preservation-only dirty paths remain unstaged and continue to match their Plan 177 or Plan 178 ownership.
+- [x] Complete fresh independent review and focused validation with zero unresolved High or Medium findings, then archive and commit only plan lifecycle changes.
 
 ## Validation Notes
 
 - This plan exists because an atomic hard replan requires one integration successor even though Plan 180 contains the complete Plan 176 implementation scope.
 - The broad write scope records preservation coverage and does not authorize bypassing the narrower implementation owners in Plans 177 and 178.
 - Plans 177, 178, and 179 retain their existing Plan 163 lineage and exact inherited acceptance text.
+- Plan 180 resolves only to `docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md`; implementation commit `042dd2497bfc0933675b78ba00839ae001965bf0` contains only the snapshot script and migration test.
+- `python3 scripts/restructure-plan.py --verify` confirmed unambiguous checked, active, and replanned successor identities for the Plan 176 and Plan 163 contracts.
+- The six preservation-only product paths remained unstaged. Plan 177 owns the four policy paths, and Plan 178 owns `copier.yml` and `scripts/project_workflow/copier_inventory.py`.
+- Fresh independent review reported Accept with High 0, Medium 0, and Low 0.
+- Focused validation passed 20 plan-restructure tests, 31 Copier migration tests, and `git diff --check`. The shell did not expose a bare `pytest` command, so the same repository test environment was invoked as `.venv/bin/pytest`.

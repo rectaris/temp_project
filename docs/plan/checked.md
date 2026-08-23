@@ -140,3 +140,4 @@ id	path
 175	docs/plan/checked/2026/08/16-31/175-integrate-candidate-review-boundaries.md
 171	docs/plan/checked/2026/08/16-31/171-integrate-session-resource-boundaries.md
 180	docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
+181	docs/plan/checked/2026/08/16-31/181-verify-plan176-successor-acceptance.md

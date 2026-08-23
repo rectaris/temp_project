@@ -24,7 +24,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
-  - docs/plan/active/181-verify-plan176-successor-acceptance.md
+  - docs/plan/checked/2026/08/16-31/181-verify-plan176-successor-acceptance.md
   - docs/plan/replanned/2026/08/16-31/163-capture-validation-witness-migration-provenance.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
