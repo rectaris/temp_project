@@ -7,4 +7,3 @@ id	path	status
 165	docs/plan/active/165-enforce-validation-witness-maps.md	in_progress
 166	docs/plan/active/166-unify-copier-update-source-inventory.md	in_progress
 167	docs/plan/active/167-integrate-validation-witness-enforcement.md	in_progress
-171	docs/plan/active/171-integrate-session-resource-boundaries.md	in_progress

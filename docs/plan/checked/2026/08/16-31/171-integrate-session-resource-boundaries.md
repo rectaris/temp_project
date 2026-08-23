@@ -1,6 +1,6 @@
 # Integrate session resource boundaries
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -65,7 +65,7 @@ required_specs:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
 focused_validation:
-  - python3 -m pytest tests/hooks
+  - python3 tests/test-hooks.py
   - python3 tests/test-plan-execution-state.py
   - python3 tests/test-sandboxed-plan-worker.py
   - python3 scripts/check-root-agent-policy.py
@@ -73,7 +73,7 @@ focused_validation:
   - git diff --check
 validation:
   - python3 tests/test-validation-tools.py
-  - python3 -m pytest tests/hooks
+  - python3 tests/test-hooks.py
   - python3 tests/test-plan-execution-state.py
   - python3 tests/test-sandboxed-plan-worker.py
   - python3 scripts/run-sandboxed-plan-worker.py self-test
@@ -92,7 +92,7 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:7ed675c8fc9df790c90252aa2b4ee1afd1063270c97e9adc9a204b62a7442bfa","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
-  - {"acceptance_sha256":"sha256:cf0c0eaf1b20d2e1a87a62c8c9b82f72b208c16e7ed984058ce9f596df8d15a7","stage":"focused","witness":"python3 -m pytest tests/hooks"}
+  - {"acceptance_sha256":"sha256:cf0c0eaf1b20d2e1a87a62c8c9b82f72b208c16e7ed984058ce9f596df8d15a7","stage":"focused","witness":"python3 tests/test-hooks.py"}
   - {"acceptance_sha256":"sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
 replan_source: docs/plan/active/132-checkpoint-plan-session-resources.md
 replan_contract: docs/plan/replanned/contracts/132-checkpoint-plan-session-resources.json
@@ -125,11 +125,15 @@ checked_summary_ja: runtime証拠、checkpoint lifecycle、review lifecycleを�
 ## Tasks
 
 - [x] Replace the active Plan 174 context path with its exact checked archive.
-- [ ] Reconcile root and generated policy, scripts, tests, and Copier inventories.
-- [ ] Run the complete focused suite and obtain one fresh independent review.
-- [ ] Run the authoritative suite exactly once.
-- [ ] Update Plan 133 dependency evidence, archive this plan, and commit.
+- [x] Reconcile root and generated policy, scripts, tests, and Copier inventories.
+- [x] Run the complete focused suite and obtain one fresh independent review.
+- [x] Run the authoritative suite exactly once.
+- [x] Update Plan 133 dependency evidence, archive this plan, and commit.
 
 ## Validation Notes
 
 - This integration plan preserves all three Plan 132 acceptance items exactly.
+- The Hook validation entry was corrected from the non-collecting `python3 -m pytest tests/hooks` path to the repository aggregate `python3 tests/test-hooks.py` without changing its acceptance witness.
+- Focused validation passed with 42 Hook tests, 66 execution-state tests, 96 sandboxed-worker tests, root policy checks, Copier template checks, and `git diff --check`.
+- One fresh independent review found no High or Medium findings in the combined integration diff.
+- Authoritative validation passed exactly once with validation tools, Hook tests, execution-state tests, sandboxed-worker tests, worker self-test, root policy including holdout, Copier checks, all-change validation, lint, smoke, Copier update, and `git diff --check`.

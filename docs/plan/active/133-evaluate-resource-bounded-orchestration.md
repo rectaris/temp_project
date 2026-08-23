@@ -39,7 +39,7 @@ context_files:
   - docs/plan/checked/2026/08/16-31/115-classify-review-outcomes-and-sequence-writes.md
   - docs/plan/active/130-map-acceptance-validation-witnesses.md
   - docs/plan/active/131-require-confirmed-failure-diagnosis.md
-  - docs/plan/active/171-integrate-session-resource-boundaries.md
+  - docs/plan/checked/2026/08/16-31/171-integrate-session-resource-boundaries.md
   - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md
   - docs/plan/checked/2026/08/01-15/075-staged-orchestration-acceptance.md
   - docs/plan/checked/2026/08/01-15/078-plan-execution-budget-ledger.md

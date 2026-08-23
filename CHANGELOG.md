@@ -2,6 +2,8 @@
 
 ## 未リリース
 
+- plan境界で本文を含まないsession checkpointを発行し、異なる観測済みroot sessionから一度だけ後続planを開始するstaged経路を追加しました。
+  agent log manifestにはprovider観測tokenと決定的proxy countを分離して保存し、独立reviewは継承turn 0の限定packetと1回の再review上限へ結合します。
 - 権威検証の失敗後は、失敗した操作と終了statusを実行台帳へ固定し、読み取り専用の再現証拠が一つの影響対象invariantを確認するまで修復planの作成を拒否するようにしました。
 - 進行中の統合planでは全受入条件を最初の静的検査、限定検証、または最終検証へdigestで対応付け、限定検証を飛ばす定義と理由のない最終検証専用定義を実行前に拒否するようにしました。
 - Copier更新fixtureのsource copyとGit stagingを単一inventoryから生成し、重複、欠落、および再度の二重管理を検出する回帰検証を追加しました。
