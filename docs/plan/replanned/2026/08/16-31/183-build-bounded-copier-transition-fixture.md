@@ -1,7 +1,8 @@
 # Build the bounded v1.4.4-to-v1.4.5 Copier transition fixture
 
-status: in_progress
-primary_invariant: the genuine Copier update fixture observes pending then consumed provenance through a uniformly bounded fixture before-stage synchronization sequence and leaves no guardian or update process behind
+status: replanned
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 task_types:
   - template_workflow
   - security
@@ -40,15 +41,15 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
-replan_source: docs/plan/active/178-wire-validation-witness-copier-transition.md
-replan_contract: docs/plan/replanned/contracts/178-wire-validation-witness-copier-transition.json
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/183-build-bounded-copier-transition-fixture.md
+replan_contract: docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
 integration_gates:
-  - Plan 182 must be checked and its exact checked archive path must replace the active context path before implementation
-  - Plan 184 must verify the committed Plan 182 and Plan 183 results before Plan 179 may run the complete Copier fixture
+  - combined successors must satisfy every source acceptance item
 successor_plans:
-  - docs/plan/active/182-admit-v145-copier-wiring.md
-  - docs/plan/active/183-build-bounded-copier-transition-fixture.md
-  - docs/plan/active/184-verify-plan178-successor-acceptance.md
+  - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
+  - docs/plan/active/186-bind-connected-copier-fixture-checker.md
+  - docs/plan/active/187-verify-plan183-successor-acceptance.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
 checked_summary_ja: 実際のv1.4.4からv1.4.5へのfixtureでpendingとconsumedをboundedに確認しprocessを残さない。

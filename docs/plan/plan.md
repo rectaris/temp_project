@@ -7,5 +7,7 @@ id	path	status
 166	docs/plan/active/166-unify-copier-update-source-inventory.md	in_progress
 167	docs/plan/active/167-integrate-validation-witness-enforcement.md	in_progress
 179	docs/plan/active/179-integrate-validation-witness-migration-provenance.md	in_progress
-183	docs/plan/active/183-build-bounded-copier-transition-fixture.md	in_progress
 184	docs/plan/active/184-verify-plan178-successor-acceptance.md	in_progress
+185	docs/plan/active/185-complete-bounded-copier-fixture-runtime.md	in_progress
+186	docs/plan/active/186-bind-connected-copier-fixture-checker.md	in_progress
+187	docs/plan/active/187-verify-plan183-successor-acceptance.md	in_progress

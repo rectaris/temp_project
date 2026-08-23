@@ -23,7 +23,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
-  - docs/plan/active/183-build-bounded-copier-transition-fixture.md
+  - docs/plan/active/187-verify-plan183-successor-acceptance.md
   - docs/plan/replanned/2026/08/16-31/178-wire-validation-witness-copier-transition.md
   - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
 required_specs:
@@ -47,7 +47,7 @@ validation_witness_map:
 replan_source: docs/plan/active/178-wire-validation-witness-copier-transition.md
 replan_contract: docs/plan/replanned/contracts/178-wire-validation-witness-copier-transition.json
 integration_gates:
-  - Plans 182 and 183 must be checked and their exact checked archive paths must replace active context paths before focused validation
+  - Plan 182 and Plan 187 must be checked and their exact checked archive paths must be present before focused validation
   - do not edit, stage, or commit the five preservation-only product paths in this plan
   - Plan 179 must not start until this plan is checked and its exact checked archive path replaces the active dependency
 successor_plans:
@@ -60,15 +60,16 @@ checked_summary_ja: checked済みwiringとbounded fixtureを統合確認しPlan 
 
 ## Decisions
 
-- Plan 178 successor acceptance gate means the condition that both checked implementation successors jointly satisfy the unchanged source acceptance and original focused validation without consuming Plan 179 authoritative validation.
+- Plan 178 successor acceptance gate means the condition that checked Plan 182 and checked Plan 187 jointly satisfy the unchanged source acceptance and original focused validation without consuming Plan 179 authoritative validation.
+- Treat checked Plan 187 as the durable replacement for replanned Plan 183 while retaining this plan's responsibility to verify committed Plan 182 and the replacement result.
 - Treat all five write-scope paths as read-only preservation coverage; any required product edit causes `replan_required`.
-- Verify that each implementation commit contains only its independently reviewed scope and that the later checker retains the earlier declarative checks.
+- Verify the checked Plan 182 commit and the Plan 185 and Plan 186 implementation commits admitted by checked Plan 187, and confirm that the later checker retains the earlier declarative checks.
 - Leave tests/copier-update.sh execution exclusively to Plan 179.
 - Commit only parent-owned plan lifecycle changes after focused validation and fresh independent review pass.
 
 ## Tasks
 
-- [ ] Replace Plan 182 and Plan 183 active context paths with their exact checked archives and verify both accepted commits and review evidence.
+- [ ] Confirm Plan 182 and Plan 187 are checked, replace the Plan 187 active context path with its exact checked archive, and verify their accepted commits and review evidence.
 - [ ] Confirm the final checker proves the parsed migration, one inventory loop, connected bounded fixture before-stage synchronization sequence, update-process ownership release, and guardian cleanup without direct script invocation.
 - [ ] Run the original Plan 178 focused validation and fresh independent read-only review with zero unresolved High or Medium findings.
 - [ ] Archive and commit only lifecycle files, then refresh Plan 179 to this checked archive.
@@ -76,4 +77,4 @@ checked_summary_ja: checked済みwiringとbounded fixtureを統合確認しPlan 
 ## Validation Notes
 
 - This plan does not execute the complete Copier transition and does not change product files.
-- The stopped Plan 178 ledger and reviews are advisory history and cannot authorize this successor acceptance.
+- The stopped Plan 178 and Plan 183 ledgers and reviews are advisory history and cannot authorize this successor acceptance.

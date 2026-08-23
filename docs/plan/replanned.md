@@ -27,3 +27,4 @@ id	path	contract
 163	docs/plan/replanned/2026/08/16-31/163-capture-validation-witness-migration-provenance.md	docs/plan/replanned/contracts/163-capture-validation-witness-migration-provenance.json
 176	docs/plan/replanned/2026/08/16-31/176-establish-live-validation-witness-provenance.md	docs/plan/replanned/contracts/176-establish-live-validation-witness-provenance.json
 178	docs/plan/replanned/2026/08/16-31/178-wire-validation-witness-copier-transition.md	docs/plan/replanned/contracts/178-wire-validation-witness-copier-transition.json
+183	docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md	docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
