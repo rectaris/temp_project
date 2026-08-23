@@ -1,6 +1,6 @@
 # Checkpoint plan-session resources at lifecycle boundaries
 
-status: in_progress
+status: replanned
 task_types:
   - planning_docs
   - security
@@ -10,7 +10,6 @@ human_design_required: yes
 human_approval_status: approved
 implementation_risk: high
 implementation_ambiguity: ordinary
-primary_invariant: continue another numbered plan only in a different verified root session and start each reviewer with zero inherited turns from one bounded checkpoint with directly observed resource evidence
 write_scope:
   - AGENTS.md
   - CHANGELOG.md
@@ -92,22 +91,18 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:7ed675c8fc9df790c90252aa2b4ee1afd1063270c97e9adc9a204b62a7442bfa","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
   - {"acceptance_sha256":"sha256:cf0c0eaf1b20d2e1a87a62c8c9b82f72b208c16e7ed984058ce9f596df8d15a7","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:86bc3a11238d614d9f4c64f46e1d43b192886250498623253acd5d3cf652eacc","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
-replan_source: docs/plan/active/116-evaluate-plan-worker-orchestration.md
-replan_contract: docs/plan/replanned/contracts/116-evaluate-plan-worker-orchestration.json
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/132-checkpoint-plan-session-resources.md
+replan_contract: docs/plan/replanned/contracts/132-checkpoint-plan-session-resources.json
 integration_gates:
-  - plan 136 as the accepted successor for plan 113, plan 162 as the checked replacement successor for plan 155 and plan 114, and plan 115 must be checked before implementation starts
-  - Do not implement this plan in the session that creates or materially updates it.
-  - Start the next numbered plan only in a root session whose directly observed runtime session identity differs from the session that emitted the prior terminal checkpoint.
-  - Treat compaction or a summary injected into the same conversation as continued context, not a fresh root session.
-  - When either session identity is unavailable, record freshness as `not_observed` and stop before staged execution without blocking the current default path.
-  - Start each independent reviewer with zero inherited conversation turns and an explicit bounded packet containing only the unchanged plan, admitted diff, bounded receipts, and applicable specifications.
-  - Use compaction, helper-turn, and tool-call counts only as diagnostic proxies; require directly comparable provider-observed token values for a token-reduction claim.
-  - plan 133 must compare the checkpointed path with the unchanged baseline under the same provider observations
+  - combined successors must satisfy every source acceptance item
 successor_plans:
-  - docs/plan/active/130-map-acceptance-validation-witnesses.md
-  - docs/plan/active/131-require-confirmed-failure-diagnosis.md
-  - docs/plan/active/132-checkpoint-plan-session-resources.md
-  - docs/plan/active/133-evaluate-resource-bounded-orchestration.md
+  - docs/plan/active/168-verify-runtime-session-resource-evidence.md
+  - docs/plan/active/169-linearize-session-checkpoint-lifecycle.md
+  - docs/plan/active/170-bind-review-context-to-candidate-lifecycle.md
+  - docs/plan/active/171-integrate-session-resource-boundaries.md
 inherited_acceptance_digests:
   - sha256:7ed675c8fc9df790c90252aa2b4ee1afd1063270c97e9adc9a204b62a7442bfa
   - sha256:cf0c0eaf1b20d2e1a87a62c8c9b82f72b208c16e7ed984058ce9f596df8d15a7
@@ -142,3 +137,7 @@ checked_summary_ja: plan境界で限定的な引継記録を作り、利用量�
 - On 2026-08-21, the user requested this plan-only refinement after a second implementation sequence remained in one root session, compacted four times, and started three reviewers with full inherited history.
 - This plan update intentionally ends without implementation; continuing implementation in this root session violates its bootstrap gate.
 - The source Plan 116 acceptance text is preserved exactly.
+- On 2026-08-23, bounded parent implementation passed every focused validation command.
+- The initial independent review found five High or Medium lifecycle defects. One bounded remediation closed checkpoint copy replay, dangling runner controls, and transcript-source mismatch.
+- The permitted rereview still found unverified runtime identity, unverified reviewer inheritance, review budget not bound to a candidate lifecycle, and incomplete reviewer history at non-checked boundaries.
+- The parent-direct remediation budget is exhausted. Authoritative validation, completion, archival, and commit are stopped pending a restructured successor.
