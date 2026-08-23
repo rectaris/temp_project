@@ -1,6 +1,6 @@
 # Verify runtime session resource evidence
 
-status: in_progress
+status: checked
 task_types:
   - planning_docs
   - security
@@ -77,11 +77,11 @@ checked_summary_ja: runtimeが生成した証拠だけからsession identityと�
 
 ## Tasks
 
-- [ ] Define the runtime evidence schema and source-digest binding.
-- [ ] Verify transcript and hook provenance before marking identity or inheritance observed.
-- [ ] Preserve no-overwrite transcript and manifest correspondence.
-- [ ] Add deterministic rejection tests for caller-fabricated observations and mismatched evidence.
-- [ ] Run focused validation, independent review, authoritative validation once, archive, and commit.
+- [x] Define the runtime evidence schema and source-digest binding.
+- [x] Verify transcript and hook provenance before marking identity or inheritance observed.
+- [x] Preserve no-overwrite transcript and manifest correspondence.
+- [x] Add deterministic rejection tests for caller-fabricated observations and mismatched evidence.
+- [x] Run focused validation, independent review, authoritative validation once, archive, and commit.
 
 ## Validation Notes
 
