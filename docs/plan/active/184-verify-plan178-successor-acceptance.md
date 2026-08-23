@@ -22,7 +22,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/182-admit-v145-copier-wiring.md
+  - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
   - docs/plan/active/183-build-bounded-copier-transition-fixture.md
   - docs/plan/replanned/2026/08/16-31/178-wire-validation-witness-copier-transition.md
   - docs/plan/active/179-integrate-validation-witness-migration-provenance.md

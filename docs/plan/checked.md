@@ -142,3 +142,4 @@ id	path
 180	docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
 181	docs/plan/checked/2026/08/16-31/181-verify-plan176-successor-acceptance.md
 177	docs/plan/checked/2026/08/16-31/177-align-validation-witness-provenance-policy.md
+182	docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md

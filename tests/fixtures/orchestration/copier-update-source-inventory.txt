@@ -1,5 +1,6 @@
 copier.yml
 scripts/migrate-sequential-plan-worker.py
+scripts/snapshot-validation-witness-provenance.py
 scripts/validate-copier-update.py
 template/README.md.jinja
 template/.github/workflows/codex-ci-autofix.yml.jinja

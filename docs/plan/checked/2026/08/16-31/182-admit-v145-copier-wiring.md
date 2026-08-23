@@ -1,6 +1,6 @@
 # Admit v1.4.5 Copier wiring and source inventory
 
-status: in_progress
+status: checked
 primary_invariant: the v1.4.5 before and after migration commands and every required source path are admitted through the existing single Copier update inventory
 task_types:
   - template_workflow
@@ -65,13 +65,18 @@ checked_summary_ja: v1.4.5のbefore/after migrationと必要source pathを既存
 
 ## Tasks
 
-- [ ] Re-admit only the preserved v1.4.5 migration and inventory hunks against checked Plans 177, 180, and 181.
-- [ ] Make the checker parse the exact v1.4.5 YAML entries and prove unique `copier.yml` and snapshot-script inventory membership without claiming runtime fixture behavior.
-- [ ] Complete fresh independent review and focused validation with zero unresolved High or Medium findings.
-- [ ] Archive and commit only this plan's four implementation paths plus parent-owned lifecycle files.
+- [x] Re-admit only the preserved v1.4.5 migration and inventory hunks against checked Plans 177, 180, and 181.
+- [x] Make the checker parse the exact v1.4.5 YAML entries and prove unique `copier.yml` and snapshot-script inventory membership without claiming runtime fixture behavior.
+- [x] Complete fresh independent review and focused validation with zero unresolved High or Medium findings.
+- [x] Archive and commit only this plan's four implementation paths plus parent-owned lifecycle files.
 
 ## Validation Notes
 
 - All prior Plan 178 reviews and diagnostic checks are advisory history only; initialize a fresh execution ledger.
 - The preserved tests/copier-update.sh bytes remain unaccepted input owned by Plan 183.
 - Do not run tests/copier-update.sh in this slice.
+- Parent-direct execution ledger `/tmp/plan182-execution-state.json` records one independent review, one focused validation event, and exactly one authoritative validation event without a stop reason.
+- Independent review `.agent-artifacts/reviews/182-wiring-review.md` reported Accept with High 0, Medium 0, and Low 0 for the exact four-path implementation diff.
+- Focused and authoritative validation each passed `python3 scripts/check-copier-template.py` and `git diff --check`.
+- Repository completion validation passed `scripts/lint-project-workflow.sh` and `tests/smoke.sh`; actionlint was unavailable and the smoke script reported its configured skip.
+- `tests/copier-update.sh` was not executed, staged, edited, or accepted in this slice and remains reserved for Plan 183.

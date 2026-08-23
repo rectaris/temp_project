@@ -49,6 +49,7 @@ SOURCE_REQUIRED = [
     "scripts/migrate-sequential-plan-worker.py",
     "scripts/plan_validation_commands.py",
     "scripts/run-sandboxed-plan-worker.py",
+    "scripts/snapshot-validation-witness-provenance.py",
     "scripts/restructure-plan.py",
     "scripts/plan-execution-state.py",
     "scripts/referent-contract.py",

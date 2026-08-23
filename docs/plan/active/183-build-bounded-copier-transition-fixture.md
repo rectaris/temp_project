@@ -18,7 +18,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/182-admit-v145-copier-wiring.md
+  - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
   - docs/plan/replanned/2026/08/16-31/178-wire-validation-witness-copier-transition.md
   - docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
   - tests/test-copier-migration.py

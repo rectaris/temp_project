@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import os
+import yaml
 from typing import Any
 from itertools import combinations, product
 from pathlib import Path
@@ -1123,6 +1124,47 @@ def require_update_boundaries(copier_yml: str) -> None:
             fail(f"copier.yml missing namespaced-layout migration marker: {marker}")
 
 
+def require_validation_witness_copier_transition(copier_yml: str) -> None:
+    migration_script = "scripts/snapshot-validation-witness-provenance.py"
+    expected_migrations = [
+        {
+            "version": "v1.4.5",
+            "command": [
+                "python3",
+                f"[[ _copier_conf.src_path ]]/{migration_script}",
+                "--destination",
+                ".",
+                "--stage",
+                stage,
+            ],
+            "when": f"[[ _stage == '{stage}' ]]",
+        }
+        for stage in ("before", "after")
+    ]
+    try:
+        copier_configuration = yaml.safe_load(copier_yml)
+    except yaml.YAMLError as exc:
+        fail(f"copier.yml is not valid YAML: {exc}")
+    if not isinstance(copier_configuration, dict):
+        fail("copier.yml must contain a mapping")
+    migrations = copier_configuration.get("_migrations")
+    if not isinstance(migrations, list):
+        fail("copier.yml must contain a migration list")
+    v145_migrations = [
+        migration
+        for migration in migrations
+        if isinstance(migration, dict) and migration.get("version") == "v1.4.5"
+    ]
+    if v145_migrations != expected_migrations:
+        fail("copier.yml has an incorrect v1.4.5 validation-witness boundary")
+
+    inventory_path = "tests/fixtures/orchestration/copier-update-source-inventory.txt"
+    inventory = read(inventory_path).splitlines()
+    for required in ("copier.yml", migration_script):
+        if inventory.count(required) != 1:
+            fail(f"Copier update source inventory must contain exactly one {required}")
+
+
 def require_context_compression_boundary() -> None:
     wrapper = read("template/.project-agent-workflow/scripts/context-compress.sh")
     required = (
@@ -1851,6 +1893,7 @@ def main() -> int:
             fail(f"copier.yml missing question: {question}")
     require_japanese_prompts(copier_yml)
     require_update_boundaries(copier_yml)
+    require_validation_witness_copier_transition(copier_yml)
     require_context_compression_boundary()
     require_review_turn_zero_contract()
     require_agent_profile_task()

@@ -88,6 +88,24 @@ _migrations:
       - "--destination"
       - "."
     when: "[[ _stage == 'after' ]]"
+  - version: v1.4.5
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/snapshot-validation-witness-provenance.py"
+      - "--destination"
+      - "."
+      - "--stage"
+      - "before"
+    when: "[[ _stage == 'before' ]]"
+  - version: v1.4.5
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/snapshot-validation-witness-provenance.py"
+      - "--destination"
+      - "."
+      - "--stage"
+      - "after"
+    when: "[[ _stage == 'after' ]]"
 
 project_name:
   type: str
