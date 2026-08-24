@@ -1,8 +1,7 @@
 # Active Plan
 
 id	path	status
-164	docs/plan/active/164-bind-replan-contract-validation-baseline.md	in_progress
-105	docs/plan/active/105-admit-reconstructed-plan-validation-commands.md	deferred
+105	docs/plan/active/105-admit-reconstructed-plan-validation-commands.md	in_progress
 190	docs/plan/active/190-migrate-live-plan-contracts.md	deferred
 191	docs/plan/active/191-freeze-bounded-copier-fixture-validator.md	deferred
 185	docs/plan/active/185-complete-bounded-copier-fixture-runtime.md	deferred

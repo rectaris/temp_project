@@ -60,9 +60,20 @@ class PlanRestructureTest(unittest.TestCase):
         self.acceptance = ["Preserve user data.", "Run the integration check."]
         source = self.source_text()
         (self.repo / self.source_path).write_text(source, encoding="utf-8")
+        publisher_path = "docs/plan/active/190-migrate-live-plan-contracts.md"
+        (self.repo / publisher_path).write_text(
+            "# Publish companion baseline\n\n"
+            "status: deferred\n"
+            "write_scope:\n"
+            "  - docs/plan/replanned/baselines/live-validation-successors-v1.json\n"
+            "context_files:\n"
+            "  - none\n",
+            encoding="utf-8",
+        )
         (self.repo / "docs/plan/plan.md").write_text(
             "# Active Plan\n\nid\tpath\tstatus\n"
-            f"001\t{self.source_path}\treplan_required\n",
+            f"001\t{self.source_path}\treplan_required\n"
+            f"190\t{publisher_path}\tdeferred\n",
             encoding="utf-8",
         )
         git(self.repo, "add", ".")
@@ -87,6 +98,17 @@ class PlanRestructureTest(unittest.TestCase):
             module.validate_repository_active_predecessors()
         finally:
             os.chdir(old_cwd)
+
+    def test_empty_contract_repository_does_not_require_companion(self) -> None:
+        (self.repo / "docs/plan/plan.md").write_text(
+            "# Active Plan\n\nNo active development items.\n",
+            encoding="utf-8",
+        )
+        (self.repo / self.source_path).unlink()
+        publisher = self.repo / "docs/plan/active/190-migrate-live-plan-contracts.md"
+        publisher.unlink()
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
 
     def test_repository_active_predecessors_reject_cross_id_index_rows(self) -> None:
         active_index = self.repo / "docs/plan/plan.md"
@@ -140,8 +162,21 @@ class PlanRestructureTest(unittest.TestCase):
         all_paths = ["docs/plan/active/002-data.md", "docs/plan/active/003-integration.md"]
         successor_lines = "\n".join(f"  - {value}" for value in all_paths)
         digest_lines = "\n".join(f"  - {value}" for value in mapped)
-        acceptance = self.acceptance if integration else [self.acceptance[0]]
+        acceptance = [value for value in self.acceptance if digest(value) in mapped]
         acceptance_lines = "\n".join(f"  - {value}" for value in acceptance)
+        witness_lines = "\n".join(
+            "  - "
+            + json.dumps(
+                {
+                    "acceptance_sha256": digest(value),
+                    "stage": "focused",
+                    "witness": "git diff --check",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for value in acceptance
+        )
         scope = "src/" if not integration else "tests/"
         return (
             f"# {'Integration' if integration else 'Data'}\n\n"
@@ -163,8 +198,11 @@ class PlanRestructureTest(unittest.TestCase):
             "  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n"
             "  - docs/agent/SPEC_USER_COMMUNICATION.md\n"
             "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "focused_validation:\n  - git diff --check\n"
             "validation:\n  - git diff --check\n"
             f"acceptance:\n{acceptance_lines}\n"
+            "validation_witness_schema: 1\n"
+            f"validation_witness_map:\n{witness_lines}\n"
             "checked_summary_ja: 後続計画。\n\n## Tasks\n\n- [ ] implement\n"
         )
 
@@ -245,6 +283,19 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertFalse((self.repo / self.source_path).exists())
         contract_path = self.repo / str(self.spec["contract_path"])
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        self.assertEqual(contract["schema_version"], 2)
+        for successor in contract["successors"]:
+            manifest = successor["content"]
+            self.assertEqual(successor["validation_witness_schema"], 1)
+            self.assertEqual(
+                successor["authoritative_validation"],
+                ["git diff --check"],
+            )
+            self.assertEqual(
+                successor["authoritative_validation_digest"],
+                digest('["git diff --check"]'),
+            )
+            self.assertIn("validation_witness_map:", manifest)
         self.assertEqual(
             {key: contract["source"][key] for key in self.spec["source"]},
             self.spec["source"],
@@ -450,6 +501,68 @@ class PlanRestructureTest(unittest.TestCase):
         contract_path.write_text(json.dumps(contract) + "\n", encoding="utf-8")
         self.assertNotEqual(self.run_verify().returncode, 0)
 
+    def test_validation_projection_tampering_and_live_reordering_are_rejected(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["successors"][0]["authoritative_validation_digest"] = "sha256:" + "0" * 64
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        mismatch = self.run_verify()
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn("validation projection mismatch", mismatch.stderr)
+
+        contract = json.loads(
+            (self.repo / str(self.spec["contract_path"])).read_text(encoding="utf-8")
+        )
+        contract["successors"][0]["authoritative_validation_digest"] = digest(
+            '["git diff --check"]'
+        )
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        successor_path = self.repo / str(self.spec["successors"][0]["path"])  # type: ignore[index]
+        successor_path.write_text(
+            successor_path.read_text(encoding="utf-8").replace(
+                "validation:\n  - git diff --check",
+                "validation:\n  - python3 tests/test-plan-restructure.py\n  - git diff --check",
+            ),
+            encoding="utf-8",
+        )
+        reordered = self.run_verify()
+        self.assertNotEqual(reordered.returncode, 0)
+        self.assertIn("validation projection mismatch", reordered.stderr)
+
+    def test_missing_or_invalid_integration_witness_rejects_before_writes(self) -> None:
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        integration["content"] = str(integration["content"]).replace(
+            "validation_witness_schema: 1\n"
+            "validation_witness_map:\n",
+            "validation_witness_map:\n",
+            1,
+        )
+        self.write_spec()
+        missing = self.run_command()
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("requires validation_witness_schema: 1", missing.stderr)
+        self.assert_source_unchanged()
+
+        self.spec = self.make_spec()
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        integration["content"] = str(integration["content"]).replace(
+            '"witness":"git diff --check"',
+            '"witness":"python3 tests/test-plan-restructure.py"',
+            1,
+        )
+        self.write_spec()
+        invalid = self.run_command()
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("focused witness is not declared", invalid.stderr)
+        self.assert_source_unchanged()
+
     def test_rehashed_source_status_tampering_is_rejected(self) -> None:
         self.assertEqual(self.run_command().returncode, 0)
         contract_path = self.repo / str(self.spec["contract_path"])
@@ -468,8 +581,8 @@ class PlanRestructureTest(unittest.TestCase):
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
         successor = contract["successors"][0]
         successor["content"] = successor["content"].replace(
-            "  - Preserve user data.\nchecked_summary_ja:",
-            "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+            "  - Preserve user data.\nvalidation_witness_schema:",
+            "  - Preserve user data.\n  - Clarification: discard user data.\nvalidation_witness_schema:",
         )
         successor["content_digest"] = digest(successor["content"])
         contract_path.write_text(
@@ -483,8 +596,8 @@ class PlanRestructureTest(unittest.TestCase):
         successor_path = self.repo / str(self.spec["successors"][0]["path"])  # type: ignore[index]
         successor_path.write_text(
             successor_path.read_text(encoding="utf-8").replace(
-                "  - Preserve user data.\nchecked_summary_ja:",
-                "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+                "  - Preserve user data.\nvalidation_witness_schema:",
+                "  - Preserve user data.\n  - Clarification: discard user data.\nvalidation_witness_schema:",
             ),
             encoding="utf-8",
         )
@@ -541,8 +654,8 @@ class PlanRestructureTest(unittest.TestCase):
         checked_index.write_text(clean_checked_index, encoding="utf-8")
         checked.write_text(
             checked.read_text(encoding="utf-8").replace(
-                "  - Preserve user data.\nchecked_summary_ja:",
-                "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+                "  - Preserve user data.\nvalidation_witness_schema:",
+                "  - Preserve user data.\n  - Clarification: discard user data.\nvalidation_witness_schema:",
             ),
             encoding="utf-8",
         )
@@ -641,8 +754,8 @@ class PlanRestructureTest(unittest.TestCase):
             for old, new in replacements.items():
                 content = content.replace(old, new)
             return content.replace("__NESTED_SOURCE__", source_path).replace(
-                "  - Preserve user data.\n  - Run the integration check.\nchecked_summary_ja:",
-                "  - Preserve user data.\nchecked_summary_ja:",
+                "  - Preserve user data.\n  - Run the integration check.\nvalidation_witness_schema:",
+                "  - Preserve user data.\nvalidation_witness_schema:",
             )
 
         today = date.today()
@@ -788,8 +901,8 @@ class PlanRestructureTest(unittest.TestCase):
         successor = self.spec["successors"][0]  # type: ignore[index]
         original = str(successor["content"])
         successor["content"] = original.replace(
-            "  - Preserve user data.\nchecked_summary_ja:",
-            "  - Preserve user data.\n  - Clarification: discard user data.\nchecked_summary_ja:",
+            "  - Preserve user data.\nvalidation_witness_schema:",
+            "  - Preserve user data.\n  - Clarification: discard user data.\nvalidation_witness_schema:",
         )
         self.write_spec()
         self.assertNotEqual(self.run_command().returncode, 0)
@@ -798,8 +911,8 @@ class PlanRestructureTest(unittest.TestCase):
         self.spec = self.make_spec()
         successor = self.spec["successors"][0]  # type: ignore[index]
         successor["content"] = str(successor["content"]).replace(
-            "  - Preserve user data.\nchecked_summary_ja:",
-            "  - Preserve user data.\n  - Add an unrelated requirement.\nchecked_summary_ja:",
+            "  - Preserve user data.\nvalidation_witness_schema:",
+            "  - Preserve user data.\n  - Add an unrelated requirement.\nvalidation_witness_schema:",
         )
         self.write_spec()
         self.assertNotEqual(self.run_command().returncode, 0)
@@ -1013,7 +1126,15 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertEqual(self.run_command().returncode, 0)
         contract_path = self.repo / str(self.spec["contract_path"])
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["schema_version"] = 1
         for successor in contract["successors"]:
+            for key in (
+                "authoritative_validation",
+                "authoritative_validation_digest",
+                "validation_witness_schema",
+                "validation_witness_map_digest",
+            ):
+                successor.pop(key)
             successor["content"] = successor["content"].replace(
                 "preservation_scope:\n  - none\n", ""
             )
@@ -1031,6 +1152,97 @@ class PlanRestructureTest(unittest.TestCase):
         )
         verified = self.run_verify()
         self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_schema_one_companion_is_exact_ordered_and_terminal_after_publication(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["schema_version"] = 1
+        companion_successors = []
+        for index, successor in enumerate(contract["successors"]):
+            projection = {
+                key: successor.pop(key)
+                for key in (
+                    "authoritative_validation",
+                    "authoritative_validation_digest",
+                    "validation_witness_schema",
+                    "validation_witness_map_digest",
+                )
+            }
+            companion_successors.append(
+                {
+                    "path": successor["path"],
+                    "acceptance_digests": successor["acceptance_digests"],
+                    **projection,
+                }
+            )
+            if index == 0:
+                successor["content"] = successor["content"].replace(
+                    '"witness":"git diff --check"',
+                    '"witness":"python3 tests/test-plan-restructure.py"',
+                    1,
+                )
+                successor["content_digest"] = digest(successor["content"])
+                live = self.repo / successor["path"]
+                live.write_text(
+                    live.read_text(encoding="utf-8").replace(
+                        '"witness":"git diff --check"',
+                        '"witness":"python3 tests/test-plan-restructure.py"',
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                companion_successors[-1]["validation_witness_map_digest"] = digest(
+                    '[{"acceptance_sha256":"'
+                    + digest(self.acceptance[0])
+                    + '","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}]'
+                )
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        companion = {
+            "schema_version": 1,
+            "records": [
+                {
+                    "contract_path": str(self.spec["contract_path"]),
+                    "contract_digest": digest(contract_path.read_bytes()),
+                    "successors": companion_successors,
+                }
+            ],
+        }
+        companion_path = (
+            self.repo
+            / "docs/plan/replanned/baselines/live-validation-successors-v1.json"
+        )
+        companion_path.parent.mkdir(parents=True)
+        companion_path.write_text(
+            json.dumps(companion, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        accepted = self.run_verify()
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        companion["records"][0]["successors"].reverse()
+        companion_path.write_text(
+            json.dumps(companion, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        reordered = self.run_verify()
+        self.assertNotEqual(reordered.returncode, 0)
+        self.assertIn("companion baseline mismatch", reordered.stderr)
+
+        companion["records"][0]["successors"].reverse()
+        companion_path.write_text(
+            json.dumps(companion, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "publish companion baseline")
+        companion_path.unlink()
+        missing = self.run_verify()
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("missing live validation successor companion baseline", missing.stderr)
 
     def test_injected_midwrite_failure_rolls_back_metadata(self) -> None:
         old_cwd = Path.cwd()

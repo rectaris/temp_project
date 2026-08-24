@@ -146,3 +146,4 @@ id	path
 102	docs/plan/checked/2026/08/16-31/102-select-runnable-active-plan.md
 188	docs/plan/checked/2026/08/16-31/188-separate-replan-preservation-authority.md
 189	docs/plan/checked/2026/08/16-31/189-enforce-active-plan-predecessors.md
+164	docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md

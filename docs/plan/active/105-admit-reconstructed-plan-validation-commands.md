@@ -1,7 +1,6 @@
 # Admit reconstructed-plan validation commands
 
-status: deferred
-completion_deferred_reason: Plan 164 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: every new validation command used by the reconstructed active chain is admitted by an exact root allowlist rule before dependent activation without expanding generated-project-specific authority
 task_types:
   - planning_docs
@@ -23,7 +22,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/164-bind-replan-contract-validation-baseline.md
+  - docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
   - template/.project-agent-workflow/scripts/plan_validation_commands.py
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -44,9 +43,9 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:cac00ac6f45d5ceda22dea50a283e173be051aa97fc0ae7a73636c7f56e681b3","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 predecessor_plans:
-  - docs/plan/active/164-bind-replan-contract-validation-baseline.md
+  - docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
 integration_gates:
-  - Plan 164 must be checked and its exact checked archive path must replace this active predecessor before implementation
+  - Plan 164 is checked at docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
   - preserve scripts/check-copier-template.py and tests/copier-update.sh without editing, staging, or committing them
   - Plan 190 remains deferred until this plan is checked and its exact checked archive path replaces its active predecessor
 checked_summary_ja: 再構築後のroot planが使う新しい検証commandだけをroot allowlistへ追加し、生成先固有の権限境界を保つ。

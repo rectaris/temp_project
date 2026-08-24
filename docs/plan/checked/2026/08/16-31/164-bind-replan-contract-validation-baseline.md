@@ -1,6 +1,6 @@
 # Bind replan contracts to authoritative validation baselines
 
-status: in_progress
+status: checked
 primary_invariant: every newly restructured integration successor carries immutable contract evidence of its complete authoritative validation command sequence and witness schema
 task_types:
   - planning_docs
@@ -74,13 +74,20 @@ checked_summary_ja: 再計画契約へ最終検証command列とwitness schemaを
 
 ## Tasks
 
-- [ ] Extend the contract schema and verifier without rewriting historical schema-1 contracts.
-- [ ] Implement the exact companion schema and the bounded pre-publication absence transition that Plan 190 will consume without changing verifier code.
-- [ ] Validate every new successor witness map and authoritative command baseline before atomic replacement.
-- [ ] Add positive, compatibility, tampering, ordering, and rollback tests.
-- [ ] Complete focused validation and independent review, archive, commit, and activate Plan 105 with this exact checked predecessor.
+- [x] Extend the contract schema and verifier without rewriting historical schema-1 contracts.
+- [x] Implement the exact companion schema and the bounded pre-publication absence transition that Plan 190 will consume without changing verifier code.
+- [x] Validate every new successor witness map and authoritative command baseline before atomic replacement.
+- [x] Add positive, compatibility, tampering, ordering, and rollback tests.
+- [x] Complete focused validation and independent review, archive, commit, and activate Plan 105 with this exact checked predecessor.
 
 ## Validation Notes
 
 - The existing contract already stores successor content, but an explicit versioned validation projection is required for stable runtime consumption and tamper checks.
 - `successor_plans` preserves the immutable Plan 130 lineage; this schema producer no longer waits for Plan 179 because Plan 190, not this plan, binds the current live lineage.
+- New contracts use schema 2 and bind each successor's authoritative validation sequence, sequence digest, witness schema, and witness-map digest to the digest-verified successor content.
+- Historical schema-1 contracts remain unchanged. Their current live schema-1 successors are captured without retroactively applying newer witness semantics, while acceptance coverage and source ordering remain mandatory.
+- The companion verifier accepts absence only while exact Plan 190 is the sole unfinished publisher, no active consumer references the companion, and Git contains no prior publication.
+- Focused and authoritative validation passed 31 restructuring tests, the Copier template static check, and `git diff --check`.
+- Independent review found one High compatibility defect in the initial legacy capture path. The corrected capture-only path received an independent rereview with zero unresolved High or Medium findings.
+- The first repository smoke run exposed an empty-project compatibility defect: a generated project with no schema-1 live successor records was incorrectly required to contain a companion baseline. The bounded correction accepts only the empty record set, received an independent review with zero unresolved High or Medium findings, and preserved strict missing and stale rejection for non-empty records.
+- `scripts/lint-project-workflow.sh` and `tests/smoke.sh` passed after the bounded correction.

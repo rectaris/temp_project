@@ -47,6 +47,8 @@ ARCHIVE_PATH_RE = re.compile(
     r"docs/plan/replanned/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/([0-9]{3}-[a-z0-9][a-z0-9-]*\.md)"
 )
 CONTRACT_PATH_RE = re.compile(r"docs/plan/replanned/contracts/[0-9]{3}-[a-z0-9][a-z0-9-]*\.json")
+COMPANION_PATH = "docs/plan/replanned/baselines/live-validation-successors-v1.json"
+COMPANION_PLAN_PATH = "docs/plan/active/190-migrate-live-plan-contracts.md"
 SHA_RE = re.compile(r"sha256:[0-9a-f]{64}")
 CHECKED_PATH_RE = re.compile(
     r"docs/plan/checked/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/"
@@ -60,6 +62,17 @@ class RestructureError(ValueError):
 
 def sha256(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def canonical_digest(value: Any) -> str:
+    return sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
 
 
 def exact_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
@@ -314,6 +327,107 @@ def validate_current_plan_rules(manifest: dict[str, str | list[str]], label: str
             raise RestructureError(f"{label} validation command is invalid: {exc}") from exc
 
 
+def validation_projection(
+    manifest: dict[str, str | list[str]],
+    label: str,
+    *,
+    require_witness: bool,
+    enforce_witness_semantics: bool = True,
+) -> dict[str, Any]:
+    commands = items(manifest, "validation")
+    if not commands or len(commands) != len(set(commands)):
+        raise RestructureError(f"{label} validation commands must be non-empty and unique")
+    schema = scalar(manifest, "validation_witness_schema")
+    raw_map = items(manifest, "validation_witness_map")
+    if require_witness and schema != "1":
+        raise RestructureError(f"{label} requires validation_witness_schema: 1")
+    if require_witness and not raw_map:
+        raise RestructureError(f"{label} requires validation_witness_map")
+    if schema not in {"", "1"}:
+        raise RestructureError(f"{label} has unsupported validation_witness_schema")
+    records: list[dict[str, str]] = []
+    for index, raw in enumerate(raw_map, start=1):
+        try:
+            record = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RestructureError(
+                f"{label} validation_witness_map entry {index} is invalid"
+            ) from exc
+        if not isinstance(record, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in record.items()
+        ):
+            raise RestructureError(
+                f"{label} validation_witness_map entry {index} is invalid"
+            )
+        stage = record.get("stage")
+        expected_keys = {"acceptance_sha256", "stage", "witness"}
+        if stage == "authoritative":
+            expected_keys.add("authoritative_only_reason")
+        if set(record) != expected_keys or stage not in {
+            "static",
+            "focused",
+            "authoritative",
+        }:
+            raise RestructureError(
+                f"{label} validation_witness_map entry {index} is invalid"
+            )
+        witness = record["witness"]
+        if enforce_witness_semantics and stage == "static":
+            if witness != "resolved-context-files":
+                raise RestructureError(
+                    f"{label} validation_witness_map entry {index} has unknown static witness"
+                )
+        elif enforce_witness_semantics and stage == "focused":
+            if witness not in items(manifest, "focused_validation"):
+                raise RestructureError(
+                    f"{label} validation_witness_map entry {index} focused witness is not declared"
+                )
+        elif enforce_witness_semantics and stage == "authoritative":
+            if witness not in commands or witness in items(manifest, "focused_validation"):
+                raise RestructureError(
+                    f"{label} validation_witness_map entry {index} authoritative witness is invalid"
+                )
+            reason = record["authoritative_only_reason"]
+            if (
+                not reason
+                or reason != reason.strip()
+                or len(reason.encode("utf-8")) > 512
+                or any(ord(char) < 0x20 for char in reason)
+            ):
+                raise RestructureError(
+                    f"{label} validation_witness_map entry {index} authoritative-only reason is invalid"
+                )
+        records.append(record)
+    acceptance_digests = [
+        sha256(value.encode("utf-8")) for value in items(manifest, "acceptance")
+    ]
+    if raw_map and [record["acceptance_sha256"] for record in records] != acceptance_digests:
+        raise RestructureError(
+            f"{label} validation_witness_map must cover acceptance in source order"
+        )
+    return {
+        "authoritative_validation": commands,
+        "authoritative_validation_digest": canonical_digest(commands),
+        "validation_witness_schema": int(schema) if schema else None,
+        "validation_witness_map_digest": canonical_digest(records),
+    }
+
+
+def validate_projection(
+    projection: dict[str, Any],
+    manifest: dict[str, str | list[str]],
+    label: str,
+) -> None:
+    expected = validation_projection(
+        manifest,
+        label,
+        require_witness=projection["validation_witness_schema"] == 1,
+    )
+    if projection != expected:
+        raise RestructureError(f"{label} validation projection mismatch")
+
+
 def active_rows(text: str) -> list[tuple[str, str, str]]:
     rows: list[tuple[str, str, str]] = []
     for line in text.splitlines():
@@ -534,6 +648,7 @@ def validate_replanned_successor(
     expected_digests: list[str],
     expected_acceptance: list[str],
     expected_preservation: list[str] | None,
+    expected_projection: dict[str, Any] | None,
 ) -> None:
     records = replanned_records_for_id(plan_id, expected_path)
     if len(records) != 1:
@@ -569,7 +684,7 @@ def validate_replanned_successor(
         },
         f"replanned successor contract {plan_id}",
     )
-    if contract["schema_version"] != 1 or contract["contract_path"] != contract_path:
+    if contract["schema_version"] not in {1, 2} or contract["contract_path"] != contract_path:
         raise RestructureError(
             f"replanned successor contract identity mismatch: {expected_path}"
         )
@@ -615,6 +730,12 @@ def validate_replanned_successor(
     ) != expected_preservation:
         raise RestructureError(
             f"replanned successor source preservation_scope mismatch: {expected_path}"
+        )
+    if expected_projection is not None:
+        validate_projection(
+            expected_projection,
+            source_manifest,
+            f"replanned successor source {plan_id}",
         )
     archive_manifest = parse_manifest(archive_file.read_text(encoding="utf-8"))
     if scalar(archive_manifest, "status") != "replanned":
@@ -726,12 +847,18 @@ def validate_plan_entry(
             f"{label} acceptance must exactly equal mapped source text in source order"
         )
     validate_current_plan_rules(manifest, label)
+    projection = validation_projection(
+        manifest,
+        label,
+        require_witness=status == "in_progress",
+    )
     preserved = preservation_scope(manifest, label, required=True)
     return {
         **obj,
         "manifest": manifest,
         "preservation_scope": preserved,
         "content_digest": sha256(content.encode("utf-8")),
+        "validation_projection": projection,
     }
 
 
@@ -1020,7 +1147,7 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
         acceptance_digests=ordered_digests,
     )
     contract = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "contract_path": contract_path,
         "source": {**source, "content": source_text},
@@ -1035,6 +1162,7 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 "content": entry["content"],
                 "acceptance_digests": entry["acceptance_digests"],
                 "integration": index == len(entries) - 1,
+                **entry["validation_projection"],
             }
             for index, entry in enumerate(entries)
         ],
@@ -1160,6 +1288,7 @@ def verify_repository_contracts() -> None:
     if not REPLANNED_INDEX.is_file():
         raise RestructureError("missing docs/plan/replanned.md")
     rows = replanned_rows(REPLANNED_INDEX.read_text(encoding="utf-8"))
+    companion_records: list[dict[str, Any]] = []
     for plan_id, archive_path, contract_path in rows:
         normalized_path(archive_path, ARCHIVE_PATH_RE, "replanned archive path")
         normalized_path(contract_path, CONTRACT_PATH_RE, "replanned contract path")
@@ -1170,15 +1299,19 @@ def verify_repository_contracts() -> None:
         if not archive_file.is_file() or not contract_file.is_file():
             raise RestructureError(f"missing replanned archive or contract for {plan_id}")
         try:
-            contract = json.loads(contract_file.read_text(encoding="utf-8"))
+            contract_bytes = contract_file.read_bytes()
+            contract = json.loads(contract_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RestructureError(f"invalid durable contract for {plan_id}: {exc}") from exc
+        schema_version = contract.get("schema_version") if isinstance(contract, dict) else None
+        if schema_version not in {1, 2}:
+            raise RestructureError(f"contract identity mismatch for {plan_id}")
         exact_object(
             contract,
             {"schema_version", "created_at", "contract_path", "source", "reason_codes", "dirty_product_paths", "archive_path", "successors"},
             f"contract {plan_id}",
         )
-        if contract["schema_version"] != 1 or contract["contract_path"] != contract_path:
+        if contract["contract_path"] != contract_path:
             raise RestructureError(f"contract identity mismatch for {plan_id}")
         if contract["archive_path"] != archive_path:
             raise RestructureError(f"contract archive mismatch for {plan_id}")
@@ -1215,10 +1348,28 @@ def verify_repository_contracts() -> None:
         contract_preservation: list[str] = []
         contract_write_scopes: list[list[str]] = []
         preservation_mode: bool | None = None
+        live_companion_successors: list[dict[str, Any]] = []
         for index, raw_successor in enumerate(successors):
+            successor_keys = {
+                "id",
+                "path",
+                "content_digest",
+                "content",
+                "acceptance_digests",
+                "integration",
+            }
+            if schema_version == 2:
+                successor_keys.update(
+                    {
+                        "authoritative_validation",
+                        "authoritative_validation_digest",
+                        "validation_witness_schema",
+                        "validation_witness_map_digest",
+                    }
+                )
             successor = exact_object(
                 raw_successor,
-                {"id", "path", "content_digest", "content", "acceptance_digests", "integration"},
+                successor_keys,
                 f"contract successor {plan_id}/{index}",
             )
             path = normalized_path(successor["path"], PLAN_PATH_RE, "contract successor path")
@@ -1229,6 +1380,28 @@ def verify_repository_contracts() -> None:
             if not isinstance(successor["content"], str) or sha256(successor["content"].encode()) != successor["content_digest"]:
                 raise RestructureError(f"contract successor content digest mismatch for {plan_id}")
             successor_manifest = parse_manifest(successor["content"])
+            projection = (
+                {
+                    "authoritative_validation": successor["authoritative_validation"],
+                    "authoritative_validation_digest": successor[
+                        "authoritative_validation_digest"
+                    ],
+                    "validation_witness_schema": successor[
+                        "validation_witness_schema"
+                    ],
+                    "validation_witness_map_digest": successor[
+                        "validation_witness_map_digest"
+                    ],
+                }
+                if schema_version == 2
+                else None
+            )
+            if projection is not None:
+                validate_projection(
+                    projection,
+                    successor_manifest,
+                    f"contract successor {plan_id}/{index}",
+                )
             has_preservation = "preservation_scope" in successor_manifest
             if preservation_mode is None:
                 preservation_mode = has_preservation
@@ -1291,6 +1464,7 @@ def verify_repository_contracts() -> None:
                     digests,
                     expected_successor_acceptance,
                     expected_preservation,
+                    projection,
                 )
                 live_successor_file = None
             else:
@@ -1310,6 +1484,26 @@ def verify_repository_contracts() -> None:
                 ) != expected_preservation:
                     raise RestructureError(
                         f"live successor preservation_scope mismatch for {plan_id}: {path}"
+                    )
+                if projection is not None:
+                    validate_projection(
+                        projection,
+                        live_successor_manifest,
+                        f"live successor {plan_id}/{index}",
+                    )
+                elif scalar(live_successor_manifest, "validation_witness_schema") == "1":
+                    live_projection = validation_projection(
+                        live_successor_manifest,
+                        f"live successor {plan_id}/{index}",
+                        require_witness=True,
+                        enforce_witness_semantics=False,
+                    )
+                    live_companion_successors.append(
+                        {
+                            "path": path,
+                            "acceptance_digests": digests,
+                            **live_projection,
+                        }
                     )
             mapped.update(digests)
             paths.append(path)
@@ -1350,6 +1544,73 @@ def verify_repository_contracts() -> None:
             raise RestructureError(f"archive acceptance lineage mismatch for {plan_id}")
         if items(archive_manifest, "acceptance") != [record["text"] for record in source_records]:
             raise RestructureError(f"archive acceptance text mismatch for {plan_id}")
+        if schema_version == 1 and live_companion_successors:
+            companion_records.append(
+                {
+                    "contract_path": contract_path,
+                    "contract_digest": sha256(contract_bytes),
+                    "successors": live_companion_successors,
+                }
+            )
+    verify_companion_baseline(companion_records)
+
+
+def companion_publication_recorded() -> bool:
+    return bool(
+        run_git("log", "--all", "--format=%H", "--", COMPANION_PATH).strip()
+    )
+
+
+def companion_absence_allowed() -> bool:
+    if companion_publication_recorded() or not ACTIVE_INDEX.is_file():
+        return False
+    publisher_records = [
+        row for row in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8"))
+        if row[0] == "190" or row[1] == COMPANION_PLAN_PATH
+    ]
+    if len(publisher_records) != 1:
+        return False
+    plan_id, path, status = publisher_records[0]
+    if (
+        (plan_id, path) != ("190", COMPANION_PLAN_PATH)
+        or status not in {"deferred", "in_progress"}
+    ):
+        return False
+    publisher = ROOT / path
+    if not publisher.is_file():
+        return False
+    publisher_manifest = parse_manifest(publisher.read_text(encoding="utf-8"))
+    if (
+        scalar(publisher_manifest, "status") != status
+        or COMPANION_PATH not in items(publisher_manifest, "write_scope")
+    ):
+        return False
+    for row_id, row_path, _ in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8")):
+        target = ROOT / row_path
+        if not target.is_file():
+            return False
+        manifest = parse_manifest(target.read_text(encoding="utf-8"))
+        if row_id != "190" and COMPANION_PATH in items(manifest, "write_scope"):
+            return False
+        if COMPANION_PATH in items(manifest, "context_files"):
+            return False
+    return True
+
+
+def verify_companion_baseline(records: list[dict[str, Any]]) -> None:
+    path = ROOT / COMPANION_PATH
+    if not path.exists():
+        if not records or companion_absence_allowed():
+            return
+        raise RestructureError("missing live validation successor companion baseline")
+    reject_symlink_ancestors(COMPANION_PATH, include_target=True)
+    try:
+        baseline = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RestructureError("invalid live validation successor companion baseline") from exc
+    exact_object(baseline, {"schema_version", "records"}, "companion baseline")
+    if baseline["schema_version"] != 1 or baseline["records"] != records:
+        raise RestructureError("live validation successor companion baseline mismatch")
 
 
 def main() -> int:
