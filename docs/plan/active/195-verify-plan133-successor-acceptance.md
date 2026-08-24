@@ -14,6 +14,9 @@ implementation_risk: high
 implementation_ambiguity: ordinary
 write_scope:
   - docs/plan/plan.md
+preservation_scope:
+  - scripts/check-copier-template.py
+  - tests/copier-update.sh
 context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_DECISION_AUDIT.md

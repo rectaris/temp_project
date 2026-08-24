@@ -17,13 +17,16 @@ write_scope:
   - template/.project-agent-workflow/scripts/plan_validation_commands.py
   - template/.project-agent-workflow/scripts/planlib.py
   - tests/validation_tools/plan.py
+preservation_scope:
+  - scripts/check-copier-template.py
+  - tests/copier-update.sh
 context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
-  - docs/plan/active/190-migrate-live-plan-contracts.md
+  - docs/plan/checked/2026/08/16-31/190-migrate-live-plan-contracts.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -44,7 +47,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 predecessor_plans:
-  - docs/plan/active/190-migrate-live-plan-contracts.md
+  - docs/plan/checked/2026/08/16-31/190-migrate-live-plan-contracts.md
   - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
 replan_source: docs/plan/active/130-map-acceptance-validation-witnesses.md
 replan_contract: docs/plan/replanned/contracts/130-map-acceptance-validation-witnesses.json

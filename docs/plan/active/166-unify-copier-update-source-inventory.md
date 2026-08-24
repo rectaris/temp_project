@@ -13,6 +13,8 @@ implementation_ambiguity: low
 write_scope:
   - tests/copier-update.sh
   - tests/fixtures/orchestration/copier-update-source-inventory.txt
+preservation_scope:
+  - scripts/check-copier-template.py
 context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_PLAN_WORKFLOW.md

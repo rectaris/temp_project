@@ -17,6 +17,8 @@ write_scope:
   - scripts/check-copier-template.py
   - scripts/check-root-agent-policy.py
   - tests/smoke.sh
+preservation_scope:
+  - tests/copier-update.sh
 context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_DECISION_AUDIT.md
@@ -27,7 +29,6 @@ context_files:
   - docs/plan/active/164-bind-replan-contract-validation-baseline.md
   - docs/plan/active/165-enforce-validation-witness-maps.md
   - docs/plan/active/166-unify-copier-update-source-inventory.md
-  - docs/plan/active/192-freeze-resource-evaluation-contract.md
   - docs/plan/checked/2026/08/16-31/131-require-confirmed-failure-diagnosis.md
   - docs/plan/checked/2026/08/16-31/171-integrate-session-resource-boundaries.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md

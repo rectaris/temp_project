@@ -1,6 +1,6 @@
 # Bind live plan baselines and execution manifests
 
-status: in_progress
+status: checked
 primary_invariant: every live successor and dependency edge receives the accepted preservation, predecessor, and companion validation baseline without changing existing contract bytes, source acceptance, or product bytes
 task_types:
   - planning_docs
@@ -94,13 +94,18 @@ checked_summary_ja: 現行plan chainを保持範囲、依存先、validation bas
 
 ## Tasks
 
-- [ ] Create the bounded companion baseline for the five live lineage contracts and the Plan 133 replacement contract without modifying those contract files.
-- [ ] Update active plans with exact predecessor and preservation fields, remove downstream context cycles, and preserve every acceptance map.
-- [ ] Verify that exactly one unfinished plan is in_progress and every later plan is deferred behind an exact predecessor.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 191 with the exact checked predecessor path.
+- [x] Create the bounded companion baseline for the five live lineage contracts and the Plan 133 replacement contract without modifying those contract files.
+- [x] Update active plans with exact predecessor and preservation fields, remove downstream context cycles, and preserve every acceptance map.
+- [x] Verify that exactly one unfinished plan is in_progress and every later plan is deferred behind an exact predecessor.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 191 with the exact checked predecessor path.
 
 ## Validation Notes
 
 - Plan 196 owns the verifier correction required before the first focused command can pass.
 - This plan owns lifecycle and companion-baseline artifacts only and must leave both uncommitted product candidates and every existing replan contract byte-identical and unstaged.
+- Published the schema-1 companion with nine verifier-required contract records, including the five named live lineages, the Plan 133 replacement, and three still-live checked lineages discovered by the accepted verifier.
+- Added exact preservation coverage to read-only successors, retained product write ownership on Plans 166, 167, and 194, and removed the downstream Plan 192 context edge from Plan 167.
+- Focused validation passed: `python3 scripts/restructure-plan.py --verify`, `python3 scripts/check-root-agent-policy.py`, and `git diff --check`.
+- Independent review reported zero High or Medium findings.
+- Authoritative validation passed once: `python3 scripts/restructure-plan.py --verify`, `python3 scripts/check-root-agent-policy.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check`.

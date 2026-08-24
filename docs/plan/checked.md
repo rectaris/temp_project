@@ -149,3 +149,4 @@ id	path
 164	docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
 105	docs/plan/checked/2026/08/16-31/105-admit-reconstructed-plan-validation-commands.md
 196	docs/plan/checked/2026/08/16-31/196-accept-historical-schema1-preservation.md
+190	docs/plan/checked/2026/08/16-31/190-migrate-live-plan-contracts.md

@@ -15,6 +15,9 @@ implementation_ambiguity: low
 write_scope:
   - CHANGELOG.md
   - tests/smoke.sh
+preservation_scope:
+  - scripts/check-copier-template.py
+  - tests/copier-update.sh
 context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_DECISION_AUDIT.md

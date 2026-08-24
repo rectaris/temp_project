@@ -1,7 +1,6 @@
 # Freeze the bounded Copier fixture validator
 
-status: deferred
-completion_deferred_reason: Plan 190 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: a separately accepted parser and mutation suite rejects every missing, reordered, duplicated, or bypassed bounded fixture operation before the runtime or broad checker is committed
 task_types:
   - security
@@ -22,7 +21,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/190-migrate-live-plan-contracts.md
+  - docs/plan/checked/2026/08/16-31/190-migrate-live-plan-contracts.md
   - docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
   - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
@@ -44,7 +43,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02","stage":"focused","witness":"python3 tests/test-copier-fixture.py"}
 predecessor_plans:
-  - docs/plan/active/190-migrate-live-plan-contracts.md
+  - docs/plan/checked/2026/08/16-31/190-migrate-live-plan-contracts.md
 integration_gates:
   - Plan 190 must be checked and its exact checked archive path must replace this active predecessor before implementation
   - preserve both current product candidates without editing, staging, or committing them
