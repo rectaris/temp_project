@@ -58,12 +58,13 @@ checked_summary_ja: active indexとplan statusから実行可能な1件を選び
 
 ## Tasks
 
-- [ ] Replace numeric-first selection with exact index/status selection in root and generated orchestration guidance.
-- [ ] Add deterministic checks for one runnable row, zero or multiple rows, stale index status, deferred lower ids, duplicate identities, and unresolved predecessor inputs.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 188 with this exact checked predecessor.
+- [x] Replace numeric-first selection with exact index/status selection in root and generated orchestration guidance.
+- [x] Add deterministic checks for one runnable row, zero or multiple rows, stale index status, deferred lower ids, duplicate identities, and unresolved predecessor inputs.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 188 with this exact checked predecessor.
 
 ## Validation Notes
 
 - This bootstrap changes only plan selection semantics and no product file.
 - The user authorized full active-plan reconstruction on 2026-08-24.
+- Focused validation (`check-root-agent-policy.py`), `lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check` all passed.
