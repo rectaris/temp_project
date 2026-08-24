@@ -1,8 +1,7 @@
 # Active Plan
 
 id	path	status
-188	docs/plan/active/188-separate-replan-preservation-authority.md	in_progress
-189	docs/plan/active/189-enforce-active-plan-predecessors.md	deferred
+189	docs/plan/active/189-enforce-active-plan-predecessors.md	in_progress
 164	docs/plan/active/164-bind-replan-contract-validation-baseline.md	deferred
 105	docs/plan/active/105-admit-reconstructed-plan-validation-commands.md	deferred
 190	docs/plan/active/190-migrate-live-plan-contracts.md	deferred

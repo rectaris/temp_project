@@ -1,7 +1,6 @@
 # Enforce active-plan predecessor identities
 
-status: deferred
-completion_deferred_reason: Plan 188 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: a dependent active plan cannot become in_progress until every exact predecessor is checked and no active predecessor edge forms a cycle
 task_types:
   - planning_docs
@@ -29,7 +28,7 @@ context_files:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/188-separate-replan-preservation-authority.md
+  - docs/plan/checked/2026/08/16-31/188-separate-replan-preservation-authority.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -53,9 +52,9 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:58e4bb384e9d49ab1b6dcb65c9faa1e870172cbe37a1ca48f7b6a184c3f56c4b","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
-  - docs/plan/active/188-separate-replan-preservation-authority.md
+  - docs/plan/checked/2026/08/16-31/188-separate-replan-preservation-authority.md
 integration_gates:
-  - Plan 188 must be checked and its exact checked archive path must replace this active predecessor before implementation
+  - Plan 188 is checked at docs/plan/checked/2026/08/16-31/188-separate-replan-preservation-authority.md
   - preserve scripts/check-copier-template.py and tests/copier-update.sh without editing, staging, or committing them
   - Plan 164 remains deferred until this plan is checked and its exact checked archive path replaces its active predecessor
 checked_summary_ja: active planの依存先、循環、checked移行、実行可能状態を機械的に検証する。
