@@ -1,7 +1,6 @@
 # Bind replan contracts to authoritative validation baselines
 
-status: deferred
-completion_deferred_reason: Plan 189 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: every newly restructured integration successor carries immutable contract evidence of its complete authoritative validation command sequence and witness schema
 task_types:
   - planning_docs
@@ -24,7 +23,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/189-enforce-active-plan-predecessors.md
+  - docs/plan/checked/2026/08/16-31/189-enforce-active-plan-predecessors.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -45,7 +44,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
-  - docs/plan/active/189-enforce-active-plan-predecessors.md
+  - docs/plan/checked/2026/08/16-31/189-enforce-active-plan-predecessors.md
 replan_source: docs/plan/active/130-map-acceptance-validation-witnesses.md
 replan_contract: docs/plan/replanned/contracts/130-map-acceptance-validation-witnesses.json
 integration_gates:

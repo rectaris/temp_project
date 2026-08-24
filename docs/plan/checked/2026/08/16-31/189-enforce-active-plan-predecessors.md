@@ -1,6 +1,6 @@
 # Enforce active-plan predecessor identities
 
-status: in_progress
+status: checked
 primary_invariant: a dependent active plan cannot become in_progress until every exact predecessor is checked and no active predecessor edge forms a cycle
 task_types:
   - planning_docs
@@ -70,12 +70,16 @@ checked_summary_ja: active planの依存先、循環、checked移行、実行可
 
 ## Tasks
 
-- [ ] Add predecessor parsing, identity resolution, acyclicity, status, and active-to-checked refresh checks.
-- [ ] Add positive chains and negative cycle, premature activation, stale path, wrong id, duplicate edge, and successor-lineage-confusion tests.
-- [ ] Align root and generated plan workflow policy and validation behavior.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 164 with the exact checked predecessor path.
+- [x] Add predecessor parsing, identity resolution, acyclicity, status, and active-to-checked refresh checks.
+- [x] Add positive chains and negative cycle, premature activation, stale path, wrong id, duplicate edge, and successor-lineage-confusion tests.
+- [x] Align root and generated plan workflow policy and validation behavior.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 164 with the exact checked predecessor path.
 
 ## Validation Notes
 
-- The implementation details remain bounded to this plan and require focused tests before the new field governs later plans.
+- Focused validation passed with 27 restructuring tests, 41 validation-tool tests, and `git diff --check`.
+- Independent review identified and cleared three Medium findings: unreachable root validation, dropped active index identities, and a worker-admission bypass.
+- The initial authoritative run failed in `tests/smoke.sh` because predecessor checking made `add_active` require a materialized active plan, breaking the deliberate conflicting-index fixture.
+- Independent diagnosis confirmed the affected invariant that `add_active` remains a pure index registration operation; the bounded repair restored that contract while keeping worker admission and lifecycle transitions fail-closed.
+- The fresh authoritative suite passed: both focused test files, Copier template checking, project workflow lint, smoke tests, and `git diff --check`.

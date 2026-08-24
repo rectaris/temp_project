@@ -259,6 +259,10 @@ def lint_manifest(path: Path) -> None:
         fail(f"{path} human_design_required: yes requires review_class: C")
     if status_value == "deferred" and not planlib.manifest_scalar(values, "completion_deferred_reason").strip():
         fail(f"{path} status: deferred requires completion_deferred_reason")
+    try:
+        planlib.validate_predecessor_list(values, str(path))
+    except planlib.PlanError as exc:
+        fail(str(exc))
     lint_replan_fields(path, values, status_value)
     if not is_checked and not is_replanned:
         try:
@@ -478,6 +482,10 @@ def main() -> int:
     lint_checked_index()
     lint_replanned_index()
     lint_manifests()
+    try:
+        planlib.validate_active_plan_predecessors()
+    except planlib.PlanError as exc:
+        fail(str(exc))
     print("plan docs lint passed")
     return 0
 

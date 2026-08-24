@@ -335,6 +335,207 @@ class PlanValidationCommandsTest(unittest.TestCase):
             self.assertEqual(legacy_values["replan_reason_codes"], [])
             self.assertEqual(module.manifest_scalar(legacy_values, "primary_invariant"), "")
 
+    def test_active_predecessor_graph_requires_exact_checked_refresh(self) -> None:
+        module = load_module(PLANLIB, "active_predecessor_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active = root / "docs/plan/active"
+            checked = root / "docs/plan/checked/2026/08/16-31"
+            active.mkdir(parents=True)
+            checked.mkdir(parents=True)
+            module.ROOT = root
+            module.PLAN = root / "docs/plan/plan.md"
+            module.CHECKED = root / "docs/plan/checked.md"
+            module.ACTIVE_DIR = active
+            first = "docs/plan/active/001-first.md"
+            second = "docs/plan/active/002-second.md"
+            (root / first).write_text("status: in_progress\n\n## Tasks\n", encoding="utf-8")
+            (root / second).write_text(
+                "status: deferred\n"
+                "predecessor_plans:\n"
+                f"  - {first}\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            module.PLAN.write_text(
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                f"001\t{first}\tin_progress\n"
+                f"002\t{second}\tdeferred\n",
+                encoding="utf-8",
+            )
+            module.CHECKED.write_text(
+                "# Checked Plan Index\n\nid\tpath\n", encoding="utf-8"
+            )
+            module.validate_active_plan_predecessors()
+
+            (root / second).write_text(
+                (root / second).read_text(encoding="utf-8").replace(
+                    "status: deferred", "status: in_progress"
+                ),
+                encoding="utf-8",
+            )
+            module.PLAN.write_text(
+                module.PLAN.read_text(encoding="utf-8").replace(
+                    f"002\t{second}\tdeferred", f"002\t{second}\tin_progress"
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(module.PlanError):
+                module.check_active_mapping("002", second, "in_progress")
+            with self.assertRaises(module.PlanError):
+                module.validate_active_plan_predecessors()
+
+            checked_first = "docs/plan/checked/2026/08/16-31/001-first.md"
+            (root / checked_first).write_text(
+                "status: checked\n\n## Tasks\n", encoding="utf-8"
+            )
+            (root / first).unlink()
+            module.CHECKED.write_text(
+                "# Checked Plan Index\n\nid\tpath\n"
+                f"001\t{checked_first}\n",
+                encoding="utf-8",
+            )
+            module.PLAN.write_text(
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                f"002\t{second}\tdeferred\n",
+                encoding="utf-8",
+            )
+            (root / second).write_text(
+                "status: deferred\n"
+                "predecessor_plans:\n"
+                f"  - {first}\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            module.validate_active_plan_predecessors()
+            with self.assertRaises(module.PlanError):
+                module.require_predecessors_checked(root / second)
+
+            (root / second).write_text(
+                "status: in_progress\n"
+                "predecessor_plans:\n"
+                f"  - {checked_first}\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            module.PLAN.write_text(
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                f"002\t{second}\tin_progress\n",
+                encoding="utf-8",
+            )
+            module.require_predecessors_checked(root / second)
+            module.check_active_mapping("002", second, "in_progress")
+            module.validate_active_plan_predecessors()
+
+    def test_active_predecessors_reject_cycles_duplicates_and_cross_id_paths(self) -> None:
+        module = load_module(PLANLIB, "invalid_active_predecessor_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active = root / "docs/plan/active"
+            active.mkdir(parents=True)
+            module.ROOT = root
+            module.PLAN = root / "docs/plan/plan.md"
+            module.CHECKED = root / "docs/plan/checked.md"
+            module.ACTIVE_DIR = active
+            first = "docs/plan/active/001-first.md"
+            second = "docs/plan/active/002-second.md"
+            module.PLAN.write_text(
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                f"001\t{first}\tdeferred\n"
+                f"002\t{second}\tdeferred\n",
+                encoding="utf-8",
+            )
+            module.CHECKED.write_text(
+                "# Checked Plan Index\n\nid\tpath\n", encoding="utf-8"
+            )
+            (root / first).write_text(
+                "status: deferred\npredecessor_plans:\n"
+                f"  - {second}\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            (root / second).write_text(
+                "status: deferred\npredecessor_plans:\n"
+                f"  - {first}\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(module.PlanError):
+                module.validate_active_plan_predecessors()
+
+            duplicate_values = {
+                "predecessor_plans": [first, first],
+            }
+            with self.assertRaises(module.PlanError):
+                module.validate_predecessor_list(duplicate_values, second)
+
+            wrong = "docs/plan/checked/2026/08/16-31/001-first.md"
+            module.CHECKED.write_text(
+                "# Checked Plan Index\n\nid\tpath\n"
+                f"999\t{wrong}\n",
+                encoding="utf-8",
+            )
+            (root / wrong).parent.mkdir(parents=True, exist_ok=True)
+            (root / wrong).write_text("status: checked\n", encoding="utf-8")
+            (root / second).write_text(
+                "status: in_progress\npredecessor_plans:\n"
+                f"  - {wrong}\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            module.PLAN.write_text(
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                f"002\t{second}\tin_progress\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(module.PlanError):
+                module.validate_active_plan_predecessors()
+
+    def test_successor_lineage_does_not_create_an_execution_dependency(self) -> None:
+        module = load_module(PLANLIB, "successor_lineage_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active = root / "docs/plan/active"
+            active.mkdir(parents=True)
+            module.ROOT = root
+            module.PLAN = root / "docs/plan/plan.md"
+            module.CHECKED = root / "docs/plan/checked.md"
+            module.ACTIVE_DIR = active
+            plan = "docs/plan/active/001-first.md"
+            (root / plan).write_text(
+                "status: in_progress\n"
+                "successor_plans:\n"
+                "  - docs/plan/active/002-history.md\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            module.PLAN.write_text(
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                f"001\t{plan}\tin_progress\n",
+                encoding="utf-8",
+            )
+            module.CHECKED.write_text(
+                "# Checked Plan Index\n\nid\tpath\n", encoding="utf-8"
+            )
+            module.validate_active_plan_predecessors()
+
+    def test_add_active_remains_a_pure_index_registration_operation(self) -> None:
+        module = load_module(PLANLIB, "add_active_index_planlib")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs/plan").mkdir(parents=True)
+            module.ROOT = root
+            module.PLAN = root / "docs/plan/plan.md"
+            module.CHECKED = root / "docs/plan/checked.md"
+            module.ACTIVE_DIR = root / "docs/plan/active"
+            module.add_active(
+                "006",
+                "docs/plan/active/006-promotion-index.md",
+            )
+            self.assertEqual(
+                module.read_active_rows(),
+                [
+                    (
+                        "006",
+                        "docs/plan/active/006-promotion-index.md",
+                        "in_progress",
+                    )
+                ],
+            )
+
     def test_title_does_not_hide_manifest_validation_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp) / "plan.md"

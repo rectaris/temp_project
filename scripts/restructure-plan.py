@@ -48,6 +48,10 @@ ARCHIVE_PATH_RE = re.compile(
 )
 CONTRACT_PATH_RE = re.compile(r"docs/plan/replanned/contracts/[0-9]{3}-[a-z0-9][a-z0-9-]*\.json")
 SHA_RE = re.compile(r"sha256:[0-9a-f]{64}")
+CHECKED_PATH_RE = re.compile(
+    r"docs/plan/checked/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/"
+    r"([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
+)
 
 
 class RestructureError(ValueError):
@@ -339,6 +343,119 @@ def replanned_rows(text: str) -> list[tuple[str, str, str]]:
     return rows
 
 
+def checked_rows() -> list[tuple[str, str]]:
+    index = ROOT / "docs/plan/checked.md"
+    if not index.is_file():
+        return []
+    rows: list[tuple[str, str]] = []
+    for line in index.read_text(encoding="utf-8").splitlines():
+        if not re.match(r"^[0-9]{3}\t", line):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 2:
+            raise RestructureError(f"malformed checked index row: {line}")
+        rows.append((parts[0], parts[1]))
+    return rows
+
+
+def predecessor_paths(manifest: dict[str, str | list[str]], label: str) -> list[str]:
+    predecessors = items(manifest, "predecessor_plans")
+    if predecessors == ["[]"]:
+        return []
+    if len(predecessors) != len(set(predecessors)):
+        raise RestructureError(f"{label} predecessor_plans must not contain duplicates")
+    for predecessor in predecessors:
+        path = PurePosixPath(predecessor)
+        if (
+            not predecessor
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or not (
+                PLAN_PATH_RE.fullmatch(predecessor)
+                or CHECKED_PATH_RE.fullmatch(predecessor)
+            )
+        ):
+            raise RestructureError(f"{label} has invalid predecessor path: {predecessor!r}")
+    return predecessors
+
+
+def matching_checked_paths(
+    plan_id: str,
+    basename: str,
+    rows: list[tuple[str, str]],
+) -> list[str]:
+    related = [
+        path for indexed_id, path in rows
+        if indexed_id == plan_id or Path(path).name == basename
+    ]
+    exact = [
+        path for indexed_id, path in rows
+        if indexed_id == plan_id and Path(path).name == basename
+    ]
+    if related and len(exact) != len(related):
+        raise RestructureError(f"predecessor identity mismatch for plan {plan_id}")
+    return exact
+
+
+def validate_active_predecessors(
+    records: dict[str, tuple[str, dict[str, str | list[str]]]],
+) -> None:
+    checked = checked_rows()
+    graph: dict[str, list[str]] = {path: [] for path in records}
+    for path, (status, manifest) in records.items():
+        unresolved: list[str] = []
+        for predecessor in predecessor_paths(manifest, path):
+            active_match = PLAN_PATH_RE.fullmatch(predecessor)
+            if active_match is not None:
+                if predecessor in records:
+                    graph[path].append(predecessor)
+                    unresolved.append(predecessor)
+                    continue
+                exact_checked = matching_checked_paths(
+                    active_match.group(1), Path(predecessor).name, checked
+                )
+                if not exact_checked:
+                    raise RestructureError(f"{path} predecessor is missing: {predecessor}")
+                unresolved.append(predecessor)
+                continue
+            checked_match = CHECKED_PATH_RE.fullmatch(predecessor)
+            assert checked_match is not None
+            exact_checked = matching_checked_paths(
+                checked_match.group(1), Path(predecessor).name, checked
+            )
+            if exact_checked != [predecessor]:
+                raise RestructureError(
+                    f"{path} checked predecessor is missing or stale: {predecessor}"
+                )
+            checked_file = ROOT / predecessor
+            if not checked_file.is_file():
+                raise RestructureError(f"{path} checked predecessor is missing: {predecessor}")
+            if scalar(parse_manifest(checked_file.read_text(encoding="utf-8")), "status") != "checked":
+                raise RestructureError(f"{path} predecessor is not checked: {predecessor}")
+        if unresolved and status != "deferred":
+            raise RestructureError(
+                f"{path} must remain deferred until active predecessors are replaced "
+                "with exact checked archive paths"
+            )
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(path: str) -> None:
+        if path in visiting:
+            raise RestructureError(f"active predecessor cycle detected at: {path}")
+        if path in visited:
+            return
+        visiting.add(path)
+        for predecessor in graph[path]:
+            visit(predecessor)
+        visiting.remove(path)
+        visited.add(path)
+
+    for path in graph:
+        visit(path)
+
+
 def render_replanned(rows: list[tuple[str, str, str]]) -> str:
     body = "\n".join("\t".join(row) for row in rows)
     return f"# Replanned Plan Index\n\nid\tpath\tcontract\n{body}\n"
@@ -563,8 +680,12 @@ def validate_plan_entry(
     )
     if missing_fields:
         raise RestructureError(f"{label} missing required manifest fields: {', '.join(missing_fields)}")
-    if scalar(manifest, "status") != "in_progress":
-        raise RestructureError(f"{label} must start in status: in_progress")
+    status = scalar(manifest, "status")
+    if status not in {"in_progress", "deferred"}:
+        raise RestructureError(f"{label} must start in status: in_progress or deferred")
+    if status == "deferred" and not scalar(manifest, "completion_deferred_reason").strip():
+        raise RestructureError(f"{label} deferred plan requires completion_deferred_reason")
+    predecessor_paths(manifest, label)
     if scalar(manifest, "replan_source") != source_path:
         raise RestructureError(f"{label} replan_source mismatch")
     if scalar(manifest, "replan_contract") != contract_path:
@@ -847,6 +968,27 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
     rows = active_rows(active_text)
     if rows.count((source_id, source_path, "replan_required")) != 1:
         raise RestructureError("active index does not exactly map the stopped source plan")
+    active_records: dict[str, tuple[str, dict[str, str | list[str]]]] = {}
+    for row_id, row_path, row_status in rows:
+        if row_id == source_id:
+            continue
+        row_match = PLAN_PATH_RE.fullmatch(row_path)
+        if row_match is None or row_match.group(1) != row_id:
+            raise RestructureError(f"active plan identity mismatch: {row_path}")
+        active_file = ROOT / row_path
+        if not active_file.is_file():
+            raise RestructureError(f"missing active plan: {row_path}")
+        active_manifest = parse_manifest(active_file.read_text(encoding="utf-8"))
+        if scalar(active_manifest, "status") != row_status:
+            raise RestructureError(f"active plan status mismatch: {row_path}")
+        active_records[row_path] = (row_status, active_manifest)
+    active_records.update(
+        {
+            entry["path"]: (scalar(entry["manifest"], "status"), entry["manifest"])
+            for entry in entries
+        }
+    )
+    validate_active_predecessors(active_records)
     replanned_text = (
         REPLANNED_INDEX.read_text(encoding="utf-8")
         if REPLANNED_INDEX.exists()
@@ -898,7 +1040,10 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
         ],
     }
     new_rows = [row for row in rows if row[0] != source_id]
-    new_rows.extend((entry["id"], entry["path"], "in_progress") for entry in entries)
+    new_rows.extend(
+        (entry["id"], entry["path"], scalar(entry["manifest"], "status"))
+        for entry in entries
+    )
     new_replanned = [*prior_replanned, (source_id, archive_path, contract_path)]
     return {
         "source_file": source_file,
@@ -993,7 +1138,25 @@ def execute(spec_path: Path, *, fail_after_writes: int = 0) -> str:
     return state["contract_path"]
 
 
+def validate_repository_active_predecessors() -> None:
+    active_records: dict[str, tuple[str, dict[str, str | list[str]]]] = {}
+    if ACTIVE_INDEX.is_file():
+        for plan_id, path, status in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8")):
+            match = PLAN_PATH_RE.fullmatch(path)
+            if match is None or match.group(1) != plan_id:
+                raise RestructureError(f"active plan identity mismatch: {path}")
+            target = ROOT / path
+            if not target.is_file():
+                raise RestructureError(f"missing active plan: {path}")
+            manifest = parse_manifest(target.read_text(encoding="utf-8"))
+            if scalar(manifest, "status") != status:
+                raise RestructureError(f"active plan status mismatch: {path}")
+            active_records[path] = (status, manifest)
+    validate_active_predecessors(active_records)
+
+
 def verify_repository_contracts() -> None:
+    validate_repository_active_predecessors()
     if not REPLANNED_INDEX.is_file():
         raise RestructureError("missing docs/plan/replanned.md")
     rows = replanned_rows(REPLANNED_INDEX.read_text(encoding="utf-8"))

@@ -83,6 +83,7 @@ LIST_KEYS = {
     "acceptance",
     "acceptance_focus",
     "integration_gates",
+    "predecessor_plans",
     "successor_plans",
     "inherited_acceptance_digests",
     "replan_reason_codes",
@@ -108,6 +109,13 @@ WITNESS_REQUIRED_STATUSES = {"in_progress"}
 VALIDATION_WITNESS_STAGES = {"static", "focused", "authoritative"}
 STATIC_VALIDATION_WITNESSES = {"resolved-context-files"}
 VALIDATION_WITNESS_REASON_MAX_BYTES = 240
+ACTIVE_PREDECESSOR_RE = re.compile(
+    r"docs/plan/active/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
+)
+CHECKED_PREDECESSOR_RE = re.compile(
+    r"docs/plan/checked/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/"
+    r"([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
+)
 class PlanError(ValueError):
     """Raised for invalid plan docs or indexes."""
 
@@ -271,6 +279,161 @@ def manifest_joined(values: dict[str, str | list[str]], key: str) -> str:
     if isinstance(value, list):
         return " ".join(item for item in value if item != "none")
     return value
+
+
+def validate_predecessor_list(values: dict[str, str | list[str]], label: str) -> list[str]:
+    predecessors = values.get("predecessor_plans", [])
+    if not isinstance(predecessors, list):
+        raise PlanError(f"{label} predecessor_plans must be a list")
+    if predecessors == ["[]"]:
+        return []
+    if len(predecessors) != len(set(predecessors)):
+        raise PlanError(f"{label} predecessor_plans must not contain duplicates")
+    for predecessor in predecessors:
+        path = Path(predecessor)
+        if (
+            not predecessor
+            or predecessor != path.as_posix()
+            or path.is_absolute()
+            or "." in path.parts
+            or ".." in path.parts
+            or not (
+                ACTIVE_PREDECESSOR_RE.fullmatch(predecessor)
+                or CHECKED_PREDECESSOR_RE.fullmatch(predecessor)
+            )
+        ):
+            raise PlanError(f"{label} has invalid predecessor path: {predecessor!r}")
+    return predecessors
+
+
+def read_checked_rows() -> list[tuple[str, str]]:
+    if not CHECKED.exists():
+        return []
+    rows: list[tuple[str, str]] = []
+    for line in CHECKED.read_text(encoding="utf-8").splitlines():
+        if not re.match(r"^\d{3}\t", line):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 2:
+            raise PlanError(f"malformed checked index row: {line}")
+        rows.append((parts[0], parts[1]))
+    return rows
+
+
+def _matching_checked_paths(
+    plan_id: str,
+    basename: str,
+    checked_rows: list[tuple[str, str]],
+) -> list[str]:
+    related = [
+        path
+        for indexed_id, path in checked_rows
+        if indexed_id == plan_id or Path(path).name == basename
+    ]
+    exact = [
+        path
+        for indexed_id, path in checked_rows
+        if indexed_id == plan_id and Path(path).name == basename
+    ]
+    if related and len(exact) != len(related):
+        raise PlanError(f"predecessor identity mismatch for plan {plan_id}")
+    return exact
+
+
+def require_predecessors_checked(path: Path) -> None:
+    values = parse_manifest(path)
+    predecessors = validate_predecessor_list(values, str(path))
+    checked_rows = read_checked_rows()
+    for predecessor in predecessors:
+        match = CHECKED_PREDECESSOR_RE.fullmatch(predecessor)
+        if match is None:
+            raise PlanError(
+                f"{path} predecessor must use its exact checked archive before activation: "
+                f"{predecessor}"
+            )
+        plan_id = match.group(1)
+        exact = _matching_checked_paths(plan_id, Path(predecessor).name, checked_rows)
+        if exact != [predecessor]:
+            raise PlanError(f"{path} checked predecessor is missing or stale: {predecessor}")
+        target = ROOT / predecessor
+        if not target.is_file():
+            raise PlanError(f"{path} checked predecessor is missing: {predecessor}")
+        if manifest_scalar(parse_manifest(target), "status") != "checked":
+            raise PlanError(f"{path} predecessor is not checked: {predecessor}")
+
+
+def validate_active_plan_predecessors() -> None:
+    rows = read_active_rows()
+    by_path = {path: (plan_id, status) for plan_id, path, status in rows}
+    if len(by_path) != len(rows):
+        raise PlanError("active index contains duplicate predecessor identities")
+    checked_rows = read_checked_rows()
+    graph: dict[str, list[str]] = {path: [] for path in by_path}
+
+    for path, (plan_id, index_status) in by_path.items():
+        target = ROOT / path
+        if not target.is_file():
+            raise PlanError(f"missing active plan: {path}")
+        values = parse_manifest(target)
+        status = manifest_scalar(values, "status")
+        if status != index_status:
+            raise PlanError(f"active predecessor status mismatch: {path}")
+        unresolved: list[str] = []
+        for predecessor in validate_predecessor_list(values, path):
+            active_match = ACTIVE_PREDECESSOR_RE.fullmatch(predecessor)
+            if active_match is not None:
+                predecessor_id = active_match.group(1)
+                active_record = by_path.get(predecessor)
+                if active_record is not None:
+                    if active_record[0] != predecessor_id:
+                        raise PlanError(f"{path} predecessor identity mismatch: {predecessor}")
+                    graph[path].append(predecessor)
+                    unresolved.append(predecessor)
+                    continue
+                exact_checked = _matching_checked_paths(
+                    predecessor_id, Path(predecessor).name, checked_rows
+                )
+                if not exact_checked:
+                    raise PlanError(f"{path} predecessor is missing: {predecessor}")
+                unresolved.append(predecessor)
+                continue
+
+            checked_match = CHECKED_PREDECESSOR_RE.fullmatch(predecessor)
+            assert checked_match is not None
+            predecessor_id = checked_match.group(1)
+            exact_checked = _matching_checked_paths(
+                predecessor_id, Path(predecessor).name, checked_rows
+            )
+            if exact_checked != [predecessor]:
+                raise PlanError(f"{path} checked predecessor is missing or stale: {predecessor}")
+            checked_file = ROOT / predecessor
+            if not checked_file.is_file():
+                raise PlanError(f"{path} checked predecessor is missing: {predecessor}")
+            if manifest_scalar(parse_manifest(checked_file), "status") != "checked":
+                raise PlanError(f"{path} predecessor is not checked: {predecessor}")
+
+        if unresolved and status != "deferred":
+            raise PlanError(
+                f"{path} must remain deferred until active predecessors are replaced "
+                "with exact checked archive paths"
+            )
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(path: str) -> None:
+        if path in visiting:
+            raise PlanError(f"active predecessor cycle detected at: {path}")
+        if path in visited:
+            return
+        visiting.add(path)
+        for predecessor in graph[path]:
+            visit(predecessor)
+        visiting.remove(path)
+        visited.add(path)
+
+    for path in graph:
+        visit(path)
 
 
 def acceptance_digest(acceptance: str) -> str:
@@ -514,6 +677,8 @@ def rewrite_status(path: str, status: str) -> None:
     target = ROOT / path
     if target.parent != ACTIVE_DIR or not target.is_file():
         raise PlanError(f"missing plan: {path}")
+    if status == "in_progress":
+        require_predecessors_checked(target)
     content = status_text(target.read_text(encoding="utf-8"), status)
     atomic_write_text(target, content)
 
@@ -525,6 +690,8 @@ def copy_with_status_exclusive(source: str, destination: str, status: str) -> No
         raise PlanError(f"missing plan: {source}")
     if destination_path.parent != ACTIVE_DIR and CHECKED_DIR not in destination_path.parents:
         raise PlanError(f"destination is outside active or checked plan directories: {destination}")
+    if status == "in_progress":
+        require_predecessors_checked(source_path)
     content = status_text(source_path.read_text(encoding="utf-8"), status)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -608,9 +775,13 @@ def check_active_mapping(plan_id: str, path: str, status: str) -> None:
         raise PlanError(
             f"active index mapping mismatch for {plan_id}: expected {path} with status {status}"
         )
+    if status == "in_progress":
+        require_predecessors_checked(ROOT / path)
 
 
 def set_active_status(plan_id: str, path: str, old_status: str, new_status: str) -> None:
+    if new_status == "in_progress":
+        require_predecessors_checked(ROOT / path)
     with lifecycle_lock():
         check_active_mapping(plan_id, path, old_status)
         rows = [

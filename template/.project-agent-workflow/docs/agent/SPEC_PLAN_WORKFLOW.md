@@ -88,6 +88,7 @@ Optional active/backlog fields:
 - `preservation_scope`
 - `primary_invariant`
 - `integration_gates`
+- `predecessor_plans`
 - `replan_source`
 - `replan_contract`
 - `successor_plans`
@@ -119,6 +120,11 @@ Rules:
 - `checked_summary_ja` is the human-facing Japanese one-line completion summary.
 - Keep active-plan bodies parseable by agents. English is preferred for manifest values and operational detail; Japanese is fine for user-facing summaries, domain terms, and `checked_summary_ja`.
 - `completion_deferred_reason` is required when `status` is `deferred` and records the unresolved condition that keeps the plan open.
+- `predecessor_plans` lists exact active or checked plan paths whose checked lifecycle state is required before the dependent plan may become `in_progress`.
+- Keep a dependent plan `deferred` while any predecessor entry is an active path, including an active path whose matching plan has already moved to the checked archive but has not yet been refreshed in the dependent manifest.
+- Before changing a dependent plan to `in_progress`, replace every active predecessor path with the exact checked archive path recorded in `docs/plan/checked.md`.
+- Reject missing, duplicate, non-normalized, stale checked, cross-id, or cyclic active predecessor edges.
+- `successor_plans` records immutable restructuring lineage and does not define operational execution order.
 - Restructured successor and integration plans use `primary_invariant`, `integration_gates`, `replan_source`, `replan_contract`, `successor_plans`, and `inherited_acceptance_digests` as an exact lineage contract. Legacy plans may omit them.
 - `replan_reason_codes` is a bounded list and is required when `status` is `replan_required`.
 - `human_design_required: yes` requires `review_class: C`.

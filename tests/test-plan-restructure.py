@@ -74,6 +74,46 @@ class PlanRestructureTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_repository_active_predecessors_are_valid(self) -> None:
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(ROOT)
+            spec = importlib.util.spec_from_file_location(
+                "root_predecessor_validation", SCRIPT
+            )
+            assert spec and spec.loader
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.validate_repository_active_predecessors()
+        finally:
+            os.chdir(old_cwd)
+
+    def test_repository_active_predecessors_reject_cross_id_index_rows(self) -> None:
+        active_index = self.repo / "docs/plan/plan.md"
+        active_index.write_text(
+            active_index.read_text(encoding="utf-8").replace(
+                f"001\t{self.source_path}\treplan_required",
+                f"999\t{self.source_path}\treplan_required",
+            ),
+            encoding="utf-8",
+        )
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            spec = importlib.util.spec_from_file_location(
+                "cross_id_predecessor_validation",
+                self.repo / "scripts/restructure-plan.py",
+            )
+            assert spec and spec.loader
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with self.assertRaisesRegex(
+                module.RestructureError, "active plan identity mismatch"
+            ):
+                module.validate_repository_active_predecessors()
+        finally:
+            os.chdir(old_cwd)
+
     def source_text(self) -> str:
         accepted = "\n".join(f"  - {item}" for item in self.acceptance)
         return (
@@ -240,6 +280,165 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertNotEqual(self.run_verify().returncode, 0)
         successor_path.write_text(clean_successor, encoding="utf-8")
         active_index.write_text(clean_active_index, encoding="utf-8")
+
+    def test_predecessor_chain_requires_deferred_then_exact_checked_refresh(self) -> None:
+        first = self.spec["successors"][0]  # type: ignore[index]
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        integration["content"] = str(integration["content"]).replace(
+            "status: in_progress\n",
+            "status: deferred\n"
+            "completion_deferred_reason: predecessor must be checked\n",
+            1,
+        ).replace(
+            "primary_invariant:",
+            f"predecessor_plans:\n  - {first['path']}\nprimary_invariant:",
+            1,
+        )
+        self.write_spec()
+        transitioned = self.run_command()
+        self.assertEqual(transitioned.returncode, 0, transitioned.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+        integration_path = self.repo / str(integration["path"])
+        active_index = self.repo / "docs/plan/plan.md"
+        integration_path.write_text(
+            integration_path.read_text(encoding="utf-8").replace(
+                "status: deferred", "status: in_progress", 1
+            ),
+            encoding="utf-8",
+        )
+        active_index.write_text(
+            active_index.read_text(encoding="utf-8").replace(
+                f"{integration['id']}\t{integration['path']}\tdeferred",
+                f"{integration['id']}\t{integration['path']}\tin_progress",
+            ),
+            encoding="utf-8",
+        )
+        premature = self.run_verify()
+        self.assertNotEqual(premature.returncode, 0)
+        self.assertIn("must remain deferred", premature.stderr)
+
+        integration_path.write_text(
+            integration_path.read_text(encoding="utf-8").replace(
+                "status: in_progress", "status: deferred", 1
+            ),
+            encoding="utf-8",
+        )
+        active_index.write_text(
+            active_index.read_text(encoding="utf-8").replace(
+                f"{integration['id']}\t{integration['path']}\tin_progress",
+                f"{integration['id']}\t{integration['path']}\tdeferred",
+            ),
+            encoding="utf-8",
+        )
+        first_path = self.repo / str(first["path"])
+        checked_relative = "docs/plan/checked/2026/08/16-31/002-data.md"
+        checked = self.repo / checked_relative
+        checked.parent.mkdir(parents=True)
+        checked.write_text(
+            first_path.read_text(encoding="utf-8").replace(
+                "status: in_progress", "status: checked", 1
+            ),
+            encoding="utf-8",
+        )
+        first_path.unlink()
+        active_index.write_text(
+            active_index.read_text(encoding="utf-8").replace(
+                f"{first['id']}\t{first['path']}\tin_progress\n", ""
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / "docs/plan/checked.md").write_text(
+            "# Checked Plan Index\n\nid\tpath\n"
+            f"{first['id']}\t{checked_relative}\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+        integration_path.write_text(
+            integration_path.read_text(encoding="utf-8")
+            .replace("status: deferred", "status: in_progress", 1)
+            .replace(str(first["path"]), checked_relative, 1),
+            encoding="utf-8",
+        )
+        active_index.write_text(
+            active_index.read_text(encoding="utf-8").replace(
+                f"{integration['id']}\t{integration['path']}\tdeferred",
+                f"{integration['id']}\t{integration['path']}\tin_progress",
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_predecessor_cycles_and_duplicate_edges_are_rejected_before_writes(self) -> None:
+        first = self.spec["successors"][0]  # type: ignore[index]
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        for entry, predecessor in ((first, integration["path"]), (integration, first["path"])):
+            entry["content"] = str(entry["content"]).replace(
+                "status: in_progress\n",
+                "status: deferred\ncompletion_deferred_reason: predecessor is active\n",
+                1,
+            ).replace(
+                "primary_invariant:",
+                f"predecessor_plans:\n  - {predecessor}\nprimary_invariant:",
+                1,
+            )
+        self.write_spec()
+        cycle = self.run_command()
+        self.assertNotEqual(cycle.returncode, 0)
+        self.assertIn("cycle", cycle.stderr)
+        self.assert_source_unchanged()
+
+        self.spec = self.make_spec()
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        predecessor = self.spec["successors"][0]["path"]  # type: ignore[index]
+        integration["content"] = str(integration["content"]).replace(
+            "primary_invariant:",
+            f"predecessor_plans:\n  - {predecessor}\n  - {predecessor}\nprimary_invariant:",
+            1,
+        )
+        self.write_spec()
+        duplicate = self.run_command()
+        self.assertNotEqual(duplicate.returncode, 0)
+        self.assertIn("must not contain duplicates", duplicate.stderr)
+        self.assert_source_unchanged()
+
+    def test_stale_or_cross_id_checked_predecessor_is_rejected(self) -> None:
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        stale = "docs/plan/checked/2026/08/01-15/009-predecessor.md"
+        current = "docs/plan/checked/2026/08/16-31/009-predecessor.md"
+        current_path = self.repo / current
+        current_path.parent.mkdir(parents=True)
+        current_path.write_text("status: checked\n", encoding="utf-8")
+        (self.repo / "docs/plan/checked.md").write_text(
+            "# Checked Plan Index\n\nid\tpath\n"
+            f"009\t{current}\n",
+            encoding="utf-8",
+        )
+        integration["content"] = str(integration["content"]).replace(
+            "primary_invariant:",
+            f"predecessor_plans:\n  - {stale}\nprimary_invariant:",
+            1,
+        )
+        self.write_spec()
+        stale_result = self.run_command()
+        self.assertNotEqual(stale_result.returncode, 0)
+        self.assertIn("missing or stale", stale_result.stderr)
+        self.assert_source_unchanged()
+
+        (self.repo / "docs/plan/checked.md").write_text(
+            "# Checked Plan Index\n\nid\tpath\n"
+            f"999\t{stale}\n",
+            encoding="utf-8",
+        )
+        stale_path = self.repo / stale
+        stale_path.parent.mkdir(parents=True, exist_ok=True)
+        stale_path.write_text("status: checked\n", encoding="utf-8")
+        self.write_spec()
+        cross_id = self.run_command()
+        self.assertNotEqual(cross_id.returncode, 0)
+        self.assertIn("identity mismatch", cross_id.stderr)
+        self.assert_source_unchanged()
 
     def test_durable_contract_tampering_is_rejected(self) -> None:
         self.assertEqual(self.run_command().returncode, 0)

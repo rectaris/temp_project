@@ -47,6 +47,10 @@ This repository root is a template development repository. It is not a Copier-ge
 - Keep `checked.md` as the machine-readable index for all checked archives, including nested paths.
 - Treat checked archives as historical completion records, not current implementation guidance.
 - Treat replanned archives as historical replacement records, not successful completion evidence.
+- Treat `predecessor_plans` as operational execution order and `successor_plans` only as immutable restructuring lineage.
+- Keep a dependent plan `deferred` while any declared predecessor still uses an active-plan path.
+- Before changing a dependent plan to `in_progress`, replace every active predecessor path with the exact checked archive path recorded in `docs/plan/checked.md`.
+- Reject missing, duplicate, non-normalized, stale checked, cross-id, or cyclic active predecessor edges.
 - Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
 - Keep active plans executable. Use `## Decisions` for final accepted decisions, not full decision-audit output.
 - Keep active-plan operational prose in English by default.
