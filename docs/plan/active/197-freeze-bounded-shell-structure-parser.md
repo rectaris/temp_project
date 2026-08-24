@@ -1,6 +1,9 @@
 # Freeze the bounded shell structure parser
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
+  - multiple_independent_invariants
 primary_invariant: supplied shell bytes expose one unique function table and one reachable top-level execution sequence before any Copier-specific operation rule is evaluated
 replan_source: docs/plan/active/191-freeze-bounded-copier-fixture-validator.md
 replan_contract: docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json
@@ -71,3 +74,10 @@ checked_summary_ja: shell fixtureの関数定義とtop-level到達可能性をCo
 
 - The rejected Plan 191 candidate remains advisory evidence only and is not copied into this successor.
 - This slice is intentionally insufficient to accept the source requirement without Plan 198.
+- Parent-direct implementation produced an unaccepted parser and a 24-case synthetic mutation suite in the declared two-file write scope.
+- Focused validation passed `python3 tests/test-copier-fixture.py` with 24 tests, `python3 -m py_compile scripts/project_workflow/copier_fixture.py tests/test-copier-fixture.py`, and `git diff --check`.
+- Independent review round 1 reported High 3 and Medium 2; remediation covered quoted here-document text, AND/OR operands, assignment and continuation transfers, branch tokens, and piped function definitions.
+- Independent review round 2 reported High 4; remediation covered commented and truncated here-documents, split function definitions, condition transfers, redirection prefixes, and comment continuations.
+- Final independent review still reported High 2 and Medium 4 for complete here-document tokenization, `eval` function-table replacement, multi-command conditions, interleaved prefixes, asynchronous lists, and terminal function calls.
+- Two parent-direct remediation rounds still leave High and Medium findings, so this execution is stopped and requires reconstructed implementation and validation boundaries before further edits, validation, archival, or commit.
+- The `replan_source`, `replan_contract`, and `successor_plans` fields above preserve the immutable Plan 191 lineage; the self path in that historical successor set does not designate this stopped plan as its own next reconstruction successor.

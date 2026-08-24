@@ -13,5 +13,8 @@ id	path	status
 193	docs/plan/active/193-collect-resource-evaluation-evidence.md	deferred
 194	docs/plan/active/194-apply-resource-evaluation-outcome.md	deferred
 195	docs/plan/active/195-verify-plan133-successor-acceptance.md	deferred
-197	docs/plan/active/197-freeze-bounded-shell-structure-parser.md	in_progress
+197	docs/plan/active/197-freeze-bounded-shell-structure-parser.md	replan_required
 198	docs/plan/active/198-integrate-bounded-copier-fixture-validator.md	deferred
+199	docs/plan/active/199-admit-decomposed-shell-validation.md	in_progress
+200	docs/plan/active/200-enable-coupled-lineage-reconstruction.md	deferred
+201	docs/plan/active/201-reconstruct-shell-parser-lineage.md	deferred
