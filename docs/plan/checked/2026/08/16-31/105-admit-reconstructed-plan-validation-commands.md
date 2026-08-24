@@ -1,6 +1,6 @@
 # Admit reconstructed-plan validation commands
 
-status: in_progress
+status: checked
 primary_invariant: every new validation command used by the reconstructed active chain is admitted by an exact root allowlist rule before dependent activation without expanding generated-project-specific authority
 task_types:
   - planning_docs
@@ -59,12 +59,18 @@ checked_summary_ja: 再構築後のroot planが使う新しい検証commandだ�
 
 ## Tasks
 
-- [ ] Add the four exact command forms to the root validation policy only.
-- [ ] Add positive and negative tests for exact argv identity and every near-match rejection.
-- [ ] Prove the generated policy still rejects root-only fixture and replan commands while its existing project-local families remain unchanged.
-- [ ] Run check-plan against Plans 190, 191, 185, and 186.
-- [ ] Complete focused validation and independent review, archive, commit, and activate Plan 190.
+- [x] Add the four exact command forms to the root validation policy only.
+- [x] Add positive and negative tests for exact argv identity and every near-match rejection.
+- [x] Prove the generated policy still rejects root-only fixture and replan commands while its existing project-local families remain unchanged.
+- [x] Run check-plan against Plans 190, 191, 185, and 186.
+- [x] Complete focused validation and independent review, archive, commit, and activate Plan 190.
 
 ## Validation Notes
 
 - This plan admits commands only; it does not implement or run the bounded fixture or complete Copier transition.
+- The root policy admits the three root-only script forms exactly and restricts the two protected `py_compile` inputs to the single declared ordered argv while preserving the shared compile family for unrelated paths.
+- Plan checks passed for Plans 190, 191, 185, and 186.
+- Independent review found one Medium alternate lexical-path bypass in the initial diff. The normalized path-identity correction received an independent rereview with High 0, Medium 0, and Low 0.
+- Focused validation passed `python3 tests/test-validation-tools.py`, all four dependent plan checks, and `git diff --check`.
+- The authoritative suite passed `python3 tests/test-validation-tools.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check`.
+- Parent ledger run `105-parent-direct-20260824` used `/home/rectaris/tmp/gakumasu-project/plan-execution-ledgers/105-admit-reconstructed-plan-validation-commands.json` and recorded one focused validation and exactly one authoritative validation.

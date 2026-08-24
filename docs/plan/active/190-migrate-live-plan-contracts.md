@@ -1,7 +1,6 @@
 # Bind live plan baselines and execution manifests
 
-status: deferred
-completion_deferred_reason: Plans 188, 189, 164, and 105 must be checked and their exact checked archive paths must replace the active predecessors before implementation.
+status: in_progress
 primary_invariant: every live successor and dependency edge receives the accepted preservation, predecessor, and companion validation baseline without changing existing contract bytes, source acceptance, or product bytes
 task_types:
   - planning_docs
@@ -35,8 +34,8 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/189-enforce-active-plan-predecessors.md
-  - docs/plan/active/164-bind-replan-contract-validation-baseline.md
+  - docs/plan/checked/2026/08/16-31/189-enforce-active-plan-predecessors.md
+  - docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
   - docs/plan/replanned/2026/08/16-31/116-evaluate-plan-worker-orchestration.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
   - docs/plan/replanned/2026/08/16-31/163-capture-validation-witness-migration-provenance.md
@@ -69,10 +68,10 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:253605228652141b4235578e7e0a6f606db9bb4d884582f49df4795794c21046","stage":"focused","witness":"python3 scripts/restructure-plan.py --verify"}
 predecessor_plans:
-  - docs/plan/active/188-separate-replan-preservation-authority.md
-  - docs/plan/active/189-enforce-active-plan-predecessors.md
-  - docs/plan/active/164-bind-replan-contract-validation-baseline.md
-  - docs/plan/active/105-admit-reconstructed-plan-validation-commands.md
+  - docs/plan/checked/2026/08/16-31/188-separate-replan-preservation-authority.md
+  - docs/plan/checked/2026/08/16-31/189-enforce-active-plan-predecessors.md
+  - docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
+  - docs/plan/checked/2026/08/16-31/105-admit-reconstructed-plan-validation-commands.md
 integration_gates:
   - Plans 188, 189, 164, and 105 must be checked and their exact checked archive paths must be present before migration starts
   - preserve scripts/check-copier-template.py and tests/copier-update.sh without editing, staging, or committing them

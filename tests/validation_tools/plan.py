@@ -614,6 +614,76 @@ class PlanValidationCommandsTest(unittest.TestCase):
         with self.assertRaises(template_module.ValidationCommandError):
             template_module.parse_validation_command("python3 tests/test-verify-copier-update.py")
 
+    def test_root_accepts_exact_reconstructed_plan_commands(self) -> None:
+        root_module = load_module(PLAN_COMMAND_MODULES[0], "root_reconstructed_plan_commands")
+        for command in (
+            "python3 scripts/restructure-plan.py --verify",
+            "python3 tests/test-copier-fixture.py",
+            "python3 -m py_compile "
+            "scripts/project_workflow/copier_fixture.py tests/test-copier-fixture.py",
+            "python3 scripts/project_workflow/copier_fixture.py --check tests/copier-update.sh",
+        ):
+            with self.subTest(command=command):
+                root_module.parse_validation_command(command)
+
+    def test_root_rejects_reconstructed_plan_command_near_matches(self) -> None:
+        root_module = load_module(PLAN_COMMAND_MODULES[0], "root_reconstructed_plan_near_matches")
+        for command in (
+            "python3 scripts/restructure-plan.py",
+            "python3 scripts/restructure-plan.py --verify extra",
+            "python3 scripts/restructure_plan.py --verify",
+            "python scripts/restructure-plan.py --verify",
+            "python3 --verify scripts/restructure-plan.py",
+            "python3 tests/test-copier-fixture.py --verbose",
+            "python3 tests/copier-fixture.py",
+            "python tests/test-copier-fixture.py",
+            "python3 -m py_compile tests/test-copier-fixture.py "
+            "scripts/project_workflow/copier_fixture.py",
+            "python3 -m py_compile scripts/project_workflow/copier_fixture.py",
+            "python3 -m py_compile scripts/project_workflow/copier_fixture.py "
+            "tests/test-copier-fixture.py tests/other.py",
+            "python3 -m py_compile scripts/project_workflow/other.py "
+            "tests/test-copier-fixture.py",
+            "python3 -m py_compile ./scripts/project_workflow/copier_fixture.py "
+            "./tests/test-copier-fixture.py",
+            "python3 -m py_compile ./scripts/project_workflow/copier_fixture.py "
+            "./tests/test-copier-fixture.py tests/other.py",
+            "python3 -m py_compile ./tests/test-copier-fixture.py "
+            "./scripts/project_workflow/copier_fixture.py",
+            "python -m py_compile scripts/project_workflow/copier_fixture.py "
+            "tests/test-copier-fixture.py",
+            "python3 scripts/project_workflow/copier_fixture.py --check",
+            "python3 scripts/project_workflow/copier_fixture.py --check tests/other.sh",
+            "python3 scripts/project_workflow/copier_fixture.py "
+            "tests/copier-update.sh --check",
+            "python3 scripts/project_workflow/copier_fixture.py "
+            "--check tests/copier-update.sh extra",
+            "python scripts/project_workflow/copier_fixture.py --check tests/copier-update.sh",
+            "python3 scripts/restructure-plan.py --verify; git diff --check",
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(root_module.ValidationCommandError):
+                    root_module.parse_validation_command(command)
+
+    def test_generated_policy_keeps_root_only_commands_out(self) -> None:
+        template_module = load_module(
+            PLAN_COMMAND_MODULES[1],
+            "template_reconstructed_plan_commands",
+        )
+        for command in (
+            "python3 scripts/restructure-plan.py --verify",
+            "python3 tests/test-copier-fixture.py",
+            "python3 scripts/project_workflow/copier_fixture.py --check tests/copier-update.sh",
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(template_module.ValidationCommandError):
+                    template_module.parse_validation_command(command)
+
+        template_module.parse_validation_command(
+            "python3 -m py_compile "
+            ".project-agent-workflow/scripts/example.py tests/example.py"
+        )
+
     def test_copier_update_required_mode_rejects_an_unavailable_cli(self) -> None:
         environment = os.environ.copy()
         environment["PATH"] = "/usr/bin:/bin"
