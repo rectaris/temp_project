@@ -1,7 +1,8 @@
 # Separate replan preservation from write authority
 
-status: deferred
-completion_deferred_reason: Plan 102 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
+predecessor_plans:
+  - docs/plan/checked/2026/08/16-31/102-select-runnable-active-plan.md
 primary_invariant: restructuring preserves every declared dirty product path without granting that path to candidate generation, validation, apply, staging, or commit
 task_types:
   - planning_docs
