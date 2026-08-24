@@ -277,6 +277,72 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertFalse((self.repo / str(self.spec["contract_path"])).exists())
         self.assertIn("001\t", (self.repo / "docs/plan/plan.md").read_text(encoding="utf-8"))
 
+    def add_sequential_successor(self) -> None:
+        successors = self.spec["successors"]
+        integration = self.spec["integration"]
+        assert isinstance(successors, list)
+        assert isinstance(integration, dict)
+        extra = copy.deepcopy(successors[0])
+        extra["id"] = "004"
+        extra["path"] = "docs/plan/active/004-follow-up.md"
+        successors.append(extra)
+        old_paths = (
+            "successor_plans:\n"
+            "  - docs/plan/active/002-data.md\n"
+            "  - docs/plan/active/003-integration.md\n"
+        )
+        new_paths = (
+            "successor_plans:\n"
+            "  - docs/plan/active/002-data.md\n"
+            "  - docs/plan/active/004-follow-up.md\n"
+            "  - docs/plan/active/003-integration.md\n"
+        )
+        for entry in [*successors, integration]:
+            entry["content"] = str(entry["content"]).replace(old_paths, new_paths)
+
+    def convert_contract_to_schema_one(
+        self,
+        scopes: list[list[str] | None],
+        dirty_paths: list[str],
+    ) -> dict[str, object]:
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["schema_version"] = 1
+        contract["dirty_product_paths"] = dirty_paths
+        self.assertEqual(len(scopes), len(contract["successors"]))
+        for successor, scope in zip(contract["successors"], scopes, strict=True):
+            for key in (
+                "authoritative_validation",
+                "authoritative_validation_digest",
+                "validation_witness_schema",
+                "validation_witness_map_digest",
+            ):
+                successor.pop(key)
+            replacement = ""
+            if scope is not None:
+                values = scope or ["none"]
+                replacement = "preservation_scope:\n" + "".join(
+                    f"  - {value}\n" for value in values
+                )
+            successor["content"] = successor["content"].replace(
+                "preservation_scope:\n  - none\n",
+                replacement,
+            )
+            successor["content_digest"] = digest(successor["content"])
+            live = self.repo / successor["path"]
+            live.write_text(
+                live.read_text(encoding="utf-8").replace(
+                    "preservation_scope:\n  - none\n",
+                    replacement,
+                ),
+                encoding="utf-8",
+            )
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return contract
+
     def test_success_preserves_requirements_and_switches_indexes(self) -> None:
         result = self.run_command()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1152,6 +1218,139 @@ class PlanRestructureTest(unittest.TestCase):
         )
         verified = self.run_verify()
         self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_schema_one_partial_repeated_preservation_scope_verifies(self) -> None:
+        self.add_sequential_successor()
+        self.write_spec()
+        self.assertEqual(self.run_command().returncode, 0)
+        first = "config/first-owned.yaml"
+        second = "config/second-owned.yaml"
+        contract = self.convert_contract_to_schema_one(
+            [[first], [first, second], None],
+            [first, second],
+        )
+        omitted = contract["successors"][2]
+        omitted["content"] = omitted["content"].replace(
+            "write_scope:\n  - tests/",
+            "write_scope:\n  - config/",
+        )
+        omitted["content_digest"] = digest(omitted["content"])
+        live = self.repo / omitted["path"]
+        live.write_text(
+            live.read_text(encoding="utf-8").replace(
+                "write_scope:\n  - tests/",
+                "write_scope:\n  - config/",
+            ),
+            encoding="utf-8",
+        )
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_schema_one_declared_preservation_requires_complete_coverage(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        self.convert_contract_to_schema_one(
+            [[], None],
+            ["config/project-owned.yaml"],
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0)
+        self.assertIn(
+            "contract preservation_scope does not match dirty paths",
+            verified.stderr,
+        )
+
+    def test_schema_one_preservation_rejects_cross_successor_write_overlap(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        first = "config/first/project-owned.yaml"
+        second = "config/second/project-owned.yaml"
+        contract = self.convert_contract_to_schema_one(
+            [[first], [second]],
+            [first, second],
+        )
+        successor = contract["successors"][1]
+        successor["content"] = successor["content"].replace(
+            "write_scope:\n  - tests/",
+            "write_scope:\n  - config/first/",
+        )
+        successor["content_digest"] = digest(successor["content"])
+        live = self.repo / successor["path"]
+        live.write_text(
+            live.read_text(encoding="utf-8").replace(
+                "write_scope:\n  - tests/",
+                "write_scope:\n  - config/first/",
+            ),
+            encoding="utf-8",
+        )
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0)
+        self.assertIn("preservation_scope overlaps write_scope", verified.stderr)
+
+    def test_schema_two_still_rejects_mixed_preservation_metadata(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        successor = contract["successors"][0]
+        successor["content"] = successor["content"].replace(
+            "preservation_scope:\n  - none\n",
+            "",
+        )
+        successor["content_digest"] = digest(successor["content"])
+        live = self.repo / successor["path"]
+        live.write_text(
+            live.read_text(encoding="utf-8").replace(
+                "preservation_scope:\n  - none\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0)
+        self.assertIn("contract successors mix preservation schemas", verified.stderr)
+
+    def test_schema_two_verifier_still_requires_exact_once_preservation(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        preserved = "config/project-owned.yaml"
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["dirty_product_paths"] = [preserved]
+        for successor in contract["successors"]:
+            successor["content"] = successor["content"].replace(
+                "preservation_scope:\n  - none\n",
+                f"preservation_scope:\n  - {preserved}\n",
+            )
+            successor["content_digest"] = digest(successor["content"])
+            live = self.repo / successor["path"]
+            live.write_text(
+                live.read_text(encoding="utf-8").replace(
+                    "preservation_scope:\n  - none\n",
+                    f"preservation_scope:\n  - {preserved}\n",
+                ),
+                encoding="utf-8",
+            )
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0)
+        self.assertIn(
+            "contract preservation_scope does not match dirty paths",
+            verified.stderr,
+        )
 
     def test_schema_one_companion_is_exact_ordered_and_terminal_after_publication(self) -> None:
         self.assertEqual(self.run_command().returncode, 0)

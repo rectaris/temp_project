@@ -1,8 +1,7 @@
 # Active Plan
 
 id	path	status
-196	docs/plan/active/196-accept-historical-schema1-preservation.md	in_progress
-190	docs/plan/active/190-migrate-live-plan-contracts.md	deferred
+190	docs/plan/active/190-migrate-live-plan-contracts.md	in_progress
 191	docs/plan/active/191-freeze-bounded-copier-fixture-validator.md	deferred
 185	docs/plan/active/185-complete-bounded-copier-fixture-runtime.md	deferred
 186	docs/plan/active/186-bind-connected-copier-fixture-checker.md	deferred

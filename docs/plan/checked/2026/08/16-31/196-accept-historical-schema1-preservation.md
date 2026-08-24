@@ -1,6 +1,6 @@
 # Accept historical schema-1 preservation metadata
 
-status: in_progress
+status: checked
 primary_invariant: immutable schema-1 replan contracts remain verifiable without treating partial historical preservation metadata as schema-2 authority
 task_types:
   - planning_docs
@@ -68,12 +68,15 @@ checked_summary_ja: schema 1の不完全な保持情報をschema 2の権限と�
 
 ## Tasks
 
-- [ ] Add explicit schema-version handling for historical partial preservation metadata without changing any contract.
-- [ ] Add positive Plan 133-shaped coverage and negative missing-coverage, cross-successor overlap, and schema-2 regression tests.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and reactivate Plan 190 with this exact checked predecessor.
+- [x] Add explicit schema-version handling for historical partial preservation metadata without changing any contract.
+- [x] Add positive Plan 133-shaped coverage and negative missing-coverage, cross-successor overlap, and schema-2 regression tests.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and reactivate Plan 190 with this exact checked predecessor.
 
 ## Validation Notes
 
 - The current repository failure is `contract successors mix preservation schemas for 133`.
 - This plan changes verifier behavior and tests only; Plan 190 retains ownership of companion publication and active-plan metadata migration.
+- Focused validation passed: `python3 tests/test-plan-restructure.py`, `python3 scripts/check-copier-template.py`, and `git diff --check`.
+- Independent review reported zero High or Medium findings; its two Low test-coverage findings were addressed before authoritative validation.
+- Authoritative validation passed once: `python3 tests/test-plan-restructure.py`, `python3 scripts/check-copier-template.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check`.

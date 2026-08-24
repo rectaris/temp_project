@@ -1347,6 +1347,7 @@ def verify_repository_contracts() -> None:
         integration_count = 0
         contract_preservation: list[str] = []
         contract_write_scopes: list[list[str]] = []
+        preservation_declared = False
         preservation_mode: bool | None = None
         live_companion_successors: list[dict[str, Any]] = []
         for index, raw_successor in enumerate(successors):
@@ -1403,12 +1404,14 @@ def verify_repository_contracts() -> None:
                     f"contract successor {plan_id}/{index}",
                 )
             has_preservation = "preservation_scope" in successor_manifest
-            if preservation_mode is None:
-                preservation_mode = has_preservation
-            elif preservation_mode != has_preservation:
-                raise RestructureError(
-                    f"contract successors mix preservation schemas for {plan_id}"
-                )
+            preservation_declared = preservation_declared or has_preservation
+            if schema_version == 2:
+                if preservation_mode is None:
+                    preservation_mode = has_preservation
+                elif preservation_mode != has_preservation:
+                    raise RestructureError(
+                        f"contract successors mix preservation schemas for {plan_id}"
+                    )
             expected_preservation = (
                 preservation_scope(
                     successor_manifest,
@@ -1515,12 +1518,15 @@ def verify_repository_contracts() -> None:
                 raise RestructureError(f"contract integration flag is invalid for {plan_id}")
         if len(paths) != len(set(paths)) or mapped != set(source_digests) or integration_count != 1:
             raise RestructureError(f"contract mapping is incomplete or ambiguous for {plan_id}")
-        if preservation_mode:
+        if preservation_declared:
             dirty_paths = contract["dirty_product_paths"]
             if (
                 not isinstance(dirty_paths, list)
-                or len(contract_preservation) != len(set(contract_preservation))
-                or sorted(contract_preservation) != dirty_paths
+                or sorted(set(contract_preservation)) != dirty_paths
+                or (
+                    schema_version == 2
+                    and len(contract_preservation) != len(set(contract_preservation))
+                )
             ):
                 raise RestructureError(
                     f"contract preservation_scope does not match dirty paths for {plan_id}"
