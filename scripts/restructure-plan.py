@@ -182,6 +182,49 @@ def scope_covers(scope: list[str], path: str) -> bool:
     return False
 
 
+def preservation_scope(manifest: dict[str, str | list[str]], label: str, *, required: bool) -> list[str]:
+    if "preservation_scope" not in manifest:
+        if required:
+            raise RestructureError(f"{label} requires preservation_scope")
+        return []
+    scope = items(manifest, "preservation_scope")
+    if scope == ["none"]:
+        return []
+    if not scope or "none" in scope or len(scope) != len(set(scope)):
+        raise RestructureError(
+            f"{label} preservation_scope must be none or unique normalized exact paths"
+        )
+    for entry in scope:
+        path = PurePosixPath(entry)
+        if (
+            not entry
+            or entry.startswith("/")
+            or entry.endswith("/")
+            or "\\" in entry
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise RestructureError(
+                f"{label} preservation_scope must be none or unique normalized exact paths"
+            )
+    return scope
+
+
+def reject_preservation_write_overlap(
+    preservation_paths: list[str],
+    write_scopes: list[list[str]],
+    label: str,
+) -> None:
+    overlaps = sorted(
+        path
+        for path in preservation_paths
+        if any(scope_covers(scope, path) for scope in write_scopes)
+    )
+    if overlaps:
+        raise RestructureError(
+            f"{label} preservation_scope overlaps write_scope: {', '.join(overlaps)}"
+        )
+
+
 def routing_contract(spec_index: Path) -> tuple[set[str], dict[str, set[str]]]:
     default_reads: set[str] = set()
     routes: dict[str, set[str]] = {}
@@ -227,6 +270,7 @@ def validate_current_plan_rules(manifest: dict[str, str | list[str]], label: str
     required_specs = items(manifest, "required_specs")
     context_files = items(manifest, "context_files")
     write_scope = items(manifest, "write_scope")
+    preserved = preservation_scope(manifest, label, required=False)
     if len(task_types) != len(set(task_types)) or not task_types:
         raise RestructureError(f"{label} task_types must be non-empty and unique")
     spec_candidates = (
@@ -249,6 +293,7 @@ def validate_current_plan_rules(manifest: dict[str, str | list[str]], label: str
     overlap = sorted((set(write_scope) - {"none"}) & (set(context_files) - {"none"}))
     if overlap:
         raise RestructureError(f"{label} write_scope overlaps context_files: {', '.join(overlap)}")
+    reject_preservation_write_overlap(preserved, [write_scope], label)
     command_module_path = Path(__file__).with_name("plan_validation_commands.py")
     if not command_module_path.is_file():
         raise RestructureError("missing plan validation command policy")
@@ -371,6 +416,7 @@ def validate_replanned_successor(
     expected_path: str,
     expected_digests: list[str],
     expected_acceptance: list[str],
+    expected_preservation: list[str] | None,
 ) -> None:
     records = replanned_records_for_id(plan_id, expected_path)
     if len(records) != 1:
@@ -447,6 +493,12 @@ def validate_replanned_successor(
         raise RestructureError(
             f"replanned successor source acceptance drift: {expected_path}"
         )
+    if expected_preservation is not None and preservation_scope(
+        source_manifest, f"replanned successor source {plan_id}", required=True
+    ) != expected_preservation:
+        raise RestructureError(
+            f"replanned successor source preservation_scope mismatch: {expected_path}"
+        )
     archive_manifest = parse_manifest(archive_file.read_text(encoding="utf-8"))
     if scalar(archive_manifest, "status") != "replanned":
         raise RestructureError(
@@ -467,6 +519,12 @@ def validate_replanned_successor(
     if items(archive_manifest, "acceptance") != expected_acceptance:
         raise RestructureError(
             f"replanned successor archive acceptance mismatch: {expected_path}"
+        )
+    if expected_preservation is not None and preservation_scope(
+        archive_manifest, f"replanned successor archive {plan_id}", required=True
+    ) != expected_preservation:
+        raise RestructureError(
+            f"replanned successor archive preservation_scope mismatch: {expected_path}"
         )
 
 
@@ -547,7 +605,13 @@ def validate_plan_entry(
             f"{label} acceptance must exactly equal mapped source text in source order"
         )
     validate_current_plan_rules(manifest, label)
-    return {**obj, "manifest": manifest, "content_digest": sha256(content.encode("utf-8"))}
+    preserved = preservation_scope(manifest, label, required=True)
+    return {
+        **obj,
+        "manifest": manifest,
+        "preservation_scope": preserved,
+        "content_digest": sha256(content.encode("utf-8")),
+    }
 
 
 def manifest_field_ranges(text: str) -> list[tuple[str, int, int]]:
@@ -767,9 +831,18 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(declared_dirty, list) or declared_dirty != actual_dirty:
         raise RestructureError("dirty_product_paths must exactly match current Git status")
     successor_scopes = [items(entry["manifest"], "write_scope") for entry in entries]
-    for path in actual_dirty:
-        if not any(scope_covers(scope, path) for scope in successor_scopes):
-            raise RestructureError(f"dirty product path is outside successor write scopes: {path}")
+    preserved_paths = [
+        path for entry in entries for path in entry["preservation_scope"]
+    ]
+    if len(preserved_paths) != len(set(preserved_paths)):
+        raise RestructureError("preservation_scope paths must be assigned exactly once")
+    if sorted(preserved_paths) != actual_dirty:
+        raise RestructureError(
+            "successor preservation_scope must exactly match dirty_product_paths"
+        )
+    reject_preservation_write_overlap(
+        preserved_paths, successor_scopes, "successor plans"
+    )
     active_text = ACTIVE_INDEX.read_text(encoding="utf-8")
     rows = active_rows(active_text)
     if rows.count((source_id, source_path, "replan_required")) != 1:
@@ -976,6 +1049,9 @@ def verify_repository_contracts() -> None:
         paths: list[str] = []
         mapped: set[str] = set()
         integration_count = 0
+        contract_preservation: list[str] = []
+        contract_write_scopes: list[list[str]] = []
+        preservation_mode: bool | None = None
         for index, raw_successor in enumerate(successors):
             successor = exact_object(
                 raw_successor,
@@ -990,6 +1066,25 @@ def verify_repository_contracts() -> None:
             if not isinstance(successor["content"], str) or sha256(successor["content"].encode()) != successor["content_digest"]:
                 raise RestructureError(f"contract successor content digest mismatch for {plan_id}")
             successor_manifest = parse_manifest(successor["content"])
+            has_preservation = "preservation_scope" in successor_manifest
+            if preservation_mode is None:
+                preservation_mode = has_preservation
+            elif preservation_mode != has_preservation:
+                raise RestructureError(
+                    f"contract successors mix preservation schemas for {plan_id}"
+                )
+            expected_preservation = (
+                preservation_scope(
+                    successor_manifest,
+                    f"contract successor {plan_id}/{index}",
+                    required=True,
+                )
+                if has_preservation
+                else None
+            )
+            if expected_preservation is not None:
+                contract_preservation.extend(expected_preservation)
+                contract_write_scopes.append(items(successor_manifest, "write_scope"))
             digests = successor["acceptance_digests"]
             if not isinstance(digests, list) or not digests or len(digests) != len(set(digests)):
                 raise RestructureError(f"contract successor mapping is invalid for {plan_id}")
@@ -1028,7 +1123,11 @@ def verify_repository_contracts() -> None:
                 expected_live_status = "checked"
             elif replanned_records:
                 validate_replanned_successor(
-                    successor["id"], path, digests, expected_successor_acceptance
+                    successor["id"],
+                    path,
+                    digests,
+                    expected_successor_acceptance,
+                    expected_preservation,
                 )
                 live_successor_file = None
             else:
@@ -1041,6 +1140,14 @@ def verify_repository_contracts() -> None:
                     raise RestructureError(f"live successor lineage mismatch for {plan_id}: {path}")
                 if items(live_successor_manifest, "acceptance") != expected_successor_acceptance:
                     raise RestructureError(f"live successor acceptance mismatch for {plan_id}: {path}")
+                if expected_preservation is not None and preservation_scope(
+                    live_successor_manifest,
+                    f"live successor {plan_id}/{index}",
+                    required=True,
+                ) != expected_preservation:
+                    raise RestructureError(
+                        f"live successor preservation_scope mismatch for {plan_id}: {path}"
+                    )
             mapped.update(digests)
             paths.append(path)
             if successor["integration"] is True:
@@ -1051,6 +1158,21 @@ def verify_repository_contracts() -> None:
                 raise RestructureError(f"contract integration flag is invalid for {plan_id}")
         if len(paths) != len(set(paths)) or mapped != set(source_digests) or integration_count != 1:
             raise RestructureError(f"contract mapping is incomplete or ambiguous for {plan_id}")
+        if preservation_mode:
+            dirty_paths = contract["dirty_product_paths"]
+            if (
+                not isinstance(dirty_paths, list)
+                or len(contract_preservation) != len(set(contract_preservation))
+                or sorted(contract_preservation) != dirty_paths
+            ):
+                raise RestructureError(
+                    f"contract preservation_scope does not match dirty paths for {plan_id}"
+                )
+            reject_preservation_write_overlap(
+                contract_preservation,
+                contract_write_scopes,
+                f"contract {plan_id}",
+            )
         archive_text = archive_file.read_text(encoding="utf-8")
         archive_manifest = parse_manifest(archive_text)
         if scalar(archive_manifest, "status") != "replanned":

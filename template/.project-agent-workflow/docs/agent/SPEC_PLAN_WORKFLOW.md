@@ -85,6 +85,7 @@ Optional active/backlog fields:
 - `target_json`
 - `acceptance_focus`
 - `completion_deferred_reason`
+- `preservation_scope`
 - `primary_invariant`
 - `integration_gates`
 - `replan_source`
@@ -105,8 +106,10 @@ Rules:
 - `required_specs` must contain `default_reads` plus the union of every listed route's `required` entries.
 - Add matching conditional specs when the task or touched paths satisfy their conditions.
 - `write_scope` lists paths the implementing agent may edit.
+- `preservation_scope` lists exact dirty product paths that restructuring must retain without granting edit, validation, apply, staging, or commit authority. Use `none` when no dirty product path must be retained.
 - `context_files` lists additional read-only paths needed to perform the work; use `none` when no additional paths are needed.
 - A path must not appear in both `write_scope` and `context_files`.
+- A `preservation_scope` entry must be normalized, exact, unique across all restructuring successors, and disjoint from every successor `write_scope`.
 - `target_json` is optional structured context. JSON edit targets must also appear in `write_scope`.
 - `validation` should list commands needed for completion.
 - Validate plan command lists with `python3 .project-agent-workflow/scripts/plan_validation_commands.py check-plan <plan>` when plan validation entries are edited manually.
@@ -155,7 +158,9 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - Preserve the exact source plan path, source HEAD, source-plan digest, and digest of every normalized source acceptance item in a parent-owned replan contract.
 - Map every source acceptance digest to at least one successor plan or integration gate. The integration plan retains the source acceptance text exactly and proves the combined successors against it.
 - Successors may change plan boundaries, ordering, implementation methods, and validation methods. Replacing, weakening, deleting, or adding a user requirement or accepted safety condition requires explicit user authorization recorded separately from restructuring.
-- Preserve committed work. Do not reset, stash, delete, commit, or apply product changes during restructuring. Record dirty paths and cover each one with a successor write scope before implementation resumes.
+- Preserve committed work. Do not reset, stash, delete, commit, or apply product changes during restructuring.
+- Record every dirty product path exactly once across successor `preservation_scope` fields. Preservation proves retention only and never authorizes candidate generation, validation, apply, staging, or commit effects.
+- Reject missing, duplicate, overlapping, non-normalized, or silently dropped preservation entries. Continue verifying schema-1 contracts created before `preservation_scope` without reinterpreting their historical write scopes as the new preservation authority.
 - Keep full option analysis outside active plans. Active successors contain only accepted decisions and executable instructions.
 
 ## Handoff Queue

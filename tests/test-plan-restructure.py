@@ -117,6 +117,7 @@ class PlanRestructureTest(unittest.TestCase):
             "human_design_required: yes\n"
             "human_approval_status: approved\n"
             f"write_scope:\n  - {scope}\n"
+            "preservation_scope:\n  - none\n"
             "context_files:\n  - none\n"
             "required_specs:\n"
             "  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n"
@@ -691,8 +692,8 @@ class PlanRestructureTest(unittest.TestCase):
         self.spec["dirty_product_paths"] = [dirty_relative]
         integration = self.spec["integration"]
         integration["content"] = str(integration["content"]).replace(
-            "write_scope:\n  - tests/",
-            "write_scope:\n  - tests/\n  - config/",
+            "preservation_scope:\n  - none",
+            f"preservation_scope:\n  - {dirty_relative}",
         )
         self.spec["reason_codes"] = [scenario["expected"]["reason_code"]]
         source = self.repo / self.source_path
@@ -724,39 +725,113 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertNotEqual(self.run_command().returncode, 0)
         self.assert_source_unchanged()
 
-    def test_dirty_product_path_requires_successor_scope(self) -> None:
+    def test_dirty_product_path_requires_preservation_scope(self) -> None:
         dirty = self.repo / "config/user.yaml"
         dirty.parent.mkdir()
         dirty.write_text("user: true\n", encoding="utf-8")
         self.spec["dirty_product_paths"] = ["config/user.yaml"]
         self.write_spec()
-        self.assertNotEqual(self.run_command().returncode, 0)
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preservation_scope must exactly match", result.stderr)
         self.assertEqual(dirty.read_text(encoding="utf-8"), "user: true\n")
         self.assert_source_unchanged()
 
-    def test_dirty_product_path_requires_trailing_slash_for_directory_scope(self) -> None:
+    def test_preservation_scope_requires_exact_path_and_rejects_write_overlap(self) -> None:
         dirty = self.repo / "config/project-owned.yaml"
         dirty.parent.mkdir()
         dirty.write_text("user: true\n", encoding="utf-8")
         self.spec["dirty_product_paths"] = ["config/project-owned.yaml"]
         integration = self.spec["integration"]  # type: ignore[assignment]
         integration["content"] = str(integration["content"]).replace(
-            "write_scope:\n  - tests/", "write_scope:\n  - config"
+            "preservation_scope:\n  - none", "preservation_scope:\n  - config/"
         )
         self.write_spec()
         rejected = self.run_command()
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn("outside successor write scopes", rejected.stderr)
+        self.assertIn("unique normalized exact paths", rejected.stderr)
         self.assertEqual(dirty.read_text(encoding="utf-8"), "user: true\n")
         self.assert_source_unchanged()
 
         integration["content"] = str(integration["content"]).replace(
-            "write_scope:\n  - config", "write_scope:\n  - config/"
+            "preservation_scope:\n  - config/",
+            "preservation_scope:\n  - config/project-owned.yaml",
+        ).replace(
+            "write_scope:\n  - tests/", "write_scope:\n  - config/"
+        )
+        self.write_spec()
+        overlap = self.run_command()
+        self.assertNotEqual(overlap.returncode, 0)
+        self.assertIn("preservation_scope overlaps write_scope", overlap.stderr)
+        self.assert_source_unchanged()
+
+        integration["content"] = str(integration["content"]).replace(
+            "write_scope:\n  - config/", "write_scope:\n  - tests/"
         )
         self.write_spec()
         accepted = self.run_command()
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         self.assertEqual(dirty.read_text(encoding="utf-8"), "user: true\n")
+
+    def test_duplicate_and_dropped_preservation_scope_are_rejected(self) -> None:
+        dirty = self.repo / "config/project-owned.yaml"
+        dirty.parent.mkdir()
+        dirty.write_text("user: true\n", encoding="utf-8")
+        self.spec["dirty_product_paths"] = ["config/project-owned.yaml"]
+        for successor in [self.spec["successors"][0], self.spec["integration"]]:  # type: ignore[index]
+            successor["content"] = str(successor["content"]).replace(
+                "preservation_scope:\n  - none",
+                "preservation_scope:\n  - config/project-owned.yaml",
+            )
+        self.write_spec()
+        duplicate = self.run_command()
+        self.assertNotEqual(duplicate.returncode, 0)
+        self.assertIn("assigned exactly once", duplicate.stderr)
+        self.assert_source_unchanged()
+
+        self.spec = self.make_spec()
+        self.spec["dirty_product_paths"] = ["config/project-owned.yaml"]
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        integration["content"] = str(integration["content"]).replace(
+            "preservation_scope:\n  - none",
+            "preservation_scope:\n  - config/project-owned.yaml",
+        )
+        self.write_spec()
+        self.assertEqual(self.run_command().returncode, 0)
+        integration_path = self.repo / str(integration["path"])
+        integration_path.write_text(
+            integration_path.read_text(encoding="utf-8").replace(
+                "preservation_scope:\n  - config/project-owned.yaml",
+                "preservation_scope:\n  - none",
+            ),
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0)
+        self.assertIn("live successor preservation_scope mismatch", verified.stderr)
+
+    def test_legacy_schema_one_contract_without_preservation_scope_still_verifies(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        for successor in contract["successors"]:
+            successor["content"] = successor["content"].replace(
+                "preservation_scope:\n  - none\n", ""
+            )
+            successor["content_digest"] = digest(successor["content"])
+            live = self.repo / successor["path"]
+            live.write_text(
+                live.read_text(encoding="utf-8").replace(
+                    "preservation_scope:\n  - none\n", ""
+                ),
+                encoding="utf-8",
+            )
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
 
     def test_injected_midwrite_failure_rolls_back_metadata(self) -> None:
         old_cwd = Path.cwd()

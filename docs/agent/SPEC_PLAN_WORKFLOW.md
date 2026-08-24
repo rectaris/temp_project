@@ -63,7 +63,10 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - Preserve the exact source plan path, source HEAD, source-plan digest, and digest of every normalized source acceptance item in the parent-owned replan contract.
 - Map every source acceptance digest to at least one successor plan or integration gate. The integration plan must retain the source acceptance text exactly and prove the combined successors against it.
 - A successor may change plan boundaries, ordering, implementation methods, and validation methods. Replacing, weakening, deleting, or adding a user requirement or accepted safety condition requires explicit user authorization recorded separately from the restructuring operation.
-- Preserve committed work. Do not reset, stash, delete, commit, or apply product changes as part of restructuring. Record dirty paths and cover each one with a successor write scope before implementation resumes.
+- Preserve committed work. Do not reset, stash, delete, commit, or apply product changes as part of restructuring.
+- Record every dirty product path exactly once across successor `preservation_scope` fields. Each entry is one normalized exact path, not a directory prefix.
+- Keep `preservation_scope` disjoint from every successor `write_scope`. Preservation proves retention only and never authorizes candidate generation, validation, apply, staging, or commit effects.
+- Reject missing, duplicate, overlapping, non-normalized, or silently dropped preservation entries. Continue verifying schema-1 contracts created before `preservation_scope` without reinterpreting their historical write scopes as the new preservation authority.
 - After an atomic restructuring transition, archive the source with terminal `status: replanned`. This state means “replaced while preserving requirements”; it is distinct from successful `checked` completion and prerequisite-based `deferred` work.
 - Keep full option analysis and decision matrices outside active plans. Active successors contain only accepted decisions, bounded lineage fields, executable scope, validation, and acceptance.
 
