@@ -1,7 +1,9 @@
 # Freeze the bounded Copier fixture validator
 
-status: in_progress
-primary_invariant: a separately accepted parser and mutation suite rejects every missing, reordered, duplicated, or bypassed bounded fixture operation before the runtime or broad checker is committed
+status: replanned
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
+  - multiple_independent_invariants
 task_types:
   - security
   - template_workflow
@@ -44,11 +46,16 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02","stage":"focused","witness":"python3 tests/test-copier-fixture.py"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/190-migrate-live-plan-contracts.md
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/191-freeze-bounded-copier-fixture-validator.md
+replan_contract: docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json
 integration_gates:
-  - Plan 190 must be checked and its exact checked archive path must replace this active predecessor before implementation
-  - preserve both current product candidates without editing, staging, or committing them
-  - do not execute tests/copier-update.sh in this slice; Plan 179 owns the next complete transition for the Plan 163 lineage
-  - Plan 185 remains deferred until this plan is checked and its exact checked archive path replaces its active predecessor
+  - combined successors must satisfy every source acceptance item
+successor_plans:
+  - docs/plan/active/197-freeze-bounded-shell-structure-parser.md
+  - docs/plan/active/198-integrate-bounded-copier-fixture-validator.md
+inherited_acceptance_digests:
+  - sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02
 checked_summary_ja: bounded Copier fixtureをruntimeや全体checkerの未受理差分に依存せず検証できるparserとmutation testを確定する。
 
 ## Decisions
@@ -71,3 +78,9 @@ checked_summary_ja: bounded Copier fixtureをruntimeや全体checkerの未受理
 
 - The dirty runtime and broad checker remain advisory input and cannot authorize this validator.
 - The validator's synthetic positive case must be defined independently from the dirty runtime candidate.
+- Parent-direct implementation produced an unaccepted parser and 13-case mutation suite in the declared two-file write scope.
+- Focused validation passed `python3 tests/test-copier-fixture.py` with 13 tests and `git diff --check`.
+- Independent review round 1 reported High 2 and Medium 2; parent remediation bound background process ownership, connected control-flow blocks, direct snapshot rejection, and inventory copy/staging.
+- Independent review round 2 reported Medium 1; parent remediation fixed the inventory loop body and conditional bypass case.
+- Independent review round 3 reported High 1 because an early top-level termination can still make the required fixture sequence unreachable.
+- Two parent-direct remediation rounds still leave a High finding, so this execution is stopped and requires a reconstructed implementation and validation boundary before further edits, validation, archival, or commit.

@@ -1,7 +1,6 @@
 # Active Plan
 
 id	path	status
-191	docs/plan/active/191-freeze-bounded-copier-fixture-validator.md	in_progress
 185	docs/plan/active/185-complete-bounded-copier-fixture-runtime.md	deferred
 186	docs/plan/active/186-bind-connected-copier-fixture-checker.md	deferred
 187	docs/plan/active/187-verify-plan183-successor-acceptance.md	deferred
@@ -14,3 +13,5 @@ id	path	status
 193	docs/plan/active/193-collect-resource-evaluation-evidence.md	deferred
 194	docs/plan/active/194-apply-resource-evaluation-outcome.md	deferred
 195	docs/plan/active/195-verify-plan133-successor-acceptance.md	deferred
+197	docs/plan/active/197-freeze-bounded-shell-structure-parser.md	in_progress
+198	docs/plan/active/198-integrate-bounded-copier-fixture-validator.md	deferred
