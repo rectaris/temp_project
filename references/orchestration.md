@@ -36,6 +36,12 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 - `docs_researcher`: read-only external or version-specific research.
 - `sequential_plan_worker`: read-only implementation contract for exactly one assigned active plan; writable execution must route through `scripts/run-sandboxed-plan-worker.py`.
 
+## Plan Selection
+
+- Select the runnable active plan from the active-plan index (`docs/plan/plan.md`) by finding the one row whose `status` column is `in_progress` and whose plan file also declares `status: in_progress`.
+- Reject zero runnable rows (no work to do), multiple runnable rows (ambiguous selection), duplicate ids or paths, index/file status mismatch, malformed index rows, and a selected plan with unresolved predecessor inputs.
+- Integer prefixes are immutable identities and archive ordering only; do not use them as the runnable-plan selector. A lower-numbered deferred plan does not block the selected runnable plan.
+
 ## Delegation Rules
 
 - Delegate only concrete, bounded, independently useful work.

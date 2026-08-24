@@ -413,6 +413,20 @@ def check_sandboxed_worker_fallback() -> None:
         ):
             if marker not in text:
                 fail(f"{relative} missing candidate review identity marker: {marker}")
+    for relative in (
+        "references/orchestration.md",
+        ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        text = read(relative).lower()
+        for marker in (
+            "active-plan index",
+            "index/file status mismatch",
+            "duplicate ids or paths",
+            "immutable identities and archive ordering",
+            "lower-numbered deferred plan does not block",
+        ):
+            if marker not in text:
+                fail(f"{relative} missing runnable-plan selection marker: {marker}")
 
 
 def check_reusable_skill_parity() -> None:
@@ -2028,6 +2042,13 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "proactively",
         "short deterministic",
         "cost",
+        "select the runnable active plan",
+        "index/file status mismatch",
+        "zero runnable rows",
+        "multiple runnable rows",
+        "duplicate ids or paths",
+        "immutable identities and archive ordering only",
+        "lower-numbered deferred plan does not block",
         "external writes",
         "context files read-only",
         "advisory",
@@ -2512,6 +2533,50 @@ def check_active_plans() -> None:
     for path in sorted(active_dir.glob("[0-9][0-9][0-9]-*.md")):
         if contains_option_matrix(path.read_text(encoding="utf-8")):
             fail(f"{path.relative_to(ROOT)} contains an option-analysis matrix")
+
+    index_path = ROOT / "docs/plan/plan.md"
+    if not index_path.exists():
+        return
+    lines = index_path.read_text(encoding="utf-8").splitlines()
+    header_idx = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith("id\t"):
+            header_idx = i
+            break
+    if header_idx is None:
+        return
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
+    runnable_rows: list[str] = []
+    for line in lines[header_idx + 1:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split("\t")
+        if len(parts) != 3:
+            fail(f"malformed active index row: {stripped}")
+        row_id, row_path, row_status = parts
+        if row_id in seen_ids:
+            fail(f"duplicate id in active index: {row_id}")
+        if row_path in seen_paths:
+            fail(f"duplicate path in active index: {row_path}")
+        seen_ids.add(row_id)
+        seen_paths.add(row_path)
+        plan_file = ROOT / row_path
+        if not plan_file.exists():
+            fail(f"active index references missing plan file: {row_path}")
+        plan_text = plan_file.read_text(encoding="utf-8")
+        file_status = None
+        for plan_line in plan_text.splitlines():
+            if plan_line.startswith("status:"):
+                file_status = plan_line.split(":", 1)[1].strip()
+                break
+        if file_status is not None and file_status != row_status:
+            fail(f"active index status '{row_status}' does not match plan file status '{file_status}' for {row_path}")
+        if row_status == "in_progress":
+            runnable_rows.append(row_id)
+    if len(runnable_rows) > 1:
+        fail(f"multiple runnable plans in active index: {', '.join(runnable_rows)}")
 
 
 def self_test() -> None:

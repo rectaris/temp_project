@@ -9,8 +9,9 @@ Process active plans as a parent-owned sequence. Keep implementation in the work
 
 ## Workflow
 
-1. Enumerate `docs/plan/active/<number>-<name>.md` files and sort by the integer prefix.
-   Stop on malformed names, duplicate numbers, ambiguous or blocked plans, or missing required inputs.
+1. Read the active-plan index (`docs/plan/plan.md`) and select the one row whose `status` column is `in_progress` and whose plan file also declares `status: in_progress`.
+   Reject zero or multiple runnable rows, duplicate ids or paths, index/file status mismatch, malformed rows, and a selected plan with unresolved predecessor inputs.
+   Integer prefixes are immutable identities and archive ordering only; do not use them as the runnable-plan selector. A lower-numbered deferred plan does not block the selected runnable plan.
 2. Read the selected plan, every required spec, and the active-plan index before delegation.
 3. Verify `.project-agent-workflow/scripts/run-sandboxed-plan-worker.py` is available and keep the built-in `sequential_plan_worker` profile read-only.
    Stop if the sandboxed runner is unavailable.
@@ -37,7 +38,7 @@ Process active plans as a parent-owned sequence. Keep implementation in the work
    Before apply, authorize the same validation operation with `--suite authoritative` exactly once for an otherwise acceptable candidate. A failed focused or authoritative command stops without model fallback.
    After apply, commit the exact admitted patch and record the accepted attempt closure before archiving metadata or starting any dependent writable plan. The accepted closing-event, candidate, and source-commit digests form the predecessor proof and cannot be replaced by a worker receipt or helper claim.
    Keep detailed logs and large evidence under `.agent-logs/` or `.agent-artifacts/`.
-8. Repeat for the next numeric plan only after acceptance.
+8. After acceptance, re-read the active-plan index, select the next runnable plan by index status, and repeat.
    Finish with consolidated validation and remaining-risk reporting.
 
 ## Boundaries
