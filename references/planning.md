@@ -44,6 +44,7 @@ Required fields for new active and backlog plans:
 Optional fields for new active and backlog plans:
 
 - `target_json`
+- `implementation_tier` (`0`, `1`, or `2`; selects plan weight and available stop transitions)
 - `acceptance_focus`
 - `completion_deferred_reason` (required when `status` is `deferred`)
 - `primary_invariant`

@@ -1144,6 +1144,7 @@ def require_current_plan_manifest_reference(planning: str) -> None:
         "target_json",
         "acceptance_focus",
         "completion_deferred_reason",
+        "implementation_tier",
         "primary_invariant",
         "integration_gates",
         "replan_source",
