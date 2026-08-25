@@ -1,7 +1,6 @@
 # Preserve canonical lifecycle bytes
 
-status: deferred
-completion_deferred_reason: Plan 206 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: lifecycle verification removes only syntactically parsed lifecycle field bytes, preserves every other byte, and admits replan_required only with canonical stopped metadata
 task_types:
   - planning_docs
@@ -26,7 +25,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/active/200-enable-coupled-lineage-reconstruction.md
-  - docs/plan/active/206-enforce-per-source-integration-coverage.md
+  - docs/plan/checked/2026/08/16-31/206-enforce-per-source-integration-coverage.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -50,7 +49,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:d6486ed4fe2f32f744fd53df526284ab3151fd6bb9fed42e2318cf89855de837","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
-  - docs/plan/active/206-enforce-per-source-integration-coverage.md
+  - docs/plan/checked/2026/08/16-31/206-enforce-per-source-integration-coverage.md
 integration_gates:
   - begin only from the exact checked Plan 206 archive and a clean worktree
   - preserve the Plan 206 acceptance check and all unrelated manifest and body bytes

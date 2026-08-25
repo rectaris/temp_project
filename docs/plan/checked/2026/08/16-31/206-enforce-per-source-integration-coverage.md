@@ -1,6 +1,6 @@
 # Enforce per-source integration coverage
 
-status: in_progress
+status: checked
 primary_invariant: every durable schema-3 source is accepted only when its one designated integration successor maps that source's complete ordered acceptance set
 task_types:
   - planning_docs
@@ -71,13 +71,16 @@ checked_summary_ja: sourceごとのintegration successorが全acceptanceを保�
 
 ## Tasks
 
-- [ ] Add exact per-source coverage checks to schema-3 construction and durable verification.
-- [ ] Add positive multi-source coverage and negative partial-integration, aggregate-only, reordered, duplicate, and foreign-digest tests.
-- [ ] Align the root and generated Plan Workflow policy with the enforced condition.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 207 with this plan's exact checked archive as predecessor.
+- [x] Add exact per-source coverage checks to schema-3 construction and durable verification.
+- [x] Add positive multi-source coverage and negative partial-integration, aggregate-only, reordered, duplicate, and foreign-digest tests.
+- [x] Align the root and generated Plan Workflow policy with the enforced condition.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 207 with this plan's exact checked archive as predecessor.
 
 ## Validation Notes
 
 - The baseline commit is preservation evidence only; it does not make Plan 200 checked or accepted.
 - This plan owns only the per-source integration coverage finding from the final Plan 200 rereview.
+- Focused validation passed with `python3 tests/test-plan-restructure.py`, `python3 scripts/restructure-plan.py --verify`, and `git diff --check`.
+- Independent review reported no unresolved High or Medium findings.
+- The authoritative validation suite completed successfully once.
