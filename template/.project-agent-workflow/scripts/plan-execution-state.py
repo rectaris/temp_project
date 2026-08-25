@@ -23,7 +23,7 @@ from types import ModuleType
 from typing import Any
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 MAX_BYTES = 65_536
 EXECUTION_STATE_MAX_BYTES = 131_072
 CANDIDATE_MANIFEST_MAX_BYTES = 1024 * 1024
@@ -59,6 +59,11 @@ REASON_CODES = {
 }
 REPAIR_REASON_CODES = {"independent_repair_required"}
 DESCOPE_REASON_CODES = {"bounded_acceptance_reduction_required"}
+DESCOPE_PENDING_REASON_CODES = {
+    "implementation_finding_budget_exhausted",
+    "boundary_finding_budget_exhausted",
+    "parent_remediation_budget_exhausted",
+}
 REVIEW_REASON_CODES = {
     "acceptance_unmet",
     "out_of_scope_change",
@@ -68,6 +73,19 @@ REVIEW_REASON_CODES = {
     "evidence_incomplete",
     "multiple_invariants_coupled",
 }
+IMPLEMENTATION_REVIEW_REASON_CODES = {
+    "acceptance_unmet",
+    "focused_validation_failed",
+    "evidence_incomplete",
+}
+BOUNDARY_REVIEW_REASON_CODES = {
+    "out_of_scope_change",
+    "required_spec_missed",
+    "integration_contract_mismatch",
+}
+DESIGN_REVIEW_REASON_CODES = {"multiple_invariants_coupled"}
+IMPLEMENTATION_FINDING_BUDGET = 4
+BOUNDARY_FINDING_BUDGET = 2
 MODES = {"candidate", "parent_direct"}
 ATTEMPT_KINDS = {"initial", "correction"}
 REVIEW_OUTCOMES = {"accepted", "correction_requested", "rejected"}
@@ -101,7 +119,7 @@ EXACT_KEYS = {
     "implementation_mode", "candidate_generations", "correction_rounds",
     "parent_direct_remediation_rounds", "focused_validation_events",
     "authoritative_validation_events", "repair_reason_codes", "replan_reason_codes",
-    "descope_reason_codes",
+    "descope_reason_codes", "descope_pending_reason_codes",
     "predecessor_plan_digest", "predecessor_accepted_candidate_digest",
     "predecessor_closing_event_digest", "predecessor_accepted_source_head",
     "writable_attempt_starts",
@@ -1406,7 +1424,7 @@ def validate_state(value: Any) -> dict[str, Any]:
     require_digest(value["successor_claim_digest"], "successor_claim_digest", allow_empty=True)
     if value["state"] not in {
         "active", "accepted", "rejected", "diagnosis_required",
-        "repair_required", "descope_required", "replan_required"
+        "repair_required", "descope_required", "descope_pending", "replan_required"
     }:
         raise StateError("invalid state")
     if value["implementation_mode"] not in MODES:
@@ -1443,7 +1461,21 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("invalid descope_reason_codes")
     if value["state"] == "descope_required" and not descope_reasons:
         raise StateError("descope_required state needs a reason")
-    if value["state"] == "active" and (reasons or repair_reasons or descope_reasons):
+    descope_pending_reasons = value["descope_pending_reason_codes"]
+    if (
+        not isinstance(descope_pending_reasons, list)
+        or len(descope_pending_reasons) != len(set(descope_pending_reasons))
+        or any(
+            not isinstance(reason, str) or reason not in DESCOPE_PENDING_REASON_CODES
+            for reason in descope_pending_reasons
+        )
+    ):
+        raise StateError("invalid descope_pending_reason_codes")
+    if value["state"] == "descope_pending" and not descope_pending_reasons:
+        raise StateError("descope_pending state needs a reason")
+    if value["state"] == "active" and (
+        reasons or repair_reasons or descope_reasons or descope_pending_reasons
+    ):
         raise StateError("active state cannot have stop reasons")
     review_reasons = value["review_reason_codes"]
     if not isinstance(review_reasons, list) or len(review_reasons) != len(set(review_reasons)) or any(
@@ -1534,7 +1566,22 @@ def validate_state(value: Any) -> dict[str, Any]:
                 prior_summary["state"] == "diagnosis_required"
                 and event["event_type"] in {"failure_diagnosis", "repair_classification"}
             )
-            if not successor_is_allowed and not diagnosis_is_allowed and not checkpoint_event_allowed:
+            descope_pending_is_allowed = (
+                prior_summary["state"] == "descope_pending"
+                and event["event_type"] in {
+                    "descope_classification",
+                    "scope_drift",
+                    "spec_drift",
+                    "security_boundary_drift",
+                    "post_authoritative_design_change",
+                }
+            )
+            if (
+                not successor_is_allowed
+                and not diagnosis_is_allowed
+                and not descope_pending_is_allowed
+                and not checkpoint_event_allowed
+            ):
                 raise StateError("event history continues after a terminal execution state")
         invariants = event["invariant_digests"]
         if not isinstance(invariants, list) or len(invariants) != len(set(invariants)) or any(
@@ -1926,6 +1973,9 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     reasons: list[str] = []
     repair_reasons: list[str] = []
     descope_reasons: list[str] = []
+    descope_pending_reasons: list[str] = []
+    implementation_finding_count = 0
+    boundary_finding_count = 0
     authoritative_failure_seen = False
     diagnosis_attempts = 0
     confirmed_invariant = ""
@@ -1933,6 +1983,10 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     def add_reason(reason: str) -> None:
         if reason not in reasons:
             reasons.append(reason)
+
+    def add_descope_pending_reason(reason: str) -> None:
+        if reason not in descope_pending_reasons:
+            descope_pending_reasons.append(reason)
 
     for event in events:
         event_type = event["event_type"]
@@ -1955,7 +2009,7 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             ) & {"High", "Medium"}:
                 parent_rounds += 1
                 if parent_rounds >= MAX_PARENT_REMEDIATIONS:
-                    add_reason("parent_remediation_budget_exhausted")
+                    add_descope_pending_reason("parent_remediation_budget_exhausted")
         elif event_type == "focused_validation":
             focused_events += 1
         elif event_type == "authoritative_validation":
@@ -2017,13 +2071,23 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             last_review_outcome = outcome
             reason = event["review_reason_code"]
             if reason:
-                repeated = reason in review_reason_codes
-                if not repeated:
+                if reason not in review_reason_codes:
                     review_reason_codes.append(reason)
-                if repeated:
+                if reason in DESIGN_REVIEW_REASON_CODES:
                     add_reason(reason)
-                if reason == "multiple_invariants_coupled":
-                    add_reason(reason)
+                elif outcome in {"correction_requested", "rejected"}:
+                    if reason in IMPLEMENTATION_REVIEW_REASON_CODES:
+                        implementation_finding_count += 1
+                        if implementation_finding_count >= IMPLEMENTATION_FINDING_BUDGET:
+                            add_descope_pending_reason(
+                                "implementation_finding_budget_exhausted"
+                            )
+                    elif reason in BOUNDARY_REVIEW_REASON_CODES:
+                        boundary_finding_count += 1
+                        if boundary_finding_count >= BOUNDARY_FINDING_BUDGET:
+                            add_descope_pending_reason(
+                                "boundary_finding_budget_exhausted"
+                            )
             if outcome == "accepted":
                 if last_attempt_kind not in ATTEMPT_KINDS:
                     raise StateError("accepted closure lacks a writable attempt")
@@ -2053,6 +2117,8 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         state = "rejected"
     elif authoritative_failure_seen:
         state = "diagnosis_required"
+    elif descope_pending_reasons:
+        state = "descope_pending"
     else:
         state = "active"
     return {
@@ -2072,6 +2138,7 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "review_reason_codes": review_reason_codes,
         "repair_reason_codes": repair_reasons,
         "descope_reason_codes": descope_reasons,
+        "descope_pending_reason_codes": descope_pending_reasons,
         "replan_reason_codes": reasons,
     }
 
@@ -2586,6 +2653,7 @@ def init_state(args: argparse.Namespace) -> None:
         "review_reason_codes": [],
         "repair_reason_codes": [],
         "descope_reason_codes": [],
+        "descope_pending_reason_codes": [],
         "replan_reason_codes": [],
         "last_monotonic_ns": 0,
         "genesis_digest": "",
@@ -3389,6 +3457,11 @@ def stopped_message(state: dict[str, Any]) -> str:
         return "plan execution is stopped for restructuring"
     if state["state"] == "descope_required":
         return "plan execution is stopped for a bounded acceptance reduction"
+    if state["state"] == "descope_pending":
+        return (
+            "plan execution is stopped pending a bounded descope classification "
+            "or hard drift escalation"
+        )
     if state["state"] == "accepted":
         return "plan execution is closed with an accepted candidate"
     if state["state"] == "rejected":
@@ -3424,6 +3497,15 @@ def record_event(args: argparse.Namespace) -> None:
                 raise StateError("failure diagnosis attempt budget is exhausted")
             if args.event_type == "repair_classification" and not confirmed_diagnosis_invariant(state):
                 raise StateError("repair classification requires a confirmed failure diagnosis")
+        elif state["state"] == "descope_pending":
+            if args.event_type not in {
+                "descope_classification",
+                "scope_drift",
+                "spec_drift",
+                "security_boundary_drift",
+                "post_authoritative_design_change",
+            }:
+                raise StateError(stopped_message(state))
         else:
             raise StateError(stopped_message(state))
         if any(event["event_id"] == args.event_id for event in state["events"]):

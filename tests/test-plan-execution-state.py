@@ -2415,6 +2415,54 @@ class PlanExecutionStateTest(unittest.TestCase):
             arguments.extend(("--accepted-source-head", accepted_source_head))
         return self.run_cli(*arguments)
 
+    def synthetic_attempt_events_for_reasons(
+        self,
+        reasons: list[str],
+        *,
+        outcome: str = "correction_requested",
+    ) -> list[dict[str, object]]:
+        events: list[dict[str, object]] = []
+        last_digest = digest("synthetic-genesis")
+        for index, reason in enumerate(reasons, start=1):
+            attempt_id = f"synthetic-attempt-{index}"
+            start_event = {
+                "event_type": "writable_attempt_started",
+                "attempt_id": attempt_id,
+                "attempt_kind": "initial" if index == 1 else "correction",
+                "review_outcome": "",
+            }
+            close_event = {
+                "event_type": "attempt_closed",
+                "attempt_id": attempt_id,
+                "review_outcome": outcome,
+                "review_reason_code": reason,
+                "candidate_digest": digest(f"candidate-{index}"),
+                "accepted_source_head": self.head if outcome == "accepted" else "",
+                "event_digest": digest(f"close-{index}:{last_digest}"),
+            }
+            events.extend([start_event, close_event])
+            last_digest = str(close_event["event_digest"])
+        return events
+
+    def exhaust_boundary_finding_budget(
+        self,
+        *,
+        reason: str = "required_spec_missed",
+    ) -> None:
+        invariant = digest("one invariant")
+        for index in (1, 2):
+            attempt_id = f"boundary-budget-{index}"
+            started = self.start_writable_attempt(
+                self.state, self.lifecycle, "run-1", attempt_id,
+                kind="initial" if index == 1 else "correction",
+            )
+            self.assertEqual(started.returncode, 0, started.stderr)
+            closed = self.close_writable_attempt(
+                self.state, self.lifecycle, "run-1", attempt_id,
+                invariant=invariant, outcome="correction_requested", reason=reason,
+            )
+            self.assertEqual(closed.returncode, 0, closed.stderr)
+
     def accepted_execution(self, label: str) -> tuple[Path, Path, str]:
         state, lifecycle, run_id = self.initialize_execution(label)
         started = self.start_writable_attempt(
@@ -2843,8 +2891,76 @@ class PlanExecutionStateTest(unittest.TestCase):
                 digest(f"receipt-{index}"),
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(payload["state"], "descope_pending")
         self.assertEqual(
-            json.loads(state.read_text(encoding="utf-8"))["state"], "replan_required"
+            payload["descope_pending_reason_codes"],
+            ["parent_remediation_budget_exhausted"],
+        )
+        self.assertEqual(payload["replan_reason_codes"], [])
+
+    def test_implementation_review_reason_repeats_below_budget_remain_active(self) -> None:
+        with mock.patch.object(STATE_MODULE, "MAX_CORRECTIONS", 10):
+            summary = STATE_MODULE.derive_summary(
+                self.synthetic_attempt_events_for_reasons(["acceptance_unmet"] * 3)
+            )
+        self.assertEqual(summary["state"], "active")
+        self.assertEqual(summary["replan_reason_codes"], [])
+        self.assertEqual(summary["descope_pending_reason_codes"], [])
+        self.assertEqual(summary["review_reason_codes"], ["acceptance_unmet"])
+
+    def test_implementation_review_reason_budget_enters_descope_pending(self) -> None:
+        with mock.patch.object(STATE_MODULE, "MAX_CORRECTIONS", 10):
+            summary = STATE_MODULE.derive_summary(
+                self.synthetic_attempt_events_for_reasons(["evidence_incomplete"] * 4)
+            )
+        self.assertEqual(summary["state"], "descope_pending")
+        self.assertEqual(
+            summary["descope_pending_reason_codes"],
+            ["implementation_finding_budget_exhausted"],
+        )
+        self.assertEqual(summary["replan_reason_codes"], [])
+
+    def test_boundary_review_reason_budget_enters_descope_pending(self) -> None:
+        self.exhaust_boundary_finding_budget(reason="integration_contract_mismatch")
+        payload = self.payload()
+        self.assertEqual(payload["state"], "descope_pending")
+        self.assertEqual(
+            payload["descope_pending_reason_codes"],
+            ["boundary_finding_budget_exhausted"],
+        )
+        self.assertEqual(payload["replan_reason_codes"], [])
+
+    def test_descope_pending_allows_only_descope_or_drift(self) -> None:
+        self.exhaust_boundary_finding_budget()
+        blocked = self.record("pending-focused", "focused_validation")
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("pending a bounded descope classification", blocked.stderr)
+        recorded, _ = self.record_descope("pending-descope", "pending-descope-review")
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        payload = self.payload()
+        self.assertEqual(payload["state"], "descope_required")
+        self.assertEqual(
+            payload["descope_reason_codes"], ["bounded_acceptance_reduction_required"]
+        )
+        self.assertEqual(
+            payload["descope_pending_reason_codes"],
+            ["boundary_finding_budget_exhausted"],
+        )
+
+    def test_descope_pending_drift_escalates_to_replan(self) -> None:
+        self.exhaust_boundary_finding_budget()
+        recorded = self.record(
+            "pending-scope-drift", "scope_drift",
+            "--invariant-digest", digest("one invariant"),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        payload = self.payload()
+        self.assertEqual(payload["state"], "replan_required")
+        self.assertEqual(payload["replan_reason_codes"], ["scope_drift"])
+        self.assertEqual(
+            payload["descope_pending_reason_codes"],
+            ["boundary_finding_budget_exhausted"],
         )
 
     def test_multi_invariant_and_boundary_drift_trigger_immediately(self) -> None:
@@ -3637,8 +3753,18 @@ class PlanExecutionStateTest(unittest.TestCase):
                     record_event(reason, *invariant)
 
                 payload = json.loads(state.read_text(encoding="utf-8"))
-                self.assertEqual(payload["state"], "replan_required")
-                self.assertIn(reason, payload["replan_reason_codes"])
+                if reason == "parent_remediation_budget_exhausted":
+                    self.assertEqual(payload["state"], "descope_pending")
+                    self.assertEqual(payload["replan_reason_codes"], [])
+                    self.assertEqual(
+                        payload["descope_pending_reason_codes"],
+                        ["parent_remediation_budget_exhausted"],
+                    )
+                    stopped_fragment = "pending a bounded descope classification"
+                else:
+                    self.assertEqual(payload["state"], "replan_required")
+                    self.assertIn(reason, payload["replan_reason_codes"])
+                    stopped_fragment = "stopped for restructuring"
                 common = [
                     "--orchestration-run-id", run_id,
                     "--lifecycle-state", str(lifecycle),
@@ -3657,7 +3783,7 @@ class PlanExecutionStateTest(unittest.TestCase):
                         check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     )
                     self.assertNotEqual(denied.returncode, 0)
-                    self.assertIn("stopped for restructuring", denied.stderr)
+                    self.assertIn(stopped_fragment, denied.stderr)
                     self.assertNotIn("missing-manifest", denied.stderr)
 
     def test_untuned_holdout_security_drift_stops_the_runner(self) -> None:
@@ -3811,8 +3937,9 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
         payload = json.loads(state.read_text(encoding="utf-8"))
-        self.assertEqual(payload["state"], "replan_required")
-        self.assertIn("acceptance_unmet", payload["replan_reason_codes"])
+        self.assertEqual(payload["state"], "active")
+        self.assertEqual(payload["replan_reason_codes"], [])
+        self.assertEqual(payload["descope_pending_reason_codes"], [])
 
         crashed_state, crashed_lifecycle, crashed_run = self.initialize_execution("crashed")
         self.assertEqual(
@@ -3867,6 +3994,10 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(
             json.loads(coupled_state.read_text(encoding="utf-8"))["state"],
             "replan_required",
+        )
+        self.assertEqual(
+            json.loads(coupled_state.read_text(encoding="utf-8"))["replan_reason_codes"],
+            ["multiple_invariants_coupled"],
         )
 
         rejected_state, rejected_lifecycle, rejected_run = self.initialize_execution(

@@ -81,12 +81,20 @@ A bounded descope reduces the acceptance set of the current plan without restruc
 - `descope_required` stops candidate generation, correction, validation, apply, completion, and archival for that execution run. Only the `descope_plan` gate stays open, and the stopped run is never reopened.
 - A descope creates no replan contract, no successor lineage, and no additional active plan. Keep it as the default exit for Tier 0 and Tier 1 work.
 
+### Review-Finding Budgets
+
+- Classify review findings before selecting a stop state: implementation findings are `acceptance_unmet`, `focused_validation_failed`, and `evidence_incomplete`; boundary findings are `out_of_scope_change`, `required_spec_missed`, and `integration_contract_mismatch`; the design finding is `multiple_invariants_coupled`.
+- Implementation findings have a budget of 4 correction-requested or rejected attempt closures. Boundary findings have a budget of 2 correction-requested or rejected attempt closures. Accepted closures do not count.
+- A `parent_review` event carries finding severities but no review reason code, so two parent-direct remediation rounds that still leave a High or Medium finding record `descope_pending` with `parent_remediation_budget_exhausted` instead of asserting a finding class.
+- Exhausting an implementation or boundary finding budget records `descope_pending`, with `implementation_finding_budget_exhausted` or `boundary_finding_budget_exhausted`. Only `descope_classification` or a hard drift event may follow.
+- `multiple_invariants_coupled` remains an immediate `replan_required` reason. Any scope, spec, security-boundary, or post-authoritative design drift still escalates to `replan_required`.
+
 ## Restructuring Contract
 
 Plan restructuring changes execution boundaries, ordering, implementation methods, or validation methods. It does not change the user requirement baseline. The baseline consists of the user requirements, accepted safety conditions, and every normalized `acceptance` item in the source plan.
 
 - Use `status: replan_required` when the current plan must stop before further implementation, candidate generation or correction, validation, apply, completion, or archival.
-- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a discovery after authoritative validation that requires changing source-plan boundaries, implementation or validation methods, validation authority, or acceptance mapping; exhaustion of the initial candidate plus two correction rounds; or two parent-direct remediation rounds that still leave a High or Medium independent-review finding.
+- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a discovery after authoritative validation that requires changing source-plan boundaries, implementation or validation methods, validation authority, or acceptance mapping; or exhaustion of the initial candidate plus two correction rounds.
 - Elapsed time is telemetry and a checkpoint signal only. It can prompt review of the plan boundary, but it cannot prove semantic failure or authorize requirement changes.
 - Preserve the exact source plan path, source HEAD, source-plan digest, and digest of every normalized source acceptance item in the parent-owned replan contract.
 - Map every source acceptance digest to at least one successor plan or integration gate. The integration plan must retain the source acceptance text exactly and prove the combined successors against it.
