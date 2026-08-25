@@ -2506,6 +2506,66 @@ class PlanExecutionStateTest(unittest.TestCase):
         evidence.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         return evidence
 
+    def write_descope_evidence(
+        self,
+        event_id: str,
+        receipt: str,
+        invariant: str,
+        **overrides: object,
+    ) -> Path:
+        state = self.payload()
+        source = [digest("acceptance-a"), digest("acceptance-b"), digest("acceptance-c")]
+        value: dict[str, object] = {
+            "schema_version": 1,
+            "plan_path": state["plan_path"],
+            "plan_digest": state["plan_digest"],
+            "source_head": state["source_head"],
+            "primary_invariant_digest": state["primary_invariant_digest"],
+            "affected_invariant_digests": [invariant],
+            "candidate_lifecycle_identity_digest": state["candidate_lifecycle_identity_digest"],
+            "candidate_lifecycle_digest": digest(
+                self.lifecycle.read_text(encoding="utf-8")
+                if self.lifecycle.exists() else event_id + "\n"
+            ),
+            "independent_review_receipt_digest": receipt,
+            "source_acceptance_digests": source,
+            "retained_acceptance_digests": [source[0]],
+            "deferred_acceptance_digests": [source[1], source[2]],
+            "deferred_backlog_path": "docs/plan/backlog/300-deferred-acceptance.md",
+            "bounded_write_scope": True,
+            "source_scope_unchanged": True,
+            "validation_authority_unchanged": True,
+            "invariant_boundaries_unchanged": True,
+            "primary_invariant_unchanged": True,
+            "safety_conditions_unchanged": True,
+            "external_effect_authority_unchanged": True,
+            "independent_invariant_count": 1,
+        }
+        value.update(overrides)
+        evidence = self.base / f"{event_id}-descope-evidence.json"
+        evidence.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        return evidence
+
+    def record_descope(
+        self,
+        event_id: str,
+        receipt_label: str,
+        **overrides: object,
+    ) -> tuple[subprocess.CompletedProcess[str], str]:
+        invariant_digest = digest("one invariant")
+        receipt_digest = digest(receipt_label)
+        self.lifecycle.write_text(event_id + "\n", encoding="utf-8")
+        evidence = self.write_descope_evidence(
+            event_id, receipt_digest, invariant_digest, **overrides
+        )
+        recorded = self.record(
+            event_id, "descope_classification",
+            "--invariant-digest", invariant_digest,
+            "--independent-review-receipt-digest", receipt_digest,
+            "--descope-evidence-file", str(evidence),
+        )
+        return recorded, invariant_digest
+
     def enter_confirmed_diagnosis(
         self,
         *,
@@ -3065,6 +3125,87 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertNotEqual(exhausted.returncode, 0)
         self.assertIn("attempt budget is exhausted", exhausted.stderr)
         self.assertEqual(self.payload()["state"], "diagnosis_required")
+
+    def test_bounded_descope_preserves_acceptance_without_restructuring(self) -> None:
+        recorded, _ = self.record_descope("descope-1", "descope-review-1")
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        payload = self.payload()
+        self.assertEqual(payload["state"], "descope_required")
+        self.assertEqual(
+            payload["descope_reason_codes"], ["bounded_acceptance_reduction_required"]
+        )
+        self.assertEqual(payload["replan_reason_codes"], [])
+        self.assertEqual(payload["repair_reason_codes"], [])
+        execution_gate = self.run_cli(
+            "check", str(self.state), "--run-id", "run-1",
+            "--operation", "execution", "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(execution_gate.returncode, 0)
+        descope_gate = self.run_cli(
+            "check", str(self.state), "--run-id", "run-1",
+            "--operation", "descope_plan", "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertEqual(descope_gate.returncode, 0, descope_gate.stderr)
+        repair_gate = self.run_cli(
+            "check", str(self.state), "--run-id", "run-1",
+            "--operation", "repair_plan", "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(repair_gate.returncode, 0)
+        blocked = self.record("descope-after", "focused_validation")
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("bounded acceptance reduction", blocked.stderr)
+
+    def test_descope_rejects_an_incomplete_acceptance_partition(self) -> None:
+        source = [digest("acceptance-a"), digest("acceptance-b"), digest("acceptance-c")]
+        dropped, _ = self.record_descope(
+            "descope-dropped", "descope-review-dropped",
+            retained_acceptance_digests=[source[0]],
+            deferred_acceptance_digests=[source[1]],
+        )
+        self.assertNotEqual(dropped.returncode, 0)
+        self.assertIn("partition every source acceptance digest", dropped.stderr)
+        overlapping, _ = self.record_descope(
+            "descope-overlap", "descope-review-overlap",
+            retained_acceptance_digests=[source[0], source[1]],
+            deferred_acceptance_digests=[source[1], source[2]],
+        )
+        self.assertNotEqual(overlapping.returncode, 0)
+        empty_retained, _ = self.record_descope(
+            "descope-empty", "descope-review-empty",
+            retained_acceptance_digests=[],
+            deferred_acceptance_digests=source,
+        )
+        self.assertNotEqual(empty_retained.returncode, 0)
+        self.assertIn("retain at least one acceptance item", empty_retained.stderr)
+        no_reduction, _ = self.record_descope(
+            "descope-none", "descope-review-none",
+            retained_acceptance_digests=source,
+            deferred_acceptance_digests=[],
+        )
+        self.assertNotEqual(no_reduction.returncode, 0)
+        self.assertIn("defer at least one acceptance item", no_reduction.stderr)
+        self.assertEqual(self.payload()["state"], "active")
+
+    def test_boundary_drift_escalates_a_descope_attempt_to_replan(self) -> None:
+        recorded, _ = self.record_descope(
+            "descope-drift", "descope-review-drift", source_scope_unchanged=False,
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        payload = self.payload()
+        self.assertEqual(payload["state"], "replan_required")
+        self.assertEqual(payload["replan_reason_codes"], ["scope_drift"])
+        self.assertEqual(payload["descope_reason_codes"], [])
+
+    def test_security_boundary_drift_blocks_a_bounded_descope(self) -> None:
+        recorded, _ = self.record_descope(
+            "descope-security", "descope-review-security",
+            safety_conditions_unchanged=False,
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        payload = self.payload()
+        self.assertEqual(payload["state"], "replan_required")
+        self.assertEqual(payload["replan_reason_codes"], ["security_boundary_drift"])
+        self.assertEqual(payload["descope_reason_codes"], [])
 
     def test_independent_repair_requires_bounded_evidence_and_stops_only_current_run(self) -> None:
         invariant_digest = digest("one invariant")

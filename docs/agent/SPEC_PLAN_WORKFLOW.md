@@ -49,7 +49,7 @@ Classify every change into exactly one tier before creating plan artifacts. Plan
 
 - Escalate a tier as soon as new evidence crosses its boundary, and treat the escalation as a plan update rather than a stop.
 - Never lower a recorded tier without explicit user authorization.
-- Do not route Tier 0 or Tier 1 work through the restructuring contract. Reduce their scope or stop them instead.
+- Do not route Tier 0 or Tier 1 work through the restructuring contract. Use the bounded descope transition or stop them instead.
 
 ## Rules
 
@@ -69,6 +69,17 @@ Classify every change into exactly one tier before creating plan artifacts. Plan
 - Keep active-plan operational prose in English by default.
 - Record completed task checkboxes and non-pending validation evidence, then run `scripts/complete-plan.sh` before `scripts/finalize-active-plan.sh`.
 - Treat `status: checked` as the terminal state written by finalization.
+
+## Bounded Descope
+
+A bounded descope reduces the acceptance set of the current plan without restructuring it. Use it when review findings show that the plan is too wide, not that its design is wrong.
+
+- Record `descope_required` in the parent-owned execution ledger through one `descope_classification` event bound to an independent-review receipt, the unchanged plan path, plan digest, source HEAD, primary invariant, and the current candidate lifecycle.
+- Classification requires a bounded write scope and unchanged source scope, validation authority, invariant boundaries, primary invariant, safety conditions, and external-effect authority, with exactly one independent invariant. Any drift escalates to the matching hard replan reason instead of authorizing a descope.
+- Partition every source acceptance digest exactly once into `retained_acceptance_digests` and `deferred_acceptance_digests`, preserving source order. Retain at least one item and defer at least one item. Losing, duplicating, reordering, or adding an acceptance digest is rejected.
+- Move the deferred acceptance items to the exact `deferred_backlog_path` backlog plan. A descope never deletes a requirement; it only changes when that requirement is executed.
+- `descope_required` stops candidate generation, correction, validation, apply, completion, and archival for that execution run. Only the `descope_plan` gate stays open, and the stopped run is never reopened.
+- A descope creates no replan contract, no successor lineage, and no additional active plan. Keep it as the default exit for Tier 0 and Tier 1 work.
 
 ## Restructuring Contract
 

@@ -47,6 +47,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Before submitting a substantive progress update, proposal, explanation, blocking report, or final summary, follow `docs/agent/SPEC_USER_COMMUNICATION.md` and use `.codex/skills/write-for-reader` for its operational workflow.
 - When creating or updating Codex skills, follow `docs/agent/SPEC_SKILL_AUTHORING.md`.
 - Classify every change as Tier 0, Tier 1, or Tier 2 under `docs/agent/SPEC_PLAN_WORKFLOW.md` before creating plan artifacts, record `implementation_tier` in the active plan, and keep Tier 0 and Tier 1 work out of the restructuring contract.
+- Prefer the bounded descope transition over restructuring when review findings show only that the plan is too wide. Record `descope_required` through one classification event that keeps every source acceptance digest as either retained or deferred to an exact backlog plan, and never treat a descope as a requirement deletion.
 - Validate with `scripts/lint-project-workflow.sh` and `tests/smoke.sh` before completion.
 - Use Git for all changes.
 - Keep commits granular and scoped to one meaningful work unit.

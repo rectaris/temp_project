@@ -23,7 +23,7 @@ from types import ModuleType
 from typing import Any
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MAX_BYTES = 65_536
 EXECUTION_STATE_MAX_BYTES = 131_072
 CANDIDATE_MANIFEST_MAX_BYTES = 1024 * 1024
@@ -40,11 +40,13 @@ SESSION_BOUNDARIES = {
     "checked",
     "replanned",
     "repair_required",
+    "descope_required",
     "replan_required",
     "authoritative_failure",
 }
 ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 PLAN_RE = re.compile(r"docs/plan/active/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md")
+BACKLOG_RE = re.compile(r"docs/plan/backlog/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 REASON_CODES = {
     "scope_drift",
@@ -56,6 +58,7 @@ REASON_CODES = {
     "parent_remediation_budget_exhausted",
 }
 REPAIR_REASON_CODES = {"independent_repair_required"}
+DESCOPE_REASON_CODES = {"bounded_acceptance_reduction_required"}
 REVIEW_REASON_CODES = {
     "acceptance_unmet",
     "out_of_scope_change",
@@ -81,6 +84,7 @@ EVENT_TYPES = {
     "security_boundary_drift",
     "post_authoritative_design_change",
     "repair_classification",
+    "descope_classification",
     "elapsed_checkpoint",
     "writable_attempt_started",
     "attempt_closed",
@@ -97,6 +101,7 @@ EXACT_KEYS = {
     "implementation_mode", "candidate_generations", "correction_rounds",
     "parent_direct_remediation_rounds", "focused_validation_events",
     "authoritative_validation_events", "repair_reason_codes", "replan_reason_codes",
+    "descope_reason_codes",
     "predecessor_plan_digest", "predecessor_accepted_candidate_digest",
     "predecessor_closing_event_digest", "predecessor_accepted_source_head",
     "writable_attempt_starts",
@@ -132,6 +137,7 @@ PRE_SUCCESSOR_GENESIS_DIAGNOSIS_EVENT_KEYS = DIAGNOSIS_EVENT_KEYS - {
 LEGACY_DIAGNOSIS_EVENT_KEYS = DIAGNOSIS_EVENT_KEYS - {
     "successor_genesis_digest", "review_target_digest"
 }
+DESCOPE_EVENT_KEYS = EVENT_KEYS | {"descope_classification", "descope_evidence_digest"}
 REPAIR_CLASSIFICATION_KEYS = {
     "schema_version", "plan_path", "plan_digest", "source_head", "primary_invariant_digest",
     "affected_invariant_digests", "candidate_lifecycle_identity_digest", "candidate_lifecycle_digest",
@@ -140,6 +146,16 @@ REPAIR_CLASSIFICATION_KEYS = {
     "invariant_boundaries_unchanged", "source_acceptance_unchanged",
     "safety_conditions_unchanged", "external_effect_authority_unchanged",
     "independent_invariant_count",
+}
+DESCOPE_CLASSIFICATION_KEYS = {
+    "schema_version", "plan_path", "plan_digest", "source_head", "primary_invariant_digest",
+    "affected_invariant_digests", "candidate_lifecycle_identity_digest",
+    "candidate_lifecycle_digest", "independent_review_receipt_digest",
+    "source_acceptance_digests", "retained_acceptance_digests", "deferred_acceptance_digests",
+    "deferred_backlog_path", "bounded_write_scope", "source_scope_unchanged",
+    "validation_authority_unchanged", "invariant_boundaries_unchanged",
+    "primary_invariant_unchanged", "safety_conditions_unchanged",
+    "external_effect_authority_unchanged", "independent_invariant_count",
 }
 FAILURE_EVIDENCE_KEYS = {
     "schema_version", "plan_path", "plan_digest", "source_head",
@@ -923,6 +939,108 @@ def load_repair_classification(
     return classification, digest(data)
 
 
+def classify_descope(value: dict[str, Any]) -> str:
+    if not value["source_scope_unchanged"] or not value["bounded_write_scope"]:
+        return "scope_drift"
+    if not value["validation_authority_unchanged"]:
+        return "spec_drift"
+    if not value["safety_conditions_unchanged"] or not value["external_effect_authority_unchanged"]:
+        return "security_boundary_drift"
+    if (
+        not value["invariant_boundaries_unchanged"]
+        or not value["primary_invariant_unchanged"]
+        or value["independent_invariant_count"] != 1
+    ):
+        return "multiple_independent_invariants"
+    return "bounded_acceptance_reduction_required"
+
+
+def validate_descope_classification(
+    value: Any,
+    state: dict[str, Any],
+    invariants: list[str],
+    receipt: str,
+    lifecycle_digest: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != DESCOPE_CLASSIFICATION_KEYS:
+        raise StateError("descope classification evidence has an invalid exact schema")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise StateError("descope classification evidence has an invalid schema version")
+    if type(value["independent_invariant_count"]) is not int or value["independent_invariant_count"] < 1:
+        raise StateError("descope classification evidence has an invalid invariant count")
+    boolean_keys = {
+        "bounded_write_scope", "source_scope_unchanged", "validation_authority_unchanged",
+        "invariant_boundaries_unchanged", "primary_invariant_unchanged",
+        "safety_conditions_unchanged", "external_effect_authority_unchanged",
+    }
+    if any(type(value[key]) is not bool for key in boolean_keys):
+        raise StateError("descope classification evidence has a non-boolean condition")
+    expected_identity = {
+        "plan_path": state["plan_path"],
+        "plan_digest": state["plan_digest"],
+        "source_head": state["source_head"],
+        "primary_invariant_digest": state["primary_invariant_digest"],
+        "affected_invariant_digests": invariants,
+        "candidate_lifecycle_identity_digest": state["candidate_lifecycle_identity_digest"],
+        "candidate_lifecycle_digest": lifecycle_digest,
+        "independent_review_receipt_digest": receipt,
+    }
+    if any(value[key] != expected for key, expected in expected_identity.items()):
+        raise StateError("descope classification evidence does not match the execution baseline")
+    if value["independent_invariant_count"] != len(invariants):
+        raise StateError("descope classification invariant count does not match affected invariants")
+    source = value["source_acceptance_digests"]
+    retained = value["retained_acceptance_digests"]
+    deferred = value["deferred_acceptance_digests"]
+    for label, digests in (
+        ("source", source), ("retained", retained), ("deferred", deferred),
+    ):
+        if not isinstance(digests, list) or len(digests) != len(set(digests)) or any(
+            not isinstance(item, str) or not DIGEST_RE.fullmatch(item) for item in digests
+        ):
+            raise StateError(f"descope classification has invalid {label} acceptance digests")
+    if not source:
+        raise StateError("descope classification requires the source acceptance digests")
+    if not retained:
+        raise StateError("descope classification must retain at least one acceptance item")
+    if not deferred:
+        raise StateError("descope classification must defer at least one acceptance item")
+    if len(retained) + len(deferred) != len(source):
+        raise StateError("descope classification must partition every source acceptance digest")
+    if set(retained) | set(deferred) != set(source):
+        raise StateError("descope classification must preserve every source acceptance digest")
+    if set(retained) & set(deferred):
+        raise StateError("descope acceptance partitions must be disjoint")
+    for subset in (retained, deferred):
+        if [item for item in source if item in set(subset)] != subset:
+            raise StateError("descope acceptance partitions must preserve source order")
+    backlog_path = value["deferred_backlog_path"]
+    if not isinstance(backlog_path, str) or not BACKLOG_RE.fullmatch(backlog_path):
+        raise StateError("descope classification requires an exact backlog plan path")
+    return value
+
+
+def load_descope_classification(
+    path: Path,
+    state: dict[str, Any],
+    invariants: list[str],
+    receipt: str,
+    lifecycle_digest: str,
+) -> tuple[dict[str, Any], str]:
+    data = read_external_artifact(path, "descope classification evidence")
+    try:
+        value = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError("descope classification evidence is invalid JSON") from exc
+    classification = validate_descope_classification(
+        value, state, invariants, receipt, lifecycle_digest
+    )
+    canonical = (json.dumps(classification, sort_keys=True, indent=2) + "\n").encode()
+    if data != canonical:
+        raise StateError("descope classification evidence is not canonical JSON")
+    return classification, digest(data)
+
+
 def validation_operation_digest(
     *, suite: str, kind: str, command_index: int, argv: list[str]
 ) -> str:
@@ -1288,7 +1406,7 @@ def validate_state(value: Any) -> dict[str, Any]:
     require_digest(value["successor_claim_digest"], "successor_claim_digest", allow_empty=True)
     if value["state"] not in {
         "active", "accepted", "rejected", "diagnosis_required",
-        "repair_required", "replan_required"
+        "repair_required", "descope_required", "replan_required"
     }:
         raise StateError("invalid state")
     if value["implementation_mode"] not in MODES:
@@ -1317,7 +1435,15 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("invalid repair_reason_codes")
     if value["state"] == "repair_required" and not repair_reasons:
         raise StateError("repair_required state needs a reason")
-    if value["state"] == "active" and (reasons or repair_reasons):
+    descope_reasons = value["descope_reason_codes"]
+    if not isinstance(descope_reasons, list) or len(descope_reasons) != len(set(descope_reasons)) or any(
+        not isinstance(reason, str) or reason not in DESCOPE_REASON_CODES
+        for reason in descope_reasons
+    ):
+        raise StateError("invalid descope_reason_codes")
+    if value["state"] == "descope_required" and not descope_reasons:
+        raise StateError("descope_required state needs a reason")
+    if value["state"] == "active" and (reasons or repair_reasons or descope_reasons):
         raise StateError("active state cannot have stop reasons")
     review_reasons = value["review_reason_codes"]
     if not isinstance(review_reasons, list) or len(review_reasons) != len(set(review_reasons)) or any(
@@ -1335,6 +1461,8 @@ def validate_state(value: Any) -> dict[str, Any]:
         raise StateError("only accepted state may retain accepted candidate evidence")
     if reasons and repair_reasons:
         raise StateError("repair and replan reasons cannot be combined")
+    if descope_reasons and (reasons or repair_reasons):
+        raise StateError("descope reasons cannot be combined with repair or replan reasons")
     events = value["events"]
     validate_event_budget(events)
     seen_ids: set[str] = set()
@@ -1355,6 +1483,7 @@ def validate_state(value: Any) -> dict[str, Any]:
             frozenset(PRE_REVIEW_TARGET_DIAGNOSIS_EVENT_KEYS),
             frozenset(PRE_SUCCESSOR_GENESIS_DIAGNOSIS_EVENT_KEYS),
             frozenset(LEGACY_DIAGNOSIS_EVENT_KEYS),
+            frozenset(DESCOPE_EVENT_KEYS),
         }
         if not isinstance(event, dict) or frozenset(event) not in allowed_event_keys:
             raise StateError("event has an invalid exact schema")
@@ -1424,7 +1553,7 @@ def validate_state(value: Any) -> dict[str, Any]:
         )
         receipt_digest = event["independent_review_receipt_digest"]
         receipt_required = event["event_type"] in {
-            "repair_classification", "failure_diagnosis"
+            "repair_classification", "failure_diagnosis", "descope_classification"
         } or (
             event["event_type"] == "parent_review"
             and (
@@ -1719,6 +1848,37 @@ def validate_state(value: Any) -> dict[str, Any]:
                 raise StateError("repair evidence digest does not match embedded classification")
         elif event["repair_evidence_digest"] or classification:
             raise StateError("non-repair event contains repair classification evidence")
+        descope_keys_present = frozenset(event) == frozenset(DESCOPE_EVENT_KEYS)
+        descope_classification = event.get("descope_classification", {})
+        descope_evidence_digest = event.get("descope_evidence_digest", "")
+        if event["event_type"] == "descope_classification":
+            if not descope_keys_present:
+                raise StateError("descope classification event has an invalid exact schema")
+            if not isinstance(descope_classification, dict):
+                raise StateError("invalid descope classification")
+            if not invariants:
+                raise StateError("descope classification event must affect at least one invariant")
+            require_digest(descope_evidence_digest, "descope_evidence_digest")
+            if not event["independent_review_receipt_digest"]:
+                raise StateError("descope classification event is missing evidence")
+            if not event["candidate_lifecycle_digest"]:
+                raise StateError("descope classification event is missing candidate lifecycle evidence")
+            if severities:
+                raise StateError("descope classification event cannot contain unresolved findings")
+            validate_descope_classification(
+                descope_classification,
+                value,
+                invariants,
+                event["independent_review_receipt_digest"],
+                event["candidate_lifecycle_digest"],
+            )
+            canonical_descope = (
+                json.dumps(descope_classification, sort_keys=True, indent=2) + "\n"
+            ).encode()
+            if descope_evidence_digest != digest(canonical_descope):
+                raise StateError("descope evidence digest does not match embedded classification")
+        elif descope_keys_present:
+            raise StateError("non-descope event contains descope classification evidence")
         elapsed = event["elapsed_seconds"]
         if isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)) or not math.isfinite(elapsed) or elapsed < 0:
             raise StateError("elapsed_seconds must be finite and nonnegative")
@@ -1765,6 +1925,7 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     review_reason_codes: list[str] = []
     reasons: list[str] = []
     repair_reasons: list[str] = []
+    descope_reasons: list[str] = []
     authoritative_failure_seen = False
     diagnosis_attempts = 0
     confirmed_invariant = ""
@@ -1823,6 +1984,12 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
                 repair_reasons.append(classification_result)
             else:
                 add_reason(classification_result)
+        elif event_type == "descope_classification":
+            classification_result = classify_descope(event["descope_classification"])
+            if classification_result == "bounded_acceptance_reduction_required":
+                descope_reasons.append(classification_result)
+            else:
+                add_reason(classification_result)
         elif event_type == "writable_attempt_started":
             if open_attempt_id:
                 raise StateError("writable attempts overlap")
@@ -1876,6 +2043,8 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             successor_claim_digest = event["event_digest"]
     if reasons:
         state = "replan_required"
+    elif descope_reasons:
+        state = "descope_required"
     elif repair_reasons:
         state = "repair_required"
     elif accepted_candidate_digest:
@@ -1902,6 +2071,7 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "successor_claim_digest": successor_claim_digest,
         "review_reason_codes": review_reason_codes,
         "repair_reason_codes": repair_reasons,
+        "descope_reason_codes": descope_reasons,
         "replan_reason_codes": reasons,
     }
 
@@ -2415,6 +2585,7 @@ def init_state(args: argparse.Namespace) -> None:
         "successor_claim_digest": "",
         "review_reason_codes": [],
         "repair_reason_codes": [],
+        "descope_reason_codes": [],
         "replan_reason_codes": [],
         "last_monotonic_ns": 0,
         "genesis_digest": "",
@@ -3216,6 +3387,8 @@ def require_independent_repair(state: dict[str, Any]) -> None:
 def stopped_message(state: dict[str, Any]) -> str:
     if state["state"] == "replan_required":
         return "plan execution is stopped for restructuring"
+    if state["state"] == "descope_required":
+        return "plan execution is stopped for a bounded acceptance reduction"
     if state["state"] == "accepted":
         return "plan execution is closed with an accepted candidate"
     if state["state"] == "rejected":
@@ -3421,6 +3594,9 @@ def record_event(args: argparse.Namespace) -> None:
         failure_evidence_digest = ""
         diagnosis_evidence: dict[str, Any] = {}
         diagnosis_evidence_digest = ""
+        descope_classification: dict[str, Any] = {}
+        descope_evidence_digest = ""
+        descope_evidence_file = getattr(args, "descope_evidence_file", None)
         lifecycle = args.candidate_lifecycle_digest or ""
         if args.event_type == "parent_review" and (
             args.implementation_mode == "parent_direct" or receipt
@@ -3459,6 +3635,18 @@ def record_event(args: argparse.Namespace) -> None:
                 raise StateError("independent review receipt replay is not allowed")
         elif args.diagnosis_evidence_file:
             raise StateError("diagnosis evidence is only valid for failure diagnosis")
+        if args.event_type == "descope_classification":
+            if not invariants:
+                raise StateError("descope classification requires at least one affected invariant")
+            require_digest(receipt, "independent_review_receipt_digest")
+            if not descope_evidence_file:
+                raise StateError("descope classification requires an evidence file")
+            if any(event["independent_review_receipt_digest"] == receipt for event in state["events"]):
+                raise StateError("independent review receipt replay is not allowed")
+            if severities:
+                raise StateError("descope classification cannot carry unresolved findings")
+        elif descope_evidence_file:
+            raise StateError("descope evidence is only valid for a bounded descope")
         if args.event_type in {
             "parent_review", "scope_drift", "spec_drift", "security_boundary_drift",
             "post_authoritative_design_change",
@@ -3467,7 +3655,7 @@ def record_event(args: argparse.Namespace) -> None:
         if args.event_type in {
             "candidate_generation", "correction_rejected", "focused_validation",
             "authoritative_validation", "authoritative_failure", "failure_diagnosis",
-            "repair_classification",
+            "repair_classification", "descope_classification",
         }:
             require_digest(lifecycle, "candidate_lifecycle_digest")
             if lifecycle != file_digest(Path(args.lifecycle_state)):
@@ -3497,6 +3685,10 @@ def record_event(args: argparse.Namespace) -> None:
         elif args.event_type == "failure_diagnosis":
             diagnosis_evidence, diagnosis_evidence_digest = load_diagnosis_evidence(
                 Path(args.diagnosis_evidence_file), state, invariants, receipt, lifecycle,
+            )
+        elif args.event_type == "descope_classification":
+            descope_classification, descope_evidence_digest = load_descope_classification(
+                Path(descope_evidence_file), state, invariants, receipt, lifecycle,
             )
         monotonic_ns = time.monotonic_ns()
         if monotonic_ns <= state["last_monotonic_ns"]:
@@ -3541,6 +3733,13 @@ def record_event(args: argparse.Namespace) -> None:
                     "failure_evidence_digest": failure_evidence_digest,
                     "diagnosis_evidence": diagnosis_evidence,
                     "diagnosis_evidence_digest": diagnosis_evidence_digest,
+                }
+            )
+        if args.event_type == "descope_classification":
+            event.update(
+                {
+                    "descope_classification": descope_classification,
+                    "descope_evidence_digest": descope_evidence_digest,
                 }
             )
         event["event_digest"] = digest(
@@ -3977,10 +4176,16 @@ def check_gate(args: argparse.Namespace) -> None:
         state["state"] == "diagnosis_required" and args.operation == "diagnosis_read"
     )
     repair_plan_allowed = state["state"] == "repair_required" and repair_plan
-    if state["state"] != "active" and not diagnosis_read and not repair_plan_allowed:
+    descope_plan = args.operation == "descope_plan"
+    descope_plan_allowed = state["state"] == "descope_required" and descope_plan
+    if state["state"] != "active" and not diagnosis_read and not repair_plan_allowed and (
+        not descope_plan_allowed
+    ):
         raise StateError(stopped_message(state))
     if repair_plan and state["state"] != "repair_required":
         raise StateError("repair-plan gate requires a confirmed independent repair classification")
+    if descope_plan and state["state"] != "descope_required":
+        raise StateError("descope-plan gate requires a bounded acceptance reduction classification")
     if args.plan and state["plan_path"] != args.plan:
         raise StateError("plan path mismatch")
     if args.open_attempt_id and state["open_attempt_id"] != args.open_attempt_id:
@@ -4041,6 +4246,7 @@ def parser() -> argparse.ArgumentParser:
     record.add_argument("--repair-evidence-file")
     record.add_argument("--validation-report")
     record.add_argument("--diagnosis-evidence-file")
+    record.add_argument("--descope-evidence-file")
     record.add_argument("--candidate-lifecycle-digest")
     record.add_argument("--lifecycle-state", required=True)
     record.add_argument("--elapsed-seconds", type=float, default=0.0)
@@ -4083,7 +4289,10 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--open-attempt-id")
     check.add_argument(
         "--operation",
-        choices=("execution", "completion", "archive", "repair_plan", "diagnosis_read"),
+        choices=(
+            "execution", "completion", "archive", "repair_plan", "descope_plan",
+            "diagnosis_read",
+        ),
         default="execution",
     )
     check.set_defaults(handler=check_gate)
