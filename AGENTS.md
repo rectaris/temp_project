@@ -46,6 +46,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Route the writable runner from the plan's separate `implementation_risk` and `implementation_ambiguity` fields: GPT-5.3-Codex-Spark medium only for low/low, GPT-5.6-Terra medium when neither is high and at least one is ordinary, and refuse either high. Reserve Sol for independent review. Allow exactly one fresh isolated GPT-5.6-Luna max attempt only when the Codex CLI itself reports a bounded usage limit, rate limit, unavailable-model, or denied-model-access error; do not fall back for other failures.
 - Before submitting a substantive progress update, proposal, explanation, blocking report, or final summary, follow `docs/agent/SPEC_USER_COMMUNICATION.md` and use `.codex/skills/write-for-reader` for its operational workflow.
 - When creating or updating Codex skills, follow `docs/agent/SPEC_SKILL_AUTHORING.md`.
+- Classify every change as Tier 0, Tier 1, or Tier 2 under `docs/agent/SPEC_PLAN_WORKFLOW.md` before creating plan artifacts, record `implementation_tier` in the active plan, and keep Tier 0 and Tier 1 work out of the restructuring contract.
 - Validate with `scripts/lint-project-workflow.sh` and `tests/smoke.sh` before completion.
 - Use Git for all changes.
 - Keep commits granular and scoped to one meaningful work unit.

@@ -39,9 +39,22 @@ This repository root is a template development repository. It is not a Copier-ge
 - Put detailed option analysis in chat, raw logs, handoff research artifacts, dedicated decision artifacts, or `.agent-artifacts/decision-audits/`.
 - Keep enough context for implementation and validation without preserving the full discussion that produced the plan.
 
+## Implementation Tiers
+
+Classify every change into exactly one tier before creating plan artifacts. Plan weight, review depth, and available stop transitions follow from that tier. Tier selection is a bounded parent decision recorded as `implementation_tier` in the active plan; when two tiers are defensible, choose the higher one.
+
+- Tier 0: one file, reversible, already covered by an existing validation command, with no new external effect and an unchanged security boundary. Implement directly and commit without a plan file.
+- Tier 1: bounded multi-file change whose security boundary, validation authority, and external-effect authority are unchanged. Use a short active plan carrying `primary_invariant`, `write_scope`, `validation`, and exactly one `acceptance` item.
+- Tier 2: security-boundary change, irreversible effect, external write authority, lifecycle or validation-authority change, or a write scope that cannot be enumerated as exact paths. Use the full plan manifest, review gates, and restructuring contract.
+
+- Escalate a tier as soon as new evidence crosses its boundary, and treat the escalation as a plan update rather than a stop.
+- Never lower a recorded tier without explicit user authorization.
+- Do not route Tier 0 or Tier 1 work through the restructuring contract. Reduce their scope or stop them instead.
+
 ## Rules
 
-- Create or update an active plan before non-trivial edits.
+- Create or update an active plan before non-trivial edits, except for Tier 0 changes.
+- Record `implementation_tier` in every active plan.
 - Keep `plan.md` short.
 - Archive completed work under `checked/YYYY/MM/01-15/` or `checked/YYYY/MM/16-31/` based on completion date.
 - Keep `checked.md` as the machine-readable index for all checked archives, including nested paths.
