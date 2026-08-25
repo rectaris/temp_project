@@ -48,9 +48,21 @@
 - Put detailed option analysis in chat, raw logs, handoff research artifacts, dedicated decision artifacts, or `.agent-artifacts/decision-audits/`.
 - Keep enough context for implementation and validation without preserving the full discussion that produced the plan.
 
+## Implementation Tiers
+
+Classify every change into exactly one tier before creating plan artifacts. Plan weight, review depth, and available stop transitions follow from that tier. Tier selection is a bounded parent decision recorded as `implementation_tier` in the active plan; when two tiers are defensible, choose the higher one.
+
+- Tier 0: one file, reversible, already covered by an existing validation command, with no new external effect and an unchanged security boundary. Implement directly and commit without a plan file.
+- Tier 1: bounded multi-file change whose security boundary, validation authority, and external-effect authority are unchanged. Use a short active plan carrying `primary_invariant`, `write_scope`, `validation`, and exactly one `acceptance` item.
+- Tier 2: security-boundary change, irreversible effect, external write authority, lifecycle or validation-authority change, or a write scope that cannot be enumerated as exact paths. Use the full manifest contract, review gates, and restructuring contract.
+
+- Escalate a tier as soon as new evidence crosses its boundary, and treat the escalation as a plan update rather than a stop.
+- Never lower a recorded tier without explicit user authorization.
+- Do not route Tier 0 or Tier 1 work through the restructuring contract. Use the bounded descope transition or stop them instead.
+
 ## Rules
 
-- Create or update an active plan before non-trivial edits.
+- Create or update an active plan before non-trivial edits, except for Tier 0 changes.
 - Keep `plan.md` short.
 - Archive completed work under `checked/YYYY/MM/01-15/` or `checked/YYYY/MM/16-31/` based on completion date.
 - Keep `checked.md` as the machine-readable index for all checked archives, including nested paths.
@@ -83,6 +95,7 @@ Required active/backlog fields:
 Optional active/backlog fields:
 
 - `target_json`
+- `implementation_tier`
 - `acceptance_focus`
 - `completion_deferred_reason`
 - `preservation_scope`
@@ -114,6 +127,7 @@ Rules:
 - A path must not appear in both `write_scope` and `context_files`.
 - A `preservation_scope` entry must be normalized, exact, unique across all restructuring successors, and disjoint from every successor `write_scope`.
 - `target_json` is optional structured context. JSON edit targets must also appear in `write_scope`.
+- `implementation_tier` is optional for plans authored before tiers existed and is `0`, `1`, or `2` for every new plan. It selects plan weight and the available stop transitions.
 - `validation` should list commands needed for completion.
 - Validate plan command lists with `python3 .project-agent-workflow/scripts/plan_validation_commands.py check-plan <plan>` when plan validation entries are edited manually.
 - Validate one manifest and its routed required-spec union with `python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-manifest <plan>`.
@@ -157,11 +171,30 @@ Lifecycle states:
 - After a recorded pre-v1 Copier adoption, open plans may retain the preserved root routing contract and old generic CLI paths only while the migration manifest proves the pre-v1 source and every referenced CLI is an unmodified compatibility bridge to the managed helper.
 - A mixed root and managed routing contract, a modified legacy CLI, or an unverified legacy CLI requires manual plan integration.
 
+## Bounded Descope
+
+A bounded descope reduces the acceptance set of the current plan without restructuring it. Use it when review findings show that the plan is too wide, not that its design is wrong.
+
+- Record `descope_required` in the parent-owned execution ledger through one `descope_classification` event bound to an independent-review receipt, the unchanged plan path, plan digest, source HEAD, primary invariant, and the current candidate lifecycle.
+- Classification requires a bounded write scope and unchanged source scope, validation authority, invariant boundaries, primary invariant, safety conditions, and external-effect authority, with exactly one independent invariant. Any drift escalates to the matching hard replan reason instead of authorizing a descope.
+- Partition every source acceptance digest exactly once into `retained_acceptance_digests` and `deferred_acceptance_digests`, preserving source order. Retain at least one item and defer at least one item. Losing, duplicating, reordering, or adding an acceptance digest is rejected.
+- Move the deferred acceptance items to the exact `deferred_backlog_path` backlog plan. A descope never deletes a requirement; it only changes when that requirement is executed.
+- `descope_required` stops candidate generation, correction, validation, apply, completion, and archival for that execution run. Only the `descope_plan` gate stays open, and the stopped run is never reopened.
+- A descope creates no replan contract, no successor lineage, and no additional active plan. Keep it as the default exit for Tier 0 and Tier 1 work.
+
+### Review-Finding Budgets
+
+- Classify review findings before selecting a stop state: implementation findings are `acceptance_unmet`, `focused_validation_failed`, and `evidence_incomplete`; boundary findings are `out_of_scope_change`, `required_spec_missed`, and `integration_contract_mismatch`; the design finding is `multiple_invariants_coupled`.
+- Implementation findings have a budget of 4 correction-requested or rejected attempt closures. Boundary findings have a budget of 2 correction-requested or rejected attempt closures. Accepted closures do not count.
+- A `parent_review` event carries finding severities but no review reason code, so two parent-direct remediation rounds that still leave a High or Medium finding record `descope_pending` with `parent_remediation_budget_exhausted` instead of asserting a finding class.
+- Exhausting an implementation or boundary finding budget records `descope_pending`, with `implementation_finding_budget_exhausted` or `boundary_finding_budget_exhausted`. Only `descope_classification` or a hard drift event may follow.
+- `multiple_invariants_coupled` remains an immediate `replan_required` reason. Any scope, spec, security-boundary, or post-authoritative design drift still escalates to `replan_required`.
+
 ## Restructuring Contract
 
 Plan restructuring changes execution boundaries, ordering, implementation methods, or validation methods. It does not change the user requirement baseline. The baseline consists of the user requirements, accepted safety conditions, and every normalized `acceptance` item in the source plan.
 
-- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a design change after authoritative validation has started; exhaustion of the initial candidate plus two correction rounds; or two parent-direct remediation rounds that still leave a High or Medium independent-review finding.
+- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a design change after authoritative validation has started; or exhaustion of the initial candidate plus two correction rounds.
 - Elapsed time is telemetry and a checkpoint signal only. It cannot prove semantic failure or authorize requirement changes.
 - Preserve the exact source plan path, source HEAD, source-plan digest, and digest of every normalized source acceptance item in a parent-owned replan contract.
 - Map every source acceptance digest to at least one successor plan or integration gate. The integration plan retains the source acceptance text exactly and proves the combined successors against it.

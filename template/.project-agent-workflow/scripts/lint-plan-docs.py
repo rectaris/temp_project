@@ -18,6 +18,7 @@ PLAN = planlib.PLAN
 CHECKED = planlib.CHECKED
 REPLANNED = planlib.REPLANNED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
+IMPLEMENTATION_TIER_VALUES = {"0", "1", "2"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
 OPEN_STATUS_VALUES = {"in_progress", "deferred", "replan_required", "ready_to_archive", "backlog"}
 # Copier updates must continue to read archives produced before checked became
@@ -206,6 +207,9 @@ def lint_manifest(path: Path) -> None:
     design_value = planlib.manifest_scalar(values, "human_design_required")
     if design_value not in HUMAN_DESIGN_VALUES:
         fail(f"{path} human_design_required must be yes or no")
+    tier_value = planlib.manifest_scalar(values, "implementation_tier").strip()
+    if tier_value and tier_value not in IMPLEMENTATION_TIER_VALUES:
+        fail(f"{path} implementation_tier must be 0, 1, or 2")
     if is_legacy_checked:
         task_types = [planlib.manifest_scalar(values, "task_type")]
     else:

@@ -60,6 +60,7 @@ SCALAR_KEYS = {
     "human_approval_status",
     "implementation_risk",
     "implementation_ambiguity",
+    "implementation_tier",
     "expected_output",
     "checked_summary_ja",
     "completion_deferred_reason",
