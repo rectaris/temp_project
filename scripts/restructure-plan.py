@@ -1058,6 +1058,28 @@ def replanned_records_for_id(plan_id: str, expected_path: str) -> list[tuple[str
     return records
 
 
+def backlog_paths_for_successor(plan_id: str, expected_path: str) -> list[str]:
+    directory = ROOT / "docs/plan/backlog"
+    if not directory.is_dir():
+        return []
+    expected_name = Path(expected_path).name
+    paths: list[str] = []
+    for entry in sorted(directory.iterdir()):
+        if not entry.is_file():
+            continue
+        name = entry.name
+        if not re.fullmatch(r"[0-9]{3}-[a-z0-9][a-z0-9-]*\.md", name):
+            continue
+        indexed_id = name[:3]
+        filename_matches = name == expected_name
+        if indexed_id != plan_id and not filename_matches:
+            continue
+        if indexed_id != plan_id or not filename_matches:
+            raise RestructureError(f"backlog successor identity mismatch for {plan_id}")
+        paths.append(f"docs/plan/backlog/{name}")
+    return paths
+
+
 def validate_replanned_successor(
     plan_id: str,
     expected_path: str,
@@ -4829,9 +4851,10 @@ def validate_lifecycle_evolution(
         "ready_to_archive",
         "checked",
         "replan_required",
+        "backlog",
     }:
         raise RestructureError(f"{label} has an invalid lifecycle transition")
-    if baseline_status == "deferred" and live_status != "replan_required":
+    if baseline_status == "deferred" and live_status not in {"replan_required", "backlog"}:
         raise RestructureError(
             f"{label} deferred projection changed without an activation record"
         )
@@ -4903,7 +4926,7 @@ def verify_rebind_records(
                 )
             if (
                 state["enforce_projection_semantics"]
-                and state["lifecycle"] in {"active", "checked"}
+                and state["lifecycle"] in {"active", "checked", "backlog"}
                 and not (
                     scalar(live_manifest, "status") == "replan_required"
                     and path in legacy_stopped_sources
@@ -5311,8 +5334,9 @@ def verify_schema_three_contract(
         path = successor["path"]
         active = active_records_for_successor(successor["id"], path)
         checked = checked_paths_for_successor(successor["id"], path)
+        backlog = backlog_paths_for_successor(successor["id"], path)
         replanned = replanned_records_for_id(successor["id"], path)
-        if sum((bool(active), bool(checked), bool(replanned))) != 1:
+        if sum((bool(active), bool(checked), bool(backlog), bool(replanned))) != 1:
             raise RestructureError(f"schema-3 successor lifecycle is ambiguous: {path}")
         if active:
             live_file = ROOT / path
@@ -5323,6 +5347,12 @@ def verify_schema_three_contract(
             live_file = ROOT / checked[0]
             expected_status = "checked"
             lifecycle = "checked"
+            replan_original_content = None
+        elif backlog:
+            reject_symlink_ancestors(backlog[0], include_target=True)
+            live_file = ROOT / backlog[0]
+            expected_status = "backlog"
+            lifecycle = "backlog"
             replan_original_content = None
         else:
             replanned_state = validate_replanned_successor(
@@ -5696,8 +5726,9 @@ def verify_repository_contracts(
             active_file = ROOT / path
             active_records = active_records_for_successor(successor["id"], path)
             checked_paths = checked_paths_for_successor(successor["id"], path)
+            backlog_paths = backlog_paths_for_successor(successor["id"], path)
             replanned_records = replanned_records_for_id(successor["id"], path)
-            if sum((bool(active_records), bool(checked_paths), bool(replanned_records))) > 1:
+            if sum((bool(active_records), bool(checked_paths), bool(backlog_paths), bool(replanned_records))) > 1:
                 raise RestructureError(f"successor has ambiguous durable records: {path}")
             if len(checked_paths) > 1:
                 raise RestructureError(f"successor has multiple checked index entries: {path}")
@@ -5719,6 +5750,14 @@ def verify_repository_contracts(
                     raise RestructureError(f"missing checked successor plan for {plan_id}: {checked_paths[0]}")
                 expected_live_status = "checked"
                 lifecycle = "checked"
+                replan_original_content = None
+            elif backlog_paths:
+                reject_symlink_ancestors(backlog_paths[0], include_target=True)
+                live_successor_file = ROOT / backlog_paths[0]
+                if not live_successor_file.is_file():
+                    raise RestructureError(f"missing backlog successor plan for {plan_id}: {backlog_paths[0]}")
+                expected_live_status = "backlog"
+                lifecycle = "backlog"
                 replan_original_content = None
             elif replanned_records:
                 replanned_state = validate_replanned_successor(

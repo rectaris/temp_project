@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import copy
 import subprocess
 import sys
@@ -1226,6 +1227,181 @@ class PlanRestructureTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def move_successor_to_backlog(
+        self,
+        active_relative: str,
+        plan_id: str,
+        *,
+        status: str = "backlog",
+        from_status: str = "in_progress",
+    ) -> Path:
+        active = self.repo / active_relative
+        name = Path(active_relative).name
+        backlog_relative = f"docs/plan/backlog/{name}"
+        backlog = self.repo / backlog_relative
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        content = active.read_text(encoding="utf-8").replace(
+            f"status: {from_status}",
+            f"status: {status}",
+            1,
+        )
+        content = re.sub(
+            r"^completion_deferred_reason: .*\n", "", content, flags=re.MULTILINE
+        )
+        backlog.write_text(content, encoding="utf-8")
+        active.unlink()
+        active_index = self.repo / "docs/plan/plan.md"
+        active_index.write_text(
+            "".join(
+                line
+                for line in active_index.read_text(encoding="utf-8").splitlines(
+                    keepends=True
+                )
+                if not line.startswith(f"{plan_id}\t")
+            ),
+            encoding="utf-8",
+        )
+        return backlog
+
+    def test_deferred_successor_with_rebind_record_can_defer_to_backlog(self) -> None:
+        coupled, _, target_path, _ = self.prepare_coupled_spec(include_rebind=True)
+        result = self.run_spec_data(coupled, "coupled-deferred-backlog.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+        self.assertIsNotNone(target_path)
+        assert target_path is not None
+        backlog = self.move_successor_to_backlog(
+            target_path, Path(target_path).name[:3], from_status="deferred"
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        text = backlog.read_text(encoding="utf-8")
+        self.assertIn("status: backlog", text)
+        self.assertNotIn("completion_deferred_reason:", text)
+
+    def test_deferred_successor_backlog_move_rejects_acceptance_drift(self) -> None:
+        coupled, _, target_path, _ = self.prepare_coupled_spec(include_rebind=True)
+        result = self.run_spec_data(coupled, "coupled-deferred-backlog-drift.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNotNone(target_path)
+        assert target_path is not None
+        backlog = self.move_successor_to_backlog(
+            target_path, Path(target_path).name[:3], from_status="deferred"
+        )
+        text = backlog.read_text(encoding="utf-8")
+        acceptance = re.search(r"^acceptance:\n  - (.*)$", text, re.MULTILINE)
+        self.assertIsNotNone(acceptance)
+        assert acceptance is not None
+        backlog.write_text(
+            text.replace(acceptance.group(1), acceptance.group(1) + " drifted", 1),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_schema_three_successor_can_defer_to_backlog(self) -> None:
+        coupled, _, _, successor_path = self.prepare_coupled_spec()
+        result = self.run_spec_data(coupled, "coupled-backlog.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+        plan_id = Path(successor_path).name[:3]
+        backlog = self.move_successor_to_backlog(successor_path, plan_id)
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertTrue(backlog.is_file())
+        self.assertIn("status: backlog", backlog.read_text(encoding="utf-8"))
+        contract = json.loads(
+            (self.repo / str(coupled["contract_path"])).read_text(encoding="utf-8")
+        )
+        self.assertEqual(contract["successors"][0]["path"], successor_path)
+
+    def test_backlog_successor_is_verified_as_fourth_lifecycle(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        backlog = self.move_successor_to_backlog(
+            "docs/plan/active/002-data.md", "002"
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertTrue(backlog.is_file())
+        self.assertIn("status: backlog", backlog.read_text(encoding="utf-8"))
+        contract = json.loads(
+            (self.repo / str(self.spec["contract_path"])).read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "docs/plan/active/002-data.md",
+            [successor["path"] for successor in contract["successors"]],
+        )
+
+    def test_backlog_successor_rejects_acceptance_drift(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        backlog = self.move_successor_to_backlog(
+            "docs/plan/active/002-data.md", "002"
+        )
+        clean = backlog.read_text(encoding="utf-8")
+        self.assertEqual(self.run_verify().returncode, 0)
+        backlog.write_text(
+            clean.replace("  - Preserve user data.", "  - Discard user data.", 1),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_backlog_successor_rejects_inherited_digest_drift(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        backlog = self.move_successor_to_backlog(
+            "docs/plan/active/002-data.md", "002"
+        )
+        clean = backlog.read_text(encoding="utf-8")
+        self.assertEqual(self.run_verify().returncode, 0)
+        good_digest = digest(self.acceptance[0])
+        bad_digest = "sha256:" + "0" * 64
+        backlog.write_text(
+            clean.replace(
+                f"inherited_acceptance_digests:\n  - {good_digest}",
+                f"inherited_acceptance_digests:\n  - {bad_digest}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_backlog_successor_rejects_non_backlog_status(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        self.move_successor_to_backlog(
+            "docs/plan/active/002-data.md", "002", status="in_progress"
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_backlog_and_active_presence_is_ambiguous(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        active = self.repo / "docs/plan/active/002-data.md"
+        backlog = self.repo / "docs/plan/backlog/002-data.md"
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        backlog.write_text(
+            active.read_text(encoding="utf-8").replace(
+                "status: in_progress", "status: backlog", 1
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_missing_backlog_and_active_successor_is_rejected(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        active = self.repo / "docs/plan/active/002-data.md"
+        active.unlink()
+        active_index = self.repo / "docs/plan/plan.md"
+        active_index.write_text(
+            "".join(
+                line
+                for line in active_index.read_text(encoding="utf-8").splitlines(
+                    keepends=True
+                )
+                if not line.startswith("002\t")
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing live successor plan", result.stderr)
 
     def test_alternate_contract_filename_executes_and_verifies(self) -> None:
         alternate = "docs/plan/replanned/contracts/001-contract.json"
