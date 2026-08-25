@@ -1,6 +1,6 @@
 # Admit decomposed shell parser validation
 
-status: in_progress
+status: checked
 primary_invariant: each reconstructed shell parser layer has one exact focused command and one layer-local compile command before any implementation candidate can use those commands as acceptance evidence
 task_types:
   - planning_docs
@@ -63,11 +63,11 @@ checked_summary_ja: 分割後のshell parserとCopier validatorに限定した�
 
 ## Tasks
 
-- [ ] Add the exact root-only focused, four layer-local compile, aggregate compile, and validator CLI command forms.
-- [ ] Add positive and near-match rejection tests for path order, omitted files, extra files, alternate Python executables, alternate fixture paths, and extra CLI arguments.
-- [ ] Confirm existing historical reconstructed commands remain byte-for-byte accepted and generated policy still rejects every root-only command.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 200 with this plan's exact checked archive as predecessor.
+- [x] Add the exact root-only focused, four layer-local compile, aggregate compile, and validator CLI command forms.
+- [x] Add positive and near-match rejection tests for path order, omitted files, extra files, alternate Python executables, alternate fixture paths, and extra CLI arguments.
+- [x] Confirm existing historical reconstructed commands remain byte-for-byte accepted and generated policy still rejects every root-only command.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 200 with this plan's exact checked archive as predecessor.
 
 ## Validation Notes
 

@@ -55,7 +55,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:3cc1064bb989622dab9eaca79fc89afaba85b8aabd7191dd4935882d8ba797ef","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
-  - docs/plan/active/199-admit-decomposed-shell-validation.md
+  - docs/plan/checked/2026/08/16-31/199-admit-decomposed-shell-validation.md
 integration_gates:
   - preserve the rejected Plan 197 candidate paths without editing, staging, committing, importing, or accepting them
   - keep root and generated restructure commands byte-identical
