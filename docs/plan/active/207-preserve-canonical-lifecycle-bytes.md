@@ -1,6 +1,6 @@
 # Preserve canonical lifecycle bytes
 
-status: in_progress
+status: replan_required
 primary_invariant: lifecycle verification removes only syntactically parsed lifecycle field bytes, preserves every other byte, and admits replan_required only with canonical stopped metadata
 task_types:
   - planning_docs
@@ -55,6 +55,8 @@ integration_gates:
   - preserve the Plan 206 acceptance check and all unrelated manifest and body bytes
   - keep root and generated restructure commands byte-identical
   - Plan 208 remains deferred until this plan is checked and its exact checked archive replaces the active predecessor
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 checked_summary_ja: lifecycle field以外のbyteを保持しcanonical stopped metadataを必須化する。
 
 ## Decisions
@@ -80,3 +82,9 @@ checked_summary_ja: lifecycle field以外のbyteを保持しcanonical stopped me
 
 - This plan owns both lifecycle findings because they are two violations of one canonical lifecycle projection invariant.
 - It must not broaden the legacy compatibility route or reinterpret historical contract bytes.
+- Focused validation passed after each remediation round, ending with 73 passing tests and successful repository verification.
+- The first independent review found that schema-1/schema-2 historical source manifests bypassed canonical stopped-state validation.
+- The second independent review found that schema-3 durable source reason codes and stopped manifests bypassed bounded canonical validation.
+- Two parent-direct remediation rounds still left a Medium finding: schema-1/schema-2 durable contract `reason_codes` are not bounded or required to equal the canonical source manifest.
+- The final review also found that a non-string reason-code element can raise an uncaught `TypeError` instead of a bounded lifecycle error.
+- Execution stopped before authoritative validation, archival, or commit and requires a reconstructed successor plan.
