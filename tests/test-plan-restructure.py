@@ -37,6 +37,8 @@ def git(repo: Path, *args: str) -> str:
 
 class PlanRestructureTest(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_dont_write_bytecode = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
         self.repo = self.base / "repo"
@@ -84,6 +86,7 @@ class PlanRestructureTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+        sys.dont_write_bytecode = self.original_dont_write_bytecode
 
     def test_repository_active_predecessors_are_valid(self) -> None:
         old_cwd = Path.cwd()
@@ -343,6 +346,384 @@ class PlanRestructureTest(unittest.TestCase):
         )
         return contract
 
+    def load_restructure_module(self, label: str):
+        old_cwd = Path.cwd()
+        old_dont_write_bytecode = sys.dont_write_bytecode
+        try:
+            os.chdir(self.repo)
+            sys.dont_write_bytecode = True
+            spec = importlib.util.spec_from_file_location(
+                label,
+                self.repo / "scripts/restructure-plan.py",
+            )
+            assert spec and spec.loader
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        finally:
+            sys.dont_write_bytecode = old_dont_write_bytecode
+            os.chdir(old_cwd)
+
+    def coupled_successor_content(
+        self,
+        *,
+        path: str,
+        contract_path: str,
+        source_paths: list[str],
+        source_records: list[tuple[str, list[dict[str, str]]]],
+        predecessor: str | None,
+    ) -> tuple[str, list[dict[str, object]]]:
+        mappings = [
+            {
+                "source_id": source_id,
+                "acceptance_digests": [record["digest"] for record in records],
+            }
+            for source_id, records in source_records
+        ]
+        unique_records: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for _, records in source_records:
+            for record in records:
+                if record["digest"] not in seen:
+                    seen.add(record["digest"])
+                    unique_records.append(record)
+        digest_lines = "\n".join(
+            f"  - {record['digest']}" for record in unique_records
+        )
+        acceptance_lines = "\n".join(
+            f"  - {record['text']}" for record in unique_records
+        )
+        witness_lines = "\n".join(
+            "  - "
+            + json.dumps(
+                {
+                    "acceptance_sha256": record["digest"],
+                    "stage": "focused",
+                    "witness": "git diff --check",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for record in unique_records
+        )
+        status = (
+            "status: deferred\n"
+            "completion_deferred_reason: coupled prerequisite must be checked\n"
+            if predecessor
+            else "status: in_progress\n"
+        )
+        predecessor_block = (
+            f"predecessor_plans:\n  - {predecessor}\n" if predecessor else ""
+        )
+        content = (
+            "# Coupled Integration\n\n"
+            f"{status}"
+            "primary_invariant: integrate every coupled source acceptance mapping\n"
+            "replan_sources:\n"
+            + "".join(f"  - {source}\n" for source in source_paths)
+            + f"replan_contract: {contract_path}\n"
+            "integration_gates:\n"
+            "  - verify every coupled source through one shared integration successor\n"
+            f"successor_plans:\n  - {path}\n"
+            f"inherited_acceptance_digests:\n{digest_lines}\n"
+            "integration_source_ids:\n"
+            + "".join(f"  - {source_id}\n" for source_id, _ in source_records)
+            + predecessor_block
+            + "task_types:\n  - planning_docs\n"
+            "review_class: C\n"
+            "human_design_required: yes\n"
+            "human_approval_status: approved\n"
+            "write_scope:\n  - coupled/\n"
+            "preservation_scope:\n  - none\n"
+            "context_files:\n  - none\n"
+            "required_specs:\n"
+            "  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n"
+            "  - docs/agent/SPEC_USER_COMMUNICATION.md\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "focused_validation:\n  - git diff --check\n"
+            "validation:\n  - git diff --check\n"
+            f"acceptance:\n{acceptance_lines}\n"
+            "validation_witness_schema: 1\n"
+            f"validation_witness_map:\n{witness_lines}\n"
+            "checked_summary_ja: 結合後続計画。\n\n"
+            "## Tasks\n\n- [ ] integrate\n"
+        )
+        return content, mappings
+
+    def prerequisite_content(self) -> str:
+        acceptance = "Prepare the coupled reconstruction prerequisite."
+        witness = json.dumps(
+            {
+                "acceptance_sha256": digest(acceptance),
+                "stage": "focused",
+                "witness": "git diff --check",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return (
+            "# Coupled Prerequisite\n\n"
+            "status: in_progress\n"
+            "primary_invariant: prepare one separately authorized prerequisite\n"
+            "task_types:\n  - planning_docs\n"
+            "review_class: C\n"
+            "human_design_required: yes\n"
+            "human_approval_status: approved\n"
+            "write_scope:\n  - prerequisite/\n"
+            "preservation_scope:\n  - none\n"
+            "context_files:\n  - none\n"
+            "required_specs:\n"
+            "  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n"
+            "  - docs/agent/SPEC_USER_COMMUNICATION.md\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "focused_validation:\n  - git diff --check\n"
+            "validation:\n  - git diff --check\n"
+            f"acceptance:\n  - {acceptance}\n"
+            "validation_witness_schema: 1\n"
+            f"validation_witness_map:\n  - {witness}\n"
+            "checked_summary_ja: 結合前提計画。\n\n"
+            "## Tasks\n\n- [ ] prepare\n"
+        )
+
+    def prepare_coupled_spec(
+        self,
+        *,
+        include_rebind: bool = False,
+        include_prerequisite: bool = False,
+        promotion_path: str | None = None,
+        validation_rebind: bool = False,
+        target_body_reference: bool = False,
+    ) -> tuple[dict[str, object], object, str | None, str]:
+        if include_rebind:
+            self.add_sequential_successor()
+        first = self.spec["successors"][0]  # type: ignore[index]
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        integration["content"] = str(integration["content"]).replace(
+            "status: in_progress\n",
+            "status: deferred\n"
+            "completion_deferred_reason: first successor must be checked\n",
+            1,
+        ).replace(
+            "primary_invariant:",
+            f"predecessor_plans:\n  - {first['path']}\nprimary_invariant:",
+            1,
+        )
+        target_path: str | None = None
+        if include_rebind:
+            target = self.spec["successors"][1]  # type: ignore[index]
+            target_path = str(target["path"])
+            target["content"] = str(target["content"]).replace(
+                "status: in_progress\n",
+                "status: deferred\n"
+                "completion_deferred_reason: integration successor must be checked\n",
+                1,
+            ).replace(
+                "primary_invariant:",
+                f"predecessor_plans:\n  - {integration['path']}\nprimary_invariant:",
+                1,
+            )
+            if validation_rebind:
+                target["content"] = str(target["content"]).replace(
+                    "git diff --check",
+                    "python3 tests/test-copier-fixture.py",
+                )
+            if target_body_reference:
+                target["content"] = (
+                    str(target["content"])
+                    + f"\nOperational dependency: {integration['path']}\n"
+                )
+            if promotion_path:
+                product = self.repo / promotion_path
+                product.parent.mkdir(parents=True)
+                product.write_text("generated: true\n", encoding="utf-8")
+                self.spec["dirty_product_paths"] = [promotion_path]
+                target["content"] = str(target["content"]).replace(
+                    "preservation_scope:\n  - none",
+                    f"preservation_scope:\n  - {promotion_path}",
+                ).replace(
+                    "context_files:\n  - none",
+                    "context_files:\n  - docs/agent/spec-index.yaml",
+                )
+        self.write_spec()
+        initial = self.run_command()
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        module = self.load_restructure_module("coupled_fixture_module")
+        first_path = self.repo / str(first["path"])
+        first_path.write_text(
+            module.derive_stopped_source_content(
+                first_path.read_text(encoding="utf-8"),
+                ["multiple_independent_invariants"],
+            ),
+            encoding="utf-8",
+        )
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8").replace(
+                f"{first['id']}\t{first['path']}\tin_progress",
+                f"{first['id']}\t{first['path']}\treplan_required",
+            ),
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "prepare coupled sources")
+        module = self.load_restructure_module("coupled_spec_module")
+        source_paths = [str(first["path"]), str(integration["path"])]
+        source_records: list[tuple[str, list[dict[str, str]]]] = []
+        sources: list[dict[str, object]] = []
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        for path in source_paths:
+            content = (self.repo / path).read_text(encoding="utf-8")
+            records = module.acceptance_records(content)
+            source_id = Path(path).name[:3]
+            source_records.append((source_id, records))
+            stopped = module.derive_stopped_source_content(
+                content,
+                ["multiple_independent_invariants"],
+            )
+            sources.append(
+                {
+                    "path": path,
+                    "original_plan_digest": digest(content),
+                    "stopped_plan_digest": digest(stopped),
+                    "acceptance": records,
+                    "reason_codes": ["multiple_independent_invariants"],
+                    "archive_path": (
+                        f"docs/plan/replanned/{today.year:04d}/{today.month:02d}/"
+                        f"{half}/{Path(path).name}"
+                    ),
+                }
+            )
+        contract_path = "docs/plan/replanned/contracts/002-data-coupled.json"
+        prerequisite_path = (
+            "docs/plan/active/005-coupled-prerequisite.md"
+            if include_prerequisite
+            else None
+        )
+        successor_path = (
+            "docs/plan/active/006-coupled-integration.md"
+            if include_prerequisite
+            else "docs/plan/active/005-coupled-integration.md"
+        )
+        successor_content, mappings = self.coupled_successor_content(
+            path=successor_path,
+            contract_path=contract_path,
+            source_paths=source_paths,
+            source_records=source_records,
+            predecessor=prerequisite_path,
+        )
+        if validation_rebind:
+            successor_content = successor_content.replace(
+                "write_scope:\n  - coupled/\n",
+                "write_scope:\n"
+                "  - coupled/\n"
+                "  - tests/test-copier-fixture-validator.py\n",
+                1,
+            )
+        rebindings: list[dict[str, object]] = []
+        if target_path:
+            original = (self.repo / target_path).read_text(encoding="utf-8")
+            updated = original.replace(
+                str(integration["path"]),
+                successor_path,
+                1,
+            )
+            replacements: list[dict[str, object]] = [
+                {
+                    "scope": "manifest",
+                    "field": "predecessor_plans",
+                    "old": str(integration["path"]),
+                    "new": successor_path,
+                    "count": 1,
+                }
+            ]
+            if validation_rebind:
+                old_validation = "tests/test-copier-fixture.py"
+                new_validation = "tests/test-copier-fixture-validator.py"
+                updated = updated.replace(old_validation, new_validation)
+                replacements.extend(
+                    {
+                        "scope": "manifest",
+                        "field": field,
+                        "old": old_validation,
+                        "new": new_validation,
+                        "count": 1,
+                    }
+                    for field in (
+                        "focused_validation",
+                        "validation",
+                        "validation_witness_map",
+                    )
+                )
+            state = module.verify_repository_contracts()
+            owner = state["live_successors"][target_path]["contract_path"]
+            rebindings.append(
+                {
+                    "kind": "rebind",
+                    "plan_path": target_path,
+                    "owning_contract_path": owner,
+                    "original_content_digest": digest(original),
+                    "prior_effective_projection_digest": module.projection_digest(
+                        state["effective_projections"][target_path]
+                    ),
+                    "updated_content_digest": digest(updated),
+                    "replacements": replacements,
+                    "promoted_preservation_path": None,
+                }
+            )
+        coupled = {
+            "schema_version": 3,
+            "operation": "reconstruct",
+            "source_head": git(self.repo, "rev-parse", "HEAD"),
+            "sources": sources,
+            "dirty_product_paths": [],
+            "contract_path": contract_path,
+            "successors": [
+                {
+                    "id": Path(successor_path).name[:3],
+                    "path": successor_path,
+                    "content": successor_content,
+                    "acceptance_mappings": mappings,
+                    "integration_source_ids": [
+                        source_id for source_id, _ in source_records
+                    ],
+                }
+            ],
+            "prerequisite_plans": (
+                [
+                    {
+                        "id": Path(prerequisite_path).name[:3],
+                        "path": prerequisite_path,
+                        "content": self.prerequisite_content(),
+                        "authorization": "parent_owned_prerequisite",
+                    }
+                ]
+                if prerequisite_path
+                else []
+            ),
+            "rebindings": rebindings,
+        }
+        return coupled, module, target_path, successor_path
+
+    def run_spec_data(
+        self,
+        value: dict[str, object],
+        name: str,
+    ) -> subprocess.CompletedProcess[str]:
+        path = self.base / name
+        path.write_text(
+            json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            [sys.executable, "scripts/restructure-plan.py", str(path)],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
     def test_success_preserves_requirements_and_switches_indexes(self) -> None:
         result = self.run_command()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -376,7 +757,12 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertNotIn("001\t", active)
         self.assertIn("002\tdocs/plan/active/002-data.md\tin_progress", active)
         self.assertIn("003\tdocs/plan/active/003-integration.md\tin_progress", active)
-        self.assertEqual(self.run_verify().returncode, 0)
+        verified = self.run_verify()
+        self.assertEqual(
+            verified.returncode,
+            0,
+            verified.stderr,
+        )
 
         successor_path = self.repo / "docs/plan/active/002-data.md"
         clean_successor = successor_path.read_text(encoding="utf-8")
@@ -471,20 +857,22 @@ class PlanRestructureTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(self.run_verify().returncode, 0)
-
-        integration_path.write_text(
-            integration_path.read_text(encoding="utf-8")
-            .replace("status: deferred", "status: in_progress", 1)
-            .replace(str(first["path"]), checked_relative, 1),
-            encoding="utf-8",
+        git(self.repo, "add", "docs/plan")
+        git(self.repo, "commit", "-qm", "check predecessor")
+        module = self.load_restructure_module("predecessor_activation_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=str(integration["path"]),
+            successor_path=str(first["path"]),
+            checked_path=checked_relative,
+            promoted_path=None,
+            deferred_reason="predecessor must be checked",
         )
-        active_index.write_text(
-            active_index.read_text(encoding="utf-8").replace(
-                f"{integration['id']}\t{integration['path']}\tdeferred",
-                f"{integration['id']}\t{integration['path']}\tin_progress",
-            ),
-            encoding="utf-8",
+        activated = self.run_spec_data(
+            activation,
+            "predecessor-activation.json",
         )
+        self.assertEqual(activated.returncode, 0, activated.stderr)
         self.assertEqual(self.run_verify().returncode, 0)
 
     def test_predecessor_cycles_and_duplicate_edges_are_rejected_before_writes(self) -> None:
@@ -566,6 +954,55 @@ class PlanRestructureTest(unittest.TestCase):
         )
         contract_path.write_text(json.dumps(contract) + "\n", encoding="utf-8")
         self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_committed_replanned_history_is_immutable(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        git(self.repo, "add", "docs/plan")
+        git(self.repo, "commit", "-qm", "publish replanned history")
+        contract = self.repo / str(self.spec["contract_path"])
+        archive = self.repo / str(self.spec["archive_path"])
+        for path in (contract, archive):
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                path.write_bytes(original + b"\n")
+                rejected = self.run_verify()
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(
+                    "historical contract or archive differs from committed bytes",
+                    rejected.stderr,
+                )
+                path.write_bytes(original)
+
+        replanned = self.repo / "docs/plan/replanned.md"
+        original_index = replanned.read_text(encoding="utf-8")
+        for tampered in (
+            original_index.replace(
+                "# Replanned Plan Index",
+                "# Replanned Plan Ledger",
+                1,
+            ),
+            original_index + "\nUnbound historical note.\n",
+        ):
+            with self.subTest(index_bytes=digest(tampered)):
+                replanned.write_text(tampered, encoding="utf-8")
+                rejected = self.run_verify()
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(
+                    "replanned plan index bytes are not canonical",
+                    rejected.stderr,
+                )
+        replanned.write_text(
+            "# Replanned Plan Index\n\nid\tpath\tcontract\n",
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "replanned plan index rewrites committed history",
+            rejected.stderr,
+        )
+        replanned.write_text(original_index, encoding="utf-8")
+        self.assertEqual(self.run_verify().returncode, 0)
 
     def test_validation_projection_tampering_and_live_reordering_are_rejected(self) -> None:
         self.assertEqual(self.run_command().returncode, 0)
@@ -1442,6 +1879,1359 @@ class PlanRestructureTest(unittest.TestCase):
         missing = self.run_verify()
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn("missing live validation successor companion baseline", missing.stderr)
+
+    def test_schema_three_reconstructs_coupled_sources_with_prerequisite(self) -> None:
+        coupled, _, _, successor_path = self.prepare_coupled_spec(
+            include_prerequisite=True
+        )
+        result = self.run_spec_data(coupled, "coupled.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract_path = self.repo / str(coupled["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        self.assertEqual(contract["schema_version"], 3)
+        self.assertEqual(
+            [source["id"] for source in contract["sources"]],
+            ["002", "003"],
+        )
+        self.assertEqual(
+            contract["successors"][0]["integration_source_ids"],
+            ["002", "003"],
+        )
+        for source in contract["sources"]:
+            self.assertFalse((self.repo / source["path"]).exists())
+            self.assertTrue((self.repo / source["archive_path"]).is_file())
+            self.assertEqual(
+                digest(source["stopped_content"]),
+                source["stopped_plan_digest"],
+            )
+        active = (self.repo / "docs/plan/plan.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "005\tdocs/plan/active/005-coupled-prerequisite.md\tin_progress",
+            active,
+        )
+        self.assertIn(f"006\t{successor_path}\tdeferred", active)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def check_successor(
+        self,
+        successor_path: str,
+        *,
+        product_path: str | None = None,
+    ) -> str:
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        checked_path = (
+            f"docs/plan/checked/{today.year:04d}/{today.month:02d}/{half}/"
+            f"{Path(successor_path).name}"
+        )
+        source = self.repo / successor_path
+        checked = self.repo / checked_path
+        checked.parent.mkdir(parents=True, exist_ok=True)
+        checked.write_text(
+            source.read_text(encoding="utf-8").replace(
+                "status: in_progress",
+                "status: checked",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        source.unlink()
+        plan_id = Path(successor_path).name[:3]
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            "".join(
+                line
+                for line in active.read_text(encoding="utf-8").splitlines(
+                    keepends=True
+                )
+                if not line.startswith(f"{plan_id}\t")
+            ),
+            encoding="utf-8",
+        )
+        checked_index = self.repo / "docs/plan/checked.md"
+        with checked_index.open("a", encoding="utf-8") as handle:
+            handle.write(f"{plan_id}\t{checked_path}\n")
+        if product_path:
+            self.assertTrue((self.repo / product_path).is_file())
+            (self.repo / product_path).write_text(
+                "generated: checked\n",
+                encoding="utf-8",
+            )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "check coupled successor")
+        return checked_path
+
+    def activation_spec(
+        self,
+        *,
+        module,
+        target_path: str,
+        successor_path: str,
+        checked_path: str,
+        promoted_path: str | None,
+        deferred_reason: str = "integration successor must be checked",
+    ) -> dict[str, object]:
+        original = (self.repo / target_path).read_text(encoding="utf-8")
+        reason_line = (
+            f"completion_deferred_reason: {deferred_reason}\n"
+        )
+        replacements: list[dict[str, object]] = [
+            {
+                "scope": "manifest",
+                "field": "status",
+                "old": "status: deferred\n",
+                "new": "status: in_progress\n",
+                "count": 1,
+            },
+            {
+                "scope": "manifest",
+                "field": "completion_deferred_reason",
+                "old": reason_line,
+                "new": "",
+                "count": 1,
+            },
+            {
+                "scope": "manifest",
+                "field": "predecessor_plans",
+                "old": successor_path,
+                "new": checked_path,
+                "count": 1,
+            },
+        ]
+        updated = (
+            original.replace("status: deferred\n", "status: in_progress\n", 1)
+            .replace(reason_line, "", 1)
+            .replace(successor_path, checked_path, 1)
+        )
+        if promoted_path:
+            replacements.extend(
+                [
+                    {
+                        "scope": "manifest",
+                        "field": "preservation_scope",
+                        "old": f"  - {promoted_path}\n",
+                        "new": "  - none\n",
+                        "count": 1,
+                    },
+                    {
+                        "scope": "manifest",
+                        "field": "context_files",
+                        "old": "  - docs/agent/spec-index.yaml\n",
+                        "new": (
+                            "  - docs/agent/spec-index.yaml\n"
+                            f"  - {promoted_path}\n"
+                        ),
+                        "count": 1,
+                    },
+                ]
+            )
+            updated = updated.replace(
+                f"  - {promoted_path}\n",
+                "  - none\n",
+                1,
+            ).replace(
+                "  - docs/agent/spec-index.yaml\n",
+                "  - docs/agent/spec-index.yaml\n"
+                f"  - {promoted_path}\n",
+                1,
+            )
+        state = module.verify_repository_contracts()
+        return {
+            "schema_version": 3,
+            "operation": "rebind",
+            "source_head": git(self.repo, "rev-parse", "HEAD"),
+            "rebindings": [
+                {
+                    "kind": "activation",
+                    "plan_path": target_path,
+                    "owning_contract_path": state["live_successors"][target_path][
+                        "contract_path"
+                    ],
+                    "original_content_digest": digest(original),
+                    "prior_effective_projection_digest": module.projection_digest(
+                        state["effective_projections"][target_path]
+                    ),
+                    "updated_content_digest": digest(updated),
+                    "replacements": replacements,
+                    "promoted_preservation_path": promoted_path,
+                }
+            ],
+        }
+
+    def test_rebind_overlay_and_activation_form_one_digest_chain(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "coupled-rebind.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        target = self.repo / target_path
+        self.assertIn(successor_path, target.read_text(encoding="utf-8"))
+        baseline_path = (
+            self.repo
+            / "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
+        )
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(baseline["records"]), 1)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+        checked_path = self.check_successor(successor_path)
+        module = self.load_restructure_module("activation_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        activated = self.run_spec_data(activation, "activation.json")
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+        self.assertIn(
+            "status: in_progress",
+            target.read_text(encoding="utf-8"),
+        )
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(baseline["records"]), 2)
+        self.assertEqual(
+            baseline["records"][1]["original_content_digest"],
+            baseline["records"][0]["updated_content_digest"],
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_durable_activation_record_is_reauthorized(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "durable-activation-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(successor_path)
+        module = self.load_restructure_module("durable_activation_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        activated = self.run_spec_data(
+            activation,
+            "durable-activation.json",
+        )
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+
+        unrelated_checked = checked_path.replace(
+            Path(checked_path).name,
+            "099-unrelated.md",
+        )
+        unrelated = self.repo / unrelated_checked
+        unrelated.write_text(
+            "# Unrelated\n\nstatus: checked\nwrite_scope:\n  - none\n",
+            encoding="utf-8",
+        )
+        with (self.repo / "docs/plan/checked.md").open(
+            "a",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(f"099\t{unrelated_checked}\n")
+        baseline_path = (
+            self.repo
+            / "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
+        )
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        record = baseline["records"][-1]
+        for replacement in record["replacements"]:
+            if replacement["field"] == "predecessor_plans":
+                replacement["new"] = unrelated_checked
+        record["updated_content"] = record["updated_content"].replace(
+            checked_path,
+            unrelated_checked,
+            1,
+        )
+        record["updated_content_digest"] = digest(record["updated_content"])
+        record["record_digest"] = module.canonical_digest(
+            {
+                key: value
+                for key, value in record.items()
+                if key != "record_digest"
+            }
+        )
+        baseline_path.write_text(
+            json.dumps(
+                baseline,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (self.repo / target_path).write_text(
+            record["updated_content"],
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("exact checked references", rejected.stderr)
+
+    def test_rebind_validation_uses_only_admitted_semantic_path_pairs(self) -> None:
+        coupled, _, target_path, _ = self.prepare_coupled_spec(
+            include_rebind=True,
+            validation_rebind=True,
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "validation-rebind.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        content = (self.repo / target_path).read_text(encoding="utf-8")
+        self.assertIn("python3 tests/test-copier-fixture-validator.py", content)
+        self.assertNotIn("python3 tests/test-copier-fixture.py", content)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_rebind_rejects_allowlisted_but_unadmitted_validation_path(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True,
+            validation_rebind=True,
+        )
+        assert target_path
+        admitted = "tests/test-copier-fixture-validator.py"
+        weaker = "tests/test-validation-tools.py"
+        successor = coupled["successors"][0]  # type: ignore[index]
+        successor["content"] = str(successor["content"]).replace(
+            admitted,
+            weaker,
+        )
+        rebind = coupled["rebindings"][0]  # type: ignore[index]
+        for replacement in rebind["replacements"]:
+            if replacement["new"] == admitted:
+                replacement["new"] = weaker
+        original = (self.repo / target_path).read_text(encoding="utf-8")
+        integration_path = str(self.spec["integration"]["path"])  # type: ignore[index]
+        updated = original.replace(integration_path, successor_path, 1).replace(
+            "tests/test-copier-fixture.py",
+            weaker,
+        )
+        rebind["updated_content_digest"] = digest(updated)
+        rejected = self.run_spec_data(coupled, "unadmitted-validation-rebind.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("semantic-preserving path substitutions", rejected.stderr)
+
+    def test_activation_rejects_unrelated_checked_plan_and_header_rewrite(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "activation-security-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(successor_path)
+        unrelated_checked = checked_path.replace(
+            Path(checked_path).name,
+            "099-unrelated.md",
+        )
+        unrelated = self.repo / unrelated_checked
+        unrelated.write_text(
+            "# Unrelated\n\n"
+            "status: checked\n"
+            "write_scope:\n  - none\n",
+            encoding="utf-8",
+        )
+        with (self.repo / "docs/plan/checked.md").open(
+            "a",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(f"099\t{unrelated_checked}\n")
+        git(self.repo, "add", "docs/plan")
+        git(self.repo, "commit", "-qm", "add unrelated checked plan")
+        module = self.load_restructure_module("activation_security_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        rebind = activation["rebindings"][0]  # type: ignore[index]
+        for replacement in rebind["replacements"]:
+            if replacement["field"] == "predecessor_plans":
+                replacement["new"] = unrelated_checked
+        original = (self.repo / target_path).read_text(encoding="utf-8")
+        updated = (
+            original.replace("status: deferred\n", "status: in_progress\n", 1)
+            .replace(
+                "completion_deferred_reason: integration successor must be checked\n",
+                "",
+                1,
+            )
+            .replace(successor_path, unrelated_checked, 1)
+        )
+        rebind["updated_content_digest"] = digest(updated)
+        unrelated_result = self.run_spec_data(
+            activation,
+            "unrelated-activation.json",
+        )
+        self.assertNotEqual(unrelated_result.returncode, 0)
+        self.assertIn("exact checked references", unrelated_result.stderr)
+
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        rebind = activation["rebindings"][0]  # type: ignore[index]
+        rebind["replacements"].append(
+            {
+                "scope": "manifest",
+                "field": "integration_gates",
+                "old": "integration_gates:\n",
+                "new": "",
+                "count": 1,
+            }
+        )
+        rebind["updated_content_digest"] = digest(
+            module.apply_exact_replacements(
+                original,
+                rebind["replacements"],
+                kind="activation",
+                label="header rewrite",
+            )
+        )
+        header_result = self.run_spec_data(
+            activation,
+            "header-rewrite-activation.json",
+        )
+        self.assertNotEqual(header_result.returncode, 0)
+        self.assertIn("exact active-to-checked transition", header_result.stderr)
+
+    def test_activation_rejects_unresolved_active_plan_reference_in_body(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True,
+            target_body_reference=True,
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "activation-body-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(successor_path)
+        module = self.load_restructure_module("activation_body_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        rejected = self.run_spec_data(
+            activation,
+            "unresolved-body-activation.json",
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "activation leaves active plan references unresolved",
+            rejected.stderr,
+        )
+
+    def test_standalone_activation_rejects_initial_rebind_kind(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "standalone-kind-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(successor_path)
+        module = self.load_restructure_module("standalone_kind_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        activation["rebindings"][0]["kind"] = "rebind"  # type: ignore[index]
+        rejected = self.run_spec_data(activation, "wrong-activation-kind.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("not permitted for this operation", rejected.stderr)
+
+    def test_unrebound_schema_two_and_three_successors_reject_body_drift(self) -> None:
+        coupled, module, _, successor_path = self.prepare_coupled_spec()
+        schema_two = self.repo / str(self.spec["integration"]["path"])  # type: ignore[index]
+        schema_two_original = schema_two.read_text(encoding="utf-8")
+        schema_two.write_text(
+            schema_two_original.replace(
+                "preserve one independently validatable invariant",
+                "drift the schema two invariant",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("live successor lifecycle", rejected.stderr)
+        schema_two.write_text(schema_two_original, encoding="utf-8")
+        stopped_schema_two = self.repo / str(self.spec["successors"][0]["path"])  # type: ignore[index]
+        stopped_schema_two_original = stopped_schema_two.read_text(encoding="utf-8")
+        stopped_schema_two.write_text(
+            stopped_schema_two_original.replace(
+                "- [ ] implement",
+                "- [ ] drift stopped schema two work",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("live successor lifecycle", rejected.stderr)
+        stopped_schema_two.write_text(
+            stopped_schema_two_original,
+            encoding="utf-8",
+        )
+
+        result = self.run_spec_data(coupled, "unrebound-lifecycle-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        schema_three = self.repo / successor_path
+        schema_three_original = schema_three.read_text(encoding="utf-8")
+        schema_three.write_text(
+            schema_three_original.replace(
+                "integrate every coupled source acceptance mapping",
+                "drift the schema three invariant",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("live successor lifecycle", rejected.stderr)
+        stopped_schema_three = module.derive_stopped_source_content(
+            schema_three_original,
+            ["multiple_independent_invariants"],
+        ).replace(
+            "- [ ] integrate",
+            "- [ ] drift stopped schema three work",
+            1,
+        )
+        schema_three.write_text(stopped_schema_three, encoding="utf-8")
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8").replace(
+                f"{Path(successor_path).name[:3]}\t{successor_path}\tin_progress",
+                f"{Path(successor_path).name[:3]}\t{successor_path}\treplan_required",
+            ),
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("live successor lifecycle", rejected.stderr)
+
+    def test_rebound_plan_allows_only_exact_normal_lifecycle_changes(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "lifecycle-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_predecessor = self.check_successor(successor_path)
+        module = self.load_restructure_module("lifecycle_activation_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_predecessor,
+            promoted_path=None,
+        )
+        activated = self.run_spec_data(activation, "lifecycle-activation.json")
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+        target = self.repo / target_path
+        ready_content = (
+            target.read_text(encoding="utf-8")
+            .replace("status: in_progress\n", "status: ready_to_archive\n", 1)
+            .replace("- [ ] implement\n", "- [x] implement\n", 1)
+            + "\n## Validation Notes\n\n- focused validation passed.\n"
+        )
+        target.write_text(ready_content, encoding="utf-8")
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8").replace(
+                f"{Path(target_path).name[:3]}\t{target_path}\tin_progress",
+                f"{Path(target_path).name[:3]}\t{target_path}\tready_to_archive",
+            ),
+            encoding="utf-8",
+        )
+        ready_verified = self.run_verify()
+        self.assertEqual(
+            ready_verified.returncode,
+            0,
+            ready_verified.stderr,
+        )
+        target.write_text(
+            ready_content.replace(
+                "preserve one independently validatable invariant",
+                "change the invariant after review",
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+        target.write_text(ready_content, encoding="utf-8")
+
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        checked_path = (
+            f"docs/plan/checked/{today.year:04d}/{today.month:02d}/{half}/"
+            f"{Path(target_path).name}"
+        )
+        checked = self.repo / checked_path
+        checked.parent.mkdir(parents=True, exist_ok=True)
+        checked.write_text(
+            ready_content.replace(
+                "status: ready_to_archive\n",
+                "status: checked\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        target.unlink()
+        plan_id = Path(target_path).name[:3]
+        active.write_text(
+            "".join(
+                line
+                for line in active.read_text(encoding="utf-8").splitlines(
+                    keepends=True
+                )
+                if not line.startswith(f"{plan_id}\t")
+            ),
+            encoding="utf-8",
+        )
+        with (self.repo / "docs/plan/checked.md").open(
+            "a",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(f"{plan_id}\t{checked_path}\n")
+        git(self.repo, "add", "docs/plan")
+        git(self.repo, "commit", "-qm", "complete rebound plan")
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_rebound_plan_accepts_canonical_replan_required_state(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "replan-state-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_predecessor = self.check_successor(successor_path)
+        module = self.load_restructure_module("replan_state_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_predecessor,
+            promoted_path=None,
+        )
+        activated = self.run_spec_data(
+            activation,
+            "replan-state-activation.json",
+        )
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+        target = self.repo / target_path
+        stopped = module.derive_stopped_source_content(
+            target.read_text(encoding="utf-8"),
+            ["multiple_independent_invariants"],
+        )
+        self.assertNotIn("completion_deferred_reason:", stopped)
+        target.write_text(stopped, encoding="utf-8")
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8").replace(
+                f"{Path(target_path).name[:3]}\t{target_path}\tin_progress",
+                f"{Path(target_path).name[:3]}\t{target_path}\treplan_required",
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+        target.write_text(
+            stopped.replace(
+                "replan_reason_codes:\n",
+                "completion_deferred_reason: stale deferred reason\n"
+                "replan_reason_codes:\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "stale completion_deferred_reason",
+            rejected.stderr,
+        )
+        empty_stale = stopped.replace(
+            "replan_reason_codes:\n",
+            "completion_deferred_reason:\nreplan_reason_codes:\n",
+            1,
+        )
+        target.write_text(empty_stale, encoding="utf-8")
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "stale completion_deferred_reason",
+            rejected.stderr,
+        )
+        with self.assertRaisesRegex(
+            module.RestructureError,
+            "stale completion_deferred_reason",
+        ):
+            module.derive_stopped_source_content(
+                empty_stale,
+                ["multiple_independent_invariants"],
+            )
+
+    def test_schema_three_successor_can_be_replanned_by_schema_three(self) -> None:
+        coupled, module, _, successor_path = self.prepare_coupled_spec()
+        first = self.run_spec_data(coupled, "first-coupled.json")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        source = self.repo / successor_path
+        original = source.read_text(encoding="utf-8")
+        stopped = module.derive_stopped_source_content(
+            original,
+            ["multiple_independent_invariants"],
+        )
+        source.write_text(stopped, encoding="utf-8")
+        plan_id = Path(successor_path).name[:3]
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8").replace(
+                f"{plan_id}\t{successor_path}\tin_progress",
+                f"{plan_id}\t{successor_path}\treplan_required",
+            ),
+            encoding="utf-8",
+        )
+        git(self.repo, "add", "docs/plan")
+        git(self.repo, "commit", "-qm", "stop schema three successor")
+        records = module.acceptance_records(original)
+        next_path = "docs/plan/active/007-recursive-integration.md"
+        next_contract = (
+            "docs/plan/replanned/contracts/"
+            f"{plan_id}-recursive-integration.json"
+        )
+        next_content, mappings = self.coupled_successor_content(
+            path=next_path,
+            contract_path=next_contract,
+            source_paths=[successor_path],
+            source_records=[(plan_id, records)],
+            predecessor=None,
+        )
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        recursive = {
+            "schema_version": 3,
+            "operation": "reconstruct",
+            "source_head": git(self.repo, "rev-parse", "HEAD"),
+            "sources": [
+                {
+                    "path": successor_path,
+                    "original_plan_digest": digest(stopped),
+                    "stopped_plan_digest": digest(stopped),
+                    "acceptance": records,
+                    "reason_codes": ["multiple_independent_invariants"],
+                    "archive_path": (
+                        f"docs/plan/replanned/{today.year:04d}/{today.month:02d}/"
+                        f"{half}/{Path(successor_path).name}"
+                    ),
+                }
+            ],
+            "dirty_product_paths": [],
+            "contract_path": next_contract,
+            "successors": [
+                {
+                    "id": "007",
+                    "path": next_path,
+                    "content": next_content,
+                    "acceptance_mappings": mappings,
+                    "integration_source_ids": [plan_id],
+                }
+            ],
+            "prerequisite_plans": [],
+            "rebindings": [],
+        }
+        transitioned = self.run_spec_data(recursive, "recursive-coupled.json")
+        self.assertEqual(transitioned.returncode, 0, transitioned.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_schema_three_allows_ordered_prerequisite_chains(self) -> None:
+        coupled, _, _, successor_path = self.prepare_coupled_spec(
+            include_prerequisite=True
+        )
+        second_path = "docs/plan/active/007-second-prerequisite.md"
+        first_path = "docs/plan/active/005-coupled-prerequisite.md"
+        second_content = self.prerequisite_content().replace(
+            "# Coupled Prerequisite",
+            "# Second Coupled Prerequisite",
+            1,
+        ).replace(
+            "status: in_progress\n",
+            "status: deferred\n"
+            "completion_deferred_reason: first prerequisite must be checked\n",
+            1,
+        ).replace(
+            "primary_invariant:",
+            f"predecessor_plans:\n  - {first_path}\nprimary_invariant:",
+            1,
+        )
+        coupled["prerequisite_plans"].append(  # type: ignore[union-attr]
+            {
+                "id": "007",
+                "path": second_path,
+                "content": second_content,
+                "authorization": "parent_owned_prerequisite",
+            }
+        )
+        successor = coupled["successors"][0]  # type: ignore[index]
+        successor["content"] = str(successor["content"]).replace(
+            first_path,
+            second_path,
+        )
+        result = self.run_spec_data(coupled, "prerequisite-chain.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            f"007\t{second_path}\tdeferred",
+            (self.repo / "docs/plan/plan.md").read_text(encoding="utf-8"),
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_prerequisite_validation_projection_cannot_drift(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec(
+            include_prerequisite=True
+        )
+        result = self.run_spec_data(coupled, "prerequisite-drift.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prerequisite = (
+            self.repo / "docs/plan/active/005-coupled-prerequisite.md"
+        )
+        original = prerequisite.read_text(encoding="utf-8")
+        prerequisite.write_text(
+            original.replace(
+                "git diff --check",
+                "python3 tests/test-plan-restructure.py",
+            ),
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("validation projection mismatch", rejected.stderr)
+        prerequisite.write_text(
+            original.replace(
+                "- [ ] prepare",
+                "- [ ] rewrite prerequisite work",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("live successor lifecycle", rejected.stderr)
+
+    def test_deferred_prerequisite_can_use_checked_activation_overlay(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec(
+            include_prerequisite=True
+        )
+        external_path = "docs/plan/active/099-external-prerequisite.md"
+        external = self.repo / external_path
+        external.write_text(
+            "# External prerequisite\n\n"
+            "status: in_progress\n"
+            "write_scope:\n  - external/\n",
+            encoding="utf-8",
+        )
+        active = self.repo / "docs/plan/plan.md"
+        with active.open("a", encoding="utf-8") as handle:
+            handle.write(f"099\t{external_path}\tin_progress\n")
+        prerequisite = coupled["prerequisite_plans"][0]  # type: ignore[index]
+        prerequisite["content"] = str(prerequisite["content"]).replace(
+            "status: in_progress\n",
+            "status: deferred\n"
+            "completion_deferred_reason: external prerequisite must be checked\n",
+            1,
+        ).replace(
+            "primary_invariant:",
+            f"predecessor_plans:\n  - {external_path}\nprimary_invariant:",
+            1,
+        )
+        git(self.repo, "add", "docs/plan")
+        git(self.repo, "commit", "-qm", "add external prerequisite")
+        coupled["source_head"] = git(self.repo, "rev-parse", "HEAD")
+        result = self.run_spec_data(
+            coupled,
+            "deferred-prerequisite-source.json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_external = self.check_successor(external_path)
+        module = self.load_restructure_module("prerequisite_activation_module")
+        target_path = str(prerequisite["path"])
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=external_path,
+            checked_path=checked_external,
+            promoted_path=None,
+            deferred_reason="external prerequisite must be checked",
+        )
+        activated = self.run_spec_data(
+            activation,
+            "deferred-prerequisite-activation.json",
+        )
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+        self.assertIn(
+            "status: in_progress",
+            (self.repo / target_path).read_text(encoding="utf-8"),
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_reconstruct_and_activation_rebind_kinds_are_phase_bound(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec(include_rebind=True)
+        coupled["rebindings"][0]["kind"] = "activation"  # type: ignore[index]
+        rejected = self.run_spec_data(coupled, "wrong-reconstruct-kind.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("not permitted for this operation", rejected.stderr)
+
+    def test_activation_promotes_checked_product_to_context(self) -> None:
+        product = "coupled/generated.txt"
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True,
+            promotion_path=product,
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "coupled-promotion.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(
+            successor_path,
+            product_path=product,
+        )
+        module = self.load_restructure_module("promotion_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=product,
+        )
+        promoted = self.run_spec_data(activation, "promotion.json")
+        self.assertEqual(promoted.returncode, 0, promoted.stderr)
+        content = (self.repo / target_path).read_text(encoding="utf-8")
+        manifest = module.parse_manifest(content)
+        self.assertNotIn(product, module.preservation_scope(
+            manifest, target_path, required=True
+        ))
+        self.assertIn(product, module.items(manifest, "context_files"))
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_activation_promotion_rejects_nonowner_and_stale_product_bytes(self) -> None:
+        product = "config/unowned.txt"
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True,
+            promotion_path=product,
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "unowned-promotion-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(
+            successor_path,
+            product_path=product,
+        )
+        module = self.load_restructure_module("unowned_promotion_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=product,
+        )
+        rejected = self.run_spec_data(activation, "unowned-promotion.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("exact checked producer", rejected.stderr)
+
+    def test_activation_promotion_rejects_stale_product_bytes(self) -> None:
+        product = "coupled/stale.txt"
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True,
+            promotion_path=product,
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "stale-promotion-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(
+            successor_path,
+            product_path=product,
+        )
+        (self.repo / product).write_text("stale worktree bytes\n", encoding="utf-8")
+        module = self.load_restructure_module("stale_promotion_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=product,
+        )
+        rejected = self.run_spec_data(activation, "stale-promotion.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("exact checked producer", rejected.stderr)
+
+    def test_schema_three_rejects_partial_sources_and_duplicate_integrations(self) -> None:
+        coupled, _, _, successor_path = self.prepare_coupled_spec()
+        partial = copy.deepcopy(coupled)
+        partial["sources"] = partial["sources"][:1]  # type: ignore[index]
+        rejected = self.run_spec_data(partial, "partial-source.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("unknown source", rejected.stderr)
+
+        duplicate = copy.deepcopy(coupled)
+        second_path = "docs/plan/active/007-duplicate-integration.md"
+        first_successor = duplicate["successors"][0]  # type: ignore[index]
+        second = copy.deepcopy(first_successor)
+        second["id"] = "007"
+        second["path"] = second_path
+        old_successors = f"successor_plans:\n  - {successor_path}\n"
+        new_successors = (
+            "successor_plans:\n"
+            f"  - {successor_path}\n"
+            f"  - {second_path}\n"
+        )
+        first_successor["content"] = str(first_successor["content"]).replace(
+            old_successors,
+            new_successors,
+        )
+        second["content"] = str(second["content"]).replace(
+            old_successors,
+            new_successors,
+        )
+        duplicate["successors"].append(second)  # type: ignore[union-attr]
+        rejected = self.run_spec_data(duplicate, "duplicate-integration.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("exactly one integration successor", rejected.stderr)
+
+    def test_rebind_rejects_protected_and_weakening_changes(self) -> None:
+        coupled, _, target_path, _ = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        protected = copy.deepcopy(coupled)
+        rebind = protected["rebindings"][0]  # type: ignore[index]
+        original = (self.repo / target_path).read_text(encoding="utf-8")
+        updated = original.replace("write_scope:\n  - src/", "write_scope:\n  - other/")
+        rebind["updated_content_digest"] = digest(updated)
+        rebind["replacements"] = [
+            {
+                "scope": "manifest",
+                "field": "write_scope",
+                "old": "  - src/\n",
+                "new": "  - other/\n",
+                "count": 1,
+            }
+        ]
+        rejected = self.run_spec_data(protected, "protected-rebind.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("unauthorized field", rejected.stderr)
+
+        weakening = copy.deepcopy(coupled)
+        rebind = weakening["rebindings"][0]  # type: ignore[index]
+        updated = original.replace("validation:\n  - git diff --check\n", "validation:\n")
+        rebind["updated_content_digest"] = digest(updated)
+        rebind["replacements"] = [
+            {
+                "scope": "manifest",
+                "field": "validation",
+                "old": "  - git diff --check\n",
+                "new": "",
+                "count": 1,
+            }
+        ]
+        rejected = self.run_spec_data(weakening, "weakening-rebind.json")
+        self.assertNotEqual(rejected.returncode, 0)
+
+    def test_rebind_baseline_fork_is_rejected(self) -> None:
+        coupled, module, _, _ = self.prepare_coupled_spec(include_rebind=True)
+        result = self.run_spec_data(coupled, "fork-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        baseline_path = (
+            self.repo
+            / "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
+        )
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        fork = copy.deepcopy(baseline["records"][0])
+        fork["transaction_id"] = digest("fork")
+        fork["record_digest"] = module.canonical_digest(
+            {key: value for key, value in fork.items() if key != "record_digest"}
+        )
+        baseline["records"].append(fork)
+        baseline_path.write_text(
+            json.dumps(baseline, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("gap or fork", rejected.stderr)
+
+    def journal_path(self) -> Path:
+        raw = git(
+            self.repo,
+            "rev-parse",
+            "--git-path",
+            "project-agent-workflow/restructure-journals",
+        )
+        directory = Path(raw)
+        if not directory.is_absolute():
+            directory = self.repo / directory
+        journals = list(directory.glob("*.json"))
+        self.assertEqual(len(journals), 1)
+        return journals[0]
+
+    def test_crash_recovery_rolls_back_each_precommit_phase_and_rolls_forward(self) -> None:
+        module = self.load_restructure_module("crash_recovery_module")
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            for phase in ("after_journal", "after_temps", "after_operation_1"):
+                with self.subTest(phase=phase):
+                    with self.assertRaises(module.SimulatedCrash):
+                        module.execute(self.spec_path, crash_phase=phase)
+                    journal = self.journal_path()
+                    payload = json.loads(journal.read_text(encoding="utf-8"))
+                    self.assertEqual(journal.stat().st_mode & 0o777, 0o600)
+                    module.recover_transaction(
+                        journal,
+                        payload["journal_identity"],
+                    )
+                    self.assert_source_unchanged()
+                    self.assertEqual(
+                        json.loads(journal.read_text(encoding="utf-8"))["phase"],
+                        "rolled_back",
+                    )
+                    journal.unlink()
+            state = module.validate_spec(copy.deepcopy(self.spec))
+            operations, _ = module.build_transaction_operations(state)
+            with self.assertRaises(module.SimulatedCrash):
+                module.execute(
+                    self.spec_path,
+                    crash_phase=f"after_operation_{len(operations)}",
+                )
+            journal = self.journal_path()
+            payload = json.loads(journal.read_text(encoding="utf-8"))
+            with self.assertRaises(module.SimulatedCrash):
+                module.recover_transaction(
+                    journal,
+                    payload["journal_identity"],
+                    crash_phase="rollback_after_operation_1",
+                )
+            interrupted_rollback = json.loads(
+                journal.read_text(encoding="utf-8")
+            )
+            self.assertEqual(interrupted_rollback["phase"], "rolling_back")
+            self.assertEqual(interrupted_rollback["next_operation"], 1)
+            module.recover_transaction(
+                journal,
+                payload["journal_identity"],
+            )
+            self.assert_source_unchanged()
+            self.assertEqual(
+                json.loads(journal.read_text(encoding="utf-8"))["phase"],
+                "rolled_back",
+            )
+            journal.unlink()
+            with self.assertRaises(module.SimulatedCrash):
+                module.execute(
+                    self.spec_path,
+                    crash_phase="after_commit_point",
+                )
+            journal = self.journal_path()
+            payload = json.loads(journal.read_text(encoding="utf-8"))
+            with self.assertRaises(module.SimulatedCrash):
+                module.recover_transaction(
+                    journal,
+                    payload["journal_identity"],
+                    crash_phase="replay_after_operation_1",
+                )
+            replay = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(replay["phase"], "replaying")
+            module.recover_transaction(journal, payload["journal_identity"])
+        finally:
+            os.chdir(old_cwd)
+        self.assertFalse((self.repo / self.source_path).exists())
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_recovery_rejects_stale_head_stale_content_and_hardlinked_journal(self) -> None:
+        module = self.load_restructure_module("recovery_rejection_module")
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            with self.assertRaises(module.SimulatedCrash):
+                module.execute(self.spec_path, crash_phase="after_journal")
+            journal = self.journal_path()
+            payload = json.loads(journal.read_text(encoding="utf-8"))
+            hardlink = journal.with_suffix(".hardlink")
+            os.link(journal, hardlink)
+            with self.assertRaises(module.RestructureError):
+                module.recover_transaction(journal, payload["journal_identity"])
+            hardlink.unlink()
+            git(self.repo, "commit", "--allow-empty", "-qm", "advance head")
+            with self.assertRaises(module.RestructureError):
+                module.recover_transaction(journal, payload["journal_identity"])
+        finally:
+            os.chdir(old_cwd)
+
+        stale_repo = self.base / "stale-content"
+        subprocess.run(["git", "clone", "-q", str(self.repo), str(stale_repo)], check=True)
+        git(stale_repo, "config", "user.name", "Test")
+        git(stale_repo, "config", "user.email", "test@example.invalid")
+        stale_spec = copy.deepcopy(self.spec)
+        stale_spec["source"]["head"] = git(stale_repo, "rev-parse", "HEAD")  # type: ignore[index]
+        stale_path = self.base / "stale-content.json"
+        stale_path.write_text(
+            json.dumps(stale_spec, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(stale_repo)
+            spec = importlib.util.spec_from_file_location(
+                "stale_content_module",
+                stale_repo / "scripts/restructure-plan.py",
+            )
+            assert spec and spec.loader
+            stale_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(stale_module)
+            with self.assertRaises(stale_module.SimulatedCrash):
+                stale_module.execute(stale_path, crash_phase="after_operation_1")
+            raw = git(
+                stale_repo,
+                "rev-parse",
+                "--git-path",
+                "project-agent-workflow/restructure-journals",
+            )
+            directory = Path(raw)
+            if not directory.is_absolute():
+                directory = stale_repo / directory
+            journal = next(directory.glob("*.json"))
+            payload = json.loads(journal.read_text(encoding="utf-8"))
+            changed = stale_repo / payload["operations"][0]["path"]
+            changed.write_text("stale\n", encoding="utf-8")
+            with self.assertRaises(stale_module.RestructureError):
+                stale_module.recover_transaction(
+                    journal,
+                    payload["journal_identity"],
+                )
+        finally:
+            os.chdir(old_cwd)
+
+    def test_recovery_rejects_historical_contract_mutation(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        coupled_path = self.base / "historical-recovery.json"
+        coupled_path.write_text(
+            json.dumps(
+                coupled,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        module = self.load_restructure_module("historical_recovery_module")
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            with self.assertRaises(module.SimulatedCrash):
+                module.execute(coupled_path, crash_phase="after_journal")
+            raw = git(
+                self.repo,
+                "rev-parse",
+                "--git-path",
+                "project-agent-workflow/restructure-journals",
+            )
+            directory = Path(raw)
+            if not directory.is_absolute():
+                directory = self.repo / directory
+            journal_payloads = [
+                (path, json.loads(path.read_text(encoding="utf-8")))
+                for path in directory.glob("*.json")
+            ]
+            journal, payload = next(
+                (path, value)
+                for path, value in journal_payloads
+                if value["phase"] == "prepared"
+            )
+            self.assertTrue(payload["historical_contract_snapshot"])
+            self.assertIn(
+                "docs/plan/replanned.md",
+                {
+                    entry["path"]
+                    for entry in payload["historical_contract_snapshot"]
+                },
+            )
+            historical = self.repo / next(
+                entry["path"]
+                for entry in payload["historical_contract_snapshot"]
+                if entry["path"] != "docs/plan/replanned.md"
+            )
+            historical.write_bytes(historical.read_bytes() + b"\n")
+            with self.assertRaisesRegex(
+                module.RestructureError,
+                "historical contract or archive|replanned plan index",
+            ):
+                module.recover_transaction(
+                    journal,
+                    payload["journal_identity"],
+                )
+        finally:
+            os.chdir(old_cwd)
+
+    def test_schema_one_preflight_rejects_corrupt_repository_before_journal(self) -> None:
+        baseline = (
+            self.repo
+            / "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
+        )
+        baseline.parent.mkdir(parents=True)
+        baseline.write_text('{"schema_version":1,"records":"invalid"}\n', encoding="utf-8")
+        rejected = self.run_command()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assert_source_unchanged()
+        raw = git(
+            self.repo,
+            "rev-parse",
+            "--git-path",
+            "project-agent-workflow/restructure-journals",
+        )
+        journal_dir = Path(raw)
+        if not journal_dir.is_absolute():
+            journal_dir = self.repo / journal_dir
+        self.assertFalse(journal_dir.exists())
+
+    def test_transaction_rechecks_exact_dirty_candidate_snapshot(self) -> None:
+        candidate_path = "candidate/preserved.txt"
+        candidate = self.repo / candidate_path
+        candidate.parent.mkdir()
+        candidate.write_text("candidate one\n", encoding="utf-8")
+        self.spec["dirty_product_paths"] = [candidate_path]
+        successor = self.spec["successors"][0]  # type: ignore[index]
+        successor["content"] = str(successor["content"]).replace(
+            "preservation_scope:\n  - none\n",
+            f"preservation_scope:\n  - {candidate_path}\n",
+            1,
+        )
+        self.write_spec()
+        module = self.load_restructure_module("dirty_snapshot_module")
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            state = module.validate_spec(copy.deepcopy(self.spec))
+            operations, _ = module.build_transaction_operations(state)
+            candidate.write_text("candidate two\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                module.RestructureError,
+                "dirty product candidates changed",
+            ):
+                module.require_transaction_repository_state(
+                    state,
+                    operations,
+                    targets_written=False,
+                )
+        finally:
+            os.chdir(old_cwd)
 
     def test_injected_midwrite_failure_rolls_back_metadata(self) -> None:
         old_cwd = Path.cwd()

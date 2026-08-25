@@ -90,9 +90,11 @@ Optional active/backlog fields:
 - `integration_gates`
 - `predecessor_plans`
 - `replan_source`
+- `replan_sources`
 - `replan_contract`
 - `successor_plans`
 - `inherited_acceptance_digests`
+- `integration_source_ids`
 - `replan_reason_codes`
 
 Rules:
@@ -125,7 +127,7 @@ Rules:
 - Before changing a dependent plan to `in_progress`, replace every active predecessor path with the exact checked archive path recorded in `docs/plan/checked.md`.
 - Reject missing, duplicate, non-normalized, stale checked, cross-id, or cyclic active predecessor edges.
 - `successor_plans` records immutable restructuring lineage and does not define operational execution order.
-- Restructured successor and integration plans use `primary_invariant`, `integration_gates`, `replan_source`, `replan_contract`, `successor_plans`, and `inherited_acceptance_digests` as an exact lineage contract. Legacy plans may omit them.
+- Schema-1 and schema-2 successor plans use singular `replan_source`. Schema-3 coupled successors use ordered `replan_sources` and explicit `integration_source_ids`. Both forms use `primary_invariant`, `integration_gates`, `replan_contract`, `successor_plans`, and `inherited_acceptance_digests` as exact lineage contracts. Legacy plans may omit them.
 - `replan_reason_codes` is a bounded list and is required when `status` is `replan_required`.
 - `human_design_required: yes` requires `review_class: C`.
 
@@ -168,6 +170,28 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - Record every dirty product path exactly once across successor `preservation_scope` fields. Preservation proves retention only and never authorizes candidate generation, validation, apply, staging, or commit effects.
 - Reject missing, duplicate, overlapping, non-normalized, or silently dropped preservation entries. Continue verifying schema-1 contracts created before `preservation_scope` without reinterpreting their historical write scopes as the new preservation authority.
 - Keep full option analysis outside active plans. Active successors contain only accepted decisions and executable instructions.
+
+### Coupled Lineage Reconstruction
+
+- Use a schema-3 contract when one stopped contract successor and one or more immutable dependent successors must be replaced together. Keep `sources` ordered and non-empty, and bind each source's live content digest, deterministically derived `replan_required` digest, acceptance records, archive path, reason codes, and owning historical contract path and digest.
+- Derive a dependent source's stopped bytes only by changing `status`, `completion_deferred_reason`, and `replan_reason_codes`. Preserve every other manifest field and body byte.
+- Require each source after the first to depend directly or transitively on an earlier source in the same transaction. Validate every source as one exact live successor of an already verified immutable contract.
+- Use one ordered successor graph. Schema-3 successors declare `replan_sources`, `replan_contract`, per-source acceptance mappings, and `integration_source_ids`; each source must have exactly one integration successor, while one integration successor may cover several sources.
+- Separately authorized prerequisite plans are not contract successors and carry no inherited source acceptance digest. Keep them ordered, allow each prerequisite to depend only on an earlier prerequisite, require every prerequisite to reach a mapped successor, and bind their lifecycle and validation projection to the schema-3 contract.
+- Permit `kind: rebind` only in the creating reconstruction transaction and `kind: activation` only in a later standalone operation. Initial rebindings may target only exact reference tokens owned by the source lineage and replace them with exact transaction-created plan, contract, archive, or write-scope tokens; reject prose, field-header, arbitrary checked-plan, or unrelated-path replacement.
+- Permit validation and witness path rebinding only for a project-admitted semantic path pair. Preserve every non-path command argument, retain every transformed focused and authoritative command as an ordered minimum, reproduce each witness exactly, and reject an otherwise allowlisted but unadmitted substitute.
+- Initial rebindings must preserve status, primary invariant, acceptance, write scope, preservation scope, task types, required specs, implementation classifications, review class, human approval fields, lineage fields, and every byte outside the declared token replacements.
+- Append rebind records to `docs/plan/replanned/baselines/live-successor-rebinds-v1.json`. Each record binds the owning contract digest, plan path, original and updated content, prior effective validation projection, exact replacements, resulting validation projection, and its own digest. The committed record sequence is an immutable prefix.
+- Re-authorize every durable activation record during project verification; reproducing its replacement bytes is not sufficient. Recheck same-id checked-archive resolution across manifest and body references before accepting the record.
+- Compute effective live validation authority from the verified schema-1 companion or schema-2/schema-3 contract projection, then apply one gap-free and fork-free rebind chain in record order. After the final record, permit only the reachable status lifecycle, existing task markers changing from `[ ]` to `[x]`, and a bounded append-only final `Validation Notes` section; preserve every other byte.
+- Apply the same exact lifecycle evolution to unrebound active or checked schema-2/schema-3 successors and prerequisites. Preserve legacy verification only for an exact committed already-stopped source while an older single-source nested replan consumes it.
+- Canonical `replan_required` state requires bounded `replan_reason_codes` and must not retain `completion_deferred_reason`.
+- A later activation record may replace active predecessor, context, integration-gate, or body path tokens only with the same plan id's exact checked archive and must resolve every remaining active plan path before entering `in_progress`. It may move one exact path from `preservation_scope` to the end of `context_files` only when exactly one checked predecessor owns the path in `write_scope`, its checked commit adds or changes the blob, and the clean worktree and index bytes equal that commit.
+- Treat the committed replanned index bytes as an immutable canonical prefix and every committed contract and archive as immutable bytes. Reject any noncanonical index header, row framing, or unbound text; bind the current index and historical file identities into validation and the journal, then recheck them before the journal, before the commit point, and during recovery.
+- Under the project lifecycle lock, verify the current project, build and durably verify the complete prospective project state in isolation, bind every transaction original, and recheck the source HEAD plus the exact dirty candidate status, index, type, mode, link count, identity, and content before any write and before the commit point.
+- Serialize Git-aware ref and index mutation across the transaction. Persist a mode-0600 Git-local journal that binds the source HEAD, specification digest, exact dirty snapshot, every original and target byte digest, deterministic operation order, phase, commit point, and journal identity.
+- Before the commit point, recovery durably enters `rolling_back`, records reverse-operation progress after every restored path, resumes interrupted rollback idempotently, restores every original byte, and removes and fsyncs transaction temporaries. At or after the commit point, recovery uses only monotonic `commit_point`, `replaying`, `verifying`, and `complete` phases, enforces phase-specific content and progress invariants, completes target writes idempotently, and reruns durable verification. Reject stale HEAD or candidates, impossible phase state, ambiguous content, non-confined journal identity, symlinks, hard links, and unsafe file modes.
+- Run a coupled transaction with `python3 .project-agent-workflow/scripts/restructure-plan.py <schema-3-spec.json>`. Recover only with `python3 .project-agent-workflow/scripts/restructure-plan.py --recover <journal-path> --journal-id <sha256-identity>`.
 
 ## Handoff Queue
 
