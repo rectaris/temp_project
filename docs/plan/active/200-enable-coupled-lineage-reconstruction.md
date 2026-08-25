@@ -1,7 +1,6 @@
 # Enable coupled lineage reconstruction
 
-status: deferred
-completion_deferred_reason: Plan 199 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: one durable locked transaction can replace a stopped active successor and its immutable dependent successor while applying only exact authorized reference projections in later dependents and leaving every historical contract byte, acceptance item, write scope, and unaffected predecessor edge unchanged
 task_types:
   - planning_docs
