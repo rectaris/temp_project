@@ -684,6 +684,100 @@ class PlanValidationCommandsTest(unittest.TestCase):
             ".project-agent-workflow/scripts/example.py tests/example.py"
         )
 
+    def test_root_accepts_exact_decomposed_shell_validation_commands(self) -> None:
+        root_module = load_module(PLAN_COMMAND_MODULES[0], "root_decomposed_shell_commands")
+        for command in (
+            "python3 tests/test-shell-lexical.py",
+            "python3 tests/test-shell-functions.py",
+            "python3 tests/test-shell-execution.py",
+            "python3 tests/test-copier-fixture-validator.py",
+            "python3 scripts/project_workflow/copier_fixture_validator.py "
+            "--check tests/copier-update.sh",
+            "python3 -m py_compile "
+            "scripts/project_workflow/shell_lexical.py tests/test-shell-lexical.py",
+            "python3 -m py_compile "
+            "scripts/project_workflow/shell_functions.py tests/test-shell-functions.py",
+            "python3 -m py_compile "
+            "scripts/project_workflow/shell_execution.py tests/test-shell-execution.py",
+            "python3 -m py_compile "
+            "scripts/project_workflow/copier_fixture_validator.py "
+            "tests/test-copier-fixture-validator.py",
+            "python3 -m py_compile "
+            "scripts/project_workflow/shell_lexical.py tests/test-shell-lexical.py "
+            "scripts/project_workflow/shell_functions.py tests/test-shell-functions.py "
+            "scripts/project_workflow/shell_execution.py tests/test-shell-execution.py "
+            "scripts/project_workflow/copier_fixture_validator.py "
+            "tests/test-copier-fixture-validator.py",
+        ):
+            with self.subTest(command=command):
+                root_module.parse_validation_command(command)
+
+    def test_root_rejects_decomposed_shell_command_near_matches(self) -> None:
+        root_module = load_module(PLAN_COMMAND_MODULES[0], "root_decomposed_shell_near_matches")
+        for command in (
+            "python3 tests/test-shell-lexical.py --verbose",
+            "python tests/test-shell-lexical.py",
+            "python3 tests/shell-lexical.py",
+            "python3 tests/test-shell-functions.py extra",
+            "python tests/test-shell-functions.py",
+            "python3 tests/test-shell-execution.py --all",
+            "python tests/test-shell-execution.py",
+            "python3 tests/test-copier-fixture-validator.py --check",
+            "python tests/test-copier-fixture-validator.py",
+            "python3 tests/copier-fixture-validator.py",
+            "python3 scripts/project_workflow/copier_fixture_validator.py --check",
+            "python3 scripts/project_workflow/copier_fixture_validator.py "
+            "--check tests/other.sh",
+            "python3 scripts/project_workflow/copier_fixture_validator.py "
+            "tests/copier-update.sh --check",
+            "python3 scripts/project_workflow/copier_fixture_validator.py "
+            "--check tests/copier-update.sh extra",
+            "python scripts/project_workflow/copier_fixture_validator.py "
+            "--check tests/copier-update.sh",
+            "python3 -m py_compile tests/test-shell-lexical.py "
+            "scripts/project_workflow/shell_lexical.py",
+            "python3 -m py_compile scripts/project_workflow/shell_lexical.py",
+            "python3 -m py_compile scripts/project_workflow/shell_lexical.py "
+            "tests/test-shell-lexical.py tests/other.py",
+            "python3 -m py_compile ./scripts/project_workflow/shell_lexical.py "
+            "./tests/test-shell-lexical.py",
+            "python -m py_compile scripts/project_workflow/shell_lexical.py "
+            "tests/test-shell-lexical.py",
+            "python3 -m py_compile scripts/project_workflow/shell_functions.py",
+            "python3 -m py_compile scripts/project_workflow/shell_execution.py",
+            "python3 -m py_compile scripts/project_workflow/copier_fixture_validator.py",
+            "python3 -m py_compile "
+            "scripts/project_workflow/shell_lexical.py tests/test-shell-lexical.py "
+            "scripts/project_workflow/shell_functions.py tests/test-shell-functions.py "
+            "scripts/project_workflow/shell_execution.py tests/test-shell-execution.py",
+            "python3 -m py_compile "
+            "scripts/project_workflow/shell_functions.py tests/test-shell-functions.py "
+            "scripts/project_workflow/shell_lexical.py tests/test-shell-lexical.py "
+            "scripts/project_workflow/shell_execution.py tests/test-shell-execution.py "
+            "scripts/project_workflow/copier_fixture_validator.py "
+            "tests/test-copier-fixture-validator.py",
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(root_module.ValidationCommandError):
+                    root_module.parse_validation_command(command)
+
+    def test_generated_policy_rejects_decomposed_root_only_commands(self) -> None:
+        template_module = load_module(
+            PLAN_COMMAND_MODULES[1],
+            "template_decomposed_shell_commands",
+        )
+        for command in (
+            "python3 tests/test-shell-lexical.py",
+            "python3 tests/test-shell-functions.py",
+            "python3 tests/test-shell-execution.py",
+            "python3 tests/test-copier-fixture-validator.py",
+            "python3 scripts/project_workflow/copier_fixture_validator.py "
+            "--check tests/copier-update.sh",
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(template_module.ValidationCommandError):
+                    template_module.parse_validation_command(command)
+
     def test_copier_update_required_mode_rejects_an_unavailable_cli(self) -> None:
         environment = os.environ.copy()
         environment["PATH"] = "/usr/bin:/bin"

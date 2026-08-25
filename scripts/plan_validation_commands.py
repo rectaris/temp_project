@@ -35,7 +35,12 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "scripts/check-copier-template.py": {()},
     "scripts/restructure-plan.py": {("--verify",)},
     "scripts/project_workflow/copier_fixture.py": {("--check", "tests/copier-update.sh")},
+    "scripts/project_workflow/copier_fixture_validator.py": {("--check", "tests/copier-update.sh")},
     "tests/test-copier-fixture.py": {()},
+    "tests/test-shell-lexical.py": {()},
+    "tests/test-shell-functions.py": {()},
+    "tests/test-shell-execution.py": {()},
+    "tests/test-copier-fixture-validator.py": {()},
     "tests/test-plan-restructure.py": {()},
     "tests/test-plan-execution-state.py": {()},
     "tests/test-sandboxed-plan-worker.py": {()},
@@ -64,9 +69,45 @@ RECONSTRUCTED_PLAN_PYTHON_COMPILE = (
     "scripts/project_workflow/copier_fixture.py",
     "tests/test-copier-fixture.py",
 )
+DECOMPOSED_LAYER_COMPILES: tuple[tuple[str, ...], ...] = (
+    (
+        "python3", "-m", "py_compile",
+        "scripts/project_workflow/shell_lexical.py",
+        "tests/test-shell-lexical.py",
+    ),
+    (
+        "python3", "-m", "py_compile",
+        "scripts/project_workflow/shell_functions.py",
+        "tests/test-shell-functions.py",
+    ),
+    (
+        "python3", "-m", "py_compile",
+        "scripts/project_workflow/shell_execution.py",
+        "tests/test-shell-execution.py",
+    ),
+    (
+        "python3", "-m", "py_compile",
+        "scripts/project_workflow/copier_fixture_validator.py",
+        "tests/test-copier-fixture-validator.py",
+    ),
+)
+DECOMPOSED_AGGREGATE_COMPILE = (
+    "python3", "-m", "py_compile",
+    "scripts/project_workflow/shell_lexical.py",
+    "tests/test-shell-lexical.py",
+    "scripts/project_workflow/shell_functions.py",
+    "tests/test-shell-functions.py",
+    "scripts/project_workflow/shell_execution.py",
+    "tests/test-shell-execution.py",
+    "scripts/project_workflow/copier_fixture_validator.py",
+    "tests/test-copier-fixture-validator.py",
+)
+_DECOMPOSED_PATHS = frozenset(
+    Path(p) for argv in DECOMPOSED_LAYER_COMPILES for p in argv[3:]
+)
 RECONSTRUCTED_PLAN_PYTHON_COMPILE_PATHS = frozenset(
     Path(raw_path) for raw_path in RECONSTRUCTED_PLAN_PYTHON_COMPILE[3:]
-)
+) | _DECOMPOSED_PATHS
 
 
 @dataclass(frozen=True)
@@ -209,7 +250,11 @@ def is_python_compile(argv: tuple[str, ...]) -> bool:
     if len(argv) < 4 or argv[:3] != ("python3", "-m", "py_compile"):
         return False
     if RECONSTRUCTED_PLAN_PYTHON_COMPILE_PATHS.intersection(map(Path, argv[3:])):
-        return argv == RECONSTRUCTED_PLAN_PYTHON_COMPILE
+        return (
+            argv == RECONSTRUCTED_PLAN_PYTHON_COMPILE
+            or argv in DECOMPOSED_LAYER_COMPILES
+            or argv == DECOMPOSED_AGGREGATE_COMPILE
+        )
     for raw_path in argv[3:]:
         path = Path(raw_path)
         if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
