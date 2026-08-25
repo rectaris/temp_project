@@ -1,7 +1,6 @@
 # Apply the resource-bounded orchestration evaluation outcome
 
-status: deferred
-completion_deferred_reason: Plan 193 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: backlog
 primary_invariant: the documented default changes only for a checker-validated measured pass and otherwise remains unchanged with an explicit bounded outcome
 task_types:
   - planning_docs

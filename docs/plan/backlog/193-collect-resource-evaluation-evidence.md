@@ -1,7 +1,6 @@
 # Collect comparable resource-bounded orchestration evidence
 
-status: deferred
-completion_deferred_reason: Plan 192 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: backlog
 primary_invariant: paired baseline and staged executions produce digest-linked comparable evidence without changing control flow, policy defaults, or missing measurements into estimates
 task_types:
   - planning_docs

@@ -1,7 +1,6 @@
 # Integrate validation witness enforcement
 
-status: deferred
-completion_deferred_reason: Plans 179, 164, 165, and 166 must be checked and their exact checked archive paths must replace the active predecessors before implementation.
+status: backlog
 primary_invariant: the combined successor state proves every Plan 130 acceptance clause through its earliest parent-owned witness while preserving the complete authoritative suite
 task_types:
   - planning_docs

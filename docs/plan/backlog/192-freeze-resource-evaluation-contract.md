@@ -1,7 +1,6 @@
 # Freeze the resource-bounded orchestration evaluation contract
 
-status: deferred
-completion_deferred_reason: Plan 167 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: backlog
 primary_invariant: fixed paired workloads, schemas, holdouts, measures, and tampering cases preserve comparable evaluation inputs without collecting or interpreting an outcome
 task_types:
   - planning_docs

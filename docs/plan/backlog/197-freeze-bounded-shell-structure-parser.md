@@ -1,9 +1,6 @@
 # Freeze the bounded shell structure parser
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
-  - multiple_independent_invariants
+status: backlog
 primary_invariant: supplied shell bytes expose one unique function table and one reachable top-level execution sequence before any Copier-specific operation rule is evaluated
 replan_source: docs/plan/active/191-freeze-bounded-copier-fixture-validator.md
 replan_contract: docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json

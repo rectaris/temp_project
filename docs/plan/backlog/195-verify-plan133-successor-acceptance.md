@@ -1,7 +1,6 @@
 # Verify Plan 133 successor acceptance
 
-status: deferred
-completion_deferred_reason: Plans 192, 193, and 194 must be checked and their exact checked archive paths must replace the active predecessors before implementation.
+status: backlog
 primary_invariant: the checked evaluation contract, evidence, and outcome successors jointly satisfy every unchanged Plan 133 acceptance item and preserve rollback before the source authoritative suite runs once
 task_types:
   - planning_docs
