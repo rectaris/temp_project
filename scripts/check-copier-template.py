@@ -735,6 +735,39 @@ def require_git_retirement_alignment() -> None:
         fail("Copier ownership does not preserve generated-project Git-retirement configuration")
 
 
+PLAN_WORKFLOW_ALIGNED_SECTIONS = (
+    "Implementation Tiers",
+    "Bounded Descope",
+    "Review-Finding Budgets",
+)
+
+
+def plan_workflow_section(text: str, heading: str, source: str) -> str:
+    matches = re.findall(
+        rf"^#{{2,3}} {re.escape(heading)}\n(.*?)(?=^#{{2,3}} |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if len(matches) != 1:
+        fail(f"{source} must contain exactly one {heading} section")
+    return matches[0]
+
+
+def require_plan_workflow_alignment() -> None:
+    root_spec = read("docs/agent/SPEC_PLAN_WORKFLOW.md")
+    template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md")
+    for heading in PLAN_WORKFLOW_ALIGNED_SECTIONS:
+        root_section = plan_workflow_section(root_spec, heading, "root plan-workflow specification")
+        template_section = plan_workflow_section(
+            template_spec, heading, "generated plan-workflow specification"
+        )
+        expected = root_section.replace(
+            "`scripts/", "`.project-agent-workflow/scripts/"
+        ).replace("`docs/agent/", "`.project-agent-workflow/docs/agent/")
+        if template_section != expected:
+            fail(f"root and generated {heading} policy differ beyond command paths")
+
+
 def require_sandboxed_plan_worker_alignment() -> None:
     root_runner = read("scripts/run-sandboxed-plan-worker.py")
     template_runner = read("template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py")
@@ -1925,6 +1958,7 @@ def main() -> int:
     require_referent_first_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()
+    require_plan_workflow_alignment()
     require_sandboxed_plan_worker_alignment()
     require_hook_logging_parity()
     require_root_pre_tool_hardening()

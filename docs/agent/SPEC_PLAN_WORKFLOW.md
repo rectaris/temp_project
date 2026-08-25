@@ -45,7 +45,7 @@ Classify every change into exactly one tier before creating plan artifacts. Plan
 
 - Tier 0: one file, reversible, already covered by an existing validation command, with no new external effect and an unchanged security boundary. Implement directly and commit without a plan file.
 - Tier 1: bounded multi-file change whose security boundary, validation authority, and external-effect authority are unchanged. Use a short active plan carrying `primary_invariant`, `write_scope`, `validation`, and exactly one `acceptance` item.
-- Tier 2: security-boundary change, irreversible effect, external write authority, lifecycle or validation-authority change, or a write scope that cannot be enumerated as exact paths. Use the full plan manifest, review gates, and restructuring contract.
+- Tier 2: security-boundary change, irreversible effect, external write authority, lifecycle or validation-authority change, or a write scope that cannot be enumerated as exact paths. Use the full manifest contract, review gates, and restructuring contract.
 
 - Escalate a tier as soon as new evidence crosses its boundary, and treat the escalation as a plan update rather than a stop.
 - Never lower a recorded tier without explicit user authorization.

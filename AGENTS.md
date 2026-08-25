@@ -17,6 +17,7 @@ This repository packages reusable coding-agent project management, file routing,
 - Do not add project-specific `supportcard-status` facts to generic templates.
 - When writing or editing Japanese prose in this repository, follow `docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
 - When changing Japanese writing policy for generated projects, keep `docs/agent/SPEC_JAPANESE_TECH_WRITING.md` and `template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` semantically aligned, or state the intentional difference in the change.
+- Keep root and template in the same state. Mirror every root policy or tooling change into its template counterpart in the same change, and rely on the alignment checks in `scripts/check-copier-template.py` rather than manual comparison. The `Implementation Tiers`, `Bounded Descope`, and `Review-Finding Budgets` sections of `docs/agent/SPEC_PLAN_WORKFLOW.md` are enforced identical to the generated specification after the mechanical `.project-agent-workflow/` path rewrite.
 - Use `docs/agent/spec-index.yaml` to route root-level agent policy when the task concerns planning, logging, compression, decision audit, user-facing communication, or Japanese prose.
 - Route requests to inspect or remove local linked worktrees or their local branches through `docs/agent/SPEC_GIT_RETIREMENT.md` and the project-owned `docs/agent/git-retirement.yaml` configuration.
 - Keep raw agent logs and large agent artifacts local under `.agent-logs/` and `.agent-artifacts/`; do not commit them.
