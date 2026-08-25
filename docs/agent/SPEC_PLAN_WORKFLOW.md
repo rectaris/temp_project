@@ -106,6 +106,14 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - After an atomic restructuring transition, archive the source with terminal `status: replanned`. This state means “replaced while preserving requirements”; it is distinct from successful `checked` completion and prerequisite-based `deferred` work.
 - Keep full option analysis and decision matrices outside active plans. Active successors contain only accepted decisions, bounded lineage fields, executable scope, validation, and acceptance.
 
+### Successor Backlog Deferral
+
+- A replan successor may be deferred to `docs/plan/backlog/` with `status: backlog` instead of being restructured again. Deferral changes location and priority only; it never changes lineage.
+- Keep the successor path recorded in the replan contract exactly as created. That path is immutable identity, so backlog residence never rewrites it and no new contract is required.
+- Keep `acceptance`, `inherited_acceptance_digests`, `replan_sources`, `replan_contract`, `write_scope`, and `preservation_scope` byte-identical to the contract. Remove `completion_deferred_reason` and `replan_reason_codes`, which describe a stopped active lifecycle.
+- Resolve every successor to exactly one of the active index, `docs/plan/backlog/`, the checked archive, or the replanned archive. Presence in two locations, or in none, is rejected.
+- Reactivate a deferred successor by moving it back under `docs/plan/active/`, restoring an active status, and re-adding its active index row.
+
 ### Coupled Lineage Reconstruction
 
 - Use a schema-3 contract when one stopped contract successor and one or more immutable dependent successors must be replaced together. Keep `sources` ordered and non-empty, and bind each source's live content digest, deterministically derived `replan_required` digest, acceptance records, archive path, reason codes, and owning historical contract path and digest.

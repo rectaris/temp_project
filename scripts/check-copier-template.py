@@ -739,6 +739,7 @@ PLAN_WORKFLOW_ALIGNED_SECTIONS = (
     "Implementation Tiers",
     "Bounded Descope",
     "Review-Finding Budgets",
+    "Successor Backlog Deferral",
 )
 
 
