@@ -1,6 +1,8 @@
 # Enable coupled lineage reconstruction
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 primary_invariant: one durable locked transaction can replace a stopped active successor and its immutable dependent successor while applying only exact authorized reference projections in later dependents and leaving every historical contract byte, acceptance item, write scope, and unaffected predecessor edge unchanged
 task_types:
   - planning_docs

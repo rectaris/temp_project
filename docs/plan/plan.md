@@ -15,5 +15,5 @@ id	path	status
 195	docs/plan/active/195-verify-plan133-successor-acceptance.md	deferred
 197	docs/plan/active/197-freeze-bounded-shell-structure-parser.md	replan_required
 198	docs/plan/active/198-integrate-bounded-copier-fixture-validator.md	deferred
-200	docs/plan/active/200-enable-coupled-lineage-reconstruction.md	in_progress
+200	docs/plan/active/200-enable-coupled-lineage-reconstruction.md	replan_required
 201	docs/plan/active/201-reconstruct-shell-parser-lineage.md	deferred
