@@ -705,6 +705,69 @@ class PlanRestructureTest(unittest.TestCase):
         }
         return coupled, module, target_path, successor_path
 
+    def add_aggregate_coverage_successor(
+        self,
+        coupled: dict[str, object],
+    ) -> tuple[str, str]:
+        sources = coupled["sources"]
+        successors = coupled["successors"]
+        assert isinstance(sources, list)
+        assert isinstance(successors, list)
+        integration = successors[0]
+        assert isinstance(integration, dict)
+        source = next(
+            source
+            for source in sources
+            if isinstance(source, dict)
+            and isinstance(source.get("acceptance"), list)
+            and len(source["acceptance"]) > 1
+        )
+        source_id = Path(str(source["path"])).name[:3]
+        acceptance = source["acceptance"]
+        assert isinstance(acceptance, list)
+        missing_record = acceptance[0]
+        assert isinstance(missing_record, dict)
+        auxiliary_path = "docs/plan/active/007-aggregate-coverage.md"
+        integration_path = str(integration["path"])
+        source_paths = [str(source["path"]) for source in sources]
+        auxiliary_content, auxiliary_mappings = self.coupled_successor_content(
+            path=auxiliary_path,
+            contract_path=str(coupled["contract_path"]),
+            source_paths=source_paths,
+            source_records=[(source_id, [missing_record])],
+            predecessor=None,
+        )
+        old_integration_paths = f"successor_plans:\n  - {integration_path}\n"
+        new_paths = (
+            "successor_plans:\n"
+            f"  - {integration_path}\n"
+            f"  - {auxiliary_path}\n"
+        )
+        integration["content"] = str(integration["content"]).replace(
+            old_integration_paths,
+            new_paths,
+            1,
+        )
+        auxiliary_content = auxiliary_content.replace(
+            f"successor_plans:\n  - {auxiliary_path}\n",
+            new_paths,
+            1,
+        ).replace(
+            f"integration_source_ids:\n  - {source_id}\n",
+            "",
+            1,
+        )
+        successors.append(
+            {
+                "id": "007",
+                "path": auxiliary_path,
+                "content": auxiliary_content,
+                "acceptance_mappings": auxiliary_mappings,
+                "integration_source_ids": [],
+            }
+        )
+        return source_id, str(missing_record["digest"])
+
     def run_spec_data(
         self,
         value: dict[str, object],
@@ -1897,6 +1960,15 @@ class PlanRestructureTest(unittest.TestCase):
             contract["successors"][0]["integration_source_ids"],
             ["002", "003"],
         )
+        for source, mapping in zip(
+            contract["sources"],
+            contract["successors"][0]["acceptance_mappings"],
+            strict=True,
+        ):
+            self.assertEqual(
+                mapping["acceptance_digests"],
+                source["acceptance_digests"],
+            )
         for source in contract["sources"]:
             self.assertFalse((self.repo / source["path"]).exists())
             self.assertTrue((self.repo / source["archive_path"]).is_file())
@@ -2904,6 +2976,102 @@ class PlanRestructureTest(unittest.TestCase):
         rejected = self.run_spec_data(duplicate, "duplicate-integration.json")
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("exactly one integration successor", rejected.stderr)
+
+    def test_schema_three_rejects_invalid_integration_source_mappings(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        integration = coupled["successors"][0]  # type: ignore[index]
+        mapping = next(
+            mapping
+            for mapping in integration["acceptance_mappings"]
+            if len(mapping["acceptance_digests"]) > 1
+        )
+        mapping_index = integration["acceptance_mappings"].index(mapping)
+        original = list(mapping["acceptance_digests"])
+
+        cases = (
+            (
+                "partial",
+                original[1:],
+                "integration successor does not map every acceptance",
+            ),
+            (
+                "reordered",
+                list(reversed(original)),
+                "must preserve source order",
+            ),
+            (
+                "duplicate",
+                [*original, original[-1]],
+                "invalid source acceptance mapping",
+            ),
+            (
+                "foreign",
+                [original[0], "sha256:" + "f" * 64],
+                "invalid source acceptance mapping",
+            ),
+        )
+        for label, digests, message in cases:
+            with self.subTest(label=label):
+                mutated = copy.deepcopy(coupled)
+                mutated["successors"][0]["acceptance_mappings"][mapping_index][  # type: ignore[index]
+                    "acceptance_digests"
+                ] = digests
+                rejected = self.run_spec_data(
+                    mutated,
+                    f"invalid-integration-{label}.json",
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(message, rejected.stderr)
+
+    def test_schema_three_rejects_aggregate_only_integration_coverage(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        source_id, missing_digest = self.add_aggregate_coverage_successor(coupled)
+        integration = coupled["successors"][0]  # type: ignore[index]
+        integration_mapping = next(
+            mapping
+            for mapping in integration["acceptance_mappings"]
+            if mapping["source_id"] == source_id
+        )
+        integration_mapping["acceptance_digests"].remove(missing_digest)
+
+        rejected = self.run_spec_data(
+            coupled,
+            "aggregate-only-integration.json",
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            f"integration successor does not map every acceptance for source {source_id}",
+            rejected.stderr,
+        )
+
+    def test_durable_schema_three_rejects_aggregate_only_coverage(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        source_id, missing_digest = self.add_aggregate_coverage_successor(coupled)
+        result = self.run_spec_data(coupled, "durable-aggregate-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+        contract_path = self.repo / str(coupled["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        integration = contract["successors"][0]
+        integration_mapping = next(
+            mapping
+            for mapping in integration["acceptance_mappings"]
+            if mapping["source_id"] == source_id
+        )
+        integration_mapping["acceptance_digests"].remove(missing_digest)
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            f"integration successor does not map every acceptance for source {source_id}",
+            rejected.stderr,
+        )
 
     def test_rebind_rejects_protected_and_weakening_changes(self) -> None:
         coupled, _, target_path, _ = self.prepare_coupled_spec(

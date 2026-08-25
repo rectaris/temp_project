@@ -2094,6 +2094,41 @@ def validate_schema_three_successor(
     }
 
 
+def validate_schema_three_integration_coverage(
+    successors: list[dict[str, Any]],
+    source_infos: list[dict[str, Any]],
+) -> None:
+    source_by_id = {source["id"]: source for source in source_infos}
+    integration_counts = {source_id: 0 for source_id in source_by_id}
+    mapped = {source_id: set() for source_id in source_by_id}
+    for successor in successors:
+        mapping_by_source = {
+            mapping["source_id"]: mapping["acceptance_digests"]
+            for mapping in successor["acceptance_mappings"]
+        }
+        for source_id, acceptance_digests in mapping_by_source.items():
+            mapped[source_id].update(acceptance_digests)
+        for source_id in successor["integration_source_ids"]:
+            integration_counts[source_id] += 1
+            if (
+                mapping_by_source[source_id]
+                != source_by_id[source_id]["acceptance_digests"]
+            ):
+                raise RestructureError(
+                    "integration successor does not map every acceptance "
+                    f"for source {source_id}"
+                )
+    for source_id, source in source_by_id.items():
+        if mapped[source_id] != set(source["acceptance_digests"]):
+            raise RestructureError(
+                f"source {source_id} acceptance mapping is incomplete"
+            )
+        if integration_counts[source_id] != 1:
+            raise RestructureError(
+                f"source {source_id} must have exactly one integration successor"
+            )
+
+
 def validate_prerequisite_plan(entry: Any, label: str) -> dict[str, Any]:
     obj = exact_object(entry, {"id", "path", "content", "authorization"}, label)
     path = normalized_path(obj["path"], PLAN_PATH_RE, f"{label}.path")
@@ -3260,38 +3295,7 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
         )
         for index, entry in enumerate(raw_successors)
     ]
-    integration_counts = {source_id: 0 for source_id in source_ids}
-    mapped = {
-        source_id: set()
-        for source_id in source_ids
-    }
-    for successor in successors:
-        for mapping in successor["acceptance_mappings"]:
-            mapped[mapping["source_id"]].update(mapping["acceptance_digests"])
-        for source_id in successor["integration_source_ids"]:
-            integration_counts[source_id] += 1
-            mapping = next(
-                item
-                for item in successor["acceptance_mappings"]
-                if item["source_id"] == source_id
-            )
-            if mapping["acceptance_digests"] != next(
-                source["acceptance_digests"]
-                for source in source_infos
-                if source["id"] == source_id
-            ):
-                raise RestructureError(
-                    f"integration successor does not map every acceptance for source {source_id}"
-                )
-    for source in source_infos:
-        if mapped[source["id"]] != set(source["acceptance_digests"]):
-            raise RestructureError(
-                f"source {source['id']} acceptance mapping is incomplete"
-            )
-        if integration_counts[source["id"]] != 1:
-            raise RestructureError(
-                f"source {source['id']} must have exactly one integration successor"
-            )
+    validate_schema_three_integration_coverage(successors, source_infos)
     raw_prerequisites = spec["prerequisite_plans"]
     if not isinstance(raw_prerequisites, list):
         raise RestructureError("prerequisite_plans must be a list")
@@ -5297,19 +5301,10 @@ def verify_schema_three_contract(
         ):
             raise RestructureError("schema-3 successor projection mismatch")
         validated_successors.append(validated)
-    integration_counts = {source_id: 0 for source_id in source_ids}
-    mapped = {source_id: set() for source_id in source_ids}
-    for successor in validated_successors:
-        for mapping in successor["acceptance_mappings"]:
-            mapped[mapping["source_id"]].update(mapping["acceptance_digests"])
-        for source_id in successor["integration_source_ids"]:
-            integration_counts[source_id] += 1
-    for source in source_infos:
-        if (
-            mapped[source["id"]] != set(source["acceptance_digests"])
-            or integration_counts[source["id"]] != 1
-        ):
-            raise RestructureError("schema-3 successor mapping is incomplete")
+    validate_schema_three_integration_coverage(
+        validated_successors,
+        source_infos,
+    )
     contract_preservation: list[str] = []
     contract_scopes: list[list[str]] = []
     for successor in validated_successors:
