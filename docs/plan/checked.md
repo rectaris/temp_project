@@ -156,3 +156,4 @@ id	path
 209	docs/plan/checked/2026/08/16-31/209-enable-direct-active-source-reconstruction.md
 213	docs/plan/checked/2026/08/16-31/213-reconstruct-stopped-lifecycle-chain.md
 218	docs/plan/checked/2026/08/16-31/218-restore-terminal-checked-archive-status.md
+219	docs/plan/checked/2026/08/16-31/219-honor-activation-context-rebinding.md

@@ -2271,6 +2271,24 @@ def checked_commit_produced_path(checked_path: str, product_path: str) -> bool:
     return True
 
 
+def resolve_active_references(
+    values: list[str],
+    pairs: dict[str, str],
+    label: str,
+) -> list[str]:
+    resolved: list[str] = []
+    for value in values:
+        for active_path in dict.fromkeys(ACTIVE_REFERENCE_RE.findall(value)):
+            checked_path = pairs.get(active_path)
+            if checked_path is None:
+                raise RestructureError(
+                    f"{label} lacks the same-ID checked archive for {active_path}"
+                )
+            value = value.replace(active_path, checked_path)
+        resolved.append(value)
+    return resolved
+
+
 def validate_activation_promotion(
     before: dict[str, str | list[str]],
     after: dict[str, str | list[str]],
@@ -2279,7 +2297,11 @@ def validate_activation_promotion(
 ) -> None:
     before_preservation = preservation_scope(before, f"{label} original", required=True)
     after_preservation = preservation_scope(after, f"{label} updated", required=True)
-    before_context = items(before, "context_files")
+    before_context = resolve_active_references(
+        items(before, "context_files"),
+        activation_checked_pairs(),
+        label,
+    )
     after_context = items(after, "context_files")
     if promoted_path is None:
         if (

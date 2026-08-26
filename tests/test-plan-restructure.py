@@ -1105,6 +1105,181 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertEqual(activated.returncode, 0, activated.stderr)
         self.assertEqual(self.run_verify().returncode, 0)
 
+    def prepare_checked_predecessor(self, first, integration) -> str:
+        self.write_spec()
+        transitioned = self.run_command()
+        self.assertEqual(transitioned.returncode, 0, transitioned.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+        first_path = self.repo / str(first["path"])
+        active_index = self.repo / "docs/plan/plan.md"
+        checked_relative = "docs/plan/checked/2026/08/16-31/002-data.md"
+        checked = self.repo / checked_relative
+        checked.parent.mkdir(parents=True)
+        checked.write_text(
+            first_path.read_text(encoding="utf-8").replace(
+                "status: in_progress", "status: checked", 1
+            ),
+            encoding="utf-8",
+        )
+        first_path.unlink()
+        active_index.write_text(
+            active_index.read_text(encoding="utf-8").replace(
+                f"{first['id']}\t{first['path']}\tin_progress\n", ""
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / "docs/plan/checked.md").write_text(
+            "# Checked Plan Index\n\nid\tpath\n"
+            f"{first['id']}\t{checked_relative}\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+        git(self.repo, "add", "docs/plan")
+        git(self.repo, "commit", "-qm", "check predecessor")
+        return checked_relative
+
+    def defer_integration_behind(self, first, integration, *, context: bool) -> None:
+        content = str(integration["content"]).replace(
+            "status: in_progress\n",
+            "status: deferred\n"
+            "completion_deferred_reason: predecessor must be checked\n",
+            1,
+        ).replace(
+            "primary_invariant:",
+            f"predecessor_plans:\n  - {first['path']}\nprimary_invariant:",
+            1,
+        )
+        if context:
+            content = content.replace(
+                "context_files:\n  - none\n",
+                f"context_files:\n  - {first['path']}\n",
+                1,
+            )
+        integration["content"] = content
+
+    def test_activation_rebinds_context_references_to_the_checked_archive(self) -> None:
+        first = self.spec["successors"][0]  # type: ignore[index]
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        self.defer_integration_behind(first, integration, context=True)
+        checked_relative = self.prepare_checked_predecessor(first, integration)
+        module = self.load_restructure_module("context_activation_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=str(integration["path"]),
+            successor_path=str(first["path"]),
+            checked_path=checked_relative,
+            promoted_path=None,
+            deferred_reason="predecessor must be checked",
+            rebind_context=True,
+        )
+        activated = self.run_spec_data(activation, "context-activation.json")
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+        activated_text = (self.repo / str(integration["path"])).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"context_files:\n  - {checked_relative}\n", activated_text)
+        self.assertIn(
+            f"predecessor_plans:\n  - {checked_relative}\n", activated_text
+        )
+
+    def test_activation_rejects_unrelated_context_changes(self) -> None:
+        first = self.spec["successors"][0]  # type: ignore[index]
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        self.defer_integration_behind(first, integration, context=False)
+        checked_relative = self.prepare_checked_predecessor(first, integration)
+        target = self.repo / str(integration["path"])
+        original = target.read_text(encoding="utf-8")
+        module = self.load_restructure_module("unrelated_context_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=str(integration["path"]),
+            successor_path=str(first["path"]),
+            checked_path=checked_relative,
+            promoted_path=None,
+            deferred_reason="predecessor must be checked",
+        )
+        rebinding = activation["rebindings"][0]  # type: ignore[index]
+        rebinding["replacements"].append(  # type: ignore[index]
+            {
+                "scope": "manifest",
+                "field": "context_files",
+                "old": "context_files:\n  - none\n",
+                "new": "context_files:\n  - docs/agent/spec-index.yaml\n",
+                "count": 1,
+            }
+        )
+        updated = (
+            original.replace("status: deferred\n", "status: in_progress\n", 1)
+            .replace(
+                "completion_deferred_reason: predecessor must be checked\n", "", 1
+            )
+            .replace(str(first["path"]), checked_relative, 1)
+            .replace(
+                "context_files:\n  - none\n",
+                "context_files:\n  - docs/agent/spec-index.yaml\n",
+                1,
+            )
+        )
+        rebinding["updated_content_digest"] = digest(updated)  # type: ignore[index]
+        rejected = self.run_spec_data(activation, "unrelated-context.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "is not an exact active-to-checked transition", rejected.stderr
+        )
+
+    def test_activation_promotion_rejects_context_drift(self) -> None:
+        first = self.spec["successors"][0]  # type: ignore[index]
+        integration = self.spec["integration"]  # type: ignore[assignment]
+        self.defer_integration_behind(first, integration, context=True)
+        checked_relative = self.prepare_checked_predecessor(first, integration)
+        module = self.load_restructure_module("promotion_guard_module")
+        original = (self.repo / str(integration["path"])).read_text(encoding="utf-8")
+        rebound = original.replace(
+            f"context_files:\n  - {first['path']}\n",
+            f"context_files:\n  - {checked_relative}\n",
+            1,
+        )
+        before = module.parse_manifest(original)
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            module.validate_activation_promotion(
+                before, module.parse_manifest(rebound), None, "probe"
+            )
+            drifted = {
+                "stale active reference": original,
+                "added context entry": rebound.replace(
+                    f"context_files:\n  - {checked_relative}\n",
+                    f"context_files:\n  - {checked_relative}\n"
+                    "  - docs/agent/spec-index.yaml\n",
+                    1,
+                ),
+                "removed context entry": rebound.replace(
+                    f"context_files:\n  - {checked_relative}\n",
+                    "context_files:\n  - none\n",
+                    1,
+                ),
+                "changed preservation scope": rebound.replace(
+                    "preservation_scope:\n  - none\n",
+                    "preservation_scope:\n  - src/keep.py\n",
+                    1,
+                ),
+            }
+            for case, text in drifted.items():
+                with self.subTest(case=case):
+                    self.assertNotEqual(text, rebound)
+                    with self.assertRaises(module.RestructureError) as raised:
+                        module.validate_activation_promotion(
+                            before, module.parse_manifest(text), None, "probe"
+                        )
+                    self.assertIn(
+                        "activation changes preservation or context without promotion",
+                        str(raised.exception),
+                    )
+        finally:
+            os.chdir(old_cwd)
+
     def test_predecessor_cycles_and_duplicate_edges_are_rejected_before_writes(self) -> None:
         first = self.spec["successors"][0]  # type: ignore[index]
         integration = self.spec["integration"]  # type: ignore[assignment]
@@ -2384,6 +2559,7 @@ class PlanRestructureTest(unittest.TestCase):
         checked_path: str,
         promoted_path: str | None,
         deferred_reason: str = "integration successor must be checked",
+        rebind_context: bool = False,
     ) -> dict[str, object]:
         original = (self.repo / target_path).read_text(encoding="utf-8")
         reason_line = (
@@ -2417,6 +2593,21 @@ class PlanRestructureTest(unittest.TestCase):
             .replace(reason_line, "", 1)
             .replace(successor_path, checked_path, 1)
         )
+        if rebind_context:
+            replacements.append(
+                {
+                    "scope": "manifest",
+                    "field": "context_files",
+                    "old": f"  - {successor_path}\n",
+                    "new": f"  - {checked_path}\n",
+                    "count": 1,
+                }
+            )
+            updated = updated.replace(
+                f"context_files:\n  - {successor_path}\n",
+                f"context_files:\n  - {checked_path}\n",
+                1,
+            )
         if promoted_path:
             replacements.extend(
                 [
