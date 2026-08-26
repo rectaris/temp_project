@@ -1,7 +1,6 @@
 # Reconstruct the shell parser lineage
 
-status: deferred
-completion_deferred_reason: Plan 211 must be checked and its exact checked archive must replace the active predecessor before implementation.
+status: in_progress
 implementation_tier: 2
 primary_invariant: the reconstruction transaction preserves source acceptance, the committed non-authoritative rejected-candidate blobs, downstream implementation authority, and every active predecessor edge while assigning each shell and Copier semantic boundary to exactly one successor plan
 replan_sources:
@@ -57,7 +56,7 @@ context_files:
   - docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
   - docs/plan/replanned/2026/08/16-31/201-reconstruct-shell-parser-lineage.md
   - docs/plan/checked/2026/08/16-31/199-admit-decomposed-shell-validation.md
-  - docs/plan/active/211-verify-coupled-lineage-acceptance.md
+  - docs/plan/checked/2026/08/16-31/211-verify-coupled-lineage-acceptance.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -80,7 +79,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:b3051fadc391a911379a6aeea9908d350b1320b725c68957355e41c255d4db6d","stage":"focused","witness":"python3 scripts/restructure-plan.py --verify"}
 predecessor_plans:
-  - docs/plan/active/211-verify-coupled-lineage-acceptance.md
+  - docs/plan/checked/2026/08/16-31/211-verify-coupled-lineage-acceptance.md
 checked_summary_ja: 停止したshell parser lineageを字句、関数表、実行graph、Copier validatorの独立planへ原子的に再構築する。
 
 ## Decisions
