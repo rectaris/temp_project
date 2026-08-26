@@ -1,6 +1,6 @@
 # Reconstruct the shell parser lineage from backlog residents
 
-status: backlog
+status: in_progress
 implementation_tier: 2
 primary_invariant: the reconstruction transaction preserves source acceptance, the committed non-authoritative rejected-candidate blobs, downstream implementation authority, and every active predecessor edge while assigning each shell and Copier semantic boundary to exactly one successor plan
 replan_sources:
@@ -143,3 +143,4 @@ checked_summary_ja: backlogへ退避したPlan 197と198をactiveへ復帰させ
 - The same defect blocks every future activation rebind for those plans, so it is an independently repairable engine defect rather than a defect in this plan's scope, acceptance, validation authority, or safety conditions.
 - Plan 224 is the separate bounded repair plan for that defect. This plan resumes through a fresh run after Plan 224 is checked; `status: deferred` is unreachable for a schema-3 contract successor, so this plan waits in the backlog instead.
 - Phases 1 and 2 are already complete and committed; the reactivated nine-plan closure stays active and verified while this plan waits.
+- Plan 224 is checked, so this plan resumes through a fresh Phase 3 run with unchanged requirements, safety conditions, scope, validation authority, and acceptance.
