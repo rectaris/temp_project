@@ -1,6 +1,6 @@
 # Reconstruct the coupled capability lineage
 
-status: in_progress
+status: checked
 primary_invariant: one plan-only transaction archives exact stopped Plans 200 and 201 and creates separately mapped acceptance successors without changing product bytes, reserved shell-plan identities, committed rejected-candidate evidence, or any unaffected active predecessor edge
 reserved_plan_ids:
   - 211
@@ -90,12 +90,12 @@ checked_summary_ja: Plans 200/201を別々のacceptance successorへ単一transa
 
 ## Tasks
 
-- [ ] Verify the clean checkpoint ancestry, checked Plans 206, 209, 213, 215, and 216, exact replanned archives for Plans 207 and 208, exact source bytes, exact source acceptance, current active index, and committed rejected-candidate blobs.
-- [ ] Build one schema-3 specification with ordered direct active sources Plans 200 and 201 and separately mapped successors Plans 211 and 212.
-- [ ] Execute the transaction and verify both source archives, the shared contract, both successor manifests, both indexes, and the complete unaffected active graph.
-- [ ] Confirm Plan 211 retains Plan 200 validation authority and Plan 212 retains Plan 201 shell plan IDs 202 through 205 without stale dirty-path claims.
-- [ ] Complete focused validation and independent review of the plan-only diff with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive and commit Plan 210, then activate Plan 211 through a separate exact activation record.
+- [x] Verify the clean checkpoint ancestry, checked Plans 206, 209, 213, 215, and 216, exact replanned archives for Plans 207 and 208, exact source bytes, exact source acceptance, current active index, and committed rejected-candidate blobs.
+- [x] Build one schema-3 specification with ordered direct active sources Plans 200 and 201 and separately mapped successors Plans 211 and 212.
+- [x] Execute the transaction and verify both source archives, the shared contract, both successor manifests, both indexes, and the complete unaffected active graph.
+- [x] Confirm Plan 211 retains Plan 200 validation authority and Plan 212 retains Plan 201 shell plan IDs 202 through 205 without stale dirty-path claims.
+- [x] Complete focused validation and independent review of the plan-only diff with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive and commit Plan 210, then activate Plan 211 through a separate exact activation record.
 
 ## Validation Notes
 
@@ -103,3 +103,8 @@ checked_summary_ja: Plans 200/201を別々のacceptance successorへ単一transa
 - Plan 211, not the prerequisite remediation plans or Plan 210, owns final acceptance of the original Plan 200 requirement.
 - Plan 212, not Plan 210, owns the original Plan 201 shell-lineage reconstruction requirement.
 - Plan 210 must not activate directly from checked Plan 209; Plan 213 and both acceptance successors created from Plans 207 and 208 are mandatory predecessors.
+- Executed at source HEAD bf153ed5 with a clean worktree descending from checkpoint 96f6645c; the transaction wrote only docs/plan paths.
+- Focused validation passed: python3 tests/test-plan-restructure.py (127 tests), python3 scripts/restructure-plan.py --verify, python3 scripts/check-root-agent-policy.py, git diff --check.
+- Authoritative suite run once and passed: python3 tests/test-plan-restructure.py, python3 scripts/restructure-plan.py --verify, python3 scripts/check-root-agent-policy.py, scripts/lint-project-workflow.sh, tests/smoke.sh, git diff --check.
+- Independent review of the staged plan-only diff closed with zero High and zero Medium findings; the single Low observation required no change and could not be applied without breaking the immutable successor content digests.
+- Both rejected-candidate blobs remain byte-identical to commit 3ff2309dc85b4ebbb31904acae1949e12654fa88 and were never used as acceptance authority.

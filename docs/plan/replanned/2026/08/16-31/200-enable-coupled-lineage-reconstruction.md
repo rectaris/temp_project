@@ -1,9 +1,6 @@
 # Enable coupled lineage reconstruction
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
-primary_invariant: one durable locked transaction can replace a stopped active successor and its immutable dependent successor while applying only exact authorized reference projections in later dependents and leaving every historical contract byte, acceptance item, write scope, and unaffected predecessor edge unchanged
+status: replanned
 task_types:
   - planning_docs
   - template_workflow
@@ -57,10 +54,18 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:3cc1064bb989622dab9eaca79fc89afaba85b8aabd7191dd4935882d8ba797ef","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/199-admit-decomposed-shell-validation.md
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/200-enable-coupled-lineage-reconstruction.md
+  - docs/plan/active/201-reconstruct-shell-parser-lineage.md
+replan_contract: docs/plan/replanned/contracts/200-enable-coupled-lineage-reconstruction.json
 integration_gates:
-  - preserve the rejected Plan 197 candidate paths without editing, staging, committing, importing, or accepting them
-  - keep root and generated restructure commands byte-identical
-  - Plan 201 remains deferred until this plan is checked and its exact checked archive path replaces the active predecessor
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/211-verify-coupled-lineage-acceptance.md
+  - docs/plan/active/212-reconstruct-shell-parser-lineage.md
+inherited_acceptance_digests:
+  - sha256:3cc1064bb989622dab9eaca79fc89afaba85b8aabd7191dd4935882d8ba797ef
 checked_summary_ja: 停止planとimmutable dependentの置換および後続metadata rebindを単一transactionで行えるようにする。
 
 ## Decisions

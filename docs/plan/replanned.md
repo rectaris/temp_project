@@ -32,3 +32,5 @@ id	path	contract
 191	docs/plan/replanned/2026/08/16-31/191-freeze-bounded-copier-fixture-validator.md	docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json
 207	docs/plan/replanned/2026/08/16-31/207-preserve-canonical-lifecycle-bytes.md	docs/plan/replanned/contracts/207-preserve-canonical-lifecycle-bytes.json
 208	docs/plan/replanned/2026/08/16-31/208-bind-journal-replacement-identity.md	docs/plan/replanned/contracts/207-preserve-canonical-lifecycle-bytes.json
+200	docs/plan/replanned/2026/08/16-31/200-enable-coupled-lineage-reconstruction.md	docs/plan/replanned/contracts/200-enable-coupled-lineage-reconstruction.json
+201	docs/plan/replanned/2026/08/16-31/201-reconstruct-shell-parser-lineage.md	docs/plan/replanned/contracts/200-enable-coupled-lineage-reconstruction.json

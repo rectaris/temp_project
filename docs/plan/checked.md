@@ -161,3 +161,4 @@ id	path
 216	docs/plan/checked/2026/08/16-31/216-bind-journal-replacement-identity.md
 217	docs/plan/checked/2026/08/16-31/217-enforce-plan-id-reservations.md
 220	docs/plan/checked/2026/08/16-31/220-resolve-active-plan-context-references.md
+210	docs/plan/checked/2026/08/16-31/210-reconstruct-coupled-capability-lineage.md
