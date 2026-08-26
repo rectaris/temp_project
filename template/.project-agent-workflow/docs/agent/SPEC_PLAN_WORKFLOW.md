@@ -140,6 +140,11 @@ Rules:
 - Keep a dependent plan `deferred` while any predecessor entry is an active path, including an active path whose matching plan has already moved to the checked archive but has not yet been refreshed in the dependent manifest.
 - Before changing a dependent plan to `in_progress`, replace every active predecessor path with the exact checked archive path recorded in `docs/plan/checked.md`.
 - Reject missing, duplicate, non-normalized, stale checked, cross-id, or cyclic active predecessor edges.
+- `reserved_plan_ids` is an optional list of three-digit plan ids that a live plan will create later. Entries are unique, ascending, and never the declaring plan's own id. A plan is live when its id appears in `docs/plan/plan.md` or when its file resides in `docs/plan/backlog/`.
+- `reserved_by` is the optional three-digit id of the plan that reserved this plan's id.
+- Reject two live plans that reserve the same id, any plan file that uses an id reserved by a live plan without the matching `reserved_by`, and any restructuring transaction that creates such an id without the matching `reserved_by`.
+- Treat `reserved_by` as historical lineage text once the named plan is no longer live, so an archived reserving plan releases its reserved ids. A manifest that declares neither field stays valid.
+- Treat both reservation fields as rebind-protected. No rebind or activation record may add, remove, or change them.
 - `successor_plans` records immutable restructuring lineage and does not define operational execution order.
 - Schema-1 and schema-2 successor plans use singular `replan_source`. Schema-3 coupled successors use ordered `replan_sources` and explicit `integration_source_ids`. Both forms use `primary_invariant`, `integration_gates`, `replan_contract`, `successor_plans`, and `inherited_acceptance_digests` as exact lineage contracts. Legacy plans may omit them.
 - `replan_reason_codes` is a bounded list and is required when `status` is `replan_required`.

@@ -1,6 +1,6 @@
 # Enforce plan id reservations
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: a plan id that a live plan reserves is never assigned to any other plan
 task_types:
@@ -81,15 +81,15 @@ checked_summary_ja: 予約済みplan idを他プランが消費できないよ�
 
 ## Tasks
 
-- [ ] Verify checked Plans 213, 215, and 216, the current live plan set, the current reserved ids, and a clean worktree.
-- [ ] Document `reserved_plan_ids` and `reserved_by` semantics in the root plan workflow specification and mirror the generated specification.
-- [ ] Implement manifest parsing and the repository verification rejections in `scripts/restructure-plan.py`.
-- [ ] Implement the created-plan-id reservation rejection for schema-1 and schema-3 transactions.
-- [ ] Mirror `scripts/restructure-plan.py` into the generated template byte-identically.
-- [ ] Add positive and negative behavior tests to `tests/test-plan-restructure.py` for every new rejection, for legitimate consumption, and for a historical manifest carrying neither field.
-- [ ] Record the existing Plan 201 and Plan 210 reservations.
-- [ ] Complete focused validation and independent review of the diff with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, then archive and commit this plan.
+- [x] Verify checked Plans 213, 215, and 216, the current live plan set, the current reserved ids, and a clean worktree.
+- [x] Document `reserved_plan_ids` and `reserved_by` semantics in the root plan workflow specification and mirror the generated specification.
+- [x] Implement manifest parsing and the repository verification rejections in `scripts/restructure-plan.py`.
+- [x] Implement the created-plan-id reservation rejection for schema-1 and schema-3 transactions.
+- [x] Mirror `scripts/restructure-plan.py` into the generated template byte-identically.
+- [x] Add positive and negative behavior tests to `tests/test-plan-restructure.py` for every new rejection, for legitimate consumption, and for a historical manifest carrying neither field.
+- [x] Record the existing Plan 201 and Plan 210 reservations.
+- [x] Complete focused validation and independent review of the diff with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, then archive and commit this plan.
 
 ## Validation Notes
 
@@ -97,3 +97,10 @@ checked_summary_ja: 予約済みplan idを他プランが消費できないよ�
 - The decision audit for this plan is stored locally at `.agent-artifacts/decision-audits/20260826-plan-id-reservation.md` and is not a durable repository dependency.
 - The motivating defect is recorded in commit d058559, which shifted Plan 213's reserved successor ids from 214 and 215 to 215 and 216 after id 214 was consumed by checked Plan 214.
 - Plan 213 consumes ids 215 and 216 before this plan executes, so this plan closes the remaining exposure of ids 202 through 205 and 211 and 212.
+- Independent review ran one review and two rereviews and returned zero unresolved High or Medium findings.
+- The initial review demonstrated a High bypass: an `activation` rebind record could absorb the `reserved_plan_ids` header line through an exempt `completion_deferred_reason` replacement and silently release or forge a reservation. Both reservation fields are now rebind-protected, and all three directions of that attack are rejected.
+- Repository verification now format-checks `reserved_by` on every scanned plan file rather than only on a plan whose id is currently reserved, so a malformed value cannot lie dormant until some plan reserves that id.
+- Backlog liveness uses the same recursive glob as the occupancy scan, so a nested backlog reserver cannot fail open.
+- Twenty-one mutants covering every new guard were injected and all twenty-one were detected.
+- The two creation-time rejections give a precise pre-transaction error. They are not the sole protection against a half-applied transaction, because `verify_prospective_repository` already validates the prospective state before the journal is written.
+- A de-listed ungoverned active plan releases its reservations by design, because this plan defines liveness positionally.

@@ -3,6 +3,9 @@
 status: deferred
 completion_deferred_reason: Plans 215 and 216 must both be checked and Plan 216's exact checked archive must replace the active predecessor before implementation.
 primary_invariant: one plan-only transaction archives exact stopped Plans 200 and 201 and creates separately mapped acceptance successors without changing product bytes, reserved shell-plan identities, committed rejected-candidate evidence, or any unaffected active predecessor edge
+reserved_plan_ids:
+  - 211
+  - 212
 task_types:
   - planning_docs
   - template_workflow

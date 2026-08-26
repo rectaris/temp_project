@@ -163,10 +163,19 @@ REBIND_PROTECTED_FIELDS = {
     "successor_plans",
     "inherited_acceptance_digests",
     "integration_source_ids",
+    "reserved_plan_ids",
+    "reserved_by",
     "checked_summary_ja",
 }
 PATH_TOKEN_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-"
+)
+PLAN_ID_RE = re.compile(r"[0-9]{3}")
+PLAN_FILE_BASES = (
+    "docs/plan/active",
+    "docs/plan/backlog",
+    "docs/plan/checked",
+    "docs/plan/replanned",
 )
 ACTIVE_REFERENCE_RE = re.compile(
     r"docs/plan/active/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md"
@@ -2572,6 +2581,9 @@ def validate_single_source_spec(spec: dict[str, Any]) -> dict[str, Any]:
                     known_ids.add(path.name[:3])
     if known_ids & set(ids):
         raise RestructureError("a created plan id already exists")
+    validate_created_plan_id_reservations(
+        [(entry["id"], entry["path"], entry["manifest"]) for entry in entries]
+    )
     if any(row[0] in ids or row[1] in raw_paths for row in rows):
         raise RestructureError("active index conflicts with a created plan")
     if any(row[0] == source_id or row[1] == archive_path or row[2] == contract_path for row in prior_replanned):
@@ -3587,6 +3599,12 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
                     known_ids.add(path.name[:3])
     if known_ids & set(created_ids):
         raise RestructureError("a created plan id already exists")
+    validate_created_plan_id_reservations(
+        [
+            (entry["id"], entry["path"], entry["manifest"])
+            for entry in created_entries
+        ]
+    )
     transaction_id = canonical_digest(
         {
             "source_head": source_head,
@@ -5025,6 +5043,112 @@ def recover_transaction(
     return payload["result_path"]
 
 
+def declared_reserved_plan_ids(
+    manifest: dict[str, str | list[str]], own_id: str, label: str
+) -> list[str]:
+    value = manifest.get("reserved_plan_ids")
+    if value is None:
+        return []
+    if not isinstance(value, list) or not value:
+        raise RestructureError(f"{label} declares a malformed reserved plan id list")
+    for entry in value:
+        if PLAN_ID_RE.fullmatch(entry) is None:
+            raise RestructureError(
+                f"{label} declares a malformed reserved plan id: {entry}"
+            )
+    if len(set(value)) != len(value):
+        raise RestructureError(f"{label} declares a duplicate reserved plan id")
+    if value != sorted(value):
+        raise RestructureError(f"{label} declares reserved plan ids out of order")
+    if own_id in value:
+        raise RestructureError(f"{label} reserves its own plan id")
+    return value
+
+
+def declared_reserved_by(manifest: dict[str, str | list[str]], label: str) -> str:
+    value = manifest.get("reserved_by")
+    if value is None:
+        return ""
+    if not isinstance(value, str) or PLAN_ID_RE.fullmatch(value) is None:
+        raise RestructureError(f"{label} declares a malformed reserved_by plan id")
+    return value
+
+
+def live_plan_records() -> list[tuple[str, str, dict[str, str | list[str]]]]:
+    records: list[tuple[str, str, dict[str, str | list[str]]]] = []
+    if ACTIVE_INDEX.is_file():
+        for plan_id, path, _status in active_rows(
+            ACTIVE_INDEX.read_text(encoding="utf-8")
+        ):
+            target = ROOT / path
+            if not target.is_file():
+                raise RestructureError(f"missing active plan: {path}")
+            records.append(
+                (plan_id, path, parse_manifest(target.read_text(encoding="utf-8")))
+            )
+    backlog = ROOT / "docs/plan/backlog"
+    if backlog.is_dir():
+        for entry in sorted(backlog.glob("**/[0-9][0-9][0-9]-*.md")):
+            records.append(
+                (
+                    entry.name[:3],
+                    str(entry.relative_to(ROOT)),
+                    parse_manifest(entry.read_text(encoding="utf-8")),
+                )
+            )
+    return records
+
+
+def live_plan_id_reservations() -> dict[str, tuple[str, str]]:
+    reservations: dict[str, tuple[str, str]] = {}
+    for plan_id, path, manifest in live_plan_records():
+        for reserved in declared_reserved_plan_ids(
+            manifest, plan_id, f"live plan {path}"
+        ):
+            claimed = reservations.get(reserved)
+            if claimed is not None:
+                raise RestructureError(
+                    f"plan id {reserved} is reserved by two live plans: "
+                    f"{claimed[1]} and {path}"
+                )
+            reservations[reserved] = (plan_id, path)
+    return reservations
+
+
+def validate_created_plan_id_reservations(
+    created: list[tuple[str, str, dict[str, str | list[str]]]],
+) -> None:
+    reservations = live_plan_id_reservations()
+    for plan_id, path, manifest in created:
+        declared = declared_reserved_by(manifest, f"created plan {path}")
+        reservation = reservations.get(plan_id)
+        if reservation is None:
+            continue
+        if declared != reservation[0]:
+            raise RestructureError(
+                f"created plan {path} uses plan id {plan_id} reserved by "
+                f"{reservation[1]}"
+            )
+
+
+def validate_repository_plan_id_reservations() -> None:
+    reservations = live_plan_id_reservations()
+    for base in PLAN_FILE_BASES:
+        directory = ROOT / base
+        if not directory.is_dir():
+            continue
+        for entry in sorted(directory.glob("**/[0-9][0-9][0-9]-*.md")):
+            relative = str(entry.relative_to(ROOT))
+            manifest = parse_manifest(entry.read_text(encoding="utf-8"))
+            declared = declared_reserved_by(manifest, f"plan {relative}")
+            reservation = reservations.get(entry.name[:3])
+            if reservation is not None and declared != reservation[0]:
+                raise RestructureError(
+                    f"plan {relative} uses plan id {entry.name[:3]} reserved by "
+                    f"{reservation[1]}"
+                )
+
+
 def validate_repository_active_predecessors() -> None:
     active_records: dict[str, tuple[str, dict[str, str | list[str]]]] = {}
     if ACTIVE_INDEX.is_file():
@@ -5989,6 +6113,7 @@ def verify_repository_contracts(
 ) -> dict[str, Any]:
     allowed_legacy_stopped_sources = legacy_stopped_sources or set()
     validate_repository_active_predecessors()
+    validate_repository_plan_id_reservations()
     if not REPLANNED_INDEX.is_file():
         raise RestructureError("missing docs/plan/replanned.md")
     rows = replanned_rows(REPLANNED_INDEX.read_text(encoding="utf-8"))

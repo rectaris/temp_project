@@ -3,6 +3,11 @@
 status: deferred
 completion_deferred_reason: Plan 200 must be checked and its exact checked archive path must replace the active predecessor before implementation.
 primary_invariant: the reconstruction transaction preserves source acceptance, exact dirty candidates, downstream implementation authority, and every active predecessor edge while assigning each shell and Copier semantic boundary to exactly one successor plan
+reserved_plan_ids:
+  - 202
+  - 203
+  - 204
+  - 205
 task_types:
   - planning_docs
   - template_workflow

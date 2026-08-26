@@ -114,6 +114,349 @@ class PlanRestructureTest(unittest.TestCase):
         verified = self.run_verify()
         self.assertEqual(verified.returncode, 0, verified.stderr)
 
+    def publisher_plan(self) -> Path:
+        return self.repo / "docs/plan/active/190-migrate-live-plan-contracts.md"
+
+    def reserve_ids(self, plan: Path, block: str) -> None:
+        text = plan.read_text(encoding="utf-8")
+        assert "reserved_plan_ids" not in text
+        plan.write_text(
+            text.replace("write_scope:\n", block + "write_scope:\n", 1),
+            encoding="utf-8",
+        )
+
+    def test_repository_rejects_malformed_plan_id_reservations(self) -> None:
+        publisher = self.publisher_plan()
+        original = publisher.read_text(encoding="utf-8")
+        for case, block, fragment in (
+            (
+                "inline scalar",
+                "reserved_plan_ids: 002\n",
+                "malformed reserved plan id list",
+            ),
+            (
+                "empty list",
+                "reserved_plan_ids:\n",
+                "malformed reserved plan id list",
+            ),
+            (
+                "short id",
+                "reserved_plan_ids:\n  - 02\n",
+                "malformed reserved plan id: 02",
+            ),
+            (
+                "non-numeric id",
+                "reserved_plan_ids:\n  - abc\n",
+                "malformed reserved plan id: abc",
+            ),
+            (
+                "duplicate id",
+                "reserved_plan_ids:\n  - 002\n  - 002\n",
+                "duplicate reserved plan id",
+            ),
+            (
+                "descending ids",
+                "reserved_plan_ids:\n  - 003\n  - 002\n",
+                "reserved plan ids out of order",
+            ),
+            (
+                "own id",
+                "reserved_plan_ids:\n  - 190\n",
+                "reserves its own plan id",
+            ),
+        ):
+            with self.subTest(case=case):
+                publisher.write_text(
+                    original.replace("write_scope:\n", block + "write_scope:\n", 1),
+                    encoding="utf-8",
+                )
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn(fragment, verified.stderr)
+                publisher.write_text(original, encoding="utf-8")
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_repository_rejects_conflicting_plan_id_reservations(self) -> None:
+        self.reserve_ids(
+            self.publisher_plan(), "reserved_plan_ids:\n  - 002\n  - 003\n"
+        )
+        self.reserve_ids(
+            self.repo / self.source_path, "reserved_plan_ids:\n  - 003\n"
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn("plan id 003 is reserved by two live plans", verified.stderr)
+
+    def test_repository_rejects_unauthorized_use_of_a_reserved_plan_id(self) -> None:
+        publisher = self.publisher_plan()
+        self.reserve_ids(publisher, "reserved_plan_ids:\n  - 042\n")
+        occupant = self.repo / "docs/plan/backlog/042-occupant.md"
+        occupant.parent.mkdir(parents=True, exist_ok=True)
+        body = (
+            "# Occupant\n\nstatus: backlog\nwrite_scope:\n  - docs/plan/\n"
+            "context_files:\n  - none\n"
+        )
+        for case, manifest, fragment in (
+            ("no reserved_by", body, "uses plan id 042 reserved by"),
+            (
+                "wrong reserved_by",
+                body.replace("status: backlog\n", "status: backlog\nreserved_by: 001\n"),
+                "uses plan id 042 reserved by",
+            ),
+            (
+                "malformed reserved_by",
+                body.replace("status: backlog\n", "status: backlog\nreserved_by: 19\n"),
+                "malformed reserved_by plan id",
+            ),
+        ):
+            with self.subTest(case=case):
+                occupant.write_text(manifest, encoding="utf-8")
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn(fragment, verified.stderr)
+        occupant.write_text(
+            body.replace("status: backlog\n", "status: backlog\nreserved_by: 190\n"),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_a_backlog_plan_reserves_plan_ids_and_an_archive_releases_them(
+        self,
+    ) -> None:
+        backlog = self.repo / "docs/plan/backlog/046-reserver.md"
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        backlog.write_text(
+            "# Reserver\n\nstatus: backlog\nreserved_plan_ids:\n  - 002\n"
+            "write_scope:\n  - docs/plan/\ncontext_files:\n  - none\n",
+            encoding="utf-8",
+        )
+        occupant = self.repo / "docs/plan/checked/2026/08/16-31/002-occupant.md"
+        occupant.parent.mkdir(parents=True, exist_ok=True)
+        occupant.write_text(
+            "# Occupant\n\nstatus: checked\n", encoding="utf-8"
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn("uses plan id 002 reserved by", verified.stderr)
+        nested = self.repo / "docs/plan/backlog/deferred/046-reserver.md"
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        nested.write_text(backlog.read_text(encoding="utf-8"), encoding="utf-8")
+        backlog.unlink()
+        nested_verified = self.run_verify()
+        self.assertNotEqual(nested_verified.returncode, 0, nested_verified.stdout)
+        self.assertIn(
+            "uses plan id 002 reserved by "
+            "docs/plan/backlog/deferred/046-reserver.md",
+            nested_verified.stderr,
+        )
+        nested.unlink()
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_transaction_rejects_creating_a_reserved_plan_id(self) -> None:
+        self.reserve_ids(
+            self.publisher_plan(), "reserved_plan_ids:\n  - 002\n  - 003\n"
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "reserve successor ids")
+        self.spec = self.make_spec()
+        self.write_spec()
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(
+            "created plan docs/plan/active/002-data.md "
+            "uses plan id 002 reserved by",
+            result.stderr,
+        )
+        self.assert_source_unchanged()
+        self.assertEqual(self.run_verify().returncode, 0)
+
+        for entry in (
+            self.spec["successors"][0],  # type: ignore[index]
+            self.spec["integration"],  # type: ignore[index]
+        ):
+            entry["content"] = str(entry["content"]).replace(  # type: ignore[index]
+                "status: ", "reserved_by: 001\nstatus: ", 1
+            )
+        self.write_spec()
+        mismatched = self.run_command()
+        self.assertNotEqual(mismatched.returncode, 0, mismatched.stdout)
+        self.assertIn(
+            "created plan docs/plan/active/002-data.md "
+            "uses plan id 002 reserved by",
+            mismatched.stderr,
+        )
+        self.assert_source_unchanged()
+        self.assertEqual(self.run_verify().returncode, 0)
+
+        self.spec = self.make_spec()
+        for entry in (
+            self.spec["successors"][0],  # type: ignore[index]
+            self.spec["integration"],  # type: ignore[index]
+        ):
+            entry["content"] = str(entry["content"]).replace(  # type: ignore[index]
+                "status: ", "reserved_by: 19\nstatus: ", 1
+            )
+        self.write_spec()
+        malformed = self.run_command()
+        self.assertNotEqual(malformed.returncode, 0, malformed.stdout)
+        self.assertIn(
+            "created plan docs/plan/active/002-data.md "
+            "declares a malformed reserved_by plan id",
+            malformed.stderr,
+        )
+        self.assert_source_unchanged()
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_coupled_transaction_rejects_creating_a_reserved_plan_id(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        self.reserve_ids(
+            self.publisher_plan(), "reserved_plan_ids:\n  - 005\n"
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "reserve the coupled successor id")
+        coupled["source_head"] = git(self.repo, "rev-parse", "HEAD")
+        result = self.run_spec_data(coupled, "coupled-reserved.json")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(
+            "created plan docs/plan/active/005-coupled-integration.md "
+            "uses plan id 005 reserved by",
+            result.stderr,
+        )
+        self.assertFalse(
+            (self.repo / "docs/plan/active/005-coupled-integration.md").exists()
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_transaction_accepts_a_declared_reserved_plan_id_consumption(
+        self,
+    ) -> None:
+        self.reserve_ids(
+            self.publisher_plan(), "reserved_plan_ids:\n  - 002\n  - 003\n"
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "reserve successor ids")
+        self.spec = self.make_spec()
+        for entry in (
+            self.spec["successors"][0],  # type: ignore[index]
+            self.spec["integration"],  # type: ignore[index]
+        ):
+            entry["content"] = str(entry["content"]).replace(  # type: ignore[index]
+                "status: ", "reserved_by: 190\nstatus: ", 1
+            )
+        self.write_spec()
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        created = self.repo / "docs/plan/active/002-data.md"
+        self.assertIn("reserved_by: 190", created.read_text(encoding="utf-8"))
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_a_manifest_without_reservation_fields_stays_valid(self) -> None:
+        publisher = self.publisher_plan().read_text(encoding="utf-8")
+        self.assertNotIn("reserved_plan_ids", publisher)
+        self.assertNotIn("reserved_by", publisher)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_repository_validates_reserved_by_on_every_plan_file(self) -> None:
+        publisher = self.publisher_plan()
+        original = publisher.read_text(encoding="utf-8")
+        for case, line in (
+            ("bare reserved_by", "reserved_by:\n"),
+            ("four-digit id", "reserved_by: 1900\n"),
+            ("non-numeric id", "reserved_by: abc\n"),
+        ):
+            with self.subTest(case=case):
+                publisher.write_text(
+                    original.replace("write_scope:\n", line + "write_scope:\n", 1),
+                    encoding="utf-8",
+                )
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn("malformed reserved_by plan id", verified.stderr)
+        publisher.write_text(original, encoding="utf-8")
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_repository_rejects_reserved_plan_ids_in_every_plan_directory(
+        self,
+    ) -> None:
+        self.reserve_ids(
+            self.publisher_plan(), "reserved_plan_ids:\n  - 042\n  - 043\n"
+        )
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        for case, relative in (
+            ("active", "docs/plan/active/042-occupant.md"),
+            (
+                "replanned",
+                f"docs/plan/replanned/{today.year:04d}/{today.month:02d}"
+                f"/{half}/043-occupant.md",
+            ),
+        ):
+            with self.subTest(case=case):
+                occupant = self.repo / relative
+                occupant.parent.mkdir(parents=True, exist_ok=True)
+                occupant.write_text(
+                    "# Occupant\n\nstatus: replan_required\n", encoding="utf-8"
+                )
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn(f"plan {relative} uses plan id", verified.stderr)
+                occupant.unlink()
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_activation_cannot_forge_plan_id_reservations(self) -> None:
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, "coupled-reservation-forge.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(successor_path)
+        module = self.load_restructure_module("reservation_activation_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        record = activation["rebindings"][0]  # type: ignore[index]
+        original = (self.repo / target_path).read_text(encoding="utf-8")
+        honest = json.dumps(record["replacements"], sort_keys=True)
+        for case, forged in (
+            ("reserved_plan_ids", "reserved_plan_ids:\n  - 050\n"),
+            ("reserved_by", "reserved_by: 001\n"),
+        ):
+            with self.subTest(case=case):
+                record["replacements"] = json.loads(honest)
+                reason = ""
+                for replacement in record["replacements"]:
+                    if replacement["field"] == "completion_deferred_reason":
+                        reason = str(replacement["old"])
+                        replacement["new"] = forged
+                        break
+                self.assertTrue(reason)
+                updated = (
+                    original.replace(
+                        "status: deferred\n", "status: in_progress\n", 1
+                    )
+                    .replace(reason, forged, 1)
+                    .replace(successor_path, checked_path, 1)
+                )
+                record["updated_content_digest"] = digest(updated)
+                forged_result = self.run_spec_data(
+                    activation, f"activation-forge-{case}.json"
+                )
+                self.assertNotEqual(forged_result.returncode, 0, forged_result.stdout)
+                self.assertIn(
+                    "activation changes protected plan identity",
+                    forged_result.stderr,
+                )
+                live = (self.repo / target_path).read_text(encoding="utf-8")
+                self.assertEqual(live, original)
+                self.assertNotIn("reserved_plan_ids", live)
+                self.assertNotIn("reserved_by", live)
+                self.assertEqual(self.run_verify().returncode, 0)
+
     def test_repository_active_predecessors_reject_cross_id_index_rows(self) -> None:
         active_index = self.repo / "docs/plan/plan.md"
         active_index.write_text(
