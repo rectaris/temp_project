@@ -7,3 +7,4 @@ id	path	status
 208	docs/plan/active/208-bind-journal-replacement-identity.md	deferred
 210	docs/plan/active/210-reconstruct-coupled-capability-lineage.md	deferred
 213	docs/plan/active/213-reconstruct-stopped-lifecycle-chain.md	in_progress
+217	docs/plan/active/217-enforce-plan-id-reservations.md	deferred
