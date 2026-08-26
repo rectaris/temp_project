@@ -1,7 +1,7 @@
 # Reconstruct the coupled capability lineage
 
 status: deferred
-completion_deferred_reason: Plan 213 must be checked, Plan 216 must replace the active predecessor, and Plans 215 and 216 must both be checked before implementation.
+completion_deferred_reason: Plans 215 and 216 must both be checked and Plan 216's exact checked archive must replace the active predecessor before implementation.
 primary_invariant: one plan-only transaction archives exact stopped Plans 200 and 201 and creates separately mapped acceptance successors without changing product bytes, reserved shell-plan identities, committed rejected-candidate evidence, or any unaffected active predecessor edge
 task_types:
   - planning_docs
@@ -27,10 +27,12 @@ context_files:
   - docs/plan/active/200-enable-coupled-lineage-reconstruction.md
   - docs/plan/active/201-reconstruct-shell-parser-lineage.md
   - docs/plan/checked/2026/08/16-31/206-enforce-per-source-integration-coverage.md
-  - docs/plan/active/207-preserve-canonical-lifecycle-bytes.md
-  - docs/plan/active/208-bind-journal-replacement-identity.md
-  - docs/plan/active/209-enable-direct-active-source-reconstruction.md
+  - docs/plan/replanned/2026/08/16-31/207-preserve-canonical-lifecycle-bytes.md
+  - docs/plan/replanned/2026/08/16-31/208-bind-journal-replacement-identity.md
+  - docs/plan/checked/2026/08/16-31/209-enable-direct-active-source-reconstruction.md
   - docs/plan/active/213-reconstruct-stopped-lifecycle-chain.md
+  - docs/plan/active/215-enforce-canonical-lifecycle-verification.md
+  - docs/plan/active/216-bind-journal-replacement-identity.md
   - docs/plan/checked/2026/08/16-31/199-admit-decomposed-shell-validation.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
@@ -56,7 +58,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:dc406d3c0fa0ac0755912a904d97a8849a5efbbc13dcebd86e0cab48b56b3b89","stage":"focused","witness":"python3 scripts/restructure-plan.py --verify"}
 predecessor_plans:
-  - docs/plan/active/213-reconstruct-stopped-lifecycle-chain.md
+  - docs/plan/active/216-bind-journal-replacement-identity.md
 integration_gates:
   - execute only after Plans 206, 209, 215, and 216 are checked and their exact checked archives are bound
   - require a clean worktree and index at a HEAD descending from checkpoint commit 96f6645c84d5e1c4b043ac938df51d5d08e736d8

@@ -30,3 +30,5 @@ id	path	contract
 183	docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md	docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
 133	docs/plan/replanned/2026/08/16-31/133-evaluate-resource-bounded-orchestration.md	docs/plan/replanned/contracts/133-evaluate-resource-bounded-orchestration.json
 191	docs/plan/replanned/2026/08/16-31/191-freeze-bounded-copier-fixture-validator.md	docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json
+207	docs/plan/replanned/2026/08/16-31/207-preserve-canonical-lifecycle-bytes.md	docs/plan/replanned/contracts/207-preserve-canonical-lifecycle-bytes.json
+208	docs/plan/replanned/2026/08/16-31/208-bind-journal-replacement-identity.md	docs/plan/replanned/contracts/207-preserve-canonical-lifecycle-bytes.json

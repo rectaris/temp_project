@@ -1,6 +1,6 @@
 # Reconstruct the stopped lifecycle chain
 
-status: in_progress
+status: checked
 primary_invariant: one plan-only direct-active schema-3 transaction archives exact stopped Plan 207 and dependent Plan 208, creates one unchanged-acceptance successor for each source, and leaves product bytes and unrelated active-plan bytes unchanged
 task_types:
   - planning_docs
@@ -87,13 +87,13 @@ checked_summary_ja: 停止中のPlans 207/208を別々のacceptance successorへ
 
 ## Tasks
 
-- [ ] Verify checked Plan 209, exact active source bytes, source acceptance, source ordering, active index state, and a clean product worktree.
-- [ ] Build one schema-3 direct-active specification with ordered sources Plans 207 and 208 and separately mapped successor Plans 215 and 216.
-- [ ] Execute the transaction and verify both source archives, the shared contract, both successor manifests, both indexes, and every unaffected active predecessor edge.
-- [ ] Update deferred Plan 210 to depend on active Plan 216 and to reference exact Plan 207/208 replanned archives plus active Plans 215 and 216.
-- [ ] Confirm Plan 215 retains Plan 207 validation authority and Plan 216 retains Plan 208 recovery and threat-model boundaries.
-- [ ] Complete focused validation and independent review of the plan-only diff with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive and commit Plan 213, then activate Plan 215 through a separate exact activation record.
+- [x] Verify checked Plan 209, exact active source bytes, source acceptance, source ordering, active index state, and a clean product worktree.
+- [x] Build one schema-3 direct-active specification with ordered sources Plans 207 and 208 and separately mapped successor Plans 215 and 216.
+- [x] Execute the transaction and verify both source archives, the shared contract, both successor manifests, both indexes, and every unaffected active predecessor edge.
+- [x] Update deferred Plan 210 to depend on active Plan 216 and to reference exact Plan 207/208 replanned archives plus active Plans 215 and 216.
+- [x] Confirm Plan 215 retains Plan 207 validation authority and Plan 216 retains Plan 208 recovery and threat-model boundaries.
+- [x] Complete focused validation and independent review of the plan-only diff with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive and commit Plan 213, then activate Plan 215 through a separate exact activation record.
 
 ## Validation Notes
 
@@ -101,3 +101,9 @@ checked_summary_ja: 停止中のPlans 207/208を別々のacceptance successorへ
 - The rejected Plan 207 candidate is stored locally at `/home/rectaris/.copilot/session-state/b03dfa28-bd50-474b-aa5f-2acf4794258a/files/plan-207/unaccepted-candidate.patch` with SHA-256 `60a8d1fbb0765310dffa74675557764f4b0f38d55a33a8d69a2fd8f8fd34c0c6`.
 - The local patch is not a durable repository dependency and may be absent in another session without blocking implementation.
 - Plan 215 owns final acceptance of Plan 207, and Plan 216 owns final acceptance of Plan 208.
+- The schema-3 direct-active transaction archived Plans 207 and 208 under `docs/plan/replanned/2026/08/16-31/`, created the shared contract `docs/plan/replanned/contracts/207-preserve-canonical-lifecycle-bytes.json`, and created deferred Plans 215 and 216 with unchanged source acceptance.
+- Plan 210 now depends on active Plan 216 and binds the exact Plan 207/208 replanned archives, the exact checked Plan 209 archive, and active Plans 215 and 216.
+- Focused validation passed `python3 scripts/restructure-plan.py --verify`, `python3 scripts/check-root-agent-policy.py`, and `git diff --check`.
+- Independent review of the plan-only diff reported zero High and zero Medium findings.
+- The authoritative suite passed once after review, including `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- Plan 215 activation requires a separate `kind: activation` rebind operation because both successors are durable schema-3 contract successors.

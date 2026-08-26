@@ -1,7 +1,6 @@
 # Preserve canonical lifecycle bytes
 
-status: replan_required
-primary_invariant: lifecycle verification removes only syntactically parsed lifecycle field bytes, preserves every other byte, and admits replan_required only with canonical stopped metadata
+status: replanned
 task_types:
   - planning_docs
   - template_workflow
@@ -50,13 +49,18 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:d6486ed4fe2f32f744fd53df526284ab3151fd6bb9fed42e2318cf89855de837","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/206-enforce-per-source-integration-coverage.md
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/207-preserve-canonical-lifecycle-bytes.md
+  - docs/plan/active/208-bind-journal-replacement-identity.md
+replan_contract: docs/plan/replanned/contracts/207-preserve-canonical-lifecycle-bytes.json
 integration_gates:
-  - begin only from the exact checked Plan 206 archive and a clean worktree
-  - preserve the Plan 206 acceptance check and all unrelated manifest and body bytes
-  - keep root and generated restructure commands byte-identical
-  - Plan 208 remains deferred until this plan is checked and its exact checked archive replaces the active predecessor
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/215-enforce-canonical-lifecycle-verification.md
+  - docs/plan/active/216-bind-journal-replacement-identity.md
+inherited_acceptance_digests:
+  - sha256:d6486ed4fe2f32f744fd53df526284ab3151fd6bb9fed42e2318cf89855de837
 checked_summary_ja: lifecycle field以外のbyteを保持しcanonical stopped metadataを必須化する。
 
 ## Decisions
