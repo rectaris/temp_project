@@ -1,7 +1,6 @@
 # Active Plan
 
 id	path	status
-223	docs/plan/active/223-reconstruct-backlog-resident-shell-lineage.md	in_progress
 185	docs/plan/active/185-complete-bounded-copier-fixture-runtime.md	deferred
 186	docs/plan/active/186-bind-connected-copier-fixture-checker.md	deferred
 187	docs/plan/active/187-verify-plan183-successor-acceptance.md	deferred

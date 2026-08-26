@@ -1,6 +1,6 @@
 # Reconstruct the shell parser lineage from backlog residents
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: the reconstruction transaction preserves source acceptance, the committed non-authoritative rejected-candidate blobs, downstream implementation authority, and every active predecessor edge while assigning each shell and Copier semantic boundary to exactly one successor plan
 replan_sources:
@@ -129,8 +129,8 @@ checked_summary_ja: backlogへ退避したPlan 197と198をactiveへ復帰させ
 - [x] Phase 6: verify both source archives, the schema-3 contract, the rebind overlay, all created plan files, every index, unchanged bytes for unaffected downstream Plans 187, 184, 179, 165, 167, and 192 through 195, the complete predecessor graph, and repository-wide historical contract verification.
 - [x] Record the future activation projections that replace active Plans 202 through 205 with exact checked archives before Plans 185, 186, and 166 can leave `deferred`.
 - [x] Record the exact activation-only preservation-to-context promotions for `tests/copier-update.sh` in Plan 186 and `scripts/check-copier-template.py` in Plan 166.
-- [ ] Complete focused validation and independent review over lifecycle consistency with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once and archive and commit this planning transition.
+- [x] Complete focused validation and independent review over lifecycle consistency with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once and archive and commit this planning transition.
 - [ ] Phase 7: in the separate parent-owned post-check activation update, replace Plan 202's predecessor with this plan's exact checked archive, set Plan 202 to `in_progress`, and return every still-unreachable plan to the backlog.
 
 ## Validation Notes
@@ -149,3 +149,6 @@ checked_summary_ja: backlogへ退避したPlan 197と198をactiveへ復帰させ
 - Two recorded Plan 166 rebind decisions are not expressible through the accepted rebind capability and were intentionally not applied: an initial rebind may replace only exact reference tokens, so the prose integration gate naming `Plans 164, 165, 186, and 191` cannot be rewritten, and `docs/plan/active/186-bind-connected-copier-fixture-checker.md` is not a transaction-owned new reference, so it cannot be added as a Plan 166 predecessor. Plan 166 already names Plan 186 as exact read-only context, and neither omission changes this plan's acceptance, any write scope, any validation authority, or any safety condition.
 - The engine defect discovered in the first Phase 3 attempt was repaired independently through checked Plan 224 before this run; this plan's requirements, scope, validation authority, and acceptance are unchanged.
 - The authoritative suite passed once after the transaction: `python3 scripts/restructure-plan.py --verify`, `python3 scripts/check-root-agent-policy.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check`.
+- The recorded Plan 186 body decision is a third intentionally unapplied rebind: line 79 reads `checked Plans 182, 185, and 191`, which holds no exact `Plan 191` reference token, so the accepted rebind capability cannot rewrite it. Plan 186 keeps this stale reference to replanned Plan 191 as a disclosed residue; its acceptance, write scope, validation authority, and safety conditions are unchanged, and the successor projection that replaces Plan 191 is Plan 205, already bound through Plan 186's exact `context_files` entry and its two rebound validation commands, with the ordering edge carried transitively by its Plan 185 predecessor.
+- Required future activation replacements, in addition to the Plan 185, Plan 186, and Plan 166 gates above: each of Plans 203, 204, and 205 must, inside the single activation update that flips it from `deferred` to `in_progress`, replace every active Plan 202, Plan 203, and Plan 204 reference it still carries with the corresponding exact checked archive path. The engine resolves these per activation and never per predecessor: an activation record requires the rebound plan to move from `deferred` to `in_progress`, and it rejects any record that leaves one active plan reference unresolved, so a plan's references cannot be updated early or partially while it stays deferred. The concrete references are Plan 203 lines 27 and 48, Plan 204 lines 27, 28, and 49, and Plan 205 lines 43, 44, 45, and 69. No plan may leave `deferred` while it still names an archived predecessor through an active path.
+- Independent review ran two rounds over the reconstruction commit. The first round reported no High findings, one Medium finding on the undisclosed Plan 186 body omission, and one Low finding on the ungated active Plan 202 references. The second round confirmed the Plan 186 disclosure and reported one further Medium finding, that the first activation-replacement wording prescribed per-predecessor updates the engine forbids; the bullet above now states the per-activation rule the engine enforces. No finding changed any acceptance digest, write scope, validation authority, or safety condition.
