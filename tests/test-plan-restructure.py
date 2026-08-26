@@ -5102,6 +5102,76 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("gap or fork", rejected.stderr)
 
+    def test_rebind_admits_legacy_contract_successor_without_preservation_baseline(
+        self,
+    ) -> None:
+        coupled, _module, target_path, _ = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["schema_version"] = 1
+        contract["dirty_product_paths"] = []
+        converted = False
+        for successor in contract["successors"]:
+            for key in (
+                "authoritative_validation",
+                "authoritative_validation_digest",
+                "validation_witness_schema",
+                "validation_witness_map_digest",
+            ):
+                successor.pop(key, None)
+            if successor["path"] == target_path:
+                successor["content"] = successor["content"].replace(
+                    "preservation_scope:\n  - none\n", "", 1
+                )
+                successor["content_digest"] = digest(successor["content"])
+                converted = True
+        self.assertTrue(converted)
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "preservation_scope:\n  - none\n",
+            (self.repo / target_path).read_text(encoding="utf-8"),
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "convert owning contract to schema one")
+        coupled["source_head"] = git(self.repo, "rev-parse", "HEAD")
+        result = self.run_spec_data(coupled, "legacy-contract-rebind.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_contract_identity_ignores_only_the_declared_field(self) -> None:
+        module = self.load_restructure_module("contract_identity_module")
+        base = {"preservation_scope": ["none"], "write_scope": ["src/"]}
+        preservation_drift = {
+            "preservation_scope": ["config/project-owned.yaml"],
+            "write_scope": ["src/"],
+        }
+        with self.assertRaises(module.RestructureError):
+            module.compare_contract_identity(preservation_drift, base, "identity")
+        module.compare_contract_identity(
+            preservation_drift,
+            base,
+            "identity",
+            ignore_fields=frozenset({"preservation_scope"}),
+        )
+        scope_drift = {
+            "preservation_scope": ["config/project-owned.yaml"],
+            "write_scope": ["other/"],
+        }
+        with self.assertRaises(module.RestructureError):
+            module.compare_contract_identity(
+                scope_drift,
+                base,
+                "identity",
+                ignore_fields=frozenset({"preservation_scope"}),
+            )
+
     def journal_directory(self) -> Path:
         raw = git(
             self.repo,

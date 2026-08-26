@@ -165,3 +165,4 @@ id	path
 211	docs/plan/checked/2026/08/16-31/211-verify-coupled-lineage-acceptance.md
 221	docs/plan/checked/2026/08/16-31/221-rebind-referrer-context-on-archive.md
 222	docs/plan/checked/2026/08/16-31/222-close-archived-context-tolerance.md
+224	docs/plan/checked/2026/08/16-31/224-admit-legacy-contract-successor-rebinding.md

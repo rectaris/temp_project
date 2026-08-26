@@ -1,6 +1,6 @@
 # Reconstruct the shell parser lineage from backlog residents
 
-status: in_progress
+status: backlog
 implementation_tier: 2
 primary_invariant: the reconstruction transaction preserves source acceptance, the committed non-authoritative rejected-candidate blobs, downstream implementation authority, and every active predecessor edge while assigning each shell and Copier semantic boundary to exactly one successor plan
 replan_sources:
@@ -139,3 +139,7 @@ checked_summary_ja: backlogへ退避したPlan 197と198をactiveへ復帰させ
 - This plan performs planning and lifecycle effects only; it creates no parser, validator, runtime, or checker implementation.
 - The four successor plans must use the exact validation commands admitted by checked Plan 199.
 - The decision audit for the Plan 212 stop is stored locally at `.agent-artifacts/decision-audits/plan212-replan.md`.
+- Phase 3 stopped this execution run before any reconstruction write: the coupled transaction rejects every rebinding of Plans 185, 186, and 166 because `compare_contract_identity` compares the first rebind record against the owning contract's created bytes including `preservation_scope`, and all three plans legitimately gained a `preservation_scope` entry after creation under Plan 130 and Plan 183 schema-1 contracts that record no preservation baseline.
+- The same defect blocks every future activation rebind for those plans, so it is an independently repairable engine defect rather than a defect in this plan's scope, acceptance, validation authority, or safety conditions.
+- Plan 224 is the separate bounded repair plan for that defect. This plan resumes through a fresh run after Plan 224 is checked; `status: deferred` is unreachable for a schema-3 contract successor, so this plan waits in the backlog instead.
+- Phases 1 and 2 are already complete and committed; the reactivated nine-plan closure stays active and verified while this plan waits.

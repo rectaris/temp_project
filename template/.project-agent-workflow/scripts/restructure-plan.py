@@ -5533,8 +5533,10 @@ def compare_contract_identity(
     original: dict[str, str | list[str]],
     base: dict[str, str | list[str]],
     label: str,
+    *,
+    ignore_fields: frozenset[str] = frozenset(),
 ) -> None:
-    fields = REBIND_PROTECTED_FIELDS - {"status"}
+    fields = REBIND_PROTECTED_FIELDS - {"status"} - ignore_fields
     changed = sorted(
         field for field in fields if original.get(field) != base.get(field)
     )
@@ -5783,6 +5785,11 @@ def verify_rebind_records(
                     before,
                     state["base_manifest"],
                     label,
+                    ignore_fields=(
+                        frozenset()
+                        if state["expected_preservation"] is not None
+                        else frozenset({"preservation_scope"})
+                    ),
                 )
             if validation_projection(
                 before,
