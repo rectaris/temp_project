@@ -1,7 +1,6 @@
 # Reconstruct the stopped lifecycle chain
 
-status: deferred
-completion_deferred_reason: Plan 209 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: one plan-only direct-active schema-3 transaction archives exact stopped Plan 207 and dependent Plan 208, creates one unchanged-acceptance successor for each source, and leaves product bytes and unrelated active-plan bytes unchanged
 task_types:
   - planning_docs
@@ -24,7 +23,7 @@ context_files:
   - scripts/restructure-plan.py
   - docs/plan/active/207-preserve-canonical-lifecycle-bytes.md
   - docs/plan/active/208-bind-journal-replacement-identity.md
-  - docs/plan/active/209-enable-direct-active-source-reconstruction.md
+  - docs/plan/checked/2026/08/16-31/209-enable-direct-active-source-reconstruction.md
   - docs/plan/active/210-reconstruct-coupled-capability-lineage.md
   - docs/plan/checked/2026/08/16-31/206-enforce-per-source-integration-coverage.md
 required_specs:
@@ -49,7 +48,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:4c6861738c65fbabdfaa8de4a64d38dcddb3b3e533cd707c2ef532564f96ee17","stage":"focused","witness":"python3 scripts/restructure-plan.py --verify"}
 predecessor_plans:
-  - docs/plan/active/209-enable-direct-active-source-reconstruction.md
+  - docs/plan/checked/2026/08/16-31/209-enable-direct-active-source-reconstruction.md
 integration_gates:
   - execute only after Plan 209 is checked and its exact checked archive replaces both the active predecessor and active context reference
   - require a clean worktree and index after the rejected Plan 207 candidate is retained only as local advisory evidence

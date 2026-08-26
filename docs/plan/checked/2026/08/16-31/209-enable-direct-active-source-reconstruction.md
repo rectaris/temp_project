@@ -1,6 +1,6 @@
 # Enable direct active source reconstruction
 
-status: in_progress
+status: checked
 primary_invariant: schema-3 can reconstruct an exact ordered active-plan source chain without historical contract ownership while preserving all existing contract-successor, acceptance, graph, archive, and transaction guarantees
 task_types:
   - planning_docs
@@ -76,15 +76,18 @@ checked_summary_ja: historical contract未所有のexact active plan chainをsch
 
 ## Tasks
 
-- [ ] Add the explicit direct-active source representation to schema-3 specification, contract emission, and durable verification.
-- [ ] Preserve the exact historical contract-successor representation and reject implicit route changes.
-- [ ] Add positive direct/direct and mixed-route tests plus ownership, dependency, lifecycle, acceptance, graph, and historical-compatibility negatives.
-- [ ] Align the root and generated Plan Workflow policy with the new bounded source route.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 213 with this plan's exact checked archive as predecessor and context.
+- [x] Add the explicit direct-active source representation to schema-3 specification, contract emission, and durable verification.
+- [x] Preserve the exact historical contract-successor representation and reject implicit route changes.
+- [x] Add positive direct/direct and mixed-route tests plus ownership, dependency, lifecycle, acceptance, graph, and historical-compatibility negatives.
+- [x] Align the root and generated Plan Workflow policy with the new bounded source route.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 213 with this plan's exact checked archive as predecessor and context.
 
 ## Validation Notes
 
 - This capability exists to make ordinary stopped active plans formally reconstructable; it does not weaken contract ownership for plans already claimed by a historical contract.
 - Plan 209 changes capability only and must not archive Plans 200 or 201 itself.
 - Plan 209 now precedes the stopped Plan 207/208 reconstruction because that reconstruction requires the direct-active source route owned here.
+- Focused validation passed with `python3 tests/test-plan-restructure.py`, `python3 scripts/restructure-plan.py --verify`, and `git diff --check`.
+- Independent review reported no unresolved High or Medium findings; the one Low finding on nonstring `source_kind` error handling was fixed and covered by a test.
+- The authoritative validation suite completed successfully once.

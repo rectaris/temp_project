@@ -153,3 +153,4 @@ id	path
 199	docs/plan/checked/2026/08/16-31/199-admit-decomposed-shell-validation.md
 206	docs/plan/checked/2026/08/16-31/206-enforce-per-source-integration-coverage.md
 214	docs/plan/checked/2026/08/16-31/214-add-bounded-descope-transition.md
+209	docs/plan/checked/2026/08/16-31/209-enable-direct-active-source-reconstruction.md
