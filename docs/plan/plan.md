@@ -1,4 +1,4 @@
 # Active Plan
 
 id	path	status
-212	docs/plan/active/212-reconstruct-shell-parser-lineage.md	in_progress
+212	docs/plan/active/212-reconstruct-shell-parser-lineage.md	replan_required

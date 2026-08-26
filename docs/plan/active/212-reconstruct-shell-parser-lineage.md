@@ -1,6 +1,6 @@
 # Reconstruct the shell parser lineage
 
-status: in_progress
+status: replan_required
 implementation_tier: 2
 primary_invariant: the reconstruction transaction preserves source acceptance, the committed non-authoritative rejected-candidate blobs, downstream implementation authority, and every active predecessor edge while assigning each shell and Copier semantic boundary to exactly one successor plan
 replan_sources:
@@ -80,6 +80,8 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:b3051fadc391a911379a6aeea9908d350b1320b725c68957355e41c255d4db6d","stage":"focused","witness":"python3 scripts/restructure-plan.py --verify"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/211-verify-coupled-lineage-acceptance.md
+replan_reason_codes:
+  - spec_drift
 checked_summary_ja: 停止したshell parser lineageを字句、関数表、実行graph、Copier validatorの独立planへ原子的に再構築する。
 
 ## Decisions
@@ -136,3 +138,9 @@ checked_summary_ja: 停止したshell parser lineageを字句、関数表、実�
 - This plan performs planning and lifecycle effects only; it creates no parser, validator, runtime, or checker implementation.
 - The four successor plans must use the exact validation commands admitted by checked Plan 199.
 - The decision audit is stored locally at `.agent-artifacts/decision-audits/plan197-reconstruction.md`.
+- Stopped before implementation. Plans 197, 198, 185, 186, and 166 reside in `docs/plan/backlog/`, but the coupled reconstruction accepts only active-index sources and active rebinding targets.
+- Reactivating them removes the exact `docs/plan/backlog/` paths this plan declares as `context_files`, and `validate_plan_context_files` then rejects this plan. The failure was reproduced against the current HEAD.
+- No authorized channel repairs it: `validate_lifecycle_evolution` protects `context_files`, `project_context_archive_relocation` maps only an active path to its archive, and `authorized_old_references` never contains a `docs/plan/backlog/` token.
+- Rebinding Plans 185, 186, and 166 additionally requires reactivating the undeclared context closure {165, 179, 184, 187}.
+- Executing this plan therefore invalidates its own declared inputs, so the plan boundary, declared context, and execution ordering must be reconstructed. The requirement baseline, safety conditions, and acceptance item are unchanged.
+- The decision audit is stored locally at `.agent-artifacts/decision-audits/plan212-replan.md`.
