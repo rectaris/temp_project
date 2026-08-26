@@ -1,7 +1,6 @@
 # Enforce plan id reservations
 
-status: deferred
-completion_deferred_reason: Plan 213 must be checked and replace the active predecessor, and Plans 215 and 216 must be checked, before this plan may write the shared restructure tool, the shared specification, or plan files.
+status: in_progress
 implementation_tier: 2
 primary_invariant: a plan id that a live plan reserves is never assigned to any other plan
 task_types:
@@ -27,7 +26,7 @@ context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_REFERENT_FIRST.md
-  - docs/plan/active/213-reconstruct-stopped-lifecycle-chain.md
+  - docs/plan/checked/2026/08/16-31/213-reconstruct-stopped-lifecycle-chain.md
   - docs/plan/plan.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
@@ -52,7 +51,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:6c504e801d619ed94566699d8c33c4d33d5908e666cd50617844787d24c2a021","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
-  - docs/plan/active/213-reconstruct-stopped-lifecycle-chain.md
+  - docs/plan/checked/2026/08/16-31/213-reconstruct-stopped-lifecycle-chain.md
 integration_gates:
   - activate only after Plan 213 is checked and its exact checked archive replaces both the active predecessor and the active context reference
   - execute only after Plans 215 and 216 are checked, because both own this plan's restructure tool and specification write scope
