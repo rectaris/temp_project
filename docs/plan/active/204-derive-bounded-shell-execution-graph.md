@@ -1,7 +1,6 @@
 # Derive the bounded shell execution graph
 
-status: deferred
-completion_deferred_reason: Plan 203 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 implementation_tier: 2
 primary_invariant: the checked lexical and function records yield one explicit reachable command graph in which every control transfer, terminal effect, and permitted success path is modelled rather than assumed
 reserved_by: 223
@@ -46,7 +45,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:b4eacba1c2f2efe8189ac9666ec287f6e5ecbe286d54dcbee6b94f95cf9eedf4","stage":"focused","witness":"python3 tests/test-shell-execution.py"}
 predecessor_plans:
-  - docs/plan/active/203-derive-bounded-shell-function-table.md
+  - docs/plan/checked/2026/08/16-31/203-derive-bounded-shell-function-table.md
 checked_summary_ja: checked字句recordと関数表から到達可能なcommand graphを構成し、隠れた分岐と早期終了を拒否する。
 
 ## Decisions
