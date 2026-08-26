@@ -4874,6 +4874,7 @@ def execute(
             legacy_stopped_sources=legacy_stopped_sources,
         )
         operations, created_directories = build_transaction_operations(state)
+        validate_prospective_plan_context_files(operations)
         verify_prospective_repository(operations)
         payload = {
             "schema_version": JOURNAL_SCHEMA_VERSION,
@@ -5147,6 +5148,81 @@ def validate_repository_plan_id_reservations() -> None:
                     f"plan {relative} uses plan id {entry.name[:3]} reserved by "
                     f"{reservation[1]}"
                 )
+
+
+def archived_plan_locations(plan_id: str, basename: str) -> list[str]:
+    candidates = [
+        path
+        for row_id, path in checked_rows()
+        if row_id == plan_id and Path(path).name == basename
+    ]
+    if REPLANNED_INDEX.is_file():
+        candidates += [
+            path
+            for row_id, path, _contract in replanned_rows(
+                REPLANNED_INDEX.read_text(encoding="utf-8")
+            )
+            if row_id == plan_id and Path(path).name == basename
+        ]
+    return [path for path in candidates if (ROOT / path).is_file()]
+
+
+def validate_plan_context_files(
+    path: str,
+    manifest: dict[str, str | list[str]],
+    *,
+    additional_paths: frozenset[str] = frozenset(),
+) -> None:
+    for entry in items(manifest, "context_files"):
+        if entry == "none":
+            continue
+        posix = PurePosixPath(entry)
+        if posix.is_absolute() or any(part in {"", ".", ".."} for part in posix.parts):
+            raise RestructureError(
+                f"active plan {path} context file is not repository relative: {entry}"
+            )
+        reject_symlink_ancestors(entry, include_target=True)
+        if entry in additional_paths or (ROOT / entry).is_file():
+            continue
+        active_match = PLAN_PATH_RE.fullmatch(entry)
+        if active_match is None or not archived_plan_locations(
+            active_match.group(1), Path(entry).name
+        ):
+            raise RestructureError(
+                f"active plan {path} context file does not resolve: {entry}"
+            )
+
+
+def validate_prospective_plan_context_files(
+    operations: list[dict[str, Any]],
+) -> None:
+    written = frozenset(
+        operation["path"]
+        for operation in operations
+        if operation["target_content"] is not None
+    )
+    for operation in operations:
+        if operation["target_content"] is None:
+            continue
+        if PLAN_PATH_RE.fullmatch(operation["path"]) is None:
+            continue
+        validate_plan_context_files(
+            operation["path"],
+            parse_manifest(operation["target_content"]),
+            additional_paths=written,
+        )
+
+
+def validate_active_plan_context_files() -> None:
+    if not ACTIVE_INDEX.is_file():
+        return
+    for _plan_id, path, _status in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8")):
+        target = ROOT / path
+        if not target.is_file():
+            raise RestructureError(f"missing active plan: {path}")
+        validate_plan_context_files(
+            path, parse_manifest(target.read_text(encoding="utf-8"))
+        )
 
 
 def validate_repository_active_predecessors() -> None:
@@ -6114,6 +6190,7 @@ def verify_repository_contracts(
     allowed_legacy_stopped_sources = legacy_stopped_sources or set()
     validate_repository_active_predecessors()
     validate_repository_plan_id_reservations()
+    validate_active_plan_context_files()
     if not REPLANNED_INDEX.is_file():
         raise RestructureError("missing docs/plan/replanned.md")
     rows = replanned_rows(REPLANNED_INDEX.read_text(encoding="utf-8"))

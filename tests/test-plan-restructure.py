@@ -125,6 +125,217 @@ class PlanRestructureTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def set_context_files(self, plan: Path, entries: list[str]) -> None:
+        text = plan.read_text(encoding="utf-8")
+        rendered = "context_files:\n" + "".join(f"  - {entry}\n" for entry in entries)
+        start = text.index("context_files:\n")
+        end = start + len("context_files:\n")
+        while text[end:].startswith("  - "):
+            end = text.index("\n", end) + 1
+        plan.write_text(text[:start] + rendered + text[end:], encoding="utf-8")
+
+    def test_repository_rejects_an_unresolved_active_plan_context_file(self) -> None:
+        publisher = self.publisher_plan()
+        for case, entries, fragment in (
+            (
+                "missing plan",
+                ["docs/plan/active/197-absent.md"],
+                "context file does not resolve: docs/plan/active/197-absent.md",
+            ),
+            (
+                "missing document",
+                ["docs/agent/SPEC_ABSENT.md"],
+                "context file does not resolve: docs/agent/SPEC_ABSENT.md",
+            ),
+            (
+                "directory instead of file",
+                ["docs/plan/active"],
+                "context file does not resolve: docs/plan/active",
+            ),
+            (
+                "one stale entry beside resolving entries",
+                [self.source_path, "docs/plan/active/197-absent.md"],
+                "context file does not resolve: docs/plan/active/197-absent.md",
+            ),
+        ):
+            with self.subTest(case=case):
+                self.set_context_files(publisher, entries)
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn(
+                    f"active plan docs/plan/active/190-migrate-live-plan-contracts.md "
+                    f"{fragment}",
+                    verified.stderr,
+                )
+                self.set_context_files(publisher, ["none"])
+                self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_repository_accepts_resolving_active_plan_context_files(self) -> None:
+        publisher = self.publisher_plan()
+        for case, entries in (
+            ("none sentinel", ["none"]),
+            ("resolving plan path", [self.source_path]),
+            ("resolving index path", ["docs/plan/plan.md", self.source_path]),
+        ):
+            with self.subTest(case=case):
+                self.set_context_files(publisher, entries)
+                verified = self.run_verify()
+                self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def archive_context_target(self) -> str:
+        checked_relative = "docs/plan/checked/2026/08/16-31/077-archived.md"
+        checked_file = self.repo / checked_relative
+        checked_file.parent.mkdir(parents=True, exist_ok=True)
+        checked_file.write_text(
+            "# Archived\n\nstatus: checked\nwrite_scope:\n  - docs/plan/\n"
+            "context_files:\n  - none\n",
+            encoding="utf-8",
+        )
+        (self.repo / "docs/plan/checked.md").write_text(
+            f"# Checked Plan Index\n\nid\tpath\n077\t{checked_relative}\n",
+            encoding="utf-8",
+        )
+        return "docs/plan/active/077-archived.md"
+
+    def test_a_deferred_plan_may_await_activation_rebinding(self) -> None:
+        pending = self.archive_context_target()
+        self.set_context_files(self.publisher_plan(), [pending])
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_a_transaction_may_archive_a_referenced_context_plan(self) -> None:
+        self.set_context_files(self.publisher_plan(), [self.source_path])
+        self.assertEqual(self.run_verify().returncode, 0)
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_created_plan_context_is_enforced_before_any_mutation(self) -> None:
+        extra = self.repo / "docs/agent/EXTRA.md"
+        extra.write_text("# Extra\n", encoding="utf-8")
+        git(self.repo, "add", "docs/agent/EXTRA.md")
+        git(self.repo, "commit", "-qm", "add extra context document")
+        git(self.repo, "rm", "-q", "docs/agent/EXTRA.md")
+        self.spec = self.make_spec()
+        self.spec["dirty_product_paths"] = ["docs/agent/EXTRA.md"]
+        self.spec["integration"]["content"] = str(
+            self.spec["integration"]["content"]
+        ).replace(
+            "preservation_scope:\n  - none\n",
+            "preservation_scope:\n  - docs/agent/EXTRA.md\n",
+            1,
+        ).replace(
+            "context_files:\n  - none\n",
+            "context_files:\n  - docs/agent/EXTRA.md\n",
+            1,
+        )
+        self.write_spec()
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(
+            "active plan docs/plan/active/003-integration.md "
+            "context file does not resolve: docs/agent/EXTRA.md",
+            result.stderr,
+        )
+        self.assertNotIn("prospective repository verification failed", result.stderr)
+        self.assertEqual(list(self.journal_directory().glob("*.json")), [])
+        self.assert_source_unchanged()
+
+    def test_created_plan_context_may_name_a_path_the_transaction_writes(self) -> None:
+        self.spec["integration"]["content"] = str(
+            self.spec["integration"]["content"]
+        ).replace(
+            "context_files:\n  - none\n",
+            "context_files:\n  - docs/plan/active/002-data.md\n",
+            1,
+        )
+        self.write_spec()
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_context_exemption_requires_an_existing_archive_file(self) -> None:
+        pending = self.archive_context_target()
+        (self.repo / "docs/plan/checked/2026/08/16-31/077-archived.md").unlink()
+        self.set_context_files(self.publisher_plan(), [pending])
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn(f"context file does not resolve: {pending}", verified.stderr)
+
+    def test_context_exemption_requires_matching_archive_identity(self) -> None:
+        publisher = self.publisher_plan()
+        entry = "docs/plan/active/077-archived.md"
+        for name in ("077-archived.md", "077-other-name.md"):
+            archive = self.repo / "docs/plan/checked/2026/08/16-31" / name
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_text(
+                "# Other\n\nstatus: checked\nwrite_scope:\n  - docs/plan/\n"
+                "context_files:\n  - none\n",
+                encoding="utf-8",
+            )
+        index = self.repo / "docs/plan/checked.md"
+        self.set_context_files(publisher, [entry])
+        for case, row in (
+            (
+                "same id, different file name",
+                "077\tdocs/plan/checked/2026/08/16-31/077-other-name.md\n",
+            ),
+            (
+                "same file name, different id",
+                "078\tdocs/plan/checked/2026/08/16-31/077-archived.md\n",
+            ),
+        ):
+            with self.subTest(case=case):
+                index.write_text(
+                    f"# Checked Plan Index\n\nid\tpath\n{row}", encoding="utf-8"
+                )
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn(f"context file does not resolve: {entry}", verified.stderr)
+
+    def test_repository_rejects_context_files_outside_the_repository(self) -> None:
+        publisher = self.publisher_plan()
+        link = self.repo / "docs/plan/linked.md"
+        link.symlink_to(self.repo / "docs/plan/plan.md")
+        for case, entry, fragment in (
+            ("absolute", "/etc/hostname", "is not repository relative: /etc/hostname"),
+            (
+                "parent escape",
+                "docs/../../outside.md",
+                "is not repository relative: docs/../../outside.md",
+            ),
+            (
+                "symlink target",
+                "docs/plan/linked.md",
+                "symlink path component is not allowed: docs/plan/linked.md",
+            ),
+        ):
+            with self.subTest(case=case):
+                self.set_context_files(publisher, [entry])
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn(fragment, verified.stderr)
+                self.set_context_files(publisher, ["none"])
+                self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_context_resolution_ignores_body_references_and_backlog_plans(self) -> None:
+        publisher = self.publisher_plan()
+        publisher.write_text(
+            publisher.read_text(encoding="utf-8")
+            + "\n## Decisions\n\n"
+            "- Create docs/plan/active/211-unborn.md in this transaction.\n",
+            encoding="utf-8",
+        )
+        backlog = self.repo / "docs/plan/backlog/047-later.md"
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        backlog.write_text(
+            "# Later\n\nstatus: backlog\nwrite_scope:\n  - docs/plan/\n"
+            "context_files:\n  - docs/plan/active/197-absent.md\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
     def test_repository_rejects_malformed_plan_id_reservations(self) -> None:
         publisher = self.publisher_plan()
         original = publisher.read_text(encoding="utf-8")

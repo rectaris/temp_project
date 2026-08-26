@@ -145,6 +145,12 @@ Rules:
 - Reject two live plans that reserve the same id, any plan file that uses an id reserved by a live plan without the matching `reserved_by`, and any restructuring transaction that creates such an id without the matching `reserved_by`.
 - Treat `reserved_by` as historical lineage text once the named plan is no longer live, so an archived reserving plan releases its reserved ids. A manifest that declares neither field stays valid.
 - Treat both reservation fields as rebind-protected. No rebind or activation record may add, remove, or change them.
+- Require every `context_files` entry of a plan listed in `docs/plan/plan.md` to be a repository-relative path with no absolute prefix, no `..` segment, and no symlinked component. The `none` sentinel stays valid.
+- Reject such an entry when it names no existing repository file, so a relocated plan never leaves a dangling context reference.
+- Exempt one case: an entry that names an active plan path whose plan id has a checked or replanned archive with the same id, the same file name, and an existing file. That plan was archived rather than moved, so the entry still identifies it, an activation record may rebind a checked archive automatically, and a transaction stays free to archive a plan that another live plan lists as context. Rebind such an entry by hand when activation does not.
+- Apply the same rules to every active plan file a restructuring transaction writes, before the transaction mutates the repository, and treat the paths that transaction writes as present. Enforcing a created plan's context only after the commit point would leave a mutated repository that neither verification nor recovery can clear.
+- Apply both rules to `context_files` entries only, never to body prose. A plan body may name a plan that its own transaction will create.
+- Repair a stale `context_files` entry by rebinding it to the current location of the same plan file. Leave `predecessor_plans` to the active predecessor rules.
 - `successor_plans` records immutable restructuring lineage and does not define operational execution order.
 - Schema-1 and schema-2 successor plans use singular `replan_source`. Schema-3 coupled successors use ordered `replan_sources` and explicit `integration_source_ids`. Both forms use `primary_invariant`, `integration_gates`, `replan_contract`, `successor_plans`, and `inherited_acceptance_digests` as exact lineage contracts. Legacy plans may omit them.
 - `replan_reason_codes` is a bounded list and is required when `status` is `replan_required`.

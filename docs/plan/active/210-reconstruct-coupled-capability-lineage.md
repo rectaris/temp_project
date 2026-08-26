@@ -25,17 +25,17 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - scripts/restructure-plan.py
-  - docs/plan/active/197-freeze-bounded-shell-structure-parser.md
-  - docs/plan/active/198-integrate-bounded-copier-fixture-validator.md
+  - docs/plan/backlog/197-freeze-bounded-shell-structure-parser.md
+  - docs/plan/backlog/198-integrate-bounded-copier-fixture-validator.md
   - docs/plan/active/200-enable-coupled-lineage-reconstruction.md
   - docs/plan/active/201-reconstruct-shell-parser-lineage.md
   - docs/plan/checked/2026/08/16-31/206-enforce-per-source-integration-coverage.md
   - docs/plan/replanned/2026/08/16-31/207-preserve-canonical-lifecycle-bytes.md
   - docs/plan/replanned/2026/08/16-31/208-bind-journal-replacement-identity.md
   - docs/plan/checked/2026/08/16-31/209-enable-direct-active-source-reconstruction.md
-  - docs/plan/active/213-reconstruct-stopped-lifecycle-chain.md
-  - docs/plan/active/215-enforce-canonical-lifecycle-verification.md
-  - docs/plan/active/216-bind-journal-replacement-identity.md
+  - docs/plan/checked/2026/08/16-31/213-reconstruct-stopped-lifecycle-chain.md
+  - docs/plan/checked/2026/08/16-31/215-enforce-canonical-lifecycle-verification.md
+  - docs/plan/checked/2026/08/16-31/216-bind-journal-replacement-identity.md
   - docs/plan/checked/2026/08/16-31/199-admit-decomposed-shell-validation.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md

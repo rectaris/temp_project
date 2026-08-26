@@ -27,11 +27,11 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/197-freeze-bounded-shell-structure-parser.md
-  - docs/plan/active/198-integrate-bounded-copier-fixture-validator.md
-  - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
-  - docs/plan/active/186-bind-connected-copier-fixture-checker.md
-  - docs/plan/active/166-unify-copier-update-source-inventory.md
+  - docs/plan/backlog/197-freeze-bounded-shell-structure-parser.md
+  - docs/plan/backlog/198-integrate-bounded-copier-fixture-validator.md
+  - docs/plan/backlog/185-complete-bounded-copier-fixture-runtime.md
+  - docs/plan/backlog/186-bind-connected-copier-fixture-checker.md
+  - docs/plan/backlog/166-unify-copier-update-source-inventory.md
   - docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json
   - docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
 required_specs:
