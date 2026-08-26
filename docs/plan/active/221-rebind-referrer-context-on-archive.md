@@ -2,7 +2,7 @@
 
 status: in_progress
 implementation_tier: 2
-primary_invariant: a restructuring transaction that archives a plan leaves no pre-existing live plan naming that plan's former active path in context_files
+primary_invariant: a restructuring transaction that archives a plan leaves no unprotected pre-existing live plan naming that plan's former active path in context_files
 task_types:
   - planning_docs
   - template_workflow
@@ -27,7 +27,7 @@ required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
 acceptance:
-  - Rebind every pre-existing live plan's context_files entry that names an active plan archived by a restructuring transaction, inside that transaction, and reject that transaction when such an entry would survive it.
+  - Rebind every unprotected pre-existing live plan's context_files entry that names an active plan archived by a restructuring transaction, inside that transaction, and reject that transaction when such an entry would survive it.
 predecessor_plans: []
 
 ## Decisions
@@ -43,12 +43,23 @@ predecessor_plans: []
 - Rewrite an unprotected referring plan directly inside the transaction. Reject the transaction when a protected referring plan is not already covered by a declared rebinding, so the operator declares one instead of losing the reference.
 - Never rewrite a plan the transaction creates. Successor content is bound by an immutable contract `content_digest`, so a created plan must name the archive path in its own declared bytes.
 
+- Independent review proved that rejecting a lifecycle-protected referrer deadlocks the transaction. A single-source specification has no `rebindings` field, and `validate_rebinding_specs` refuses a target that already resides in the backlog, so the instruction to declare a rebinding names a remedy the validator forbids. Rewriting such a plan is equally impossible, because `validate_lifecycle_evolution` treats `context_files` as a protected manifest field.
+- Leave lifecycle-protected referrers on the existing archived-path tolerance. That is exactly the behavior before this plan, so nothing regresses, and the unprotected majority, including this repository's own backlog debt, still gains the rebinding. Plan 222 carries the protected case together with the ordinary finalization path.
+- Skip a plan the specification already rebinds. Its rebind record fixes the updated content digest before this step runs, so a later rewrite would make the recorded digest disagree with the written bytes.
+
 ## Tasks
 
-- [ ] Rebind unprotected referring live plans' `context_files` entries inside the archiving restructuring transaction.
-- [ ] Reject the transaction when a protected referring live plan would be left naming an archived former active path without a declared rebinding.
-- [ ] Record the retained and deferred acceptance split and create the deferred backlog plan.
-- [ ] Document the rule in the root and generated plan workflow specifications and keep both scripts byte-identical.
-- [ ] Add transaction tests covering protected and unprotected referring plans.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, then archive and commit this plan.
+- [x] Rebind unprotected referring live plans' `context_files` entries inside the archiving restructuring transaction.
+- [x] Reject the transaction when an unprotected referring live plan would be left naming an archived former active path.
+- [x] Record the retained and deferred acceptance split and create the deferred backlog plan.
+- [x] Document the rule in the root and generated plan workflow specifications and keep both scripts byte-identical.
+- [x] Add transaction tests covering protected and unprotected referring plans.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, then archive and commit this plan.
+
+- `python3 tests/test-plan-restructure.py` passed with 137 tests, including the four new referrer-rebinding tests and the strengthened archive-referrer test.
+- `python3 scripts/restructure-plan.py --verify`, `git diff --check`, and `diff -q` between the root and generated engine copies all passed.
+- `python3 scripts/check-copier-template.py` passed, confirming both plan workflow specifications stay aligned.
+- `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each passed once as the authoritative suite.
+- Two independent `code-review` rounds ran. The first reported one Medium and one Low finding, both fixed. The second reported zero High or Medium findings and three Low findings, all fixed.
+- The Medium finding proved that rejecting a lifecycle-protected referrer deadlocks the transaction, so protected referrers stay on the existing tolerance and move to Plan 222.

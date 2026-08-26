@@ -2628,6 +2628,9 @@ def validate_single_source_spec(spec: dict[str, Any]) -> dict[str, Any]:
         "active_text": active_text,
         "replanned_text": replanned_text,
         "replanned_existed": REPLANNED_INDEX.exists(),
+        "archived_plans": {
+            str(source_file.relative_to(ROOT)): archive_path,
+        },
         "destinations": [
             (contract_path, json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n"),
             (archive_path, archive_text),
@@ -3770,6 +3773,9 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
             (source["path"], source["original_content"])
             for source in source_infos
         ],
+        "archived_plans": {
+            source["path"]: source["archive_path"] for source in source_infos
+        },
         "destinations": [
             (
                 contract_path,
@@ -4870,11 +4876,15 @@ def execute(
                 and committed_file_bytes(relative) == content.encode("utf-8")
             )
         }
-        verify_repository_contracts(
+        repository_state = verify_repository_contracts(
             legacy_stopped_sources=legacy_stopped_sources,
         )
+        apply_referrer_context_rebinds(state, repository_state)
         operations, created_directories = build_transaction_operations(state)
         validate_prospective_plan_context_files(operations)
+        verify_no_surviving_archived_context_references(
+            state, operations, repository_state
+        )
         verify_prospective_repository(operations)
         payload = {
             "schema_version": JOURNAL_SCHEMA_VERSION,
@@ -5223,6 +5233,147 @@ def validate_active_plan_context_files() -> None:
         validate_plan_context_files(
             path, parse_manifest(target.read_text(encoding="utf-8"))
         )
+
+
+def rewrite_context_file_entries(
+    content: str,
+    replacements: dict[str, str],
+    label: str,
+) -> str:
+    body_offset = manifest_body_offset(content)
+    prefix = content[:body_offset]
+    ranges = [
+        (start, end)
+        for key, start, end in manifest_field_ranges(prefix)
+        if key == "context_files"
+    ]
+    if len(ranges) != 1:
+        raise RestructureError(f"{label} must have exactly one context_files field")
+    start, end = ranges[0]
+    rewritten_lines: list[str] = []
+    applied = 0
+    for line in prefix[start:end].splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            entry = stripped[2:].strip()
+            target = replacements.get(entry)
+            if target is not None:
+                indent = line[: len(line) - len(line.lstrip())]
+                ending = line[len(line.rstrip("\r\n")) :]
+                rewritten_lines.append(f"{indent}- {target}{ending}")
+                applied += 1
+                continue
+        rewritten_lines.append(line)
+    if applied == 0:
+        raise RestructureError(f"{label} has no context entry to rebind")
+    return prefix[:start] + "".join(rewritten_lines) + prefix[end:] + content[body_offset:]
+
+
+def referrer_context_rebind_protection(
+    contract_key: str,
+    repository_state: dict[str, Any],
+) -> bool:
+    live = repository_state["live_successors"].get(contract_key)
+    if live is None:
+        return False
+    if live.get("enforce_projection_semantics"):
+        return True
+    return any(
+        record["plan_path"] == contract_key
+        for record in repository_state["rebind_records"]
+    )
+
+
+def apply_referrer_context_rebinds(
+    state: dict[str, Any],
+    repository_state: dict[str, Any],
+) -> None:
+    """Rebind every pre-existing live plan that names a path this transaction archives.
+
+    The transaction archives active plans, so a context entry naming a former
+    active path would otherwise survive only because ``validate_plan_context_files``
+    tolerates an entry that resolves to an archive. Rewriting the referrer inside
+    the same transaction removes the need for that tolerance on this path.
+
+    A plan the specification already rebinds keeps its declared content, because its
+    rebind record fixes the updated digest before this point. Plans the transaction
+    creates are never rewritten; they declare their own context.
+
+    A lifecycle-protected contract successor is left alone and keeps relying on the
+    archived-path tolerance. Rewriting it would fail ``validate_lifecycle_evolution``,
+    which treats ``context_files`` as protected, and rejecting it would deadlock the
+    transaction: a schema-1 specification has no ``rebindings`` field at all, and
+    ``validate_rebinding_specs`` refuses a target that already resides in the backlog.
+    Closing that remaining case needs the rebinding channel those routes lack.
+    """
+    archived: dict[str, str] = state.get("archived_plans") or {}
+    if not archived:
+        return
+    updated_files: list[tuple[str, str, str]] = state.setdefault("updated_files", [])
+    declared = {path for path, _original, _content in updated_files}
+    for _plan_id, resident_path, manifest in live_plan_records():
+        if resident_path in archived or resident_path in declared:
+            continue
+        replacements = {
+            entry: archived[entry]
+            for entry in items(manifest, "context_files")
+            if entry in archived
+        }
+        if not replacements:
+            continue
+        contract_key = (
+            resident_path
+            if PLAN_PATH_RE.fullmatch(resident_path)
+            else f"docs/plan/active/{Path(resident_path).name}"
+        )
+        if referrer_context_rebind_protection(contract_key, repository_state):
+            continue
+        original = (ROOT / resident_path).read_text(encoding="utf-8")
+        updated_files.append(
+            (
+                resident_path,
+                original,
+                rewrite_context_file_entries(
+                    original, replacements, f"live plan {resident_path}"
+                ),
+            )
+        )
+
+
+def verify_no_surviving_archived_context_references(
+    state: dict[str, Any],
+    operations: list[dict[str, Any]],
+    repository_state: dict[str, Any],
+) -> None:
+    archived: dict[str, str] = state.get("archived_plans") or {}
+    if not archived:
+        return
+    written = {
+        operation["path"]: operation["target_content"] for operation in operations
+    }
+    for _plan_id, resident_path, manifest in live_plan_records():
+        if resident_path in archived:
+            continue
+        if resident_path in written:
+            content = written[resident_path]
+            if content is None:
+                continue
+            parsed = parse_manifest(content)
+        else:
+            parsed = manifest
+        contract_key = (
+            resident_path
+            if PLAN_PATH_RE.fullmatch(resident_path)
+            else f"docs/plan/active/{Path(resident_path).name}"
+        )
+        if referrer_context_rebind_protection(contract_key, repository_state):
+            continue
+        for entry in items(parsed, "context_files"):
+            if entry in archived:
+                raise RestructureError(
+                    f"live plan {resident_path} would still name the archived plan "
+                    f"path {entry} after this transaction"
+                )
 
 
 def validate_repository_active_predecessors() -> None:

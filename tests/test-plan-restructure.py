@@ -209,6 +209,114 @@ class PlanRestructureTest(unittest.TestCase):
         result = self.run_command()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.run_verify().returncode, 0)
+        archive = str(self.spec["archive_path"])
+        self.assertIn(
+            f"context_files:\n  - {archive}\n",
+            self.publisher_plan().read_text(encoding="utf-8"),
+        )
+
+    def test_a_transaction_rebinds_a_backlog_referrer_context_entry(self) -> None:
+        backlog = self.repo / "docs/plan/backlog/181-deferred-referrer.md"
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        backlog.write_text(
+            "# Deferred referrer\n\n"
+            "status: backlog\n"
+            "write_scope:\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "context_files:\n"
+            f"  - {self.source_path}\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", "docs/plan/backlog")
+        git(self.repo, "commit", "-qm", "add deferred referrer")
+        self.spec["source"]["head"] = git(  # type: ignore[index]
+            self.repo, "rev-parse", "HEAD"
+        )
+        self.write_spec()
+        self.assertEqual(self.run_verify().returncode, 0)
+        result = self.run_command()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+        archive = str(self.spec["archive_path"])
+        self.assertIn(
+            f"context_files:\n  - {archive}\n",
+            backlog.read_text(encoding="utf-8"),
+        )
+
+    def test_referrer_context_rebind_protection_tracks_lifecycle_protection(
+        self,
+    ) -> None:
+        module = self.load_restructure_module("referrer_protection_module")
+        key = "docs/plan/active/190-migrate-live-plan-contracts.md"
+        for live_successors, rebind_records, expected in (
+            ({}, [], False),
+            ({key: {"enforce_projection_semantics": False}}, [], False),
+            ({key: {"enforce_projection_semantics": True}}, [], True),
+            (
+                {key: {"enforce_projection_semantics": False}},
+                [{"plan_path": key}],
+                True,
+            ),
+            (
+                {key: {"enforce_projection_semantics": False}},
+                [{"plan_path": "docs/plan/active/001-source.md"}],
+                False,
+            ),
+        ):
+            self.assertEqual(
+                module.referrer_context_rebind_protection(
+                    key,
+                    {
+                        "live_successors": live_successors,
+                        "rebind_records": rebind_records,
+                    },
+                ),
+                expected,
+                (live_successors, rebind_records),
+            )
+
+    def test_a_protected_or_declared_referrer_keeps_its_declared_context(self) -> None:
+        self.set_context_files(self.publisher_plan(), [self.source_path])
+        module = self.load_restructure_module("protected_referrer_module")
+        publisher = "docs/plan/active/190-migrate-live-plan-contracts.md"
+        archive = str(self.spec["archive_path"])
+        protected = {
+            "live_successors": {publisher: {"enforce_projection_semantics": True}},
+            "rebind_records": [],
+        }
+        unprotected = {"live_successors": {}, "rebind_records": []}
+        untouched = {"archived_plans": {self.source_path: archive}, "updated_files": []}
+        module.apply_referrer_context_rebinds(untouched, protected)
+        self.assertEqual(untouched["updated_files"], [])
+        module.verify_no_surviving_archived_context_references(
+            {"archived_plans": {self.source_path: archive}}, [], protected
+        )
+        declared_text = (self.repo / publisher).read_text(encoding="utf-8")
+        declared = {
+            "archived_plans": {self.source_path: archive},
+            "updated_files": [(publisher, declared_text, declared_text)],
+        }
+        module.apply_referrer_context_rebinds(declared, unprotected)
+        self.assertEqual(
+            declared["updated_files"], [(publisher, declared_text, declared_text)]
+        )
+
+    def test_a_surviving_archived_context_reference_is_rejected(self) -> None:
+        self.set_context_files(self.publisher_plan(), [self.source_path])
+        module = self.load_restructure_module("surviving_reference_module")
+        publisher = "docs/plan/active/190-migrate-live-plan-contracts.md"
+        archived = {self.source_path: str(self.spec["archive_path"])}
+        unprotected = {"live_successors": {}, "rebind_records": []}
+        with self.assertRaises(module.RestructureError) as raised:
+            module.verify_no_surviving_archived_context_references(
+                {"archived_plans": archived}, [], unprotected
+            )
+        self.assertIn("would still name the archived plan path", str(raised.exception))
+        module.verify_no_surviving_archived_context_references(
+            {"archived_plans": archived},
+            [{"path": publisher, "target_content": None}],
+            unprotected,
+        )
 
     def test_created_plan_context_is_enforced_before_any_mutation(self) -> None:
         extra = self.repo / "docs/agent/EXTRA.md"
