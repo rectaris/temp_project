@@ -1,7 +1,6 @@
 # Enforce canonical lifecycle verification
 
-status: deferred
-completion_deferred_reason: Plan 213 must be checked and its exact checked archive must replace both the active predecessor and the active context reference before implementation.
+status: in_progress
 implementation_tier: 2
 primary_invariant: lifecycle verification removes only syntactically parsed lifecycle field bytes, preserves every other byte, and admits replan_required only with canonical stopped metadata that every durable contract reproduces exactly
 replan_sources:
@@ -46,7 +45,7 @@ context_files:
   - docs/plan/checked/2026/08/16-31/206-enforce-per-source-integration-coverage.md
   - docs/plan/checked/2026/08/16-31/209-enable-direct-active-source-reconstruction.md
   - docs/plan/replanned/2026/08/16-31/207-preserve-canonical-lifecycle-bytes.md
-  - docs/plan/active/213-reconstruct-stopped-lifecycle-chain.md
+  - docs/plan/checked/2026/08/16-31/213-reconstruct-stopped-lifecycle-chain.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -70,7 +69,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:d6486ed4fe2f32f744fd53df526284ab3151fd6bb9fed42e2318cf89855de837","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
-  - docs/plan/active/213-reconstruct-stopped-lifecycle-chain.md
+  - docs/plan/checked/2026/08/16-31/213-reconstruct-stopped-lifecycle-chain.md
 checked_summary_ja: lifecycle field以外のbyteを保持し、canonical stopped metadataをlive manifestとdurable contractの両方で必須化する。
 
 ## Decisions
