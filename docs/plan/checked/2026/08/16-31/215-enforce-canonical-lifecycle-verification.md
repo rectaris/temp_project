@@ -1,6 +1,6 @@
 # Enforce canonical lifecycle verification
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: lifecycle verification removes only syntactically parsed lifecycle field bytes, preserves every other byte, and admits replan_required only with canonical stopped metadata that every durable contract reproduces exactly
 replan_sources:
@@ -88,18 +88,24 @@ checked_summary_ja: lifecycle field以外のbyteを保持し、canonical stopped
 
 ## Tasks
 
-- [ ] Implement exact lifecycle-field projection over the scalar line or list field without swallowing intervening bytes.
-- [ ] Centralize canonical stopped-state validation and invoke it before schema-1 preflight, every historical source verification path, and every legacy compatibility exemption.
-- [ ] Bind durable contract reason codes to the canonical source manifest for schema-1, schema-2, schema-3, nested historical contracts, and prerequisite plans.
-- [ ] Reject missing, duplicate, unknown, and non-string reason values with bounded lifecycle errors.
-- [ ] Add comment-between-fields, blank-line-placement, unknown-instruction, and stale-deferred-reason tests.
-- [ ] Add missing, duplicate, unknown, and non-string reason-value tests plus schema-1, schema-2, schema-3, and nested historical verification tests.
-- [ ] Align the root and generated Plan Workflow policy with the enforced byte and stopped-state rules.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 216 with this plan's exact checked archive as predecessor.
+- [x] Implement exact lifecycle-field projection over the scalar line or list field without swallowing intervening bytes.
+- [x] Centralize canonical stopped-state validation and invoke it before schema-1 preflight, every historical source verification path, and every legacy compatibility exemption.
+- [x] Bind durable contract reason codes to the canonical source manifest for schema-1, schema-2, schema-3, nested historical contracts, and prerequisite plans.
+- [x] Reject missing, duplicate, unknown, and non-string reason values with bounded lifecycle errors.
+- [x] Add comment-between-fields, blank-line-placement, unknown-instruction, and stale-deferred-reason tests.
+- [x] Add missing, duplicate, unknown, and non-string reason-value tests plus schema-1, schema-2, schema-3, and nested historical verification tests.
+- [x] Align the root and generated Plan Workflow policy with the enforced byte and stopped-state rules.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 216 with this plan's exact checked archive as predecessor.
 
 ## Validation Notes
 
 - This successor owns final acceptance of the original Plan 207 requirement.
 - It must not broaden the legacy compatibility route or reinterpret historical contract bytes.
 - The rejected Plan 207 candidate is local advisory evidence and may be absent in another session without blocking implementation.
+
+- Independent review of the implementation returned one High, one Medium, and one Low finding; all three were remediated and rereviewed.
+- High: an exact byte projection alone was insufficient, because an orphan list item following an inline-valued lifecycle field re-attached to a preceding protected list field without changing the projected bytes. Lifecycle evolution now also compares every parsed non-lifecycle manifest field.
+- Medium: the canonical stopped rules now apply to already-committed durable schema-1 and schema-2 contract sources with no grandfather clause. The compatibility break is deliberate: such a contract records a state that was never canonically valid, schema-3 already rejected the same shape, and a creation-date exemption would reintroduce the legacy hole this plan closes.
+- Low: the schema-3 reason-code test now mutates a dependent source and asserts the exact bounded and mismatch errors instead of only a non-zero exit.
+- Every new test was mutation-verified to fail when its corresponding production change is reverted.

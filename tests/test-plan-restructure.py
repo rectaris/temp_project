@@ -1280,6 +1280,318 @@ class PlanRestructureTest(unittest.TestCase):
         finally:
             os.chdir(old_cwd)
 
+    def test_lifecycle_projection_removes_only_parsed_lifecycle_bytes(self) -> None:
+        module = self.load_restructure_module("lifecycle_projection_module")
+        fields = {"status", "completion_deferred_reason", "replan_reason_codes"}
+        text = (
+            "# Plan\n\n"
+            "status: replan_required\n"
+            "# keep this annotation\n"
+            "\n"
+            "primary_invariant: keep every byte\n"
+            "replan_reason_codes:\n"
+            "  - spec_drift\n"
+            "# keep this trailing annotation\n"
+            "  - scope_drift\n"
+            "context_files:\n"
+            "  - none\n"
+            "unknown instruction without a colon\n"
+            "checked_summary_ja: \u8a18\u9332\u3002\n\n"
+            "## Tasks\n\n- [ ] work\n"
+        )
+        self.assertEqual(
+            module.project_lifecycle_fields(text, fields),
+            "# Plan\n\n"
+            "# keep this annotation\n"
+            "\n"
+            "primary_invariant: keep every byte\n"
+            "# keep this trailing annotation\n"
+            "context_files:\n"
+            "  - none\n"
+            "unknown instruction without a colon\n"
+            "checked_summary_ja: \u8a18\u9332\u3002\n\n"
+            "## Tasks\n\n- [ ] work\n",
+        )
+        swallowed = module.remove_manifest_fields(text, fields)
+        self.assertNotIn("# keep this annotation", swallowed)
+        self.assertNotIn("# keep this trailing annotation", swallowed)
+
+    def test_lifecycle_evolution_rejects_unparsed_byte_loss(self) -> None:
+        module = self.load_restructure_module("lifecycle_evolution_module")
+        baseline = (
+            "# Plan\n\nstatus: in_progress\n"
+            "# keep this annotation\n"
+            "primary_invariant: keep every byte\n"
+            "checked_summary_ja: \u8a18\u9332\u3002\n\n## Tasks\n\n- [ ] work\n"
+        )
+        module.validate_lifecycle_evolution(
+            baseline,
+            baseline.replace("status: in_progress", "status: ready_to_archive", 1),
+            "probe",
+        )
+        with self.assertRaises(module.RestructureError) as raised:
+            module.validate_lifecycle_evolution(
+                baseline,
+                baseline.replace("status: in_progress", "status: ready_to_archive", 1)
+                .replace("# keep this annotation\n", "", 1),
+                "probe",
+            )
+        self.assertIn("changes non-validation-note line count", str(raised.exception))
+
+    def test_lifecycle_evolution_rejects_reattached_list_items(self) -> None:
+        module = self.load_restructure_module("lifecycle_reattach_module")
+        baseline = (
+            "# Plan\n\nstatus: deferred\n"
+            "write_scope:\n"
+            "  - src/\n"
+            "completion_deferred_reason: waiting\n"
+            "  - tests/\n"
+            "primary_invariant: keep every parsed field\n"
+            "checked_summary_ja: \u8a18\u9332\u3002\n\n## Tasks\n\n- [ ] work\n"
+        )
+        live = (
+            "# Plan\n\nstatus: replan_required\n"
+            "write_scope:\n"
+            "  - src/\n"
+            "  - tests/\n"
+            "primary_invariant: keep every parsed field\n"
+            "replan_reason_codes:\n  - spec_drift\n"
+            "checked_summary_ja: \u8a18\u9332\u3002\n\n## Tasks\n\n- [ ] work\n"
+        )
+        self.assertEqual(
+            module.parse_manifest(baseline)["write_scope"], ["src/"]
+        )
+        self.assertEqual(
+            module.parse_manifest(live)["write_scope"], ["src/", "tests/"]
+        )
+        fields = {"status", "completion_deferred_reason", "replan_reason_codes"}
+        self.assertEqual(
+            module.project_lifecycle_fields(baseline, fields),
+            module.project_lifecycle_fields(live, fields),
+        )
+        with self.assertRaises(module.RestructureError) as raised:
+            module.validate_lifecycle_evolution(baseline, live, "probe")
+        self.assertIn("changes protected manifest field: write_scope", str(raised.exception))
+
+    def test_stopping_preserves_unparsed_bytes(self) -> None:
+        module = self.load_restructure_module("stopping_projection_module")
+        text = (
+            "# Plan\n\nstatus: in_progress\n"
+            "# keep the status annotation\n"
+            "primary_invariant: keep every byte\n"
+            "completion_deferred_reason: waiting\n"
+            "# keep the deferred annotation\n"
+            "checked_summary_ja: \u8a18\u9332\u3002\n\n## Tasks\n\n- [ ] work\n"
+        )
+        stopped = module.derive_stopped_source_content(text, ["spec_drift"])
+        self.assertIn("# keep the status annotation\n", stopped)
+        self.assertIn("# keep the deferred annotation\n", stopped)
+        self.assertNotIn("completion_deferred_reason", stopped)
+        self.assertIn("status: replan_required\n", stopped)
+        self.assertIn("replan_reason_codes:\n  - spec_drift\n", stopped)
+        self.assertEqual(
+            module.derive_stopped_source_content(stopped, ["spec_drift"]), stopped
+        )
+
+    def test_canonical_stopped_state_rejects_noncanonical_metadata(self) -> None:
+        module = self.load_restructure_module("canonical_stopped_module")
+        base = (
+            "# Plan\n\nstatus: replan_required\n"
+            "replan_reason_codes:\n  - spec_drift\n"
+            "checked_summary_ja: \u8a18\u9332\u3002\n\n## Tasks\n\n- [ ] work\n"
+        )
+        module.validate_canonical_stopped_manifest(
+            module.parse_manifest(base),
+            "probe",
+            expected_reason_codes=["spec_drift"],
+        )
+        bounded = "must be a non-empty unique bounded list"
+        cases = {
+            "not stopped": (
+                base.replace("status: replan_required", "status: in_progress", 1),
+                None,
+                "must already be canonically stopped",
+            ),
+            "stale deferred reason": (
+                base.replace(
+                    "status: replan_required\n",
+                    "status: replan_required\ncompletion_deferred_reason: waiting\n",
+                    1,
+                ),
+                None,
+                "carries stale completion_deferred_reason",
+            ),
+            "missing reason codes": (
+                base.replace("replan_reason_codes:\n  - spec_drift\n", "", 1),
+                None,
+                bounded,
+            ),
+            "empty reason codes": (base.replace("  - spec_drift\n", "", 1), None, bounded),
+            "duplicate reason codes": (
+                base.replace("  - spec_drift\n", "  - spec_drift\n  - spec_drift\n", 1),
+                None,
+                bounded,
+            ),
+            "unknown reason code": (
+                base.replace("  - spec_drift\n", "  - not_a_reason\n", 1),
+                None,
+                bounded,
+            ),
+            "non-string contract reason code": (base, [1], bounded),
+            "contract reason code mismatch": (
+                base,
+                ["scope_drift"],
+                "do not match the canonical source manifest",
+            ),
+        }
+        for case, (text, expected, message) in cases.items():
+            with self.subTest(case=case):
+                with self.assertRaises(module.RestructureError) as raised:
+                    module.validate_canonical_stopped_manifest(
+                        module.parse_manifest(text),
+                        "probe",
+                        expected_reason_codes=expected,
+                    )
+                self.assertIn(message, str(raised.exception))
+
+    def test_schema_one_preflight_rejects_stale_deferred_reason(self) -> None:
+        source = self.repo / self.source_path
+        source.write_text(
+            source.read_text(encoding="utf-8").replace(
+                "status: replan_required\n",
+                "status: replan_required\ncompletion_deferred_reason: waiting\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.spec["source"]["plan_digest"] = digest(  # type: ignore[index]
+            source.read_text(encoding="utf-8")
+        )
+        self.write_spec()
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("carries stale completion_deferred_reason", result.stderr)
+        self.assert_source_unchanged()
+
+    def test_durable_contract_reason_codes_bind_to_the_source_manifest(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        self.assertEqual(self.run_verify().returncode, 0)
+        contract = self.repo / str(self.spec["contract_path"])
+        original = json.loads(contract.read_text(encoding="utf-8"))
+        cases = {
+            "mismatched reason code": ["scope_drift"],
+            "empty reason codes": [],
+            "duplicate reason codes": [
+                "multiple_independent_invariants",
+                "multiple_independent_invariants",
+            ],
+            "unknown reason code": ["not_a_reason"],
+            "non-string reason code": [1],
+            "non-list reason codes": "multiple_independent_invariants",
+        }
+        for case, reasons in cases.items():
+            with self.subTest(case=case):
+                mutated = dict(original)
+                mutated["reason_codes"] = reasons
+                contract.write_text(
+                    json.dumps(mutated, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                failed = self.run_verify()
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertNotIn("Traceback", failed.stderr)
+        contract.write_text(
+            json.dumps(original, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def test_durable_contract_rejects_stale_deferred_reason_in_the_source(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        self.assertEqual(self.run_verify().returncode, 0)
+        contract = self.repo / str(self.spec["contract_path"])
+        original = json.loads(contract.read_text(encoding="utf-8"))
+        mutated = json.loads(json.dumps(original))
+        mutated["source"]["content"] = str(mutated["source"]["content"]).replace(
+            "status: replan_required\n",
+            "status: replan_required\ncompletion_deferred_reason: waiting\n",
+            1,
+        )
+        mutated["source"]["plan_digest"] = digest(mutated["source"]["content"])
+        contract.write_text(
+            json.dumps(mutated, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        failed = self.run_verify()
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertNotIn("Traceback", failed.stderr)
+        self.assertIn("carries stale completion_deferred_reason", failed.stderr)
+        contract.write_text(
+            json.dumps(original, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_durable_schema_three_reason_codes_bind_to_the_source_manifest(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        result = self.run_spec_data(coupled, "coupled-reason-codes.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+        contract = self.repo / str(coupled["contract_path"])
+        original = json.loads(contract.read_text(encoding="utf-8"))
+        self.assertGreater(len(original["sources"]), 1)
+        for case, reasons in {
+            "mismatched reason code": ["scope_drift"],
+            "empty reason codes": [],
+            "unknown reason code": ["not_a_reason"],
+            "non-string reason code": [1],
+            "non-list reason codes": "scope_drift",
+        }.items():
+            with self.subTest(case=case):
+                mutated = json.loads(json.dumps(original))
+                mutated["sources"][0]["reason_codes"] = reasons
+                contract.write_text(
+                    json.dumps(mutated, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                failed = self.run_verify()
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertNotIn("Traceback", failed.stderr)
+        bounded = "contract reason_codes must be a non-empty unique bounded list"
+        dependent_id = original["sources"][1]["id"]
+        for case, (reasons, message) in {
+            "dependent empty reason codes": ([], bounded),
+            "dependent unknown reason code": (["not_a_reason"], bounded),
+            "dependent non-string reason code": ([1], bounded),
+            "dependent non-list reason codes": ("scope_drift", bounded),
+            "dependent duplicate reason codes": (
+                ["scope_drift", "scope_drift"],
+                bounded,
+            ),
+            "dependent mismatched reason code": (
+                ["scope_drift"],
+                "reason codes do not match the canonical source manifest",
+            ),
+        }.items():
+            with self.subTest(case=case):
+                mutated = json.loads(json.dumps(original))
+                mutated["sources"][1]["reason_codes"] = reasons
+                contract.write_text(
+                    json.dumps(mutated, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                failed = self.run_verify()
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertNotIn("Traceback", failed.stderr)
+                self.assertIn(
+                    f"replanned schema-3 stopped source {dependent_id} {message}",
+                    failed.stderr,
+                )
+        contract.write_text(
+            json.dumps(original, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
     def test_predecessor_cycles_and_duplicate_edges_are_rejected_before_writes(self) -> None:
         first = self.spec["successors"][0]  # type: ignore[index]
         integration = self.spec["integration"]  # type: ignore[assignment]

@@ -1180,11 +1180,15 @@ def validate_replanned_successor(
                 f"replanned schema-3 stopped source is missing: {expected_path}"
             )
         stopped_manifest = parse_manifest(stopped_content)
+        validate_canonical_stopped_manifest(
+            stopped_manifest,
+            f"replanned schema-3 stopped source {plan_id}",
+            expected_reason_codes=source.get("reason_codes"),
+        )
         if (
             items(source_manifest, "inherited_acceptance_digests")
             != expected_digests
             or items(source_manifest, "acceptance") != expected_acceptance
-            or scalar(stopped_manifest, "status") != "replan_required"
             or items(stopped_manifest, "inherited_acceptance_digests")
             != expected_digests
             or items(stopped_manifest, "acceptance") != expected_acceptance
@@ -1267,10 +1271,11 @@ def validate_replanned_successor(
             f"replanned successor source acceptance mismatch: {expected_path}"
         )
     source_manifest = parse_manifest(source["content"])
-    if scalar(source_manifest, "status") != "replan_required":
-        raise RestructureError(
-            f"replanned successor source status mismatch: {expected_path}"
-        )
+    validate_canonical_stopped_manifest(
+        source_manifest,
+        f"replanned successor source {plan_id}",
+        expected_reason_codes=contract["reason_codes"],
+    )
     if items(source_manifest, "inherited_acceptance_digests") != expected_digests:
         raise RestructureError(
             f"replanned successor source lineage mismatch: {expected_path}"
@@ -1445,6 +1450,30 @@ def manifest_body_offset(text: str) -> int:
     return len(text)
 
 
+def project_lifecycle_fields(text: str, fields: set[str]) -> str:
+    body_offset = manifest_body_offset(text)
+    kept: list[str] = []
+    current: str | None = None
+    for raw in text[:body_offset].splitlines(keepends=True):
+        line = raw.rstrip()
+        if not line.strip():
+            kept.append(raw)
+            continue
+        if ":" in line and not line.startswith(" "):
+            key, rest = line.split(":", 1)
+            key = key.strip()
+            current = None if rest.strip() else key
+            if key not in fields:
+                kept.append(raw)
+            continue
+        if current and line.lstrip().startswith("- "):
+            if current not in fields:
+                kept.append(raw)
+            continue
+        kept.append(raw)
+    return "".join(kept) + text[body_offset:]
+
+
 def remove_manifest_fields(prefix: str, fields: set[str]) -> str:
     ranges: list[tuple[int, int]] = []
     for key, start, end in manifest_field_ranges(prefix):
@@ -1479,13 +1508,13 @@ def derive_stopped_source_content(text: str, reason_codes: list[str]) -> str:
     manifest = parse_manifest(text)
     status = scalar(manifest, "status")
     if status == "replan_required":
-        if "completion_deferred_reason" in manifest:
-            raise RestructureError(
-                "stopped source carries stale completion_deferred_reason"
-            )
-        if items(manifest, "replan_reason_codes") != reason_codes:
-            raise RestructureError("stopped source replan_reason_codes mismatch")
+        validate_canonical_stopped_manifest(
+            manifest,
+            "stopped source",
+            expected_reason_codes=reason_codes,
+        )
         return text
+    validate_reason_codes(reason_codes, "stopped source reason codes")
     if status not in {"in_progress", "deferred"}:
         raise RestructureError("dependent source must be active, deferred, or replan_required")
     status_ranges = [
@@ -1498,7 +1527,7 @@ def derive_stopped_source_content(text: str, reason_codes: list[str]) -> str:
     start, end = status_ranges[0]
     first_line = prefix[start:end].splitlines(keepends=True)[0]
     prefix = prefix[:start] + "status: replan_required\n" + prefix[start + len(first_line):]
-    prefix = remove_manifest_fields(
+    prefix = project_lifecycle_fields(
         prefix,
         {"completion_deferred_reason", "replan_reason_codes"},
     )
@@ -1521,6 +1550,11 @@ def derive_stopped_source_content(text: str, reason_codes: list[str]) -> str:
             )
     if text[body_offset:] != stopped[manifest_body_offset(stopped):]:
         raise RestructureError("dependent source stopping changed plan body bytes")
+    lifecycle = {"status", "completion_deferred_reason", "replan_reason_codes"}
+    if project_lifecycle_fields(text, lifecycle) != project_lifecycle_fields(
+        stopped, lifecycle
+    ):
+        raise RestructureError("dependent source stopping changed protected bytes")
     return stopped
 
 
@@ -2422,6 +2456,11 @@ def validate_single_source_spec(spec: dict[str, Any]) -> dict[str, Any]:
         raise RestructureError("reason_codes must be a non-empty unique bounded list")
     if items(manifest, "replan_reason_codes") != reason_codes:
         raise RestructureError("source replan_reason_codes mismatch")
+    validate_canonical_stopped_manifest(
+        manifest,
+        "source plan",
+        expected_reason_codes=reason_codes,
+    )
     contract_path = normalized_path(spec["contract_path"], CONTRACT_PATH_RE, "contract_path")
     archive_path = normalized_path(spec["archive_path"], ARCHIVE_PATH_RE, "archive_path")
     archive_match = ARCHIVE_PATH_RE.fullmatch(archive_path)
@@ -2600,6 +2639,31 @@ def validate_reason_codes(value: Any, label: str) -> list[str]:
     ):
         raise RestructureError(f"{label} must be a non-empty unique bounded list")
     return value
+
+
+def validate_canonical_stopped_manifest(
+    manifest: dict[str, str | list[str]],
+    label: str,
+    *,
+    expected_reason_codes: Any = None,
+) -> list[str]:
+    if scalar(manifest, "status") != "replan_required":
+        raise RestructureError(f"{label} must already be canonically stopped")
+    if "completion_deferred_reason" in manifest:
+        raise RestructureError(
+            f"{label} carries stale completion_deferred_reason"
+        )
+    reasons = validate_reason_codes(
+        manifest.get("replan_reason_codes"),
+        f"{label} replan_reason_codes",
+    )
+    if expected_reason_codes is not None:
+        validate_reason_codes(expected_reason_codes, f"{label} contract reason_codes")
+        if reasons != expected_reason_codes:
+            raise RestructureError(
+                f"{label} reason codes do not match the canonical source manifest"
+            )
+    return reasons
 
 
 def source_dependency_reaches(
@@ -4900,11 +4964,11 @@ def validate_lifecycle_body_transition(
     live_content: str,
     label: str,
 ) -> None:
-    baseline_projected = remove_manifest_fields(
+    baseline_projected = project_lifecycle_fields(
         baseline_content,
         {"status", "completion_deferred_reason", "replan_reason_codes"},
     )
-    live_projected = remove_manifest_fields(
+    live_projected = project_lifecycle_fields(
         live_content,
         {"status", "completion_deferred_reason", "replan_reason_codes"},
     )
@@ -4966,19 +5030,18 @@ def validate_lifecycle_evolution(
             f"{label} deferred projection changed without an activation record"
         )
     if live_status == "replan_required":
-        if "completion_deferred_reason" in live:
-            raise RestructureError(
-                f"{label} stopped lifecycle carries stale completion_deferred_reason"
-            )
-        validate_reason_codes(
-            items(live, "replan_reason_codes"),
-            f"{label} replan_reason_codes",
-        )
+        validate_canonical_stopped_manifest(live, label)
     elif (
         scalar(live, "completion_deferred_reason")
         or items(live, "replan_reason_codes")
     ):
         raise RestructureError(f"{label} carries stale stopped-lifecycle fields")
+    lifecycle_fields = {"status", "completion_deferred_reason", "replan_reason_codes"}
+    for field in sorted(set(baseline) | set(live)):
+        if field not in lifecycle_fields and baseline.get(field) != live.get(field):
+            raise RestructureError(
+                f"{label} changes protected manifest field: {field}"
+            )
     validate_lifecycle_body_transition(
         baseline_content,
         live_content,
@@ -5034,16 +5097,21 @@ def verify_rebind_records(
             if (
                 state["enforce_projection_semantics"]
                 and state["lifecycle"] in {"active", "checked", "backlog"}
-                and not (
+            ):
+                if (
                     scalar(live_manifest, "status") == "replan_required"
                     and path in legacy_stopped_sources
-                )
-            ):
-                validate_lifecycle_evolution(
-                    state["base_content"],
-                    state["live_content"],
-                    f"live successor lifecycle: {path}",
-                )
+                ):
+                    validate_canonical_stopped_manifest(
+                        live_manifest,
+                        f"legacy stopped successor {path}",
+                    )
+                else:
+                    validate_lifecycle_evolution(
+                        state["base_content"],
+                        state["live_content"],
+                        f"live successor lifecycle: {path}",
+                    )
             effective[path] = projection
             continue
         previous_content: str | None = None
@@ -5306,12 +5374,16 @@ def verify_schema_three_contract(
         assert match
         if source["id"] != match.group(1) or source["head"] != contract["source_head"]:
             raise RestructureError("schema-3 source identity mismatch")
-        if index == 0 and (
-            scalar(parse_manifest(source["original_content"]), "status")
-            != "replan_required"
-        ):
-            raise RestructureError(
-                "schema-3 first source must already be canonically stopped"
+        if index == 0:
+            validate_canonical_stopped_manifest(
+                parse_manifest(source["original_content"]),
+                "schema-3 first source",
+                expected_reason_codes=source["reason_codes"],
+            )
+        else:
+            validate_reason_codes(
+                source["reason_codes"],
+                f"schema-3 source {index} reason_codes",
             )
         if (
             sha256(source["original_content"].encode("utf-8"))
@@ -5745,6 +5817,11 @@ def verify_repository_contracts(
         source_manifest = parse_manifest(source["content"])
         if scalar(source_manifest, "status") != "replan_required":
             raise RestructureError(f"contract source status mismatch for {plan_id}")
+        validate_canonical_stopped_manifest(
+            source_manifest,
+            f"contract source {plan_id}",
+            expected_reason_codes=contract["reason_codes"],
+        )
         contract_digest = sha256(contract_bytes)
         contract_digests[contract_path] = contract_digest
         source_records = source["acceptance"]
