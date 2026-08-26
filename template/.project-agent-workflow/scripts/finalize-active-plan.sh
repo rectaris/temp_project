@@ -39,6 +39,75 @@ dst="$dst_dir/$base"
 python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-archive-target "$id" "$dst"
 mkdir -p "$dst_dir"
 python3 .project-agent-workflow/scripts/lint-plan-docs.py --copy-status-exclusive "$src" "$dst" checked
+python3 - "$src" "$dst" <<'PY'
+from pathlib import Path
+import os
+import sys
+import tempfile
+
+source, destination = sys.argv[1], sys.argv[2]
+new_entry = f"- {destination}"
+
+
+def rebind(text: str) -> str | None:
+    lines = text.splitlines(keepends=True)
+    field = None
+    changed = False
+    for index, raw in enumerate(lines):
+        line = raw.rstrip()
+        if line.startswith("## "):
+            break
+        if ":" in line and not line.startswith(" "):
+            field = line.split(":", 1)[0].strip()
+            continue
+        stripped = raw.strip()
+        if field != "context_files" or not stripped.startswith("- "):
+            continue
+        if stripped[2:].strip() != source:
+            continue
+        indent = raw[: len(raw) - len(raw.lstrip())]
+        ending = raw[len(raw.rstrip("\r\n")):]
+        lines[index] = f"{indent}{new_entry}{ending}"
+        changed = True
+    return "".join(lines) if changed else None
+
+
+def live_plans() -> list[Path]:
+    plans = []
+    index = Path("docs/plan/plan.md")
+    if index.is_file():
+        for row in index.read_text(encoding="utf-8").splitlines():
+            columns = row.split("\t")
+            if len(columns) == 3 and columns[1].startswith("docs/plan/active/"):
+                plans.append(Path(columns[1]))
+    backlog = Path("docs/plan/backlog")
+    if backlog.is_dir():
+        plans.extend(sorted(backlog.glob("**/[0-9][0-9][0-9]-*.md")))
+    return plans
+
+
+rewritten: list[tuple[Path, str]] = []
+try:
+    for plan in live_plans():
+        if str(plan) == source or not plan.is_file():
+            continue
+        original = plan.read_text(encoding="utf-8")
+        updated = rebind(original)
+        if updated is None:
+            continue
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{plan.name}.", suffix=".tmp", dir=plan.parent
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(updated)
+        os.replace(temporary, plan)
+        rewritten.append((plan, original))
+except BaseException:
+    for plan, original in rewritten:
+        plan.write_text(original, encoding="utf-8")
+    Path(destination).unlink(missing_ok=True)
+    raise
+PY
 rm "$src"
 python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$id"
 python3 .project-agent-workflow/scripts/lint-plan-docs.py --append-checked "$id" "$dst"

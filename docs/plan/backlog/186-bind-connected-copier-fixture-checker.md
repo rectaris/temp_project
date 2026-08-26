@@ -20,7 +20,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
-  - docs/plan/active/191-freeze-bounded-copier-fixture-validator.md
+  - docs/plan/replanned/2026/08/16-31/191-freeze-bounded-copier-fixture-validator.md
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
   - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
   - tests/test-copier-migration.py

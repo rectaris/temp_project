@@ -4879,12 +4879,10 @@ def execute(
         repository_state = verify_repository_contracts(
             legacy_stopped_sources=legacy_stopped_sources,
         )
-        apply_referrer_context_rebinds(state, repository_state)
+        apply_referrer_context_rebinds(state)
         operations, created_directories = build_transaction_operations(state)
         validate_prospective_plan_context_files(operations)
-        verify_no_surviving_archived_context_references(
-            state, operations, repository_state
-        )
+        verify_no_surviving_archived_context_references(state, operations)
         verify_prospective_repository(operations)
         payload = {
             "schema_version": JOURNAL_SCHEMA_VERSION,
@@ -5195,12 +5193,16 @@ def validate_plan_context_files(
         if entry in additional_paths or (ROOT / entry).is_file():
             continue
         active_match = PLAN_PATH_RE.fullmatch(entry)
-        if active_match is None or not archived_plan_locations(
+        if active_match is not None and archived_plan_locations(
             active_match.group(1), Path(entry).name
         ):
             raise RestructureError(
-                f"active plan {path} context file does not resolve: {entry}"
+                f"active plan {path} context file names the archived former active "
+                f"path: {entry}"
             )
+        raise RestructureError(
+            f"active plan {path} context file does not resolve: {entry}"
+        )
 
 
 def validate_prospective_plan_context_files(
@@ -5233,6 +5235,27 @@ def validate_active_plan_context_files() -> None:
         validate_plan_context_files(
             path, parse_manifest(target.read_text(encoding="utf-8"))
         )
+
+
+def validate_live_plan_archived_context_references() -> None:
+    """Reject every live plan entry that still names an archived former active path.
+
+    ``validate_active_plan_context_files`` reads only the plans listed in
+    ``docs/plan/plan.md``, so a backlog resident would keep such an entry until it
+    is promoted. Both the archiving restructuring transaction and
+    ``scripts/finalize-active-plan.sh`` rebind these entries as they archive, so a
+    surviving entry is unrepaired drift rather than a lifecycle window.
+    """
+    for _plan_id, path, manifest in live_plan_records():
+        for entry in items(manifest, "context_files"):
+            match = PLAN_PATH_RE.fullmatch(entry)
+            if match is None or (ROOT / entry).is_file():
+                continue
+            if archived_plan_locations(match.group(1), Path(entry).name):
+                raise RestructureError(
+                    f"live plan {path} context file names the archived former active "
+                    f"path: {entry}"
+                )
 
 
 def rewrite_context_file_entries(
@@ -5269,42 +5292,69 @@ def rewrite_context_file_entries(
     return prefix[:start] + "".join(rewritten_lines) + prefix[end:] + content[body_offset:]
 
 
-def referrer_context_rebind_protection(
-    contract_key: str,
-    repository_state: dict[str, Any],
-) -> bool:
-    live = repository_state["live_successors"].get(contract_key)
-    if live is None:
-        return False
-    if live.get("enforce_projection_semantics"):
-        return True
-    return any(
-        record["plan_path"] == contract_key
-        for record in repository_state["rebind_records"]
-    )
+def context_archive_relocation(entry: str) -> str | None:
+    """Return the one archive path that an entry's former active path now names.
+
+    An entry qualifies only when it is an active plan path, no file exists at that
+    path, and exactly one checked or replanned archive carries the same plan id and
+    file name. Anything else has no single unambiguous target and is left alone.
+    """
+    match = PLAN_PATH_RE.fullmatch(entry)
+    if match is None or (ROOT / entry).is_file():
+        return None
+    locations = archived_plan_locations(match.group(1), Path(entry).name)
+    return locations[0] if len(locations) == 1 else None
 
 
-def apply_referrer_context_rebinds(
-    state: dict[str, Any],
-    repository_state: dict[str, Any],
-) -> None:
+def project_context_archive_relocation(content: str) -> str:
+    """Rewrite context entries that name an archived plan's former active path.
+
+    Lifecycle verification compares a live plan against a baseline written before
+    the referenced plan was archived. Projecting both sides through this canonical
+    relocation makes a rebound entry and its unrebound baseline compare equal, so a
+    lifecycle-protected contract successor can be rebound in place. The relocation
+    keeps the same plan file as the referent, and every other manifest and body byte
+    stays under the original comparison.
+    """
+    body_offset = manifest_body_offset(content)
+    prefix = content[:body_offset]
+    ranges = [
+        (start, end)
+        for key, start, end in manifest_field_ranges(prefix)
+        if key == "context_files"
+    ]
+    if len(ranges) != 1:
+        return content
+    start, end = ranges[0]
+    projected: list[str] = []
+    for line in prefix[start:end].splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            target = context_archive_relocation(stripped[2:].strip())
+            if target is not None:
+                indent = line[: len(line) - len(line.lstrip())]
+                ending = line[len(line.rstrip("\r\n")) :]
+                projected.append(f"{indent}- {target}{ending}")
+                continue
+        projected.append(line)
+    return prefix[:start] + "".join(projected) + prefix[end:] + content[body_offset:]
+
+
+def apply_referrer_context_rebinds(state: dict[str, Any]) -> None:
     """Rebind every pre-existing live plan that names a path this transaction archives.
 
     The transaction archives active plans, so a context entry naming a former
-    active path would otherwise survive only because ``validate_plan_context_files``
-    tolerates an entry that resolves to an archive. Rewriting the referrer inside
-    the same transaction removes the need for that tolerance on this path.
+    active path would otherwise be left naming a path that no longer exists.
+    Rewriting the referrer inside the same transaction keeps the reference resolvable
+    without the archived-path exemption this repository no longer grants.
 
     A plan the specification already rebinds keeps its declared content, because its
     rebind record fixes the updated digest before this point. Plans the transaction
     creates are never rewritten; they declare their own context.
 
-    A lifecycle-protected contract successor is left alone and keeps relying on the
-    archived-path tolerance. Rewriting it would fail ``validate_lifecycle_evolution``,
-    which treats ``context_files`` as protected, and rejecting it would deadlock the
-    transaction: a schema-1 specification has no ``rebindings`` field at all, and
-    ``validate_rebinding_specs`` refuses a target that already resides in the backlog.
-    Closing that remaining case needs the rebinding channel those routes lack.
+    A lifecycle-protected contract successor is rewritten like any other referrer.
+    ``validate_lifecycle_evolution`` projects both compared sides through
+    ``project_context_archive_relocation``, so this rewrite changes no compared byte.
     """
     archived: dict[str, str] = state.get("archived_plans") or {}
     if not archived:
@@ -5321,13 +5371,6 @@ def apply_referrer_context_rebinds(
         }
         if not replacements:
             continue
-        contract_key = (
-            resident_path
-            if PLAN_PATH_RE.fullmatch(resident_path)
-            else f"docs/plan/active/{Path(resident_path).name}"
-        )
-        if referrer_context_rebind_protection(contract_key, repository_state):
-            continue
         original = (ROOT / resident_path).read_text(encoding="utf-8")
         updated_files.append(
             (
@@ -5343,7 +5386,6 @@ def apply_referrer_context_rebinds(
 def verify_no_surviving_archived_context_references(
     state: dict[str, Any],
     operations: list[dict[str, Any]],
-    repository_state: dict[str, Any],
 ) -> None:
     archived: dict[str, str] = state.get("archived_plans") or {}
     if not archived:
@@ -5361,13 +5403,6 @@ def verify_no_surviving_archived_context_references(
             parsed = parse_manifest(content)
         else:
             parsed = manifest
-        contract_key = (
-            resident_path
-            if PLAN_PATH_RE.fullmatch(resident_path)
-            else f"docs/plan/active/{Path(resident_path).name}"
-        )
-        if referrer_context_rebind_protection(contract_key, repository_state):
-            continue
         for entry in items(parsed, "context_files"):
             if entry in archived:
                 raise RestructureError(
@@ -5617,6 +5652,8 @@ def validate_lifecycle_evolution(
     live_content: str,
     label: str,
 ) -> None:
+    baseline_content = project_context_archive_relocation(baseline_content)
+    live_content = project_context_archive_relocation(live_content)
     baseline = parse_manifest(baseline_content)
     live = parse_manifest(live_content)
     baseline_status = scalar(baseline, "status")
@@ -5735,7 +5772,8 @@ def verify_rebind_records(
                 raise RestructureError(f"{label} owning contract mismatch")
             if (
                 previous_content is not None
-                and record["original_content"] != previous_content
+                and project_context_archive_relocation(record["original_content"])
+                != project_context_archive_relocation(previous_content)
             ):
                 raise RestructureError(f"{label} contains a chain gap or fork")
             before = parse_manifest(record["original_content"])
@@ -6342,6 +6380,7 @@ def verify_repository_contracts(
     validate_repository_active_predecessors()
     validate_repository_plan_id_reservations()
     validate_active_plan_context_files()
+    validate_live_plan_archived_context_references()
     if not REPLANNED_INDEX.is_file():
         raise RestructureError("missing docs/plan/replanned.md")
     rows = replanned_rows(REPLANNED_INDEX.read_text(encoding="utf-8"))

@@ -20,8 +20,8 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
   - docs/plan/active/165-enforce-validation-witness-maps.md
-  - docs/plan/active/164-bind-replan-contract-validation-baseline.md
-  - docs/plan/active/191-freeze-bounded-copier-fixture-validator.md
+  - docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
+  - docs/plan/replanned/2026/08/16-31/191-freeze-bounded-copier-fixture-validator.md
   - docs/plan/active/186-bind-connected-copier-fixture-checker.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
   - tests/validation_tools/plan.py

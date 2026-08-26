@@ -197,11 +197,46 @@ class PlanRestructureTest(unittest.TestCase):
         )
         return "docs/plan/active/077-archived.md"
 
-    def test_a_deferred_plan_may_await_activation_rebinding(self) -> None:
+    def test_a_live_plan_may_not_name_an_archived_former_active_path(self) -> None:
         pending = self.archive_context_target()
         self.set_context_files(self.publisher_plan(), [pending])
         verified = self.run_verify()
-        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn(
+            "active plan docs/plan/active/190-migrate-live-plan-contracts.md context "
+            f"file names the archived former active path: {pending}",
+            verified.stderr,
+        )
+
+    def test_a_backlog_resident_may_not_name_an_archived_former_active_path(
+        self,
+    ) -> None:
+        pending = self.archive_context_target()
+        backlog = self.repo / "docs/plan/backlog/181-deferred-referrer.md"
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        backlog.write_text(
+            "# Deferred referrer\n\n"
+            "status: backlog\n"
+            "write_scope:\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "context_files:\n"
+            f"  - {pending}\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn(
+            "live plan docs/plan/backlog/181-deferred-referrer.md context file names "
+            f"the archived former active path: {pending}",
+            verified.stderr,
+        )
+        backlog.write_text(
+            backlog.read_text(encoding="utf-8").replace(
+                pending, "docs/plan/checked/2026/08/16-31/077-archived.md", 1
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
 
     def test_a_transaction_may_archive_a_referenced_context_plan(self) -> None:
         self.set_context_files(self.publisher_plan(), [self.source_path])
@@ -243,79 +278,181 @@ class PlanRestructureTest(unittest.TestCase):
             backlog.read_text(encoding="utf-8"),
         )
 
-    def test_referrer_context_rebind_protection_tracks_lifecycle_protection(
+    def test_finalization_rebinds_every_live_referrer_context_entry(self) -> None:
+        finalizer = self.repo / "scripts/finalize-active-plan.sh"
+        shutil.copy2(ROOT / "scripts/finalize-active-plan.sh", finalizer)
+        source = "docs/plan/active/077-finalized.md"
+        (self.repo / source).write_text(
+            "# Finalized\n\n"
+            "status: ready_to_archive\n"
+            "checked_summary_ja: 参照つきの計画を完了する。\n"
+            "write_scope:\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "context_files:\n"
+            "  - none\n"
+            "\n"
+            "## Validation Notes\n"
+            "\n"
+            "- finalization referrer rebinding checked.\n",
+            encoding="utf-8",
+        )
+        backlog = self.repo / "docs/plan/backlog/181-deferred-referrer.md"
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        backlog.write_text(
+            "# Deferred referrer\n\n"
+            "status: backlog\n"
+            "write_scope:\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "context_files:\n"
+            f"  - {source}\n"
+            "predecessor_plans:\n"
+            f"  - {source}\n",
+            encoding="utf-8",
+        )
+        loose = self.repo / "docs/plan/backlog/182-loose-referrer.md"
+        loose.write_text(
+            "# Loose referrer\n\n"
+            "status: backlog\n"
+            "write_scope:\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "context_files:\n"
+            f"  -   {source}\n",
+            encoding="utf-8",
+        )
+        self.set_context_files(self.publisher_plan(), [source])
+        index = self.repo / "docs/plan/plan.md"
+        index.write_text(
+            index.read_text(encoding="utf-8") + f"077\t{source}\tready_to_archive\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+        finalized = subprocess.run(
+            ["sh", "scripts/finalize-active-plan.sh", source],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(finalized.returncode, 0, finalized.stderr)
+        archive = finalized.stdout.strip()
+        self.assertTrue((self.repo / archive).is_file(), archive)
+        self.assertIn(
+            f"context_files:\n  - {archive}\n",
+            self.publisher_plan().read_text(encoding="utf-8"),
+        )
+        backlog_text = backlog.read_text(encoding="utf-8")
+        self.assertIn(f"context_files:\n  - {archive}\n", backlog_text)
+        self.assertIn(f"predecessor_plans:\n  - {source}\n", backlog_text)
+        self.assertIn(
+            f"context_files:\n  - {archive}\n",
+            loose.read_text(encoding="utf-8"),
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_context_relocation_projects_only_unambiguous_archived_entries(
         self,
     ) -> None:
-        module = self.load_restructure_module("referrer_protection_module")
-        key = "docs/plan/active/190-migrate-live-plan-contracts.md"
-        for live_successors, rebind_records, expected in (
-            ({}, [], False),
-            ({key: {"enforce_projection_semantics": False}}, [], False),
-            ({key: {"enforce_projection_semantics": True}}, [], True),
-            (
-                {key: {"enforce_projection_semantics": False}},
-                [{"plan_path": key}],
-                True,
-            ),
-            (
-                {key: {"enforce_projection_semantics": False}},
-                [{"plan_path": "docs/plan/active/001-source.md"}],
-                False,
-            ),
-        ):
-            self.assertEqual(
-                module.referrer_context_rebind_protection(
-                    key,
-                    {
-                        "live_successors": live_successors,
-                        "rebind_records": rebind_records,
-                    },
-                ),
-                expected,
-                (live_successors, rebind_records),
-            )
+        module = self.load_restructure_module("context_relocation_module")
+        pending = self.archive_context_target()
+        checked = "docs/plan/checked/2026/08/16-31/077-archived.md"
+        content = (
+            "# Referrer\n\n"
+            "status: deferred\n"
+            "context_files:\n"
+            f"  - {pending}\n"
+            "  - docs/agent/spec-index.yaml\n"
+            f"  - {self.source_path}\n"
+            "  - docs/plan/active/198-never-archived.md\n"
+            "predecessor_plans:\n"
+            f"  - {pending}\n"
+            "\n"
+            "## Body\n"
+            "\n"
+            f"- {pending}\n"
+        )
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            projected = module.project_context_archive_relocation(content)
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(
+            projected,
+            content.replace(f"context_files:\n  - {pending}\n", f"context_files:\n  - {checked}\n", 1),
+        )
 
-    def test_a_protected_or_declared_referrer_keeps_its_declared_context(self) -> None:
+    def test_a_protected_referrer_is_rebound_and_stays_lifecycle_comparable(
+        self,
+    ) -> None:
         self.set_context_files(self.publisher_plan(), [self.source_path])
         module = self.load_restructure_module("protected_referrer_module")
         publisher = "docs/plan/active/190-migrate-live-plan-contracts.md"
         archive = str(self.spec["archive_path"])
-        protected = {
-            "live_successors": {publisher: {"enforce_projection_semantics": True}},
-            "rebind_records": [],
-        }
-        unprotected = {"live_successors": {}, "rebind_records": []}
-        untouched = {"archived_plans": {self.source_path: archive}, "updated_files": []}
-        module.apply_referrer_context_rebinds(untouched, protected)
-        self.assertEqual(untouched["updated_files"], [])
-        module.verify_no_surviving_archived_context_references(
-            {"archived_plans": {self.source_path: archive}}, [], protected
+        original = (self.repo / publisher).read_text(encoding="utf-8")
+        state = {"archived_plans": {self.source_path: archive}, "updated_files": []}
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            module.apply_referrer_context_rebinds(state)
+        finally:
+            os.chdir(old_cwd)
+        rebound = original.replace(
+            f"context_files:\n  - {self.source_path}\n",
+            f"context_files:\n  - {archive}\n",
+            1,
         )
-        declared_text = (self.repo / publisher).read_text(encoding="utf-8")
+        self.assertEqual(state["updated_files"], [(publisher, original, rebound)])
         declared = {
             "archived_plans": {self.source_path: archive},
-            "updated_files": [(publisher, declared_text, declared_text)],
+            "updated_files": [(publisher, original, original)],
         }
-        module.apply_referrer_context_rebinds(declared, unprotected)
-        self.assertEqual(
-            declared["updated_files"], [(publisher, declared_text, declared_text)]
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            module.apply_referrer_context_rebinds(declared)
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(declared["updated_files"], [(publisher, original, original)])
+
+    def test_a_rebound_referrer_passes_lifecycle_comparison(self) -> None:
+        module = self.load_restructure_module("rebound_lifecycle_module")
+        pending = self.archive_context_target()
+        checked = "docs/plan/checked/2026/08/16-31/077-archived.md"
+        baseline = (
+            "# Successor\n\n"
+            "status: deferred\n"
+            "completion_deferred_reason: predecessor must be checked\n"
+            "context_files:\n"
+            f"  - {pending}\n"
         )
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            module.validate_lifecycle_evolution(
+                baseline, baseline.replace(pending, checked, 1), "probe"
+            )
+            with self.assertRaises(module.RestructureError) as raised:
+                module.validate_lifecycle_evolution(
+                    baseline,
+                    baseline.replace(pending, "docs/agent/spec-index.yaml", 1),
+                    "probe",
+                )
+        finally:
+            os.chdir(old_cwd)
+        self.assertIn("deferred projection changed", str(raised.exception))
 
     def test_a_surviving_archived_context_reference_is_rejected(self) -> None:
         self.set_context_files(self.publisher_plan(), [self.source_path])
         module = self.load_restructure_module("surviving_reference_module")
         publisher = "docs/plan/active/190-migrate-live-plan-contracts.md"
         archived = {self.source_path: str(self.spec["archive_path"])}
-        unprotected = {"live_successors": {}, "rebind_records": []}
         with self.assertRaises(module.RestructureError) as raised:
             module.verify_no_surviving_archived_context_references(
-                {"archived_plans": archived}, [], unprotected
+                {"archived_plans": archived}, []
             )
         self.assertIn("would still name the archived plan path", str(raised.exception))
         module.verify_no_surviving_archived_context_references(
             {"archived_plans": archived},
             [{"path": publisher, "target_content": None}],
-            unprotected,
         )
 
     def test_created_plan_context_is_enforced_before_any_mutation(self) -> None:
@@ -1795,10 +1932,28 @@ class PlanRestructureTest(unittest.TestCase):
             f"{first['id']}\t{checked_relative}\n",
             encoding="utf-8",
         )
+        self.rebind_referrer_context(str(integration["path"]), str(first["path"]), checked_relative)
         self.assertEqual(self.run_verify().returncode, 0)
         git(self.repo, "add", "docs/plan")
         git(self.repo, "commit", "-qm", "check predecessor")
         return checked_relative
+
+    def rebind_referrer_context(
+        self,
+        referrer_path: str,
+        active_path: str,
+        checked_path: str,
+    ) -> None:
+        """Reproduce the referrer rebinding that finalization performs on archival."""
+        referrer = self.repo / referrer_path
+        original = referrer.read_text(encoding="utf-8")
+        rebound = original.replace(
+            f"context_files:\n  - {active_path}\n",
+            f"context_files:\n  - {checked_path}\n",
+            1,
+        )
+        if rebound != original:
+            referrer.write_text(rebound, encoding="utf-8")
 
     def defer_integration_behind(self, first, integration, *, context: bool) -> None:
         content = str(integration["content"]).replace(
@@ -1819,11 +1974,18 @@ class PlanRestructureTest(unittest.TestCase):
             )
         integration["content"] = content
 
-    def test_activation_rebinds_context_references_to_the_checked_archive(self) -> None:
+    def test_finalization_rebinds_context_before_activation_resolves_predecessors(
+        self,
+    ) -> None:
         first = self.spec["successors"][0]  # type: ignore[index]
         integration = self.spec["integration"]  # type: ignore[assignment]
         self.defer_integration_behind(first, integration, context=True)
         checked_relative = self.prepare_checked_predecessor(first, integration)
+        deferred_text = (self.repo / str(integration["path"])).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"context_files:\n  - {checked_relative}\n", deferred_text)
+        self.assertIn(f"predecessor_plans:\n  - {first['path']}\n", deferred_text)
         module = self.load_restructure_module("context_activation_module")
         activation = self.activation_spec(
             module=module,
@@ -1832,7 +1994,6 @@ class PlanRestructureTest(unittest.TestCase):
             checked_path=checked_relative,
             promoted_path=None,
             deferred_reason="predecessor must be checked",
-            rebind_context=True,
         )
         activated = self.run_spec_data(activation, "context-activation.json")
         self.assertEqual(activated.returncode, 0, activated.stderr)
@@ -1896,13 +2057,9 @@ class PlanRestructureTest(unittest.TestCase):
         self.defer_integration_behind(first, integration, context=True)
         checked_relative = self.prepare_checked_predecessor(first, integration)
         module = self.load_restructure_module("promotion_guard_module")
-        original = (self.repo / str(integration["path"])).read_text(encoding="utf-8")
-        rebound = original.replace(
-            f"context_files:\n  - {first['path']}\n",
-            f"context_files:\n  - {checked_relative}\n",
-            1,
-        )
-        before = module.parse_manifest(original)
+        rebound = (self.repo / str(integration["path"])).read_text(encoding="utf-8")
+        self.assertIn(f"context_files:\n  - {checked_relative}\n", rebound)
+        before = module.parse_manifest(rebound)
         old_cwd = Path.cwd()
         try:
             os.chdir(self.repo)
@@ -1910,7 +2067,11 @@ class PlanRestructureTest(unittest.TestCase):
                 before, module.parse_manifest(rebound), None, "probe"
             )
             drifted = {
-                "stale active reference": original,
+                "stale active reference": rebound.replace(
+                    f"context_files:\n  - {checked_relative}\n",
+                    f"context_files:\n  - {first['path']}\n",
+                    1,
+                ),
                 "added context entry": rebound.replace(
                     f"context_files:\n  - {checked_relative}\n",
                     f"context_files:\n  - {checked_relative}\n"
@@ -3533,7 +3694,6 @@ class PlanRestructureTest(unittest.TestCase):
         checked_path: str,
         promoted_path: str | None,
         deferred_reason: str = "integration successor must be checked",
-        rebind_context: bool = False,
     ) -> dict[str, object]:
         original = (self.repo / target_path).read_text(encoding="utf-8")
         reason_line = (
@@ -3567,21 +3727,6 @@ class PlanRestructureTest(unittest.TestCase):
             .replace(reason_line, "", 1)
             .replace(successor_path, checked_path, 1)
         )
-        if rebind_context:
-            replacements.append(
-                {
-                    "scope": "manifest",
-                    "field": "context_files",
-                    "old": f"  - {successor_path}\n",
-                    "new": f"  - {checked_path}\n",
-                    "count": 1,
-                }
-            )
-            updated = updated.replace(
-                f"context_files:\n  - {successor_path}\n",
-                f"context_files:\n  - {checked_path}\n",
-                1,
-            )
         if promoted_path:
             replacements.extend(
                 [

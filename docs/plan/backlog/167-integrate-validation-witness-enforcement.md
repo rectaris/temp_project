@@ -25,7 +25,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
-  - docs/plan/active/164-bind-replan-contract-validation-baseline.md
+  - docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
   - docs/plan/active/165-enforce-validation-witness-maps.md
   - docs/plan/active/166-unify-copier-update-source-inventory.md
   - docs/plan/checked/2026/08/16-31/131-require-confirmed-failure-diagnosis.md
