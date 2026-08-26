@@ -1,6 +1,6 @@
 # Reconstruct the shell parser lineage
 
-status: in_progress
+status: backlog
 implementation_tier: 2
 primary_invariant: the reconstruction transaction preserves source acceptance, the committed non-authoritative rejected-candidate blobs, downstream implementation authority, and every active predecessor edge while assigning each shell and Copier semantic boundary to exactly one successor plan
 replan_sources:
