@@ -1,6 +1,6 @@
 # Close the archived context tolerance repository wide
 
-status: backlog
+status: in_progress
 implementation_tier: 2
 primary_invariant: no live plan names an archived plan's former active path in context_files, whichever command performed the archival
 task_types:
@@ -32,7 +32,7 @@ required_specs:
 acceptance:
   - Rebind referrer context for the ordinary active-to-checked finalization path and for lifecycle-protected contract successors, then reject any surviving archived-path context entry repository wide.
 predecessor_plans:
-  - docs/plan/active/221-rebind-referrer-context-on-archive.md
+  - docs/plan/checked/2026/08/16-31/221-rebind-referrer-context-on-archive.md
 
 ## Decisions
 
