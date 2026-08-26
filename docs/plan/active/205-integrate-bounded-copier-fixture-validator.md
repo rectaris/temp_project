@@ -41,7 +41,7 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/199-admit-decomposed-shell-validation.md
   - docs/plan/checked/2026/08/16-31/202-freeze-bounded-shell-lexical-projection.md
-  - docs/plan/active/203-derive-bounded-shell-function-table.md
+  - docs/plan/checked/2026/08/16-31/203-derive-bounded-shell-function-table.md
   - docs/plan/active/204-derive-bounded-shell-execution-graph.md
   - docs/plan/replanned/2026/08/16-31/197-freeze-bounded-shell-structure-parser.md
   - docs/plan/replanned/2026/08/16-31/198-integrate-bounded-copier-fixture-validator.md
