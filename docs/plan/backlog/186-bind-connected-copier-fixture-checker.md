@@ -1,7 +1,6 @@
 # Bind the connected Copier fixture checker
 
-status: deferred
-completion_deferred_reason: Plan 185 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: backlog
 primary_invariant: the focused checker rejects removal, duplication, redefinition, or bypass of every committed fixture operation needed to witness the unchanged Plan 183 acceptance
 task_types:
   - template_workflow

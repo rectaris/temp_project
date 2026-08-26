@@ -1,7 +1,6 @@
 # Verify Plan 178 successor acceptance
 
-status: deferred
-completion_deferred_reason: Plan 187 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: backlog
 primary_invariant: the checked wiring and bounded fixture successors jointly satisfy the unchanged Plan 178 acceptance before Plan 179 consumes the genuine transition
 task_types:
   - planning_docs

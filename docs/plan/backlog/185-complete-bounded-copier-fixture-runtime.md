@@ -1,7 +1,6 @@
 # Complete the bounded Copier fixture runtime
 
-status: deferred
-completion_deferred_reason: Plan 205 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: backlog
 primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup without relying on unaccepted checker changes
 task_types:
   - template_workflow

@@ -1,7 +1,6 @@
 # Integrate validation-witness migration provenance
 
-status: deferred
-completion_deferred_reason: Plan 184 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: backlog
 primary_invariant: the accepted guardian protocol, policy, source inventory, and genuine Copier transition jointly prove the Plan 163 migration boundary before downstream witness enforcement begins
 task_types:
   - planning_docs

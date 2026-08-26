@@ -1,7 +1,6 @@
 # Freeze the bounded shell lexical projection
 
-status: deferred
-completion_deferred_reason: Plan 223 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 implementation_tier: 2
 primary_invariant: supplied shell bytes project into deterministic lexical records that expose every executable region and reject every ambiguous or unsupported construct before any function-table or execution rule runs
 reserved_by: 223
@@ -44,7 +43,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:f208a240abe31f5d39ee3d0cef5e33a8e3c299ead17f5a8876ab21246e0c6571","stage":"focused","witness":"python3 tests/test-shell-lexical.py"}
 predecessor_plans:
-  - docs/plan/active/223-reconstruct-backlog-resident-shell-lineage.md
+  - docs/plan/checked/2026/08/16-31/223-reconstruct-backlog-resident-shell-lineage.md
 checked_summary_ja: 供給されたshell byteを引用、comment、here-documentを識別する決定的な字句recordへ射影する。
 
 ## Decisions
