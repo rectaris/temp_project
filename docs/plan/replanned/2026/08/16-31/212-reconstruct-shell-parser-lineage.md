@@ -1,28 +1,7 @@
 # Reconstruct the shell parser lineage
 
-status: replan_required
+status: replanned
 implementation_tier: 2
-primary_invariant: the reconstruction transaction preserves source acceptance, the committed non-authoritative rejected-candidate blobs, downstream implementation authority, and every active predecessor edge while assigning each shell and Copier semantic boundary to exactly one successor plan
-replan_sources:
-  - docs/plan/active/200-enable-coupled-lineage-reconstruction.md
-  - docs/plan/active/201-reconstruct-shell-parser-lineage.md
-replan_contract: docs/plan/replanned/contracts/200-enable-coupled-lineage-reconstruction.json
-integration_gates:
-  - combined successors must satisfy every source acceptance item
-  - activate only after Plan 211 is checked and its exact checked archive replaces the active predecessor
-  - use only the coupled reconstruction capability accepted by checked Plan 211
-  - verify the decomposed validation commands admitted by checked Plan 199 before building the coupled specification
-  - keep the blobs for scripts/project_workflow/copier_fixture.py and tests/test-copier-fixture.py byte-identical to commit 3ff2309dc85b4ebbb31904acae1949e12654fa88 and never use them as acceptance authority
-  - preserve the exact Plan 191 acceptance text and digest in every mapped successor and the final integration plan
-  - preserve the exact Plan 183 acceptance text, write scopes, and downstream authority while rebinding Plans 185 and 186
-  - before Plans 185, 186, or 166 become in_progress, replace every active Plan 202 through 205 predecessor or context reference with that plan's exact checked archive and append the exact activation rebind to the checked overlay
-successor_plans:
-  - docs/plan/active/211-verify-coupled-lineage-acceptance.md
-  - docs/plan/active/212-reconstruct-shell-parser-lineage.md
-inherited_acceptance_digests:
-  - sha256:b3051fadc391a911379a6aeea9908d350b1320b725c68957355e41c255d4db6d
-integration_source_ids:
-  - 201
 reserved_plan_ids:
   - 202
   - 203
@@ -80,8 +59,16 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:b3051fadc391a911379a6aeea9908d350b1320b725c68957355e41c255d4db6d","stage":"focused","witness":"python3 scripts/restructure-plan.py --verify"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/211-verify-coupled-lineage-acceptance.md
-replan_reason_codes:
-  - spec_drift
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/212-reconstruct-shell-parser-lineage.md
+replan_contract: docs/plan/replanned/contracts/212-reconstruct-shell-parser-lineage.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/223-reconstruct-backlog-resident-shell-lineage.md
+inherited_acceptance_digests:
+  - sha256:b3051fadc391a911379a6aeea9908d350b1320b725c68957355e41c255d4db6d
 checked_summary_ja: 停止したshell parser lineageを字句、関数表、実行graph、Copier validatorの独立planへ原子的に再構築する。
 
 ## Decisions
