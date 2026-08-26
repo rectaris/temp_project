@@ -163,3 +163,4 @@ id	path
 220	docs/plan/checked/2026/08/16-31/220-resolve-active-plan-context-references.md
 210	docs/plan/checked/2026/08/16-31/210-reconstruct-coupled-capability-lineage.md
 211	docs/plan/checked/2026/08/16-31/211-verify-coupled-lineage-acceptance.md
+221	docs/plan/checked/2026/08/16-31/221-rebind-referrer-context-on-archive.md

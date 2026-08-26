@@ -1,6 +1,7 @@
 # Rebind referrer context on archive
 
-status: in_progress
+status: checked
+checked_summary_ja: restructuring transactionがplanをarchiveする際、その旧active pathをcontext_filesに持つ既存のlive planを同一transaction内でarchive pathへ再束縛し、未保護の参照が残る場合はtransactionを拒否する。lifecycle保護されたcontract successorは既存の許容規則に残しPlan 222へ繰り越す。
 implementation_tier: 2
 primary_invariant: a restructuring transaction that archives a plan leaves no unprotected pre-existing live plan naming that plan's former active path in context_files
 task_types:
@@ -56,6 +57,8 @@ predecessor_plans: []
 - [x] Add transaction tests covering protected and unprotected referring plans.
 - [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
 - [x] Run the authoritative suite once, then archive and commit this plan.
+
+## Validation Notes
 
 - `python3 tests/test-plan-restructure.py` passed with 137 tests, including the four new referrer-rebinding tests and the strengthened archive-referrer test.
 - `python3 scripts/restructure-plan.py --verify`, `git diff --check`, and `diff -q` between the root and generated engine copies all passed.
