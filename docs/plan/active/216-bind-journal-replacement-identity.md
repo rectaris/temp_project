@@ -1,7 +1,6 @@
 # Bind journal replacement identity
 
-status: deferred
-completion_deferred_reason: Plan 215 must be checked and its exact checked archive must replace both the active predecessor and the active context reference before implementation.
+status: in_progress
 implementation_tier: 2
 primary_invariant: recovery accepts a replacement only when its content, target mode, and transaction-created file identity match the journaled operation at every apply, rollback, roll-forward, and completion boundary
 replan_sources:
@@ -45,7 +44,7 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/209-enable-direct-active-source-reconstruction.md
   - docs/plan/replanned/2026/08/16-31/208-bind-journal-replacement-identity.md
-  - docs/plan/active/215-enforce-canonical-lifecycle-verification.md
+  - docs/plan/checked/2026/08/16-31/215-enforce-canonical-lifecycle-verification.md
 required_specs:
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -69,7 +68,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:497235095714aaf76aa07e63f8c77582f7c0ad51c815a88836b01c99a1417383","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
-  - docs/plan/active/215-enforce-canonical-lifecycle-verification.md
+  - docs/plan/checked/2026/08/16-31/215-enforce-canonical-lifecycle-verification.md
 checked_summary_ja: journal replacementのtarget modeとtransaction生成file identityをrecoveryの全段階へ拘束する。
 
 ## Decisions
