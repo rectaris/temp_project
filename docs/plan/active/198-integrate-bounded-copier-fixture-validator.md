@@ -1,6 +1,7 @@
 # Integrate the bounded Copier fixture validator
 
-status: backlog
+status: deferred
+completion_deferred_reason: Plan 197 must be checked and its exact checked archive path must replace the active predecessor before implementation.
 primary_invariant: the checked shell structure parser and Copier operation rules reject every missing, reordered, duplicated, unreachable, or alternate-path bounded fixture operation through the exact check CLI
 replan_source: docs/plan/active/191-freeze-bounded-copier-fixture-validator.md
 replan_contract: docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json

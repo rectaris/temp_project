@@ -1,6 +1,7 @@
 # Enforce validation witness maps before execution
 
-status: backlog
+status: deferred
+completion_deferred_reason: Plans 190 and 179 must be checked and their exact checked archive paths must replace the active predecessors before implementation.
 primary_invariant: plan command validation fails closed unless acceptance coverage, lifecycle provenance, authoritative command identity, and every static context path identity are proven
 task_types:
   - planning_docs

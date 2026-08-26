@@ -1,6 +1,7 @@
 # Verify Plan 183 successor acceptance
 
-status: backlog
+status: deferred
+completion_deferred_reason: Plans 185 and 186 must be checked and their exact checked archive paths must replace the active predecessors before implementation.
 primary_invariant: checked Plan 182 and the checked runtime and checker replacements jointly satisfy the unchanged Plan 183 acceptance before Plan 184 performs its own verification
 task_types:
   - planning_docs
