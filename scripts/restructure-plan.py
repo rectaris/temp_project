@@ -44,6 +44,33 @@ REASON_CODES = {
     "candidate_correction_budget_exhausted",
     "parent_remediation_budget_exhausted",
 }
+SOURCE_KINDS = {"contract_successor", "direct_active"}
+DIRECT_ACTIVE_LINEAGE_FIELDS = (
+    "replan_source",
+    "replan_sources",
+    "replan_contract",
+    "inherited_acceptance_digests",
+    "successor_plans",
+    "integration_source_ids",
+)
+SCHEMA_THREE_SOURCE_FIELDS = {
+    "id",
+    "path",
+    "head",
+    "original_plan_digest",
+    "original_content",
+    "stopped_plan_digest",
+    "stopped_content",
+    "acceptance",
+    "acceptance_digests",
+    "acceptance_text_by_digest",
+    "reason_codes",
+    "archive_path",
+}
+SCHEMA_THREE_CONTRACT_SOURCE_FIELDS = {
+    "source_contract_path",
+    "source_contract_digest",
+}
 PLAN_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md")
 ARCHIVE_PATH_RE = re.compile(
     r"docs/plan/replanned/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/([0-9]{3}-[a-z0-9][a-z0-9-]*\.md)"
@@ -2571,6 +2598,39 @@ def source_dependency_reaches(
     return False
 
 
+def validate_direct_active_source(
+    *,
+    label: str,
+    path: str,
+    plan_id: str,
+    manifest: dict[str, str | list[str]],
+    rows: list[tuple[str, str, str]],
+    repository_state: dict[str, Any],
+) -> None:
+    if (
+        len([row for row in rows if row[1] == path]) != 1
+        or len([row for row in rows if row[0] == plan_id]) != 1
+    ):
+        raise RestructureError(f"{label} must appear exactly once in the active index")
+    if path in repository_state["live_successors"]:
+        raise RestructureError(
+            f"{label} is already claimed by a verified durable contract"
+        )
+    if (
+        checked_paths_for_successor(plan_id, path)
+        or backlog_paths_for_successor(plan_id, path)
+        or replanned_records_for_id(plan_id, path)
+    ):
+        raise RestructureError(f"{label} resolves to more than one lifecycle location")
+    claimed = [
+        field for field in DIRECT_ACTIVE_LINEAGE_FIELDS if field in manifest
+    ]
+    if claimed:
+        raise RestructureError(
+            f"{label} carries replan lineage field: {claimed[0]}"
+        )
+
+
 def current_active_records() -> tuple[
     str,
     list[tuple[str, str, str]],
@@ -3182,6 +3242,7 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
             raw_source,
             {
                 "path",
+                "source_kind",
                 "original_plan_digest",
                 "stopped_plan_digest",
                 "acceptance",
@@ -3190,6 +3251,11 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
             },
             f"sources[{index}]",
         )
+        source_kind = source["source_kind"]
+        if not isinstance(source_kind, str) or source_kind not in SOURCE_KINDS:
+            raise RestructureError(
+                f"sources[{index}].source_kind must be contract_successor or direct_active"
+            )
         path = normalized_path(
             source["path"],
             PLAN_PATH_RE,
@@ -3217,10 +3283,25 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 f"sources[{index}] does not depend on an earlier coupled source"
             )
         live = repository_state["live_successors"].get(path)
-        if live is None or live["lifecycle"] != "active":
-            raise RestructureError(
-                f"sources[{index}] is not an exact live contract successor"
+        if source_kind == "contract_successor":
+            if live is None or live["lifecycle"] != "active":
+                raise RestructureError(
+                    f"sources[{index}] is not an exact live contract successor"
+                )
+            source_lineage = {
+                "source_contract_path": live["contract_path"],
+                "source_contract_digest": live["contract_digest"],
+            }
+        else:
+            validate_direct_active_source(
+                label=f"sources[{index}]",
+                path=path,
+                plan_id=source_id,
+                manifest=manifest,
+                rows=rows,
+                repository_state=repository_state,
             )
+            source_lineage = {}
         content = read_regular_file(ROOT / path, path).decode("utf-8")
         original_digest = sha256(content.encode("utf-8"))
         if (
@@ -3256,6 +3337,7 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 "id": source_id,
                 "path": path,
                 "head": source_head,
+                "source_kind": source_kind,
                 "original_plan_digest": original_digest,
                 "original_content": content,
                 "stopped_plan_digest": stopped_digest,
@@ -3269,8 +3351,7 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 },
                 "reason_codes": reasons,
                 "archive_path": archive_path,
-                "source_contract_path": live["contract_path"],
-                "source_contract_digest": live["contract_digest"],
+                **source_lineage,
             }
         )
     contract_path = normalized_path(
@@ -3434,7 +3515,11 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
                     parse_manifest(source["original_content"])
                 ),
             }
-            | contract_reference_values(source["source_contract_path"])
+            | (
+                contract_reference_values(source["source_contract_path"])
+                if "source_contract_path" in source
+                else set()
+            )
         )
     }
     authorized_new_references = {
@@ -5137,6 +5222,7 @@ def verify_schema_three_contract(
     rebind_record_digests: set[str],
     live_successors: dict[str, dict[str, Any]],
     contract_digests: dict[str, str],
+    direct_active_sources: dict[str, str],
 ) -> None:
     exact_object(
         contract,
@@ -5172,24 +5258,25 @@ def verify_schema_three_contract(
     source_ids: list[str] = []
     expected_rows: list[tuple[str, str, str]] = []
     for index, raw_source in enumerate(sources):
+        if not isinstance(raw_source, dict):
+            raise RestructureError(f"schema-3 source {index} is not an object")
+        if "source_kind" in raw_source:
+            source_kind = raw_source["source_kind"]
+            if not isinstance(source_kind, str) or source_kind not in SOURCE_KINDS:
+                raise RestructureError(
+                    f"schema-3 source {index} declares an unknown source kind"
+                )
+            source_fields = SCHEMA_THREE_SOURCE_FIELDS | {"source_kind"}
+            if source_kind == "contract_successor":
+                source_fields = source_fields | SCHEMA_THREE_CONTRACT_SOURCE_FIELDS
+        else:
+            source_kind = "contract_successor"
+            source_fields = (
+                SCHEMA_THREE_SOURCE_FIELDS | SCHEMA_THREE_CONTRACT_SOURCE_FIELDS
+            )
         source = exact_object(
             raw_source,
-            {
-                "id",
-                "path",
-                "head",
-                "original_plan_digest",
-                "original_content",
-                "stopped_plan_digest",
-                "stopped_content",
-                "acceptance",
-                "acceptance_digests",
-                "acceptance_text_by_digest",
-                "reason_codes",
-                "archive_path",
-                "source_contract_path",
-                "source_contract_digest",
-            },
+            source_fields,
             f"schema-3 source {index}",
         )
         path = normalized_path(source["path"], PLAN_PATH_RE, "schema-3 source path")
@@ -5197,6 +5284,13 @@ def verify_schema_three_contract(
         assert match
         if source["id"] != match.group(1) or source["head"] != contract["source_head"]:
             raise RestructureError("schema-3 source identity mismatch")
+        if index == 0 and (
+            scalar(parse_manifest(source["original_content"]), "status")
+            != "replan_required"
+        ):
+            raise RestructureError(
+                "schema-3 first source must already be canonically stopped"
+            )
         if (
             sha256(source["original_content"].encode("utf-8"))
             != source["original_plan_digest"]
@@ -5219,18 +5313,25 @@ def verify_schema_three_contract(
             or source["acceptance_text_by_digest"] != accepted_map
         ):
             raise RestructureError("schema-3 source acceptance projection mismatch")
-        source_contract_path = normalized_path(
-            source["source_contract_path"],
-            CONTRACT_PATH_RE,
-            "schema-3 source contract path",
-        )
-        source_contract = ROOT / source_contract_path
-        if (
-            not source_contract.is_file()
-            or sha256(read_regular_file(source_contract, source_contract_path))
-            != source["source_contract_digest"]
-        ):
-            raise RestructureError("schema-3 source contract digest mismatch")
+        if source_kind == "contract_successor":
+            source_contract_path = normalized_path(
+                source["source_contract_path"],
+                CONTRACT_PATH_RE,
+                "schema-3 source contract path",
+            )
+            source_contract = ROOT / source_contract_path
+            if (
+                not source_contract.is_file()
+                or sha256(read_regular_file(source_contract, source_contract_path))
+                != source["source_contract_digest"]
+            ):
+                raise RestructureError("schema-3 source contract digest mismatch")
+        else:
+            if path in direct_active_sources:
+                raise RestructureError(
+                    f"direct active source is reconstructed twice: {path}"
+                )
+            direct_active_sources[path] = contract_path
         archive_path = normalized_path(
             source["archive_path"],
             ARCHIVE_PATH_RE,
@@ -5555,6 +5656,7 @@ def verify_repository_contracts(
     for row in rows:
         rows_by_contract.setdefault(row[2], []).append(row)
     verified_schema_three: set[str] = set()
+    direct_active_sources: dict[str, str] = {}
     for plan_id, archive_path, contract_path in rows:
         normalized_path(archive_path, ARCHIVE_PATH_RE, "replanned archive path")
         normalized_path(contract_path, CONTRACT_PATH_RE, "replanned contract path")
@@ -5581,6 +5683,7 @@ def verify_repository_contracts(
                 rebind_record_digests,
                 live_successors,
                 contract_digests,
+                direct_active_sources,
             )
             verified_schema_three.add(contract_path)
             continue
@@ -5884,6 +5987,14 @@ def verify_repository_contracts(
                 }
             )
     verify_companion_baseline(companion_records)
+    claimed_direct_sources = sorted(
+        set(direct_active_sources) & set(live_successors)
+    )
+    if claimed_direct_sources:
+        raise RestructureError(
+            "direct active source is also a contract successor: "
+            f"{claimed_direct_sources[0]}"
+        )
     effective_projections = verify_rebind_records(
         rebind_records,
         live_successors,

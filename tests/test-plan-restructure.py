@@ -486,6 +486,171 @@ class PlanRestructureTest(unittest.TestCase):
             "## Tasks\n\n- [ ] prepare\n"
         )
 
+    def direct_source_content(
+        self,
+        *,
+        title: str,
+        acceptance: list[str],
+        stopped: bool,
+        predecessor: str | None,
+        lineage_field: str | None = None,
+    ) -> str:
+        acceptance_lines = "\n".join(f"  - {value}" for value in acceptance)
+        if stopped:
+            status = "status: replan_required\n"
+            reason_block = (
+                "replan_reason_codes:\n  - multiple_independent_invariants\n"
+            )
+        elif predecessor:
+            status = (
+                "status: deferred\n"
+                "completion_deferred_reason: the earlier direct source must be checked\n"
+            )
+            reason_block = ""
+        else:
+            status = "status: in_progress\n"
+            reason_block = ""
+        predecessor_block = (
+            f"predecessor_plans:\n  - {predecessor}\n" if predecessor else ""
+        )
+        lineage_block = f"{lineage_field}\n" if lineage_field else ""
+        return (
+            f"# {title}\n\n"
+            f"{status}"
+            "primary_invariant: preserve one direct active source invariant\n"
+            + predecessor_block
+            + lineage_block
+            + "task_types:\n  - planning_docs\n"
+            "review_class: C\n"
+            "human_design_required: yes\n"
+            "human_approval_status: approved\n"
+            "write_scope:\n  - direct/\n"
+            "preservation_scope:\n  - none\n"
+            "context_files:\n  - none\n"
+            "required_specs:\n"
+            "  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md\n"
+            "  - docs/agent/SPEC_USER_COMMUNICATION.md\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            "focused_validation:\n  - git diff --check\n"
+            "validation:\n  - git diff --check\n"
+            f"acceptance:\n{acceptance_lines}\n"
+            + reason_block
+            + "checked_summary_ja: 直接能動元計画。\n\n## Tasks\n\n- [ ] implement\n"
+        )
+
+    def prepare_direct_active_sources(
+        self,
+        *,
+        stop_primary: bool = True,
+        link_dependent: bool = True,
+        lineage_field: str | None = None,
+    ) -> list[str]:
+        primary = "docs/plan/active/010-direct-primary.md"
+        dependent = "docs/plan/active/011-direct-dependent.md"
+        (self.repo / primary).write_text(
+            self.direct_source_content(
+                title="Direct Primary",
+                acceptance=["Keep the direct primary requirement."],
+                stopped=stop_primary,
+                predecessor=None,
+                lineage_field=lineage_field,
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / dependent).write_text(
+            self.direct_source_content(
+                title="Direct Dependent",
+                acceptance=["Keep the direct dependent requirement."],
+                stopped=False,
+                predecessor=primary if link_dependent else None,
+            ),
+            encoding="utf-8",
+        )
+        active = self.repo / "docs/plan/plan.md"
+        primary_status = "replan_required" if stop_primary else "in_progress"
+        dependent_status = "deferred" if link_dependent else "in_progress"
+        active.write_text(
+            active.read_text(encoding="utf-8")
+            + f"010\t{primary}\t{primary_status}\n"
+            + f"011\t{dependent}\t{dependent_status}\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "add direct active sources")
+        return [primary, dependent]
+
+    def direct_active_spec(
+        self,
+        module,
+        source_paths: list[str],
+        *,
+        kinds: list[str] | None = None,
+        successor_id: str = "012",
+        contract_name: str | None = None,
+    ) -> dict[str, object]:
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        sources: list[dict[str, object]] = []
+        source_records: list[tuple[str, list[dict[str, str]]]] = []
+        for index, path in enumerate(source_paths):
+            content = (self.repo / path).read_text(encoding="utf-8")
+            records = module.acceptance_records(content)
+            source_records.append((Path(path).name[:3], records))
+            stopped = module.derive_stopped_source_content(
+                content,
+                ["multiple_independent_invariants"],
+            )
+            sources.append(
+                {
+                    "path": path,
+                    "source_kind": (
+                        kinds[index] if kinds else "direct_active"
+                    ),
+                    "original_plan_digest": digest(content),
+                    "stopped_plan_digest": digest(stopped),
+                    "acceptance": records,
+                    "reason_codes": ["multiple_independent_invariants"],
+                    "archive_path": (
+                        f"docs/plan/replanned/{today.year:04d}/{today.month:02d}/"
+                        f"{half}/{Path(path).name}"
+                    ),
+                }
+            )
+        first_id = Path(source_paths[0]).name[:3]
+        contract_path = (
+            "docs/plan/replanned/contracts/"
+            + (contract_name or f"{first_id}-direct-active.json")
+        )
+        successor_path = f"docs/plan/active/{successor_id}-direct-integration.md"
+        content, mappings = self.coupled_successor_content(
+            path=successor_path,
+            contract_path=contract_path,
+            source_paths=source_paths,
+            source_records=source_records,
+            predecessor=None,
+        )
+        return {
+            "schema_version": 3,
+            "operation": "reconstruct",
+            "source_head": git(self.repo, "rev-parse", "HEAD"),
+            "sources": sources,
+            "dirty_product_paths": [],
+            "contract_path": contract_path,
+            "successors": [
+                {
+                    "id": successor_id,
+                    "path": successor_path,
+                    "content": content,
+                    "acceptance_mappings": mappings,
+                    "integration_source_ids": [
+                        source_id for source_id, _ in source_records
+                    ],
+                }
+            ],
+            "prerequisite_plans": [],
+            "rebindings": [],
+        }
+
     def prepare_coupled_spec(
         self,
         *,
@@ -585,6 +750,7 @@ class PlanRestructureTest(unittest.TestCase):
             sources.append(
                 {
                     "path": path,
+                    "source_kind": "contract_successor",
                     "original_plan_digest": digest(content),
                     "stopped_plan_digest": digest(stopped),
                     "acceptance": records,
@@ -2874,6 +3040,7 @@ class PlanRestructureTest(unittest.TestCase):
             "sources": [
                 {
                     "path": successor_path,
+                    "source_kind": "contract_successor",
                     "original_plan_digest": digest(stopped),
                     "stopped_plan_digest": digest(stopped),
                     "acceptance": records,
@@ -2901,6 +3068,320 @@ class PlanRestructureTest(unittest.TestCase):
         transitioned = self.run_spec_data(recursive, "recursive-coupled.json")
         self.assertEqual(transitioned.returncode, 0, transitioned.stderr)
         self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_direct_active_sources_reconstruct_without_contract_ownership(self) -> None:
+        module = self.load_restructure_module("direct_active_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(module, source_paths)
+        result = self.run_spec_data(spec, "direct-active.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract = json.loads(
+            (self.repo / str(spec["contract_path"])).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [source["source_kind"] for source in contract["sources"]],
+            ["direct_active", "direct_active"],
+        )
+        for source in contract["sources"]:
+            self.assertNotIn("source_contract_path", source)
+            self.assertNotIn("source_contract_digest", source)
+        active = (self.repo / "docs/plan/plan.md").read_text(encoding="utf-8")
+        for path in source_paths:
+            self.assertFalse((self.repo / path).exists())
+            self.assertNotIn(path, active)
+            archive = self.repo / str(
+                next(
+                    source["archive_path"]
+                    for source in contract["sources"]
+                    if source["path"] == path
+                )
+            )
+            self.assertIn("status: replanned", archive.read_text(encoding="utf-8"))
+        self.assertIn("012\t", active)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_mixed_source_routes_share_one_transaction(self) -> None:
+        initial = self.run_command()
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        module = self.load_restructure_module("mixed_route_module")
+        owned = "docs/plan/active/002-data.md"
+        owned_file = self.repo / owned
+        owned_file.write_text(
+            module.derive_stopped_source_content(
+                owned_file.read_text(encoding="utf-8"),
+                ["multiple_independent_invariants"],
+            ),
+            encoding="utf-8",
+        )
+        dependent = "docs/plan/active/010-direct-primary.md"
+        (self.repo / dependent).write_text(
+            self.direct_source_content(
+                title="Direct Dependent",
+                acceptance=["Keep the direct dependent requirement."],
+                stopped=False,
+                predecessor=owned,
+            ),
+            encoding="utf-8",
+        )
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8").replace(
+                f"002\t{owned}\tin_progress",
+                f"002\t{owned}\treplan_required",
+            )
+            + f"010\t{dependent}\tdeferred\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "prepare mixed sources")
+        spec = self.direct_active_spec(
+            module,
+            [owned, dependent],
+            kinds=["contract_successor", "direct_active"],
+            contract_name="002-mixed-routes.json",
+        )
+        result = self.run_spec_data(spec, "mixed-routes.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract = json.loads(
+            (self.repo / str(spec["contract_path"])).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [source["source_kind"] for source in contract["sources"]],
+            ["contract_successor", "direct_active"],
+        )
+        self.assertEqual(
+            contract["sources"][0]["source_contract_path"],
+            str(self.spec["contract_path"]),
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_direct_active_route_rejects_contract_owned_source(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        sources = coupled["sources"]
+        assert isinstance(sources, list)
+        sources[0]["source_kind"] = "direct_active"  # type: ignore[index]
+        result = self.run_spec_data(coupled, "forged-direct.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already claimed by a verified durable contract", result.stderr)
+
+    def test_contract_route_rejects_unowned_active_source(self) -> None:
+        module = self.load_restructure_module("unowned_contract_route_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(
+            module,
+            source_paths,
+            kinds=["contract_successor", "direct_active"],
+        )
+        result = self.run_spec_data(spec, "unowned-contract-route.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not an exact live contract successor", result.stderr)
+        self.assertTrue((self.repo / source_paths[0]).is_file())
+
+    def test_direct_active_source_requires_declared_kind(self) -> None:
+        module = self.load_restructure_module("missing_kind_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(module, source_paths)
+        sources = spec["sources"]
+        assert isinstance(sources, list)
+        del sources[0]["source_kind"]  # type: ignore[index]
+        result = self.run_spec_data(spec, "missing-kind.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sources[0]", result.stderr)
+
+    def test_direct_active_source_rejects_unknown_kind(self) -> None:
+        module = self.load_restructure_module("unknown_kind_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(
+            module,
+            source_paths,
+            kinds=["direct_active", "inferred_fallback"],
+        )
+        result = self.run_spec_data(spec, "unknown-kind.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source_kind must be", result.stderr)
+
+    def test_nonstring_source_kind_fails_with_a_structured_error(self) -> None:
+        module = self.load_restructure_module("nonstring_kind_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(module, source_paths)
+        sources = spec["sources"]
+        assert isinstance(sources, list)
+        sources[0]["source_kind"] = {"kind": "direct_active"}  # type: ignore[index]
+        rejected = self.run_spec_data(spec, "nonstring-kind.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("plan restructuring failed", rejected.stderr)
+        self.assertNotIn("Traceback", rejected.stderr)
+        sources[0]["source_kind"] = "direct_active"  # type: ignore[index]
+        accepted = self.run_spec_data(spec, "nonstring-kind-fixed.json")
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        contract_file = self.repo / str(spec["contract_path"])
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        contract["sources"][0]["source_kind"] = []
+        contract_file.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0)
+        self.assertIn("plan restructuring failed", verified.stderr)
+        self.assertNotIn("Traceback", verified.stderr)
+
+    def test_direct_active_source_rejects_missing_dependency(self) -> None:
+        module = self.load_restructure_module("unlinked_direct_module")
+        source_paths = self.prepare_direct_active_sources(link_dependent=False)
+        spec = self.direct_active_spec(module, source_paths)
+        result = self.run_spec_data(spec, "unlinked-direct.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not depend on an earlier coupled source", result.stderr)
+
+    def test_direct_active_source_rejects_noncanonical_stopping(self) -> None:
+        module = self.load_restructure_module("unstopped_direct_module")
+        source_paths = self.prepare_direct_active_sources(stop_primary=False)
+        spec = self.direct_active_spec(module, source_paths)
+        result = self.run_spec_data(spec, "unstopped-direct.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("first coupled source must already be stopped", result.stderr)
+
+    def test_direct_active_source_rejects_replan_lineage_fields(self) -> None:
+        module = self.load_restructure_module("lineage_direct_module")
+        source_paths = self.prepare_direct_active_sources(
+            lineage_field=(
+                "replan_contract: docs/plan/replanned/contracts/001-source.json"
+            ),
+        )
+        spec = self.direct_active_spec(module, source_paths)
+        result = self.run_spec_data(spec, "lineage-direct.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("carries replan lineage field: replan_contract", result.stderr)
+
+    def test_direct_active_source_rejects_duplicate_index_rows(self) -> None:
+        module = self.load_restructure_module("duplicate_index_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(module, source_paths)
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8")
+            + f"010\t{source_paths[0]}\treplan_required\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "duplicate active index row")
+        spec["source_head"] = git(self.repo, "rev-parse", "HEAD")
+        result = self.run_spec_data(spec, "duplicate-index.json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must appear exactly once in the active index", result.stderr)
+
+    def test_historical_schema_three_sources_verify_without_discriminant(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        result = self.run_spec_data(coupled, "historical-coupled.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract_file = self.repo / str(coupled["contract_path"])
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        for source in contract["sources"]:
+            self.assertEqual(source.pop("source_kind"), "contract_successor")
+        contract_file.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_durable_verification_rejects_unknown_and_forged_source_kinds(self) -> None:
+        module = self.load_restructure_module("durable_kind_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(module, source_paths)
+        result = self.run_spec_data(spec, "durable-kind.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract_file = self.repo / str(spec["contract_path"])
+        original = json.loads(contract_file.read_text(encoding="utf-8"))
+        unknown = copy.deepcopy(original)
+        unknown["sources"][0]["source_kind"] = "inferred_fallback"
+        contract_file.write_text(
+            json.dumps(unknown, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("unknown source kind", rejected.stderr)
+        forged = copy.deepcopy(original)
+        forged["sources"][0]["source_kind"] = "contract_successor"
+        contract_file.write_text(
+            json.dumps(forged, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        missing_lineage = self.run_verify()
+        self.assertNotEqual(missing_lineage.returncode, 0)
+        self.assertIn("schema-3 source 0", missing_lineage.stderr)
+
+    def test_durable_verification_rejects_double_claimed_direct_source(self) -> None:
+        module = self.load_restructure_module("double_claim_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(module, source_paths)
+        result = self.run_spec_data(spec, "double-claim.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract_file = self.repo / str(spec["contract_path"])
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        contract["sources"][1] = copy.deepcopy(contract["sources"][0])
+        contract_file.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("direct active source is reconstructed twice", rejected.stderr)
+
+    def test_durable_verification_rejects_contract_owned_direct_claim(self) -> None:
+        self.test_mixed_source_routes_share_one_transaction()
+        contract_file = self.repo / "docs/plan/replanned/contracts/002-mixed-routes.json"
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        owned = contract["sources"][0]
+        owned["source_kind"] = "direct_active"
+        owned.pop("source_contract_path")
+        owned.pop("source_contract_digest")
+        contract_file.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "direct active source is also a contract successor",
+            rejected.stderr,
+        )
+
+    def test_durable_verification_rejects_unstopped_first_source(self) -> None:
+        module = self.load_restructure_module("durable_unstopped_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.direct_active_spec(module, source_paths)
+        result = self.run_spec_data(spec, "durable-unstopped.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract_file = self.repo / str(spec["contract_path"])
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        unstopped = self.direct_source_content(
+            title="Direct Primary",
+            acceptance=["Keep the direct primary requirement."],
+            stopped=False,
+            predecessor=None,
+        )
+        source = contract["sources"][0]
+        source["original_content"] = unstopped
+        source["original_plan_digest"] = digest(unstopped)
+        stopped = module.derive_stopped_source_content(
+            unstopped,
+            source["reason_codes"],
+        )
+        source["stopped_content"] = stopped
+        source["stopped_plan_digest"] = digest(stopped)
+        contract_file.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "first source must already be canonically stopped",
+            rejected.stderr,
+        )
 
     def test_schema_three_allows_ordered_prerequisite_chains(self) -> None:
         coupled, _, _, successor_path = self.prepare_coupled_spec(
