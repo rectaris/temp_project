@@ -1,6 +1,6 @@
 # Rebind referrer context on archive
 
-status: backlog
+status: in_progress
 implementation_tier: 2
 primary_invariant: a transaction that archives a plan leaves no live plan naming that plan's former active path in context_files
 task_types:
@@ -8,7 +8,7 @@ task_types:
   - template_workflow
 review_class: C
 human_design_required: yes
-human_approval_status: pending
+human_approval_status: approved
 implementation_risk: high
 implementation_ambiguity: high
 write_scope:
