@@ -160,3 +160,4 @@ id	path
 215	docs/plan/checked/2026/08/16-31/215-enforce-canonical-lifecycle-verification.md
 216	docs/plan/checked/2026/08/16-31/216-bind-journal-replacement-identity.md
 217	docs/plan/checked/2026/08/16-31/217-enforce-plan-id-reservations.md
+220	docs/plan/checked/2026/08/16-31/220-resolve-active-plan-context-references.md

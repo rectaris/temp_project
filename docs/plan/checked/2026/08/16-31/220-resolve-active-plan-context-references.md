@@ -1,6 +1,6 @@
 # Resolve active plan context references
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: every context_files entry of a plan listed in the active index resolves to an existing repository file
 task_types:

@@ -20,7 +20,7 @@ write_scope:
 preservation_scope:
   - none
 context_files:
-  - docs/plan/active/220-resolve-active-plan-context-references.md
+  - docs/plan/checked/2026/08/16-31/220-resolve-active-plan-context-references.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
