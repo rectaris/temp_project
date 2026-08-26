@@ -10,7 +10,7 @@ task_types:
   - referent_first
 review_class: C
 human_design_required: yes
-human_approval_status: pending
+human_approval_status: approved
 implementation_risk: ordinary
 implementation_ambiguity: low
 write_scope:
