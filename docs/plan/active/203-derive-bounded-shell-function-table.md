@@ -24,7 +24,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/199-admit-decomposed-shell-validation.md
-  - docs/plan/active/202-freeze-bounded-shell-lexical-projection.md
+  - docs/plan/checked/2026/08/16-31/202-freeze-bounded-shell-lexical-projection.md
   - docs/plan/replanned/2026/08/16-31/197-freeze-bounded-shell-structure-parser.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md

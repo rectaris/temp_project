@@ -21,7 +21,7 @@ context_files:
   - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
   - docs/plan/active/165-enforce-validation-witness-maps.md
   - docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
-  - docs/plan/active/202-freeze-bounded-shell-lexical-projection.md
+  - docs/plan/checked/2026/08/16-31/202-freeze-bounded-shell-lexical-projection.md
   - docs/plan/active/203-derive-bounded-shell-function-table.md
   - docs/plan/active/204-derive-bounded-shell-execution-graph.md
   - docs/plan/active/205-integrate-bounded-copier-fixture-validator.md

@@ -167,3 +167,4 @@ id	path
 222	docs/plan/checked/2026/08/16-31/222-close-archived-context-tolerance.md
 224	docs/plan/checked/2026/08/16-31/224-admit-legacy-contract-successor-rebinding.md
 223	docs/plan/checked/2026/08/16-31/223-reconstruct-backlog-resident-shell-lineage.md
+202	docs/plan/checked/2026/08/16-31/202-freeze-bounded-shell-lexical-projection.md
