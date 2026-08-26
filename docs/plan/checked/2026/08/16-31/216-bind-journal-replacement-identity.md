@@ -1,6 +1,6 @@
 # Bind journal replacement identity
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: recovery accepts a replacement only when its content, target mode, and transaction-created file identity match the journaled operation at every apply, rollback, roll-forward, and completion boundary
 replan_sources:
@@ -86,15 +86,22 @@ checked_summary_ja: journal replacementのtarget modeとtransaction生成file id
 
 ## Tasks
 
-- [ ] Extend the operation and journal state with target-mode and transaction-created identity evidence.
-- [ ] Enforce identity transitions during temp preparation, rename, rollback restoration, replay, and completion verification.
-- [ ] Add same-content inode swap, mode drift, temp replacement, post-rename replacement, interrupted rollback, and interrupted roll-forward tests.
-- [ ] Align the root and generated Plan Workflow policy with the enforced recovery identity.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, then archive and commit this plan.
+- [x] Extend the operation and journal state with target-mode and transaction-created identity evidence.
+- [x] Enforce identity transitions during temp preparation, rename, rollback restoration, replay, and completion verification.
+- [x] Add same-content inode swap, mode drift, temp replacement, post-rename replacement, interrupted rollback, and interrupted roll-forward tests.
+- [x] Align the root and generated Plan Workflow policy with the enforced recovery identity.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, then archive and commit this plan.
 
 ## Validation Notes
 
 - This successor owns final acceptance of the original Plan 208 requirement.
 - The guarantee must not claim protection against an actor that can replace every local process and file.
 - Plan 210 depends on this plan and stays deferred until this plan's exact checked archive is bound.
+- Independent review returned zero High and zero Medium findings across an initial review and two rereviews.
+- The reviewer probed twenty-one crash windows plus three injected crash points the harness does not simulate.
+- Every new guard was mutation-verified; redundant guards were mutated as a set because removing one alone leaves the suite green.
+- A producer-side unsafe target mode check rejects setuid, setgid, sticky, and world-writable modes before any journal exists, closing a producer and reader asymmetry that could otherwise strand an unrecoverable journal.
+- Rejecting an unsafe mode is preferred over masking because the rollback path derives its mode from the original mode, so masking only the target mode would relocate the same defect to rollback.
+- The interrupted roll-forward case required by the test task also asserts that recovery rejects before the journal advances, because five downstream guards emit the same message and would otherwise mask the replaying guard.
+- The recorded temporary identity is protected by three redundant guards, kept deliberately as defence in depth.

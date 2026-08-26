@@ -4295,7 +4295,7 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("gap or fork", rejected.stderr)
 
-    def journal_path(self) -> Path:
+    def journal_directory(self) -> Path:
         raw = git(
             self.repo,
             "rev-parse",
@@ -4305,6 +4305,10 @@ class PlanRestructureTest(unittest.TestCase):
         directory = Path(raw)
         if not directory.is_absolute():
             directory = self.repo / directory
+        return directory
+
+    def journal_path(self) -> Path:
+        directory = self.journal_directory()
         journals = list(directory.glob("*.json"))
         self.assertEqual(len(journals), 1)
         return journals[0]
@@ -4380,6 +4384,200 @@ class PlanRestructureTest(unittest.TestCase):
         finally:
             os.chdir(old_cwd)
         self.assertFalse((self.repo / self.source_path).exists())
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_recovery_rejects_replaced_transaction_file_identity(self) -> None:
+        module = self.load_restructure_module("identity_recovery_module")
+        old_cwd = Path.cwd()
+
+        def swap_inode(path: Path) -> None:
+            data = path.read_bytes()
+            mode = path.stat().st_mode & 0o777
+            replacement = path.with_name(path.name + ".swap")
+            replacement.write_bytes(data)
+            os.chmod(replacement, mode)
+            os.replace(replacement, path)
+
+        def replacing_operation(payload: dict, *, unsnapshotted: bool = False) -> dict:
+            snapshotted = {
+                entry["path"] for entry in payload["historical_contract_snapshot"]
+            }
+            for operation in payload["operations"]:
+                if (
+                    operation["target_content"] is not None
+                    and operation["original_digest"] != operation["target_digest"]
+                    and not (unsnapshotted and operation["path"] in snapshotted)
+                ):
+                    return operation
+            self.fail("no content-replacing operation in the transaction")
+
+        def crash_at(phase: str) -> tuple[Path, dict]:
+            with self.assertRaises(module.SimulatedCrash):
+                module.execute(self.spec_path, crash_phase=phase)
+            journal = self.journal_path()
+            return journal, json.loads(journal.read_text(encoding="utf-8"))
+
+        def reset_repository(journal: Path, payload: dict) -> None:
+            journal.unlink()
+            for entry in payload["operations"]:
+                (self.repo / entry["temporary_path"]).unlink(missing_ok=True)
+            git(self.repo, "checkout", "-q", "--", ".")
+            git(self.repo, "clean", "-qfdx", "--", "docs")
+
+        def expect_rejected(journal: Path, payload: dict, fragment: str) -> None:
+            with self.assertRaises(module.RestructureError) as raised:
+                module.recover_transaction(journal, payload["journal_identity"])
+            self.assertIn(fragment, str(raised.exception))
+
+        try:
+            os.chdir(self.repo)
+            for case, mutate, fragment in (
+                (
+                    "temp inode swap",
+                    lambda path: swap_inode(path),
+                    "identity was externally replaced",
+                ),
+                (
+                    "temp mode drift",
+                    lambda path: os.chmod(path, 0o600),
+                    "identity was externally replaced",
+                ),
+                (
+                    "temp removal",
+                    lambda path: path.unlink(),
+                    "identity is absent from disk",
+                ),
+            ):
+                with self.subTest(case=case):
+                    journal, payload = crash_at("after_temps")
+                    self.assertEqual(payload["phase"], "temps_prepared")
+                    operation = replacing_operation(payload)
+                    self.assertIsNotNone(
+                        payload["replacement_identities"][
+                            payload["operations"].index(operation)
+                        ]["temporary"]
+                    )
+                    mutate(self.repo / operation["temporary_path"])
+                    expect_rejected(journal, payload, fragment)
+                    reset_repository(journal, payload)
+                    self.assert_source_unchanged()
+
+            for case, mutate, fragment in (
+                (
+                    "post-rename same-content inode swap",
+                    lambda path: swap_inode(path),
+                    "identity was externally replaced",
+                ),
+                (
+                    "post-rename mode drift",
+                    lambda path: os.chmod(path, 0o600),
+                    "identity was externally replaced",
+                ),
+            ):
+                with self.subTest(case=case):
+                    journal, payload = crash_at("after_commit_point")
+                    self.assertEqual(payload["phase"], "commit_point")
+                    operation = replacing_operation(payload, unsnapshotted=True)
+                    self.assertNotIn(
+                        operation["path"],
+                        {
+                            entry["path"]
+                            for entry in payload["historical_contract_snapshot"]
+                        },
+                    )
+                    target = self.repo / operation["path"]
+                    before = target.stat()
+                    mutate(target)
+                    expect_rejected(journal, payload, fragment)
+                    after = target.stat()
+                    self.assertEqual(
+                        target.read_bytes(),
+                        operation["target_content"].encode("utf-8"),
+                    )
+                    self.assertNotEqual(
+                        (before.st_ino, before.st_mode),
+                        (after.st_ino, after.st_mode),
+                    )
+                    reset_repository(journal, payload)
+
+            journal, payload = crash_at("after_commit_point")
+            with self.assertRaises(module.SimulatedCrash):
+                module.recover_transaction(
+                    journal,
+                    payload["journal_identity"],
+                    crash_phase="replay_after_operation_1",
+                )
+            replaying = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(replaying["phase"], "replaying")
+            self.assertLess(0, replaying["next_operation"])
+            self.assertLess(
+                replaying["next_operation"], len(replaying["operations"])
+            )
+            swap_inode(
+                self.repo / replacing_operation(payload, unsnapshotted=True)["path"]
+            )
+            expect_rejected(journal, payload, "identity was externally replaced")
+            stopped = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(stopped["phase"], "replaying")
+            self.assertEqual(
+                stopped["next_operation"], replaying["next_operation"]
+            )
+            reset_repository(journal, payload)
+
+            state = module.validate_spec(copy.deepcopy(self.spec))
+            operations, _ = module.build_transaction_operations(state)
+            journal, payload = crash_at(f"after_operation_{len(operations)}")
+            with self.assertRaises(module.SimulatedCrash):
+                module.recover_transaction(
+                    journal,
+                    payload["journal_identity"],
+                    crash_phase="rollback_after_operation_1",
+                )
+            interrupted = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(interrupted["phase"], "rolling_back")
+            restored = [
+                index
+                for index, entry in enumerate(interrupted["replacement_identities"])
+                if entry["restored"] is not None
+            ]
+            self.assertTrue(restored)
+            target = self.repo / interrupted["operations"][restored[0]]["path"]
+            swap_inode(target)
+            with self.assertRaises(module.RestructureError) as raised:
+                module.recover_transaction(journal, payload["journal_identity"])
+            self.assertIn(
+                "restored transaction target", str(raised.exception)
+            )
+            self.assertIn("identity was externally replaced", str(raised.exception))
+            reset_repository(journal, payload)
+        finally:
+            os.chdir(old_cwd)
+
+    def test_transaction_rejects_unsafe_target_modes_before_the_journal(self) -> None:
+        module = self.load_restructure_module("target_mode_module")
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            for case, mode in (
+                ("setgid", 0o2644),
+                ("setuid", 0o4644),
+                ("sticky", 0o1644),
+            ):
+                with self.subTest(case=case):
+                    os.chmod(self.repo / self.source_path, mode)
+                    with self.assertRaises(module.RestructureError) as raised:
+                        module.execute(self.spec_path)
+                    self.assertIn(
+                        "transaction path has an unsafe file mode",
+                        str(raised.exception),
+                    )
+                    self.assertEqual(
+                        list(self.journal_directory().glob("*.json")), []
+                    )
+            os.chmod(self.repo / self.source_path, 0o644)
+        finally:
+            os.chdir(old_cwd)
+        self.assert_source_unchanged()
         self.assertEqual(self.run_verify().returncode, 0)
 
     def test_recovery_rejects_stale_head_stale_content_and_hardlinked_journal(self) -> None:

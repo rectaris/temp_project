@@ -84,7 +84,9 @@ CHECKED_PATH_RE = re.compile(
     r"docs/plan/checked/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/"
     r"([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
 )
-JOURNAL_SCHEMA_VERSION = 1
+JOURNAL_SCHEMA_VERSION = 2
+IDENTITY_KEYS = {"device", "inode", "mode", "link_count", "digest"}
+REPLACEMENT_IDENTITY_KEYS = {"temporary", "restored"}
 JOURNAL_PHASES = {
     "prepared",
     "temps_prepared",
@@ -3859,6 +3861,10 @@ def transaction_operation(
     ):
         raise RestructureError(f"transaction source changed during preflight: {relative}")
     target_mode = original_mode or 0o644
+    if not 0 <= target_mode <= 0o777 or target_mode & 0o002:
+        raise RestructureError(
+            f"transaction path has an unsafe file mode: {relative}"
+        )
     temporary = str(
         PurePosixPath(relative).parent
         / f".{PurePosixPath(relative).name}.{transaction_id[7:23]}.tmp"
@@ -4214,6 +4220,7 @@ def load_journal(path: Path, journal_identity: str) -> dict[str, Any]:
             "dirty_product_snapshot",
             "historical_contract_snapshot",
             "result_path",
+            "replacement_identities",
         },
         "transaction journal",
     )
@@ -4335,6 +4342,27 @@ def load_journal(path: Path, journal_identity: str) -> dict[str, Any]:
                 raise RestructureError("transaction journal content digest mismatch")
         if not isinstance(operation["target_mode"], int):
             raise RestructureError("transaction journal mode is invalid")
+        if (
+            isinstance(operation["target_mode"], bool)
+            or not 0 <= operation["target_mode"] <= 0o777
+            or operation["target_mode"] & 0o002
+        ):
+            raise RestructureError("transaction journal mode is invalid")
+    if not isinstance(payload["replacement_identities"], list) or len(
+        payload["replacement_identities"]
+    ) != len(payload["operations"]):
+        raise RestructureError("transaction replacement identities are invalid")
+    for index, entry in enumerate(payload["replacement_identities"]):
+        if not isinstance(entry, dict) or set(entry) != REPLACEMENT_IDENTITY_KEYS:
+            raise RestructureError(
+                f"transaction replacement identity {index} is invalid"
+            )
+        for key in sorted(REPLACEMENT_IDENTITY_KEYS):
+            if entry[key] is not None:
+                validate_identity_record(
+                    entry[key],
+                    f"transaction replacement {key} {index}",
+                )
     validate_journal_phase_state(payload)
     return payload
 
@@ -4344,7 +4372,91 @@ def operation_current_digest(operation: dict[str, Any]) -> str | None:
     return sha256(content.encode("utf-8")) if content is not None else None
 
 
-def require_known_operation_state(operation: dict[str, Any]) -> None:
+def file_identity(path: Path, label: str, *, expected_mode: int | None = None) -> dict[str, Any]:
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise RestructureError(f"{label} must be one unlinked regular file")
+        mode = stat.S_IMODE(metadata.st_mode)
+        if expected_mode is not None and mode != expected_mode:
+            raise RestructureError(f"{label} does not carry its bound target mode")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 65_536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+    return {
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "mode": mode,
+        "link_count": metadata.st_nlink,
+        "digest": sha256(b"".join(chunks)),
+    }
+
+
+def optional_file_identity(path: Path, label: str) -> dict[str, Any] | None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        if path.is_symlink():
+            raise RestructureError(f"symlink target is not allowed: {label}") from None
+        return None
+    except OSError as exc:
+        raise RestructureError(f"{label} is not a readable regular file") from exc
+    os.close(descriptor)
+    return file_identity(path, label)
+
+
+def current_file_identity(relative: str, label: str) -> dict[str, Any] | None:
+    reject_symlink_ancestors(relative, include_target=True)
+    return optional_file_identity(ROOT / relative, label)
+
+
+def validate_identity_record(value: Any, label: str) -> None:
+    if not isinstance(value, dict) or set(value) != IDENTITY_KEYS:
+        raise RestructureError(f"{label} identity record is invalid")
+    if (
+        not isinstance(value["digest"], str)
+        or not SHA_RE.fullmatch(value["digest"])
+        or any(
+            isinstance(value[field], bool) or not isinstance(value[field], int)
+            for field in ("device", "inode", "mode", "link_count")
+        )
+        or value["link_count"] != 1
+        or not 0 <= value["mode"] <= 0o777
+        or value["mode"] & 0o002
+    ):
+        raise RestructureError(f"{label} identity record is invalid")
+
+
+def require_identity_match(
+    observed: dict[str, Any] | None,
+    expected: dict[str, Any] | None,
+    label: str,
+) -> None:
+    if expected is None:
+        raise RestructureError(f"{label} identity is missing")
+    if observed is None:
+        raise RestructureError(f"{label} identity is absent from disk")
+    if observed != expected:
+        raise RestructureError(f"{label} identity was externally replaced")
+
+
+def operation_replaces_content(operation: dict[str, Any]) -> bool:
+    return (
+        operation["target_content"] is not None
+        and operation["original_digest"] != operation["target_digest"]
+    )
+
+
+def require_known_operation_state(
+    operation: dict[str, Any],
+    identity: dict[str, Any],
+) -> None:
     current = operation_current_digest(operation)
     if current not in {
         operation["original_digest"],
@@ -4366,6 +4478,12 @@ def require_known_operation_state(operation: dict[str, Any]) -> None:
             raise RestructureError(
                 f"transaction temporary file is stale: {operation['temporary_path']}"
             )
+        if identity["temporary"] is not None:
+            require_identity_match(
+                file_identity(temporary, operation["temporary_path"]),
+                identity["temporary"],
+                f"transaction temporary file {operation['temporary_path']}",
+            )
 
 
 def operation_temporary_digest(operation: dict[str, Any]) -> str | None:
@@ -4373,6 +4491,74 @@ def operation_temporary_digest(operation: dict[str, Any]) -> str | None:
     if not temporary.exists() and not temporary.is_symlink():
         return None
     return sha256(read_regular_file(temporary, operation["temporary_path"]))
+
+
+def validate_operation_identity_state(
+    operation: dict[str, Any],
+    identity: dict[str, Any],
+    phase: str,
+    index: int,
+    next_operation: int,
+    total: int,
+    current: str | None,
+) -> None:
+    label = operation["path"]
+    replaces = operation_replaces_content(operation)
+    temporary_path = ROOT / operation["temporary_path"]
+    observed_temporary = optional_file_identity(
+        temporary_path,
+        operation["temporary_path"],
+    )
+    if observed_temporary is not None and identity["temporary"] is not None:
+        require_identity_match(
+            observed_temporary,
+            identity["temporary"],
+            f"transaction temporary file {operation['temporary_path']}",
+        )
+    if phase == "temps_prepared" and operation["target_content"] is not None:
+        require_identity_match(
+            observed_temporary,
+            identity["temporary"],
+            f"transaction temporary file {operation['temporary_path']}",
+        )
+    applied_phases = {"commit_point", "replaying", "verifying", "complete"}
+    if replaces and (
+        phase in applied_phases
+        or (phase == "applying" and index < next_operation)
+        or (
+            phase == "applying"
+            and index == next_operation
+            and current == operation["target_digest"]
+        )
+    ):
+        require_identity_match(
+            current_file_identity(label, f"transaction target {label}"),
+            identity["temporary"],
+            f"transaction target {label}",
+        )
+    if phase == "rolled_back":
+        restored_from = 0
+    elif phase == "rolling_back":
+        restored_from = total - next_operation
+    else:
+        if identity["restored"] is not None:
+            raise RestructureError(
+                f"transaction target {label} records an impossible restoration identity"
+            )
+        return
+    if index < restored_from:
+        return
+    if operation["original_content"] is None:
+        if identity["restored"] is not None:
+            raise RestructureError(
+                f"transaction target {label} records an impossible restoration identity"
+            )
+        return
+    require_identity_match(
+        current_file_identity(label, f"restored transaction target {label}"),
+        identity["restored"],
+        f"restored transaction target {label}",
+    )
 
 
 def validate_journal_phase_state(payload: dict[str, Any]) -> None:
@@ -4390,6 +4576,16 @@ def validate_journal_phase_state(payload: dict[str, Any]) -> None:
         temporary = operation_temporary_digest(operation)
         original = operation["original_digest"]
         target = operation["target_digest"]
+        identity = payload["replacement_identities"][index]
+        validate_operation_identity_state(
+            operation,
+            identity,
+            phase,
+            index,
+            next_operation,
+            len(operations),
+            current,
+        )
         if phase == "prepared":
             if current != original or temporary not in {None, target}:
                 raise RestructureError("prepared transaction state is inconsistent")
@@ -4449,7 +4645,10 @@ def validate_journal_phase_state(payload: dict[str, Any]) -> None:
                 raise RestructureError("rolled-back transaction state is inconsistent")
 
 
-def remove_operation_temporary(operation: dict[str, Any]) -> None:
+def remove_operation_temporary(
+    operation: dict[str, Any],
+    identity: dict[str, Any],
+) -> None:
     temporary = ROOT / operation["temporary_path"]
     if temporary.exists() or temporary.is_symlink():
         read_regular_file(temporary, operation["temporary_path"])
@@ -4457,9 +4656,13 @@ def remove_operation_temporary(operation: dict[str, Any]) -> None:
         fsync_directory(temporary.parent)
 
 
-def prepare_operation_temporary(operation: dict[str, Any]) -> None:
+def prepare_operation_temporary(
+    operation: dict[str, Any],
+    identity: dict[str, Any],
+) -> None:
     target = operation["target_content"]
     if target is None:
+        identity["temporary"] = None
         return
     temporary = ROOT / operation["temporary_path"]
     ensure_directories(temporary.parent)
@@ -4471,19 +4674,33 @@ def prepare_operation_temporary(operation: dict[str, Any]) -> None:
     )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), operation["target_mode"])
             handle.write(target)
             handle.flush()
             os.fsync(handle.fileno())
         fsync_directory(temporary.parent)
+        identity["temporary"] = file_identity(
+            temporary,
+            operation["temporary_path"],
+            expected_mode=operation["target_mode"],
+        )
+        if identity["temporary"]["digest"] != operation["target_digest"]:
+            raise RestructureError(
+                f"transaction temporary file is stale: {operation['temporary_path']}"
+            )
     except BaseException:
+        identity["temporary"] = None
         temporary.unlink(missing_ok=True)
         raise
 
 
-def apply_operation(operation: dict[str, Any]) -> None:
+def apply_operation(
+    operation: dict[str, Any],
+    identity: dict[str, Any],
+) -> None:
     relative = operation["path"]
     target = ROOT / relative
-    require_known_operation_state(operation)
+    require_known_operation_state(operation, identity)
     if operation["target_content"] is None:
         if target.exists():
             read_regular_file(target, relative)
@@ -4492,37 +4709,64 @@ def apply_operation(operation: dict[str, Any]) -> None:
         return
     temporary = ROOT / operation["temporary_path"]
     if operation_current_digest(operation) == operation["target_digest"]:
-        remove_operation_temporary(operation)
+        if operation_replaces_content(operation):
+            require_identity_match(
+                current_file_identity(relative, f"transaction target {relative}"),
+                identity["temporary"],
+                f"transaction target {relative}",
+            )
+        remove_operation_temporary(operation, identity)
         return
     if not temporary.is_file():
-        atomic_replace_text(
-            target,
-            operation["target_content"],
-            operation["target_mode"],
+        raise RestructureError(
+            f"transaction temporary file is missing: {operation['temporary_path']}"
         )
-        return
-    read_regular_file(temporary, operation["temporary_path"])
+    require_identity_match(
+        file_identity(temporary, operation["temporary_path"]),
+        identity["temporary"],
+        f"transaction temporary file {operation['temporary_path']}",
+    )
     os.replace(temporary, target)
     os.chmod(target, operation["target_mode"], follow_symlinks=False)
     fsync_directory(target.parent)
+    require_identity_match(
+        current_file_identity(relative, f"transaction target {relative}"),
+        identity["temporary"],
+        f"transaction target {relative}",
+    )
+    identity["restored"] = None
 
 
-def restore_operation(operation: dict[str, Any]) -> None:
-    require_known_operation_state(operation)
+def restore_operation(
+    operation: dict[str, Any],
+    identity: dict[str, Any],
+) -> None:
+    require_known_operation_state(operation, identity)
     target = ROOT / operation["path"]
-    temporary = ROOT / operation["temporary_path"]
     if operation["original_content"] is None:
         if target.exists():
             read_regular_file(target, operation["path"])
             target.unlink()
             fsync_directory(target.parent)
+        identity["restored"] = None
     else:
+        mode = operation["original_mode"] or 0o644
         atomic_replace_text(
             target,
             operation["original_content"],
-            operation["original_mode"] or 0o644,
+            mode,
         )
-    remove_operation_temporary(operation)
+        identity["restored"] = file_identity(
+            target,
+            operation["path"],
+            expected_mode=mode,
+        )
+        if identity["restored"]["digest"] != operation["original_digest"]:
+            raise RestructureError(
+                f"restored transaction target {operation['path']} identity is stale"
+            )
+    remove_operation_temporary(operation, identity)
+    identity["temporary"] = None
 
 
 def rollback_journal(
@@ -4538,7 +4782,10 @@ def rollback_journal(
     for progress in range(start, len(operations)):
         operation = operations[len(operations) - progress - 1]
         maybe_crash(crash_phase, f"rollback_before_operation_{progress + 1}")
-        restore_operation(operation)
+        restore_operation(
+            operation,
+            payload["replacement_identities"][len(operations) - progress - 1],
+        )
         update_journal(path, payload, "rolling_back", progress + 1)
         maybe_crash(crash_phase, f"rollback_after_operation_{progress + 1}")
     for relative in sorted(
@@ -4570,7 +4817,7 @@ def roll_forward_journal(
     for index in range(start, len(payload["operations"])):
         operation = payload["operations"][index]
         maybe_crash(crash_phase, f"replay_before_operation_{index + 1}")
-        apply_operation(operation)
+        apply_operation(operation, payload["replacement_identities"][index])
         update_journal(path, payload, "replaying", index + 1)
         maybe_crash(crash_phase, f"replay_after_operation_{index + 1}")
     update_journal(path, payload, "verifying", len(payload["operations"]))
@@ -4628,6 +4875,9 @@ def execute(
                 "expected_historical_contract_snapshot"
             ],
             "result_path": state["result_path"],
+            "replacement_identities": [
+                {"temporary": None, "restored": None} for _ in operations
+            ],
         }
         payload["journal_identity"] = canonical_journal_identity(payload)
         journal_path = journal_file(payload["journal_identity"])
@@ -4645,8 +4895,11 @@ def execute(
             write_new_journal(journal_path, payload)
             try:
                 maybe_crash(crash_phase, "after_journal")
-                for operation in operations:
-                    prepare_operation_temporary(operation)
+                for index, operation in enumerate(operations):
+                    prepare_operation_temporary(
+                        operation,
+                        payload["replacement_identities"][index],
+                    )
                 update_journal(journal_path, payload, "temps_prepared", 0)
                 maybe_crash(crash_phase, "after_temps")
                 require_transaction_repository_state(
@@ -4657,7 +4910,10 @@ def execute(
                 destination_writes = 0
                 for index, operation in enumerate(operations):
                     update_journal(journal_path, payload, "applying", index)
-                    apply_operation(operation)
+                    apply_operation(
+                        operation,
+                        payload["replacement_identities"][index],
+                    )
                     if operation["role"] == "destination":
                         destination_writes += 1
                     if fail_after_writes and destination_writes == fail_after_writes:
@@ -4731,8 +4987,11 @@ def recover_transaction(
                     if operation["path"] == "docs/plan/replanned.md"
                 },
             )
-            for operation in payload["operations"]:
-                require_known_operation_state(operation)
+            for index, operation in enumerate(payload["operations"]):
+                require_known_operation_state(
+                    operation,
+                    payload["replacement_identities"][index],
+                )
             if payload["phase"] in {
                 "prepared",
                 "temps_prepared",
