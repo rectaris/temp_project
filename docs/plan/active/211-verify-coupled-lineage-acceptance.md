@@ -1,7 +1,6 @@
 # Verify coupled lineage acceptance
 
-status: deferred
-completion_deferred_reason: Plan 210 must be checked and its exact checked archive must replace the active predecessor before implementation.
+status: in_progress
 implementation_tier: 2
 primary_invariant: one durable locked transaction can replace a stopped active successor and its immutable dependent successor while applying only exact authorized reference projections in later dependents and leaving every historical contract byte, acceptance item, write scope, validation authority, and unaffected predecessor edge unchanged
 replan_sources:
@@ -76,7 +75,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:3cc1064bb989622dab9eaca79fc89afaba85b8aabd7191dd4935882d8ba797ef","stage":"focused","witness":"python3 tests/test-plan-restructure.py"}
 predecessor_plans:
-  - docs/plan/active/210-reconstruct-coupled-capability-lineage.md
+  - docs/plan/checked/2026/08/16-31/210-reconstruct-coupled-capability-lineage.md
 checked_summary_ja: coupled lineage reconstructionのacceptance条項を強制pathと否定testへ一対一で束縛し、不足する強制とtestを補う。
 
 ## Decisions
