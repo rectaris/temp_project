@@ -1,7 +1,6 @@
 # Reconstruct the coupled capability lineage
 
-status: deferred
-completion_deferred_reason: Plans 215 and 216 must both be checked and Plan 216's exact checked archive must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: one plan-only transaction archives exact stopped Plans 200 and 201 and creates separately mapped acceptance successors without changing product bytes, reserved shell-plan identities, committed rejected-candidate evidence, or any unaffected active predecessor edge
 reserved_plan_ids:
   - 211
@@ -61,7 +60,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:dc406d3c0fa0ac0755912a904d97a8849a5efbbc13dcebd86e0cab48b56b3b89","stage":"focused","witness":"python3 scripts/restructure-plan.py --verify"}
 predecessor_plans:
-  - docs/plan/active/216-bind-journal-replacement-identity.md
+  - docs/plan/checked/2026/08/16-31/216-bind-journal-replacement-identity.md
 integration_gates:
   - execute only after Plans 206, 209, 215, and 216 are checked and their exact checked archives are bound
   - require a clean worktree and index at a HEAD descending from checkpoint commit 96f6645c84d5e1c4b043ac938df51d5d08e736d8
