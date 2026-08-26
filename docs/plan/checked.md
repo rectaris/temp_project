@@ -162,3 +162,4 @@ id	path
 217	docs/plan/checked/2026/08/16-31/217-enforce-plan-id-reservations.md
 220	docs/plan/checked/2026/08/16-31/220-resolve-active-plan-context-references.md
 210	docs/plan/checked/2026/08/16-31/210-reconstruct-coupled-capability-lineage.md
+211	docs/plan/checked/2026/08/16-31/211-verify-coupled-lineage-acceptance.md

@@ -5355,6 +5355,260 @@ class PlanRestructureTest(unittest.TestCase):
         results = [process.communicate()[0:2] + (process.returncode,) for process in commands]
         self.assertEqual(sum(returncode == 0 for _, _, returncode in results), 1, results)
 
+    def test_transaction_rejects_orphaning_an_unaffected_predecessor_edge(self) -> None:
+        module = self.load_restructure_module("orphan_predecessor_module")
+        source_paths = self.prepare_direct_active_sources()
+        dependent = "docs/plan/active/013-unaffected-dependent.md"
+        (self.repo / dependent).write_text(
+            self.direct_source_content(
+                title="Unaffected Dependent",
+                acceptance=["Keep the unaffected downstream requirement."],
+                stopped=False,
+                predecessor=source_paths[0],
+            ),
+            encoding="utf-8",
+        )
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8") + f"013\t{dependent}\tdeferred\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "add unaffected dependent plan")
+        spec = self.direct_active_spec(module, source_paths)
+        result = self.run_spec_data(spec, "orphan-predecessor.json")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(
+            f"{dependent} predecessor is missing: {source_paths[0]}",
+            result.stderr,
+        )
+        self.assertEqual(list(self.journal_directory().glob("*.json")), [])
+        for path in source_paths:
+            self.assertTrue((self.repo / path).is_file())
+        self.assertFalse((self.repo / str(spec["contract_path"])).exists())
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_rejected_coupled_transaction_leaves_no_mutation_or_journal(self) -> None:
+        module = self.load_restructure_module("rejected_coupled_module")
+        source_paths = self.prepare_direct_active_sources()
+        before = {
+            path: (self.repo / path).read_text(encoding="utf-8")
+            for path in (
+                *source_paths,
+                "docs/plan/plan.md",
+                "docs/plan/replanned.md",
+                "docs/plan/checked.md",
+            )
+        }
+        head = git(self.repo, "rev-parse", "HEAD")
+        spec = self.direct_active_spec(module, source_paths)
+        successor = spec["successors"][0]  # type: ignore[index]
+        successor["content"] = str(successor["content"]).replace(
+            "write_scope:\n  - coupled/\n",
+            "write_scope:\n  - coupled/\n  - coupled/\n",
+            1,
+        )
+        result = self.run_spec_data(spec, "rejected-coupled.json")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("write_scope must contain unique normalized relative paths", result.stderr)
+        self.assertEqual(list(self.journal_directory().glob("*.json")), [])
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), head)
+        self.assertEqual(
+            [
+                line
+                for line in git(self.repo, "status", "--porcelain").splitlines()
+                if ".agent-artifacts/" not in line
+            ],
+            [],
+        )
+        for path, content in before.items():
+            self.assertEqual((self.repo / path).read_text(encoding="utf-8"), content, path)
+        self.assertFalse((self.repo / str(spec["contract_path"])).exists())
+        self.assertFalse((self.repo / str(successor["path"])).exists())
+        self.assertEqual(self.run_verify().returncode, 0)
+
+
+COUPLED_ACCEPTANCE_CLAUSES: tuple[dict[str, object], ...] = (
+    {
+        "id": "atomic_transaction",
+        "enforcement": (
+            "hold_git_mutation_locks",
+            "execute",
+            "apply_operation",
+            "rollback_journal",
+            "roll_forward_journal",
+            "atomic_replace_text",
+        ),
+        "tests": (
+            "test_crash_recovery_rolls_back_each_precommit_phase_and_rolls_forward",
+            "test_injected_midwrite_failure_rolls_back_metadata",
+            "test_concurrent_transition_has_one_winner",
+        ),
+    },
+    {
+        "id": "fail_closed_preflight",
+        "enforcement": (
+            "validate_schema_three_spec",
+            "verify_prospective_repository",
+            "require_transaction_repository_state",
+            "validate_prospective_plan_context_files",
+        ),
+        "tests": (
+            "test_created_plan_context_is_enforced_before_any_mutation",
+            "test_schema_one_preflight_rejects_corrupt_repository_before_journal",
+            "test_tampered_source_digest_is_rejected_without_writes",
+            "test_rejected_coupled_transaction_leaves_no_mutation_or_journal",
+        ),
+    },
+    {
+        "id": "stopped_source_replacement",
+        "enforcement": (
+            "derive_stopped_source_content",
+            "validate_canonical_stopped_manifest",
+            "build_multi_archive",
+        ),
+        "tests": (
+            "test_direct_active_source_rejects_noncanonical_stopping",
+            "test_durable_verification_rejects_unstopped_first_source",
+            "test_canonical_stopped_state_rejects_noncanonical_metadata",
+            "test_direct_active_sources_reconstruct_without_contract_ownership",
+        ),
+    },
+    {
+        "id": "immutable_dependent_replacement",
+        "enforcement": (
+            "source_dependency_reaches",
+            "validate_direct_active_source",
+            "validate_schema_three_integration_coverage",
+        ),
+        "tests": (
+            "test_schema_three_reconstructs_coupled_sources_with_prerequisite",
+            "test_direct_active_source_rejects_missing_dependency",
+            "test_schema_three_rejects_partial_sources_and_duplicate_integrations",
+            "test_mixed_source_routes_share_one_transaction",
+        ),
+    },
+    {
+        "id": "bounded_dependent_rebinding",
+        "enforcement": (
+            "apply_exact_replacements",
+            "bounded_occurrences",
+            "validate_rebind_reference_transition",
+            "validate_validation_transition",
+            "validate_rebinding_specs",
+        ),
+        "tests": (
+            "test_rebind_rejects_protected_and_weakening_changes",
+            "test_rebind_baseline_fork_is_rejected",
+            "test_rebind_rejects_allowlisted_but_unadmitted_validation_path",
+            "test_activation_rejects_unrelated_context_changes",
+        ),
+    },
+    {
+        "id": "historical_preservation",
+        "enforcement": (
+            "require_historical_contract_snapshot",
+            "validate_lifecycle_evolution",
+            "validate_projection",
+            "compare_contract_identity",
+        ),
+        "tests": (
+            "test_durable_contract_tampering_is_rejected",
+            "test_committed_replanned_history_is_immutable",
+            "test_live_successor_acceptance_drift_is_rejected_without_contract_change",
+            "test_validation_projection_tampering_and_live_reordering_are_rejected",
+            "test_lifecycle_evolution_rejects_reattached_list_items",
+            "test_recovery_rejects_historical_contract_mutation",
+        ),
+    },
+    {
+        "id": "predecessor_graph_preservation",
+        "enforcement": (
+            "validate_active_predecessors",
+            "validate_repository_active_predecessors",
+            "matching_checked_paths",
+        ),
+        "tests": (
+            "test_predecessor_cycles_and_duplicate_edges_are_rejected_before_writes",
+            "test_stale_or_cross_id_checked_predecessor_is_rejected",
+            "test_predecessor_chain_requires_deferred_then_exact_checked_refresh",
+            "test_transaction_rejects_orphaning_an_unaffected_predecessor_edge",
+        ),
+    },
+)
+
+CLAUSE_POLICY_HEADING = "#### Acceptance Clauses"
+CLAUSE_POLICY_FILES = (
+    ROOT / "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    ROOT / "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+)
+
+
+class CoupledLineageAcceptanceCoverageTest(unittest.TestCase):
+    """Bind the coupled reconstruction acceptance clauses to enforcement and tests."""
+
+    @staticmethod
+    def clause_ids() -> list[str]:
+        return [str(clause["id"]) for clause in COUPLED_ACCEPTANCE_CLAUSES]
+
+    @staticmethod
+    def policy_clause_ids(text: str) -> list[str]:
+        start = text.index(CLAUSE_POLICY_HEADING) + len(CLAUSE_POLICY_HEADING)
+        end = len(text)
+        for index in range(start, len(text)):
+            if text.startswith("\n#", index) and not text.startswith("\n#####", index):
+                end = index
+                break
+        return re.findall(r"^- `([a-z_]+)`:", text[start:end], re.MULTILINE)
+
+    def test_clause_ids_are_unique_and_ordered_with_bound_evidence(self) -> None:
+        ids = self.clause_ids()
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(len(ids), 7)
+        for clause in COUPLED_ACCEPTANCE_CLAUSES:
+            self.assertEqual(set(clause), {"id", "enforcement", "tests"})
+            enforcement = tuple(clause["enforcement"])  # type: ignore[arg-type]
+            covering = tuple(clause["tests"])  # type: ignore[arg-type]
+            self.assertTrue(enforcement, clause["id"])
+            self.assertTrue(covering, clause["id"])
+            self.assertEqual(len(enforcement), len(set(enforcement)), clause["id"])
+            self.assertEqual(len(covering), len(set(covering)), clause["id"])
+
+    def test_every_clause_binds_existing_enforcement_functions(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        defined = set(re.findall(r"^def ([a-zA-Z_][a-zA-Z0-9_]*)\(", source, re.MULTILINE))
+        for clause in COUPLED_ACCEPTANCE_CLAUSES:
+            for name in clause["enforcement"]:  # type: ignore[union-attr]
+                self.assertIn(
+                    name,
+                    defined,
+                    f"clause {clause['id']} lost its enforcement function {name}",
+                )
+                self.assertGreater(
+                    len(re.findall(rf"(?<![a-zA-Z0-9_]){re.escape(name)}\(", source)),
+                    1,
+                    f"clause {clause['id']} enforcement function {name} lost every call site",
+                )
+
+    def test_every_clause_binds_existing_regression_tests(self) -> None:
+        available = {
+            name for name in dir(PlanRestructureTest) if name.startswith("test_")
+        }
+        for clause in COUPLED_ACCEPTANCE_CLAUSES:
+            for name in clause["tests"]:  # type: ignore[union-attr]
+                self.assertIn(
+                    name,
+                    available,
+                    f"clause {clause['id']} lost its covering test {name}",
+                )
+
+    def test_clause_decomposition_matches_root_and_generated_policy(self) -> None:
+        expected = self.clause_ids()
+        for path in CLAUSE_POLICY_FILES:
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(CLAUSE_POLICY_HEADING, text, str(path))
+            self.assertEqual(self.policy_clause_ids(text), expected, str(path))
+
 
 if __name__ == "__main__":
     unittest.main()

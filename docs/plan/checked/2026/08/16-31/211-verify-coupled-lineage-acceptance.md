@@ -1,6 +1,6 @@
 # Verify coupled lineage acceptance
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: one durable locked transaction can replace a stopped active successor and its immutable dependent successor while applying only exact authorized reference projections in later dependents and leaving every historical contract byte, acceptance item, write scope, validation authority, and unaffected predecessor edge unchanged
 replan_sources:
@@ -92,16 +92,21 @@ checked_summary_ja: coupled lineage reconstructionのacceptance条項を強制pa
 
 ## Tasks
 
-- [ ] Enumerate the seven acceptance clauses and bind each to its exact enforcing function in `scripts/restructure-plan.py`.
-- [ ] Identify every clause without a direct rejecting test and record the coverage gap before writing code.
-- [ ] Add the missing negative and hold-out tests so each clause fails independently when its enforcement is removed.
-- [ ] Add executable clause-coverage assertions that reject a silently deleted enforcement binding.
-- [ ] Keep root and generated restructuring scripts byte-identical and align the root and generated Plan Workflow policy with the recorded clause decomposition.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 212 with this plan's exact checked archive as predecessor.
+- [x] Enumerate the seven acceptance clauses and bind each to its exact enforcing function in `scripts/restructure-plan.py`.
+- [x] Identify every clause without a direct rejecting test and record the coverage gap before writing code.
+- [x] Add the missing negative and hold-out tests so each clause fails independently when its enforcement is removed.
+- [x] Add executable clause-coverage assertions that reject a silently deleted enforcement binding.
+- [x] Keep root and generated restructuring scripts byte-identical and align the root and generated Plan Workflow policy with the recorded clause decomposition.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 212 with this plan's exact checked archive as predecessor.
 
 ## Validation Notes
 
 - This successor owns final acceptance of the original Plan 200 requirement; the checked prerequisite plans do not.
 - This plan performs no plan-lifecycle restructuring of Plans 197, 198, or 201.
 - Coverage additions must not relax an existing rejection path to make a new test pass.
+- The seven clauses are recorded in `docs/agent/SPEC_PLAN_WORKFLOW.md` and its generated twin, and bound executably by `COUPLED_ACCEPTANCE_CLAUSES` and `CoupledLineageAcceptanceCoverageTest` in `tests/test-plan-restructure.py`.
+- Coverage gaps closed by new negative tests: `test_transaction_rejects_orphaning_an_unaffected_predecessor_edge` (predecessor graph preservation) and `test_rejected_coupled_transaction_leaves_no_mutation_or_journal` (fail-closed preflight and atomic transaction).
+- Root and generated `restructure-plan.py` remain byte-identical; no enforcement path was relaxed.
+- Independent review returned zero High and zero Medium findings; three Low findings were resolved by correcting the generated policy wording, narrowing the coverage claim, and asserting each bound enforcement function retains a call site.
+- Authoritative suite run once, all passing: `python3 tests/test-plan-restructure.py` (133 tests), `python3 scripts/restructure-plan.py --verify`, `python3 -m py_compile scripts/restructure-plan.py template/.project-agent-workflow/scripts/restructure-plan.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `git diff --check`.

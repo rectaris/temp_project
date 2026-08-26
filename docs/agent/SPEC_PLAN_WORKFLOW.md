@@ -165,6 +165,18 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - Keep this guarantee bounded to transaction-created file identity under the existing same-user threat model. It does not defend against an actor that can replace every local process and file.
 - Run a coupled transaction with `python3 scripts/restructure-plan.py <schema-3-spec.json>`. Recover only with `python3 scripts/restructure-plan.py --recover <journal-path> --journal-id <sha256-identity>`.
 
+#### Acceptance Clauses
+
+Decompose the coupled reconstruction requirement into these seven clauses. `tests/test-plan-restructure.py` binds each clause id to its enforcing functions and to the regression tests that cover it, so deleting an enforcement function or a bound test fails the focused suite instead of silently widening the operation.
+
+- `atomic_transaction`: one coupled reconstruction applies every plan, contract, archive, index, and overlay write as a single all-or-nothing transaction under the repository lifecycle lock.
+- `fail_closed_preflight`: every specification, repository, lineage, and prospective-state check runs and rejects before the first repository write and before any journal exists.
+- `stopped_source_replacement`: the first source is replaced only from canonical `replan_required` bytes and is archived with terminal `status: replanned`.
+- `immutable_dependent_replacement`: each dependent source depends on an earlier source, is stopped by lifecycle-field derivation alone, and is replaced in the same transaction.
+- `bounded_dependent_rebinding`: a live dependent rebinding changes only exact authorized reference tokens in permitted fields and is appended to the immutable rebind record chain.
+- `historical_preservation`: existing contract bytes, acceptance items, write scopes, and validation authority stay unchanged for every affected and unaffected plan.
+- `predecessor_graph_preservation`: the complete active predecessor graph stays resolvable, acyclic, and free of stale, cross-id, or dangling edges after the transaction.
+
 ## Independent Repair Prerequisite
 
 An authoritative validation failure does not itself authorize a repair plan.
