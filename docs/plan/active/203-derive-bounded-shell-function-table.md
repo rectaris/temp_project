@@ -1,7 +1,6 @@
 # Derive the bounded shell function table
 
-status: deferred
-completion_deferred_reason: Plan 202 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 implementation_tier: 2
 primary_invariant: the checked lexical records yield exactly one unique top-level function declaration table and every alternate, hidden, or dynamic definition path is rejected
 reserved_by: 223
@@ -45,7 +44,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:c4fce8b4e2eed5938124658fa1e59f9147abc9dcc6150ad571df1abf5efd780a","stage":"focused","witness":"python3 tests/test-shell-functions.py"}
 predecessor_plans:
-  - docs/plan/active/202-freeze-bounded-shell-lexical-projection.md
+  - docs/plan/checked/2026/08/16-31/202-freeze-bounded-shell-lexical-projection.md
 checked_summary_ja: checked字句recordから一意なtop-level関数表を導出し、代替定義経路を拒否する。
 
 ## Decisions
