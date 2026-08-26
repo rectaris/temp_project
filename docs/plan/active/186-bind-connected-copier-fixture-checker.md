@@ -21,7 +21,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
-  - docs/plan/replanned/2026/08/16-31/191-freeze-bounded-copier-fixture-validator.md
+  - docs/plan/active/205-integrate-bounded-copier-fixture-validator.md
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
   - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
   - tests/test-copier-migration.py
@@ -32,14 +32,14 @@ required_specs:
   - docs/agent/SPEC_SECURITY.md
 focused_validation:
   - sh -n tests/copier-update.sh
-  - python3 tests/test-copier-fixture.py
-  - python3 scripts/project_workflow/copier_fixture.py --check tests/copier-update.sh
+  - python3 tests/test-copier-fixture-validator.py
+  - python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh
   - python3 scripts/check-copier-template.py
   - git diff --check
 validation:
   - sh -n tests/copier-update.sh
-  - python3 tests/test-copier-fixture.py
-  - python3 scripts/project_workflow/copier_fixture.py --check tests/copier-update.sh
+  - python3 tests/test-copier-fixture-validator.py
+  - python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh
   - python3 scripts/check-copier-template.py
   - git diff --check
 acceptance:

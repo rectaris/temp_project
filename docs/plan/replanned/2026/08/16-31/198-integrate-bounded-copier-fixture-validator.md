@@ -1,17 +1,6 @@
 # Integrate the bounded Copier fixture validator
 
-status: deferred
-completion_deferred_reason: Plan 197 must be checked and its exact checked archive path must replace the active predecessor before implementation.
-primary_invariant: the checked shell structure parser and Copier operation rules reject every missing, reordered, duplicated, unreachable, or alternate-path bounded fixture operation through the exact check CLI
-replan_source: docs/plan/active/191-freeze-bounded-copier-fixture-validator.md
-replan_contract: docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json
-integration_gates:
-  - combined successors must satisfy every source acceptance item
-successor_plans:
-  - docs/plan/active/197-freeze-bounded-shell-structure-parser.md
-  - docs/plan/active/198-integrate-bounded-copier-fixture-validator.md
-inherited_acceptance_digests:
-  - sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02
+status: replanned
 task_types:
   - security
   - template_workflow
@@ -51,6 +40,17 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02","stage":"focused","witness":"python3 tests/test-copier-fixture.py"}
 predecessor_plans:
   - docs/plan/active/197-freeze-bounded-shell-structure-parser.md
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/197-freeze-bounded-shell-structure-parser.md
+  - docs/plan/active/198-integrate-bounded-copier-fixture-validator.md
+replan_contract: docs/plan/replanned/contracts/197-freeze-bounded-shell-structure-parser.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/205-integrate-bounded-copier-fixture-validator.md
+inherited_acceptance_digests:
+  - sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02
 checked_summary_ja: checked shell parserへCopier fixtureの全operationとmutation contractを接続する。
 
 ## Decisions

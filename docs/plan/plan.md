@@ -9,5 +9,7 @@ id	path	status
 179	docs/plan/active/179-integrate-validation-witness-migration-provenance.md	deferred
 165	docs/plan/active/165-enforce-validation-witness-maps.md	deferred
 166	docs/plan/active/166-unify-copier-update-source-inventory.md	deferred
-197	docs/plan/active/197-freeze-bounded-shell-structure-parser.md	replan_required
-198	docs/plan/active/198-integrate-bounded-copier-fixture-validator.md	deferred
+205	docs/plan/active/205-integrate-bounded-copier-fixture-validator.md	deferred
+202	docs/plan/active/202-freeze-bounded-shell-lexical-projection.md	deferred
+203	docs/plan/active/203-derive-bounded-shell-function-table.md	deferred
+204	docs/plan/active/204-derive-bounded-shell-execution-graph.md	deferred

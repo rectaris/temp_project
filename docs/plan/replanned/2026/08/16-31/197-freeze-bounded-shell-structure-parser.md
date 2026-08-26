@@ -1,19 +1,6 @@
 # Freeze the bounded shell structure parser
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
-  - multiple_independent_invariants
-primary_invariant: supplied shell bytes expose one unique function table and one reachable top-level execution sequence before any Copier-specific operation rule is evaluated
-replan_source: docs/plan/active/191-freeze-bounded-copier-fixture-validator.md
-replan_contract: docs/plan/replanned/contracts/191-freeze-bounded-copier-fixture-validator.json
-integration_gates:
-  - combined successors must satisfy every source acceptance item
-successor_plans:
-  - docs/plan/active/197-freeze-bounded-shell-structure-parser.md
-  - docs/plan/active/198-integrate-bounded-copier-fixture-validator.md
-inherited_acceptance_digests:
-  - sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02
+status: replanned
 task_types:
   - security
   - template_workflow
@@ -52,6 +39,17 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02","stage":"focused","witness":"python3 tests/test-copier-fixture.py"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/190-migrate-live-plan-contracts.md
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/197-freeze-bounded-shell-structure-parser.md
+  - docs/plan/active/198-integrate-bounded-copier-fixture-validator.md
+replan_contract: docs/plan/replanned/contracts/197-freeze-bounded-shell-structure-parser.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/205-integrate-bounded-copier-fixture-validator.md
+inherited_acceptance_digests:
+  - sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02
 checked_summary_ja: shell fixtureの関数定義とtop-level到達可能性をCopier固有規則から分離して確定する。
 
 ## Decisions

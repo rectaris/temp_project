@@ -35,3 +35,5 @@ id	path	contract
 200	docs/plan/replanned/2026/08/16-31/200-enable-coupled-lineage-reconstruction.md	docs/plan/replanned/contracts/200-enable-coupled-lineage-reconstruction.json
 201	docs/plan/replanned/2026/08/16-31/201-reconstruct-shell-parser-lineage.md	docs/plan/replanned/contracts/200-enable-coupled-lineage-reconstruction.json
 212	docs/plan/replanned/2026/08/16-31/212-reconstruct-shell-parser-lineage.md	docs/plan/replanned/contracts/212-reconstruct-shell-parser-lineage.json
+197	docs/plan/replanned/2026/08/16-31/197-freeze-bounded-shell-structure-parser.md	docs/plan/replanned/contracts/197-freeze-bounded-shell-structure-parser.json
+198	docs/plan/replanned/2026/08/16-31/198-integrate-bounded-copier-fixture-validator.md	docs/plan/replanned/contracts/197-freeze-bounded-shell-structure-parser.json

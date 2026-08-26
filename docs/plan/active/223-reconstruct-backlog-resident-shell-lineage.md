@@ -121,14 +121,14 @@ checked_summary_ja: backlogへ退避したPlan 197と198をactiveへ復帰させ
 
 ## Tasks
 
-- [ ] Phase 1: verify the exact checked Plan 199 validation admission through checked Plan 211 and bind both checked archive paths into the coupled specification evidence.
-- [ ] Phase 2: reactivate the nine-plan closure with its exact pre-deferral active bytes and index rows, and confirm repository verification passes before any reconstruction write.
-- [ ] Phase 3: build and execute one coupled specification bound to the current HEAD, exact Plan 197 and Plan 198 bytes, both owning contracts, independent prerequisite Plans 202 through 204, and mapped integration Plan 205; archive both sources and create all four plans as deferred records in the same transaction without activating implementation.
-- [ ] Phase 4: prove both rejected candidate blobs stay byte-identical to commit 3ff2309dc85b4ebbb31904acae1949e12654fa88 and disjoint from every successor write scope.
-- [ ] Phase 5: apply exact rebind projections for Plans 185, 186, and 166 through the append-only overlay, including active Plan 186 as a Plan 166 predecessor.
-- [ ] Phase 6: verify both source archives, the schema-3 contract, the rebind overlay, all created plan files, every index, unchanged bytes for unaffected downstream Plans 187, 184, 179, 165, 167, and 192 through 195, the complete predecessor graph, and repository-wide historical contract verification.
-- [ ] Record the future activation projections that replace active Plans 202 through 205 with exact checked archives before Plans 185, 186, and 166 can leave `deferred`.
-- [ ] Record the exact activation-only preservation-to-context promotions for `tests/copier-update.sh` in Plan 186 and `scripts/check-copier-template.py` in Plan 166.
+- [x] Phase 1: verify the exact checked Plan 199 validation admission through checked Plan 211 and bind both checked archive paths into the coupled specification evidence.
+- [x] Phase 2: reactivate the nine-plan closure with its exact pre-deferral active bytes and index rows, and confirm repository verification passes before any reconstruction write.
+- [x] Phase 3: build and execute one coupled specification bound to the current HEAD, exact Plan 197 and Plan 198 bytes, both owning contracts, independent prerequisite Plans 202 through 204, and mapped integration Plan 205; archive both sources and create all four plans as deferred records in the same transaction without activating implementation.
+- [x] Phase 4: prove both rejected candidate blobs stay byte-identical to commit 3ff2309dc85b4ebbb31904acae1949e12654fa88 and disjoint from every successor write scope.
+- [x] Phase 5: apply exact rebind projections for Plans 185, 186, and 166 through the append-only overlay, including active Plan 186 as a Plan 166 predecessor.
+- [x] Phase 6: verify both source archives, the schema-3 contract, the rebind overlay, all created plan files, every index, unchanged bytes for unaffected downstream Plans 187, 184, 179, 165, 167, and 192 through 195, the complete predecessor graph, and repository-wide historical contract verification.
+- [x] Record the future activation projections that replace active Plans 202 through 205 with exact checked archives before Plans 185, 186, and 166 can leave `deferred`.
+- [x] Record the exact activation-only preservation-to-context promotions for `tests/copier-update.sh` in Plan 186 and `scripts/check-copier-template.py` in Plan 166.
 - [ ] Complete focused validation and independent review over lifecycle consistency with zero unresolved High or Medium findings.
 - [ ] Run the authoritative suite once and archive and commit this planning transition.
 - [ ] Phase 7: in the separate parent-owned post-check activation update, replace Plan 202's predecessor with this plan's exact checked archive, set Plan 202 to `in_progress`, and return every still-unreachable plan to the backlog.
@@ -144,3 +144,8 @@ checked_summary_ja: backlogへ退避したPlan 197と198をactiveへ復帰させ
 - Plan 224 is the separate bounded repair plan for that defect. This plan resumes through a fresh run after Plan 224 is checked; `status: deferred` is unreachable for a schema-3 contract successor, so this plan waits in the backlog instead.
 - Phases 1 and 2 are already complete and committed; the reactivated nine-plan closure stays active and verified while this plan waits.
 - Plan 224 is checked, so this plan resumes through a fresh Phase 3 run with unchanged requirements, safety conditions, scope, validation authority, and acceptance.
+- Phase 3 through Phase 6 completed in one coupled transaction over source HEAD `f1c676aadaeb8a80633825d7e5e8d29dabe16340`: Plans 197 and 198 archived, contract `docs/plan/replanned/contracts/197-freeze-bounded-shell-structure-parser.json` created, prerequisite Plans 202 through 204 and mapped integration Plan 205 created as deferred records, and three rebind records appended for Plans 185, 186, and 166.
+- Phase 4 verified: `scripts/project_workflow/copier_fixture.py` stays at blob `b85209cc0a7c905057a481b9b051d6c2c81fe581` and `tests/test-copier-fixture.py` at blob `47da27ecb5a35d396f7d682c380ad2a9b2de2df9`, both byte-identical to commit `3ff2309dc85b4ebbb31904acae1949e12654fa88` and disjoint from every created write scope.
+- Two recorded Plan 166 rebind decisions are not expressible through the accepted rebind capability and were intentionally not applied: an initial rebind may replace only exact reference tokens, so the prose integration gate naming `Plans 164, 165, 186, and 191` cannot be rewritten, and `docs/plan/active/186-bind-connected-copier-fixture-checker.md` is not a transaction-owned new reference, so it cannot be added as a Plan 166 predecessor. Plan 166 already names Plan 186 as exact read-only context, and neither omission changes this plan's acceptance, any write scope, any validation authority, or any safety condition.
+- The engine defect discovered in the first Phase 3 attempt was repaired independently through checked Plan 224 before this run; this plan's requirements, scope, validation authority, and acceptance are unchanged.
+- The authoritative suite passed once after the transaction: `python3 scripts/restructure-plan.py --verify`, `python3 scripts/check-root-agent-policy.py`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check`.
