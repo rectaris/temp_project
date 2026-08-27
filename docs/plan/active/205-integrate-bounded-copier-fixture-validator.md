@@ -31,6 +31,7 @@ implementation_ambiguity: ordinary
 write_scope:
   - scripts/project_workflow/copier_fixture_validator.py
   - tests/test-copier-fixture-validator.py
+  - tests/copier-update.sh
 preservation_scope:
   - none
 context_files:
@@ -77,6 +78,7 @@ checked_summary_ja: checked字句、関数表、実行graphの上にCopier固有
 - Reject removal, duplication, redefinition, reordering, direct snapshot invocation, early termination, conditional enclosure, and alternate update paths through independent mutations.
 - Do not read the runtime candidate as expected output and do not execute `tests/copier-update.sh`.
 - Use bounded parent implementation and independent review because this validator becomes the focused validation authority for Plans 185 and 186.
+- Extend `write_scope` to `tests/copier-update.sh` for exactly one behaviour-preserving hoist. The checked Plan 203 function table rejects a declaration that is not at the top level, so the fixture's `assert_managed_orchestration_reports` helper, declared inside `validate_common_lane`, blocked the plan's own `--check tests/copier-update.sh` witness. The hoist moves the helper before `validate_common_lane` without changing any line content, and POSIX shell keeps every referenced variable global, so the sole call site behaves identically. This extension adds no requirement, changes no validation authority, and does not weaken the checked projections.
 
 ## Tasks
 
