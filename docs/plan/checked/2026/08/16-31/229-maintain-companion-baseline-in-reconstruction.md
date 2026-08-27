@@ -1,6 +1,6 @@
 # Maintain the companion baseline inside the reconstruction transaction
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: a reconstruction transaction that archives a live schema-1 contract successor publishes the exact derived live validation successor companion records in the same all-or-nothing transaction, and changes no record or successor it does not archive
 task_types:

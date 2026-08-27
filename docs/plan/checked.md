@@ -172,3 +172,4 @@ id	path
 204	docs/plan/checked/2026/08/16-31/204-derive-bounded-shell-execution-graph.md
 205	docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
 225	docs/plan/checked/2026/08/16-31/225-repair-live-successor-rebind-baseline.md
+229	docs/plan/checked/2026/08/16-31/229-maintain-companion-baseline-in-reconstruction.md
