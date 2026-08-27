@@ -1,6 +1,6 @@
 # Repair the live successor rebind baseline lineage
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: repository lineage verification succeeds only when every live contract successor's reservation and protected manifest fields are reproduced by the recorded rebind, activation, or owner-authorized reservation record sequence
 task_types:
