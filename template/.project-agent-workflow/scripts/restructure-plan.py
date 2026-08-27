@@ -109,7 +109,11 @@ JOURNAL_TRANSITIONS = {
     "complete": set(),
     "rolled_back": set(),
 }
-REBIND_KINDS = {"rebind", "activation"}
+REBIND_KINDS = {"rebind", "activation", "reservation"}
+RESERVATION_FIELDS = {
+    "write_scope",
+    "preservation_scope",
+}
 REBIND_FIELDS = {
     "completion_deferred_reason",
     "context_files",
@@ -1828,7 +1832,12 @@ def apply_exact_replacements(
     label: str,
 ) -> str:
     text = original
-    allowed_fields = ACTIVATION_FIELDS if kind == "activation" else REBIND_FIELDS
+    if kind == "activation":
+        allowed_fields = ACTIVATION_FIELDS
+    elif kind == "reservation":
+        allowed_fields = RESERVATION_FIELDS
+    else:
+        allowed_fields = REBIND_FIELDS
     seen: set[tuple[str, str, str, str, int]] = set()
     for index, raw in enumerate(replacements, start=1):
         replacement = exact_object(
@@ -3093,7 +3102,7 @@ def validate_rebinding_specs(
             before,
             after,
             spec["replacements"],
-            activation=kind == "activation",
+            activation=kind != "rebind",
             label=f"rebindings[{index}]",
         )
         record = {
@@ -3202,8 +3211,240 @@ def contract_reference_values(contract_path: str) -> set[str]:
     return references
 
 
+def collect_pending_reservations(raw_reservations: Any) -> dict[str, str]:
+    """Name the exact plan paths and commits this transaction is about to record.
+
+    The authorizing commit is already in history, so repository verification would
+    otherwise reject the very change the transaction records. The exemption is
+    bound to these exact paths and replaces the compared baseline with that
+    commit's own bytes, so every later lifecycle byte stays under the original
+    comparison.
+    """
+    if not isinstance(raw_reservations, list) or not raw_reservations:
+        raise RestructureError("reservations must be a non-empty list")
+    pending: dict[str, str] = {}
+    for index, raw in enumerate(raw_reservations, start=1):
+        if not isinstance(raw, dict):
+            raise RestructureError(f"reservations[{index}] must be an object")
+        plan_path = normalized_path(
+            raw.get("plan_path"),
+            PLAN_PATH_RE,
+            f"reservations[{index}].plan_path",
+        )
+        commit = raw.get("authorizing_commit")
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise RestructureError(
+                f"reservations[{index}] has an invalid authorizing commit"
+            )
+        if plan_path in pending:
+            raise RestructureError(
+                "one transaction may reserve each live plan once"
+            )
+        pending[plan_path] = commit
+    return pending
+
+
+def validate_reservation_specs(
+    raw_reservations: Any,
+    *,
+    repository_state: dict[str, Any],
+    transaction_id: str,
+) -> list[dict[str, Any]]:
+    """Record an already-committed owner-authorized reservation-field change.
+
+    The authorizing commit is what grants the change, so the record reproduces
+    that commit's own parent-to-commit plan bytes instead of rewriting the live
+    plan. The operation therefore writes no plan file and only appends the
+    durable record that repository verification re-authorizes.
+    """
+    if not isinstance(raw_reservations, list) or not raw_reservations:
+        raise RestructureError("reservations must be a non-empty list")
+    existing_records = repository_state["rebind_records"]
+    effective_projections = repository_state["effective_projections"]
+    live_successors = repository_state["live_successors"]
+    records: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for index, raw in enumerate(raw_reservations, start=1):
+        label = f"reservations[{index}]"
+        spec = exact_object(
+            raw,
+            {
+                "plan_path",
+                "owning_contract_path",
+                "authorizing_commit",
+                "prior_effective_projection_digest",
+                "replacements",
+            },
+            label,
+        )
+        plan_path = normalized_path(
+            spec["plan_path"],
+            PLAN_PATH_RE,
+            f"{label}.plan_path",
+        )
+        if plan_path in seen_paths:
+            raise RestructureError(
+                "one transaction may reserve each live plan once"
+            )
+        seen_paths.add(plan_path)
+        live = live_successors.get(plan_path)
+        if live is None:
+            raise RestructureError(
+                f"{label} must target one exact live contract successor"
+            )
+        if spec["owning_contract_path"] != live["contract_path"]:
+            raise RestructureError(f"{label} owning contract mismatch")
+        commit = spec["authorizing_commit"]
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise RestructureError(f"{label} has an invalid authorizing commit")
+        original_content = committed_plan_bytes(f"{commit}^", plan_path, label)
+        updated_content = committed_plan_bytes(commit, plan_path, label)
+        chained = [
+            record
+            for record in existing_records
+            if record["plan_path"] == plan_path
+        ]
+        previous_content = (
+            chained[-1]["updated_content"] if chained else live["base_content"]
+        )
+        if project_context_archive_relocation(
+            original_content
+        ) != project_context_archive_relocation(previous_content):
+            raise RestructureError(f"{label} contains a chain gap or fork")
+        prior_projection = effective_projections.get(plan_path)
+        if prior_projection is None or projection_digest(prior_projection) != spec[
+            "prior_effective_projection_digest"
+        ]:
+            raise RestructureError(f"{label} prior validation projection is stale")
+        if not isinstance(spec["replacements"], list) or not spec["replacements"]:
+            raise RestructureError(f"{label} requires an exact replacement map")
+        if apply_exact_replacements(
+            original_content,
+            spec["replacements"],
+            kind="reservation",
+            label=label,
+        ) != updated_content:
+            raise RestructureError(f"{label} replacement reproduction mismatch")
+        before = parse_manifest(original_content)
+        after = parse_manifest(updated_content)
+        record = {
+            "kind": "reservation",
+            "transaction_id": transaction_id,
+            "owning_contract_path": live["contract_path"],
+            "owning_contract_digest": live["contract_digest"],
+            "plan_path": plan_path,
+            "original_content_digest": sha256(original_content.encode("utf-8")),
+            "original_content": original_content,
+            "prior_effective_projection_digest": spec[
+                "prior_effective_projection_digest"
+            ],
+            "updated_content_digest": sha256(updated_content.encode("utf-8")),
+            "updated_content": updated_content,
+            "replacements": spec["replacements"],
+            "promoted_preservation_path": None,
+            "authorizing_commit": commit,
+            "resulting_validation_projection": {},
+            "record_digest": "",
+        }
+        authorized_field = validate_reservation_authorization(
+            record,
+            before,
+            after,
+            live["expected_preservation"],
+            label,
+        )
+        if any(
+            before.get(field) != after.get(field)
+            for field in REBIND_PROTECTED_FIELDS - {authorized_field}
+        ):
+            raise RestructureError(
+                f"{label} reservation changes protected plan identity"
+            )
+        validate_current_plan_rules(after, f"{label} updated plan")
+        record["resulting_validation_projection"] = validate_validation_transition(
+            before,
+            after,
+            spec["replacements"],
+            activation=True,
+            label=label,
+        )
+        record["record_digest"] = canonical_digest(
+            {key: value for key, value in record.items() if key != "record_digest"}
+        )
+        records.append(record)
+        effective_projections[plan_path] = record["resulting_validation_projection"]
+    return records
+
+
 def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
     operation = spec.get("operation")
+    if operation == "reserve":
+        exact_object(
+            spec,
+            {"schema_version", "operation", "source_head", "reservations"},
+            "schema-3 reserve specification",
+        )
+        if spec["source_head"] != current_head():
+            raise RestructureError("source HEAD mismatch")
+        pending_reservations = collect_pending_reservations(spec["reservations"])
+        repository_state = verify_repository_contracts(
+            pending_reservations=pending_reservations,
+        )
+        expected_dirty = dirty_product_paths()
+        transaction_id = canonical_digest(
+            {
+                "source_head": spec["source_head"],
+                "specification": spec,
+            }
+        )
+        active_text, rows, _ = current_active_records()
+        reservation_records = validate_reservation_specs(
+            spec["reservations"],
+            repository_state=repository_state,
+            transaction_id=transaction_id,
+        )
+        replanned_text = (
+            REPLANNED_INDEX.read_text(encoding="utf-8")
+            if REPLANNED_INDEX.exists()
+            else "# Replanned Plan Index\n\nid\tpath\tcontract\n"
+        )
+        baseline = {
+            "schema_version": 1,
+            "records": [
+                *repository_state["rebind_records"],
+                *reservation_records,
+            ],
+        }
+        return {
+            "operation": "rebind",
+            "pending_reservations": pending_reservations,
+            "transaction_id": transaction_id,
+            "source_head": spec["source_head"],
+            "active_text": active_text,
+            "active_new": render_active(rows),
+            "replanned_text": replanned_text,
+            "replanned_new": replanned_text,
+            "replanned_existed": REPLANNED_INDEX.exists(),
+            "source_files": [],
+            "destinations": [],
+            "updated_files": [],
+            "baseline_new": json.dumps(
+                baseline,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            "baseline_original": repository_state["rebind_baseline_content"],
+            "expected_dirty_product_paths": expected_dirty,
+            "expected_dirty_product_snapshot": dirty_product_snapshot(
+                expected_dirty
+            ),
+            "result_path": REBIND_BASELINE_PATH,
+            "rebind_record_digests": [
+                record["record_digest"] for record in reservation_records
+            ],
+        }
     if operation == "rebind":
         exact_object(
             spec,
@@ -3311,7 +3552,9 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
         "schema-3 reconstruction specification",
     )
     if operation != "reconstruct":
-        raise RestructureError("schema-3 operation must be reconstruct or rebind")
+        raise RestructureError(
+            "schema-3 operation must be reconstruct, rebind, or reserve"
+        )
     source_head = spec["source_head"]
     if (
         not isinstance(source_head, str)
@@ -4878,6 +5121,7 @@ def execute(
         }
         repository_state = verify_repository_contracts(
             legacy_stopped_sources=legacy_stopped_sources,
+            pending_reservations=state.get("pending_reservations"),
         )
         apply_referrer_context_rebinds(state)
         operations, created_directories = build_transaction_operations(state)
@@ -5460,28 +5704,36 @@ def load_rebind_baseline() -> list[dict[str, Any]]:
         ):
             raise RestructureError("live successor rebind baseline is not append-only")
     for index, raw in enumerate(records):
+        base_fields = {
+            "kind",
+            "transaction_id",
+            "owning_contract_path",
+            "owning_contract_digest",
+            "plan_path",
+            "original_content_digest",
+            "original_content",
+            "prior_effective_projection_digest",
+            "updated_content_digest",
+            "updated_content",
+            "replacements",
+            "promoted_preservation_path",
+            "resulting_validation_projection",
+            "record_digest",
+        }
+        if isinstance(raw, dict) and raw.get("kind") == "reservation":
+            base_fields = base_fields | {"authorizing_commit"}
         record = exact_object(
             raw,
-            {
-                "kind",
-                "transaction_id",
-                "owning_contract_path",
-                "owning_contract_digest",
-                "plan_path",
-                "original_content_digest",
-                "original_content",
-                "prior_effective_projection_digest",
-                "updated_content_digest",
-                "updated_content",
-                "replacements",
-                "promoted_preservation_path",
-                "resulting_validation_projection",
-                "record_digest",
-            },
+            base_fields,
             f"rebind baseline record {index}",
         )
         if record["kind"] not in REBIND_KINDS:
             raise RestructureError("rebind baseline kind is invalid")
+        if record["kind"] == "reservation" and (
+            not isinstance(record["authorizing_commit"], str)
+            or not re.fullmatch(r"[0-9a-f]{40}", record["authorizing_commit"])
+        ):
+            raise RestructureError("rebind baseline authorizing commit is invalid")
         normalized_path(
             record["plan_path"],
             PLAN_PATH_RE,
@@ -5698,11 +5950,80 @@ def validate_lifecycle_evolution(
     )
 
 
+def commit_is_ancestor_of_head(commit: str) -> bool:
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, "HEAD"],
+        cwd=ROOT,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return completed.returncode == 0
+
+
+def committed_plan_bytes(commit: str, plan_path: str, label: str) -> str:
+    try:
+        blob = run_git("show", f"{commit}:{plan_path}")
+    except RestructureError as exc:
+        raise RestructureError(
+            f"{label} authorizing commit does not contain {plan_path}"
+        ) from exc
+    try:
+        return blob.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RestructureError(f"{label} authorizing plan bytes are invalid") from exc
+
+
+def validate_reservation_authorization(
+    record: dict[str, Any],
+    before: dict[str, str | list[str]],
+    after: dict[str, str | list[str]],
+    expected_preservation: Any,
+    label: str,
+) -> str:
+    """Bind one reservation-field change to the commit that authorized it.
+
+    Reservation fields stay immutable against rebind and activation records. A
+    reservation record is the only durable carrier for an owner-authorized change,
+    and it is accepted only when the named commit is an ancestor of HEAD and its
+    own parent-to-commit transition on the same plan path carries exactly the same
+    field values the record claims.
+    """
+    commit = record["authorizing_commit"]
+    if not commit_is_ancestor_of_head(commit):
+        raise RestructureError(
+            f"{label} authorizing commit is not an ancestor of HEAD"
+        )
+    changed = sorted(
+        field
+        for field in RESERVATION_FIELDS
+        if before.get(field) != after.get(field)
+    )
+    if len(changed) != 1:
+        raise RestructureError(
+            f"{label} must change exactly one reservation field"
+        )
+    field = changed[0]
+    if field == "preservation_scope" and expected_preservation is not None:
+        raise RestructureError(
+            f"{label} may not change a contract-bound preservation_scope"
+        )
+    plan_path = record["plan_path"]
+    if committed_plan_bytes(f"{commit}^", plan_path, label) != record[
+        "original_content"
+    ] or committed_plan_bytes(commit, plan_path, label) != record["updated_content"]:
+        raise RestructureError(
+            f"{label} authorizing commit does not carry the reservation change"
+        )
+    return field
+
+
 def verify_rebind_records(
     records: list[dict[str, Any]],
     live_successors: dict[str, dict[str, Any]],
     contract_digests: dict[str, str],
     legacy_stopped_sources: set[str],
+    pending_reservations: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
@@ -5712,12 +6033,14 @@ def verify_rebind_records(
         raise RestructureError(
             "rebind baseline targets unknown live successors: " + ", ".join(unknown)
         )
+    pending = pending_reservations or {}
     effective: dict[str, dict[str, Any]] = {}
     for path, state in live_successors.items():
         projection = state["base_projection"]
         if projection is None:
             raise RestructureError(f"live successor lacks validation authority: {path}")
         chain = grouped.get(path, [])
+        pending_commit = pending.get(path)
         if not chain:
             live_manifest = state["live_manifest"]
             if state["expected_preservation"] is not None and preservation_scope(
@@ -5757,7 +6080,13 @@ def verify_rebind_records(
                     )
                 else:
                     validate_lifecycle_evolution(
-                        state["base_content"],
+                        committed_plan_bytes(
+                            pending_commit,
+                            path,
+                            f"pending reservation {path}",
+                        )
+                        if pending_commit is not None
+                        else state["base_content"],
                         state["live_content"],
                         f"live successor lifecycle: {path}",
                     )
@@ -5815,6 +6144,23 @@ def verify_rebind_records(
                     raise RestructureError(f"{label} changes protected plan identity")
                 if record["promoted_preservation_path"] is not None:
                     raise RestructureError(f"{label} has an invalid promotion")
+            elif record["kind"] == "reservation":
+                if record["promoted_preservation_path"] is not None:
+                    raise RestructureError(f"{label} has an invalid promotion")
+                authorized_field = validate_reservation_authorization(
+                    record,
+                    before,
+                    after,
+                    state["expected_preservation"],
+                    label,
+                )
+                if any(
+                    before.get(field) != after.get(field)
+                    for field in REBIND_PROTECTED_FIELDS - {authorized_field}
+                ):
+                    raise RestructureError(
+                        f"{label} reservation changes protected plan identity"
+                    )
             else:
                 protected = REBIND_PROTECTED_FIELDS - {"status", "preservation_scope"}
                 if any(before.get(field) != after.get(field) for field in protected):
@@ -5846,13 +6192,19 @@ def verify_rebind_records(
                 before,
                 after,
                 record["replacements"],
-                activation=record["kind"] == "activation",
+                activation=record["kind"] != "rebind",
                 label=label,
             )
             if projection != record["resulting_validation_projection"]:
                 raise RestructureError(f"{label} resulting projection mismatch")
             previous_content = record["updated_content"]
         assert previous_content is not None
+        if pending_commit is not None:
+            previous_content = committed_plan_bytes(
+                pending_commit,
+                path,
+                f"pending reservation {path}",
+            )
         replan_original = state.get("replan_original_content")
         if (
             state["lifecycle"] == "replanned"
@@ -6382,6 +6734,7 @@ def verify_schema_three_contract(
 def verify_repository_contracts(
     *,
     legacy_stopped_sources: set[str] | None = None,
+    pending_reservations: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     allowed_legacy_stopped_sources = legacy_stopped_sources or set()
     validate_repository_active_predecessors()
@@ -6757,6 +7110,7 @@ def verify_repository_contracts(
         live_successors,
         contract_digests,
         allowed_legacy_stopped_sources,
+        pending_reservations or {},
     )
     return {
         "rebind_records": rebind_records,

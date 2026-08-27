@@ -3898,6 +3898,188 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("exact checked references", rejected.stderr)
 
+    def prepare_reservation(self, label: str):
+        coupled, _, target_path, successor_path = self.prepare_coupled_spec(
+            include_rebind=True
+        )
+        assert target_path
+        result = self.run_spec_data(coupled, f"{label}-source.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked_path = self.check_successor(successor_path)
+        module = self.load_restructure_module(f"{label}_module")
+        activation = self.activation_spec(
+            module=module,
+            target_path=target_path,
+            successor_path=successor_path,
+            checked_path=checked_path,
+            promoted_path=None,
+        )
+        activated = self.run_spec_data(activation, f"{label}-activation.json")
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "activate the reservation target")
+        return module, target_path
+
+    def authorize_plan_edit(self, target_path: str, old: str, new: str) -> str:
+        plan = self.repo / target_path
+        text = plan.read_text(encoding="utf-8")
+        self.assertEqual(text.count(old), 1)
+        plan.write_text(text.replace(old, new, 1), encoding="utf-8")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "authorize the reservation change")
+        return git(self.repo, "rev-parse", "HEAD")
+
+    def reserve_spec(
+        self,
+        *,
+        target_path: str,
+        authorizing_commit: str,
+        replacements: list[dict[str, object]],
+    ) -> dict[str, object]:
+        baseline = json.loads(
+            (
+                self.repo
+                / "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
+            ).read_text(encoding="utf-8")
+        )
+        chained = [
+            record
+            for record in baseline["records"]
+            if record["plan_path"] == target_path
+        ]
+        module = self.load_restructure_module("reserve_spec_module")
+        return {
+            "schema_version": 3,
+            "operation": "reserve",
+            "source_head": git(self.repo, "rev-parse", "HEAD"),
+            "reservations": [
+                {
+                    "plan_path": target_path,
+                    "owning_contract_path": chained[-1]["owning_contract_path"],
+                    "authorizing_commit": authorizing_commit,
+                    "prior_effective_projection_digest": module.projection_digest(
+                        chained[-1]["resulting_validation_projection"]
+                    ),
+                    "replacements": replacements,
+                }
+            ],
+        }
+
+    def test_reserve_operation_records_an_authorized_write_scope_change(
+        self,
+    ) -> None:
+        _, target_path = self.prepare_reservation("reserve-success")
+        original_scope = "write_scope:\n  - src/\n"
+        extended_scope = "write_scope:\n  - src/\n  - extension/\n"
+        plan_text = (self.repo / target_path).read_text(encoding="utf-8")
+        self.assertIn(original_scope, plan_text)
+        commit = self.authorize_plan_edit(
+            target_path,
+            original_scope,
+            extended_scope,
+        )
+        spec = self.reserve_spec(
+            target_path=target_path,
+            authorizing_commit=commit,
+            replacements=[
+                {
+                    "scope": "manifest",
+                    "field": "write_scope",
+                    "old": "  - src/\n",
+                    "new": "  - src/\n  - extension/\n",
+                    "count": 1,
+                }
+            ],
+        )
+        reserved = self.run_spec_data(spec, "reserve-success.json")
+        self.assertEqual(reserved.returncode, 0, reserved.stderr)
+        baseline = json.loads(
+            (
+                self.repo
+                / "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
+            ).read_text(encoding="utf-8")
+        )
+        record = baseline["records"][-1]
+        self.assertEqual(record["kind"], "reservation")
+        self.assertEqual(record["authorizing_commit"], commit)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_reserve_operation_rejects_an_unauthorized_reservation_change(
+        self,
+    ) -> None:
+        _, target_path = self.prepare_reservation("reserve-unauthorized")
+        commit = self.authorize_plan_edit(
+            target_path,
+            "  - src/\n",
+            "  - src/\n  - extension/\n",
+        )
+        spec = self.reserve_spec(
+            target_path=target_path,
+            authorizing_commit=commit,
+            replacements=[
+                {
+                    "scope": "manifest",
+                    "field": "write_scope",
+                    "old": "  - src/\n",
+                    "new": "  - src/\n  - unauthorized/\n",
+                    "count": 1,
+                }
+            ],
+        )
+        rejected = self.run_spec_data(spec, "reserve-unauthorized.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("replacement reproduction mismatch", rejected.stderr)
+
+    def test_durable_reservation_record_rejects_a_forged_authorizing_commit(
+        self,
+    ) -> None:
+        module, target_path = self.prepare_reservation("reserve-forged")
+        commit = self.authorize_plan_edit(
+            target_path,
+            "write_scope:\n  - src/\n",
+            "write_scope:\n  - src/\n  - extension/\n",
+        )
+        spec = self.reserve_spec(
+            target_path=target_path,
+            authorizing_commit=commit,
+            replacements=[
+                {
+                    "scope": "manifest",
+                    "field": "write_scope",
+                    "old": "  - src/\n",
+                    "new": "  - src/\n  - extension/\n",
+                    "count": 1,
+                }
+            ],
+        )
+        reserved = self.run_spec_data(spec, "reserve-forged.json")
+        self.assertEqual(reserved.returncode, 0, reserved.stderr)
+        baseline_path = (
+            self.repo
+            / "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
+        )
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        record = baseline["records"][-1]
+        record["authorizing_commit"] = git(self.repo, "rev-parse", f"{commit}^")
+        record["record_digest"] = module.canonical_digest(
+            {
+                key: value
+                for key, value in record.items()
+                if key != "record_digest"
+            }
+        )
+        baseline_path.write_text(
+            json.dumps(baseline, ensure_ascii=False, sort_keys=True, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        rejected = self.run_verify()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "authorizing commit does not carry the reservation change",
+            rejected.stderr,
+        )
+
     def test_rebind_validation_uses_only_admitted_semantic_path_pairs(self) -> None:
         coupled, _, target_path, _ = self.prepare_coupled_spec(
             include_rebind=True,

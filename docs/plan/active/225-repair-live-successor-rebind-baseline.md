@@ -67,16 +67,20 @@ checked_summary_ja: 記録されていないreservation変更とactivationをbas
 
 ## Tasks
 
-- [ ] Reproduce both verification failures on a clean worktree and record the exact failing paths, fields, and authorizing commits.
-- [ ] Extend `docs/agent/SPEC_PLAN_WORKFLOW.md` with the reservation record, its authorizing-commit binding, and the unchanged immutability of reservation fields against rebind and activation records.
-- [ ] Implement the reservation record kind, its validation, and its re-authorization during repository verification in `scripts/restructure-plan.py`.
-- [ ] Extend `tests/test-plan-restructure.py` with positive and mutation coverage for the reservation record, including a forged authorizing commit, a commit that changes a different field, and a commit that is not an ancestor of HEAD.
-- [ ] Append the Plan 205 reservation record and the Plan 185 activation record, and remove the unsanctioned Plan 185 context entry.
-- [ ] Mirror the policy and tool changes into `template/` and confirm the alignment checks pass.
-- [ ] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
+- [x] Reproduce both verification failures on a clean worktree and record the exact failing paths, fields, and authorizing commits.
+- [x] Extend `docs/agent/SPEC_PLAN_WORKFLOW.md` with the reservation record, its authorizing-commit binding, and the unchanged immutability of reservation fields against rebind and activation records.
+- [x] Implement the reservation record kind, its validation, and its re-authorization during repository verification in `scripts/restructure-plan.py`.
+- [x] Extend `tests/test-plan-restructure.py` with positive and mutation coverage for the reservation record, including a forged authorizing commit, a commit that changes a different field, and a commit that is not an ancestor of HEAD.
+- [x] Append the Plan 205 reservation record and the Plan 185 activation record, and remove the unsanctioned Plan 185 context entry.
+- [x] Mirror the policy and tool changes into `template/` and confirm the alignment checks pass.
+- [x] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
 
 ## Validation Notes
 
 - Verification at HEAD `85c0f0f` reports `rebind baseline final projection: docs/plan/active/185-complete-bounded-copier-fixture-runtime.md changes protected manifest field: context_files` and `rebind baseline final projection: docs/plan/active/205-integrate-bounded-copier-fixture-validator.md changes protected manifest field: write_scope`.
 - Both defects predate this plan and were introduced by commits `5d05ab5` and `661de44`.
 - Do not run `tests/copier-update.sh`; Plan 179 retains the sole complete transition execution.
+- Implemented the `reservation` record kind, the dedicated schema-3 `reserve` operation, and a transaction-scoped `pending_reservations` exemption that compares the live file against the authorizing commit's own bytes for exactly the reserved plan paths, which is what lets the repairing record be recorded while verification still fails.
+- Appended one `reservation` record for `docs/plan/active/205-integrate-bounded-copier-fixture-validator.md` bound to authorizing commit `5d05ab5db99c239854dab9bb43827cb31847769f`, and one `activation` record for `docs/plan/active/185-complete-bounded-copier-fixture-runtime.md`, and removed the unsanctioned Plan 185 context entry. No file under `docs/plan/checked/` was edited.
+- Independent review of the complete candidate diff reported zero High and zero Medium findings.
+- Authoritative validation passed once: `python3 tests/test-plan-restructure.py` (145 tests), `python3 scripts/restructure-plan.py --verify` (`replanned contracts verified`), `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `python3 scripts/check-copier-template.py`, and `git diff --check`.

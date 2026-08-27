@@ -26,7 +26,6 @@ context_files:
   - docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
   - docs/plan/checked/2026/08/16-31/141-separate-synthetic-copier-version-tags.md
   - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
-  - scripts/project_workflow/copier_fixture_validator.py
   - tests/test-copier-migration.py
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
