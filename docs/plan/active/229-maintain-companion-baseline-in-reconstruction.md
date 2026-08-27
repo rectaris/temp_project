@@ -67,13 +67,17 @@ checked_summary_ja: reconstruction取引がcompanion baselineを同一取引内�
 
 ## Tasks
 
-- [ ] Reproduce the prospective `live validation successor companion baseline mismatch` for a reconstruction that archives a live schema-1 contract successor.
-- [ ] Extend `docs/agent/SPEC_PLAN_WORKFLOW.md` with the in-transaction companion baseline projection and its bounded change rule.
-- [ ] Implement the projection in `scripts/restructure-plan.py` and publish it as one journaled transaction write.
-- [ ] Extend `tests/test-plan-restructure.py` with coverage for the archived successor, an untouched record, an emptied record, and a pre-existing published disagreement.
-- [ ] Mirror the policy and tool changes into `template/` and confirm the alignment checks pass.
-- [ ] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
+- [x] Reproduce the prospective `live validation successor companion baseline mismatch` for a reconstruction that archives a live schema-1 contract successor.
+- [x] Extend `docs/agent/SPEC_PLAN_WORKFLOW.md` with the in-transaction companion baseline projection and its bounded change rule.
+- [x] Implement the projection in `scripts/restructure-plan.py` and publish it as one journaled transaction write.
+- [x] Extend `tests/test-plan-restructure.py` with coverage for the archived successor, an untouched record, an emptied record, and a pre-existing published disagreement.
+- [x] Mirror the policy and tool changes into `template/` and confirm the alignment checks pass.
+- [x] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
 
 ## Validation Notes
 
-- Pending. Reproduced at HEAD `fac6aa6` as `plan restructuring failed: prospective repository verification failed: plan restructuring failed: live validation successor companion baseline mismatch` for both a schema-1 and a schema-3 reconstruction of `docs/plan/active/185-complete-bounded-copier-fixture-runtime.md`.
+- Reproduced at HEAD `fac6aa6` as `plan restructuring failed: prospective repository verification failed: plan restructuring failed: live validation successor companion baseline mismatch` for both a schema-1 and a schema-3 reconstruction of `docs/plan/active/185-complete-bounded-copier-fixture-runtime.md`.
+- Implemented `project_companion_baseline`, called from `execute` between the referrer rebinds and the transaction operations, so the projection is published as one ordinary journaled write with its own expected original bytes.
+- Bound the projection to the exact companion bytes repository verification accepted. An external replacement between verification and the projection is rejected instead of leaving the published baseline outside the journal.
+- Independent review of the candidate diff reported one Medium finding, that a concurrent pre-projection replacement could bypass journaling. The binding above resolves it, and a regression test covers the rejection.
+- Authoritative validation passed once after the remediation: `python3 tests/test-plan-restructure.py` (149 tests), `python3 scripts/restructure-plan.py --verify` (`replanned contracts verified`), `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, `python3 scripts/check-copier-template.py`, and `git diff --check`.

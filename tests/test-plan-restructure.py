@@ -3504,6 +3504,240 @@ class PlanRestructureTest(unittest.TestCase):
             verified.stderr,
         )
 
+    def run_nested_restructure(
+        self,
+        source_path: str,
+    ) -> subprocess.CompletedProcess[str]:
+        """Stop one live schema-1 contract successor and restructure it in place."""
+        module = self.load_restructure_module("nested_companion_module")
+        source = self.repo / source_path
+        source.write_text(
+            module.derive_stopped_source_content(
+                source.read_text(encoding="utf-8"),
+                ["multiple_independent_invariants"],
+            ),
+            encoding="utf-8",
+        )
+        source_id = Path(source_path).name[:3]
+        active = self.repo / "docs/plan/plan.md"
+        active.write_text(
+            active.read_text(encoding="utf-8").replace(
+                f"{source_id}\t{source_path}\tin_progress",
+                f"{source_id}\t{source_path}\treplan_required",
+            ),
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "stop the nested successor")
+        source_text = source.read_text(encoding="utf-8")
+        records = module.acceptance_records(source_text)
+        mapped = [record["digest"] for record in records]
+        replacements = {
+            "docs/plan/replanned/contracts/001-source.json": (
+                f"docs/plan/replanned/contracts/{source_id}-nested.json"
+            ),
+            "docs/plan/active/002-data.md": "docs/plan/active/004-nested.md",
+            "docs/plan/active/003-integration.md": "docs/plan/active/005-nested-integration.md",
+        }
+
+        def nested_content(integration: bool) -> str:
+            content = self.plan_content("", mapped, integration=integration).replace(
+                self.source_path, "__NESTED_SOURCE__"
+            )
+            for old, new in replacements.items():
+                content = content.replace(old, new)
+            return content.replace("__NESTED_SOURCE__", source_path)
+
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        spec = {
+            "schema_version": 1,
+            "source": {
+                "path": source_path,
+                "head": git(self.repo, "rev-parse", "HEAD"),
+                "plan_digest": digest(source_text),
+                "acceptance": records,
+            },
+            "reason_codes": ["multiple_independent_invariants"],
+            "dirty_product_paths": [],
+            "contract_path": f"docs/plan/replanned/contracts/{source_id}-nested.json",
+            "archive_path": (
+                f"docs/plan/replanned/{today.year:04d}/{today.month:02d}/{half}/"
+                f"{Path(source_path).name}"
+            ),
+            "successors": [
+                {
+                    "id": "004",
+                    "path": "docs/plan/active/004-nested.md",
+                    "content": nested_content(False),
+                    "acceptance_digests": mapped,
+                }
+            ],
+            "integration": {
+                "id": "005",
+                "path": "docs/plan/active/005-nested-integration.md",
+                "content": nested_content(True),
+                "acceptance_digests": mapped,
+            },
+        }
+        return self.run_spec_data(spec, f"nested-{source_id}.json")
+
+    def companion_path(self) -> Path:
+        return (
+            self.repo
+            / "docs/plan/replanned/baselines/live-validation-successors-v1.json"
+        )
+
+    def publish_schema_one_companion(self) -> dict[str, object]:
+        """Turn the fixture contract into a schema-1 contract and publish its companion.
+
+        Only a schema-1 contract contributes companion records, so a reconstruction
+        that archives one of its live successors is the case the projection must cover.
+        """
+        contract_path = self.repo / str(self.spec["contract_path"])
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["schema_version"] = 1
+        companion_successors = []
+        for successor in contract["successors"]:
+            projection = {
+                key: successor.pop(key)
+                for key in (
+                    "authoritative_validation",
+                    "authoritative_validation_digest",
+                    "validation_witness_schema",
+                    "validation_witness_map_digest",
+                )
+            }
+            companion_successors.append(
+                {
+                    "path": successor["path"],
+                    "acceptance_digests": successor["acceptance_digests"],
+                    **projection,
+                }
+            )
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        companion = {
+            "schema_version": 1,
+            "records": [
+                {
+                    "contract_path": str(self.spec["contract_path"]),
+                    "contract_digest": digest(contract_path.read_bytes()),
+                    "successors": companion_successors,
+                }
+            ],
+        }
+        path = self.companion_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(companion, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "publish schema-1 companion baseline")
+        published = self.run_verify()
+        self.assertEqual(published.returncode, 0, published.stderr)
+        return companion
+
+    def test_reconstruction_drops_only_the_archived_companion_successor(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        companion = self.publish_schema_one_companion()
+        retained = [
+            successor
+            for successor in companion["records"][0]["successors"]
+            if successor["path"] != "docs/plan/active/002-data.md"
+        ]
+        self.assertTrue(retained)
+        result = self.run_nested_restructure("docs/plan/active/002-data.md")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        projected = json.loads(self.companion_path().read_text(encoding="utf-8"))
+        self.assertEqual(projected["schema_version"], 1)
+        self.assertEqual(len(projected["records"]), 1)
+        self.assertEqual(projected["records"][0]["successors"], retained)
+        self.assertEqual(
+            projected["records"][0]["contract_digest"],
+            companion["records"][0]["contract_digest"],
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_reconstruction_removes_a_companion_record_without_live_successors(
+        self,
+    ) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        companion = self.publish_schema_one_companion()
+        self.assertEqual(len(companion["records"][0]["successors"]), 2)
+        coupled["source_head"] = git(self.repo, "rev-parse", "HEAD")
+        result = self.run_spec_data(coupled, "companion-emptied.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        projected = json.loads(self.companion_path().read_text(encoding="utf-8"))
+        self.assertEqual(projected, {"schema_version": 1, "records": []})
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_reconstruction_rejects_a_companion_replaced_after_verification(
+        self,
+    ) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        companion = self.publish_schema_one_companion()
+        module = self.load_restructure_module("companion_binding_module")
+        state = {
+            "archived_plans": {
+                "docs/plan/active/002-data.md": (
+                    "docs/plan/replanned/2026/08/16-31/002-data.md"
+                )
+            }
+        }
+        projected = [
+            {
+                **companion["records"][0],
+                "successors": [
+                    successor
+                    for successor in companion["records"][0]["successors"]
+                    if successor["path"] != "docs/plan/active/002-data.md"
+                ],
+            }
+        ]
+        self.companion_path().write_text(
+            json.dumps(
+                {"schema_version": 1, "records": projected},
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        original = json.dumps(
+            {"schema_version": 1, "records": companion["records"]},
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        ) + "\n"
+        with self.assertRaises(module.RestructureError) as raised:
+            module.project_companion_baseline(state, {"companion_text": original})
+        self.assertIn("changed during the transaction", str(raised.exception))
+
+    def test_reconstruction_rejects_a_published_companion_disagreement(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        companion = self.publish_schema_one_companion()
+        successors = companion["records"][0]["successors"]
+        untouched = next(
+            successor
+            for successor in successors
+            if successor["path"] != "docs/plan/active/002-data.md"
+        )
+        untouched["acceptance_digests"] = ["sha256:" + "0" * 64]
+        self.companion_path().write_text(
+            json.dumps(companion, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "publish a disagreeing companion baseline")
+        result = self.run_nested_restructure("docs/plan/active/002-data.md")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("companion baseline mismatch", result.stderr)
+
     def test_schema_one_companion_is_exact_ordered_and_terminal_after_publication(self) -> None:
         self.assertEqual(self.run_command().returncode, 0)
         contract_path = self.repo / str(self.spec["contract_path"])

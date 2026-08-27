@@ -5124,6 +5124,7 @@ def execute(
             pending_reservations=state.get("pending_reservations"),
         )
         apply_referrer_context_rebinds(state)
+        project_companion_baseline(state, repository_state)
         operations, created_directories = build_transaction_operations(state)
         validate_prospective_plan_context_files(operations)
         verify_no_surviving_archived_context_references(state, operations)
@@ -5625,6 +5626,89 @@ def apply_referrer_context_rebinds(state: dict[str, Any]) -> None:
                 ),
             )
         )
+
+
+def project_companion_baseline(
+    state: dict[str, Any],
+    repository_state: dict[str, Any],
+) -> None:
+    """Publish the companion records this transaction's archival already implies.
+
+    ``verify_companion_baseline`` compares the published live validation successor
+    records against records derived from the repository, and the prospective state is
+    verified the same way. Archiving a live schema-1 contract successor removes it
+    from the derived records, so without this projection every such reconstruction
+    fails prospective verification and the successor can never be restructured.
+
+    The projection removes only the successors this transaction archives and removes a
+    record only when it retains no live successor. Every other record, successor, and
+    field keeps its published bytes, so a disagreement this transaction did not cause
+    still fails verification.
+
+    The projected bytes are bound to the bytes repository verification already accepted.
+    An external replacement between verification and this point is rejected instead of
+    silently leaving the published baseline outside the journal.
+    """
+    archived: dict[str, str] = state.get("archived_plans") or {}
+    if not archived:
+        return
+    original = repository_state.get("companion_text")
+    path = ROOT / COMPANION_PATH
+    if original is None:
+        if path.exists():
+            raise RestructureError(
+                "live validation successor companion baseline changed during the transaction"
+            )
+        return
+    reject_symlink_ancestors(COMPANION_PATH, include_target=True)
+    if not path.is_file() or read_regular_file(
+        path, COMPANION_PATH
+    ).decode("utf-8") != original:
+        raise RestructureError(
+            "live validation successor companion baseline changed during the transaction"
+        )
+    try:
+        baseline = json.loads(original)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RestructureError(
+            "invalid live validation successor companion baseline"
+        ) from exc
+    exact_object(baseline, {"schema_version", "records"}, "companion baseline")
+    records = baseline["records"]
+    if baseline["schema_version"] != 1 or not isinstance(records, list):
+        raise RestructureError(
+            "invalid live validation successor companion baseline"
+        )
+    projected: list[Any] = []
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(
+            record.get("successors"), list
+        ):
+            raise RestructureError(
+                "invalid live validation successor companion baseline"
+            )
+        retained = [
+            successor
+            for successor in record["successors"]
+            if not isinstance(successor, dict)
+            or successor.get("path") not in archived
+        ]
+        if retained == record["successors"]:
+            projected.append(record)
+            continue
+        if retained:
+            projected.append({**record, "successors": retained})
+    if projected == records:
+        return
+    updated = json.dumps(
+        {"schema_version": 1, "records": projected},
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+    state.setdefault("updated_files", []).append(
+        (COMPANION_PATH, original, updated)
+    )
 
 
 def verify_no_surviving_archived_context_references(
@@ -7096,7 +7180,7 @@ def verify_repository_contracts(
                     "successors": live_companion_successors,
                 }
             )
-    verify_companion_baseline(companion_records)
+    companion_text = verify_companion_baseline(companion_records)
     claimed_direct_sources = sorted(
         set(direct_active_sources) & set(live_successors)
     )
@@ -7118,6 +7202,7 @@ def verify_repository_contracts(
         "contract_digests": contract_digests,
         "effective_projections": effective_projections,
         "rebind_baseline_content": baseline_content,
+        "companion_text": companion_text,
         "historical_contract_snapshot": immutable_history,
     }
 
@@ -7164,20 +7249,22 @@ def companion_absence_allowed() -> bool:
     return True
 
 
-def verify_companion_baseline(records: list[dict[str, Any]]) -> None:
+def verify_companion_baseline(records: list[dict[str, Any]]) -> str | None:
     path = ROOT / COMPANION_PATH
     if not path.exists():
         if not records or companion_absence_allowed():
-            return
+            return None
         raise RestructureError("missing live validation successor companion baseline")
     reject_symlink_ancestors(COMPANION_PATH, include_target=True)
+    published = read_regular_file(path, COMPANION_PATH).decode("utf-8")
     try:
-        baseline = json.loads(path.read_text(encoding="utf-8"))
+        baseline = json.loads(published)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RestructureError("invalid live validation successor companion baseline") from exc
     exact_object(baseline, {"schema_version", "records"}, "companion baseline")
     if baseline["schema_version"] != 1 or baseline["records"] != records:
         raise RestructureError("live validation successor companion baseline mismatch")
+    return published
 
 
 def main() -> int:
