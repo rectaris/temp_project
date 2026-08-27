@@ -1,6 +1,8 @@
 # Complete the bounded Copier fixture runtime
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - scope_drift
 primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup without relying on unaccepted checker changes
 task_types:
   - template_workflow
@@ -85,3 +87,13 @@ checked_summary_ja: Copier fixtureの固有version、bounded同期、子process�
 - The stopped Plan 183 ledger and reviews cannot authorize this successor.
 - The current checker candidate is unaccepted read-only input and remains owned by Plan 186.
 - Do not execute tests/copier-update.sh in this slice.
+- Execution stopped before any implementation: this plan's declared `write_scope` and its bound focused witness are mutually unsatisfiable.
+- `tests/copier-update.sh` passes `copier_fixture_validator --check` at HEAD only vacuously. `_is_transition` is false because the committed fixture starts no asynchronous operation and no reachable operation names a transition marker, so `_check_transition` never runs.
+- Adding any required transition runtime makes `_is_transition` true and activates `_check_alternate_paths`, which rejects every reachable Copier update path outside the single sanctioned update child, wherever it is written and whichever project it targets.
+- Supplying the committed fixture plus the accepted `TRANSITION` sample from `tests/test-copier-fixture-validator.py` to `check()` returns 39 findings: 37 `alternate_path`, 1 `release_path`, and 1 `guardian`. Only the two cleanup findings are fixable inside this plan's scope. No `version_commit`, `inventory_region`, `bounded_poll`, `child_pid`, `child_reap`, or `state_order` rule fails.
+- The 37 rejected operations are pre-existing accepted coverage: 28 `run_copier` calls, seven direct `update-from-copier.sh` dispatches at lines 284, 288, 555, 588, 1559, 1580, and 1626, and two `run-copier-update.sh` dispatches at lines 569 and 574. Deleting or hiding them would destroy checked behavior.
+- The prohibition is intentional and tested by `test_second_copier_update_path_before_the_child_is_rejected`, `test_second_copier_update_path_after_the_reap_is_rejected`, and `test_an_indirect_second_update_path_is_rejected`, so it is not an incidental checker defect this plan may work around.
+- No exemption spares the existing lanes. Only unreachable operations and the sanctioned child's own offset are exempt; cleanup handlers, conditionals, subshells, position relative to the child, and a different destination project all remain rejected.
+- Renaming the `run_copier` helper or routing it through a local alias would silence the substring match without changing behavior. That is the bypass successor Plan 186 is chartered to reject, so it is not an admissible correction.
+- Independent review of this classification confirmed the blocker and corrected the finding split from 36+2 to 37+2 before the stop was recorded.
+- Restructuring must reconstruct validation authority or plan boundaries, for example by making the alternate-path rule transition-region or target aware, or by separating the transition lane from the legacy lanes while preserving both. Both options change Plan 205's checked validator or this plan's `write_scope`, so neither is available here.
