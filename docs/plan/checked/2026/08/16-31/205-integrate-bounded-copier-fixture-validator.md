@@ -1,6 +1,6 @@
 # Integrate the bounded Copier fixture validator
 
-status: in_progress
+status: checked
 implementation_tier: 2
 primary_invariant: the checked lexical, function, and execution projections plus Copier operation rules reject every missing, reordered, duplicated, unreachable, or alternate-path bounded fixture operation through the exact check CLI
 replan_sources:
@@ -82,14 +82,19 @@ checked_summary_ja: checked字句、関数表、実行graphの上にCopier固有
 
 ## Tasks
 
-- [ ] Bind the checked Plan 202, 203, and 204 modules through their exact checked archive paths.
-- [ ] Add the complete Copier operation contract and exact check CLI over supplied bytes.
-- [ ] Add positive, removal, duplication, redefinition, reordering, reachability, direct-invocation, and alternate-path mutation cases without reading the runtime candidate as expected output.
-- [ ] Complete focused validation and independent review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative suite once, archive, commit, and activate Plan 185 with this plan's exact checked archive as predecessor and read-only validator context.
+- [x] Bind the checked Plan 202, 203, and 204 modules through their exact checked archive paths.
+- [x] Add the complete Copier operation contract and exact check CLI over supplied bytes.
+- [x] Add positive, removal, duplication, redefinition, reordering, reachability, direct-invocation, and alternate-path mutation cases without reading the runtime candidate as expected output.
+- [x] Complete focused validation and independent review with zero unresolved High or Medium findings.
+- [x] Run the authoritative suite once, archive, commit, and activate Plan 185 with this plan's exact checked archive as predecessor and read-only validator context.
 
 ## Validation Notes
 
 - This plan owns final acceptance of the Plan 197 and Plan 198 source requirement; Plans 202 through 204 do not.
 - Plans 202, 203, and 204 own generic shell projection; this plan may extend but must not replace that accepted behavior.
 - The rejected `scripts/project_workflow/copier_fixture.py` and `tests/test-copier-fixture.py` candidates stay committed as non-authoritative evidence and cannot authorize this validator.
+- Focused validation passed: `python3 tests/test-copier-fixture-validator.py` reports 126 tests OK, and `python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh` exits 0.
+- The authoritative suite ran once after review closed: the focused suite, the exact check CLI, `python3 -m py_compile` over the three checked projections and this validator with their tests, and `git diff --check` all passed.
+- `scripts/lint-project-workflow.sh` and `tests/smoke.sh` passed.
+- Independent review ran fourteen bounded read-only rounds and closed with zero unresolved High or Medium findings. Every round was replayed in process and pinned by a regression test before the next round started.
+- `tests/copier-update.sh` still fails when executed, with `plan restructuring failed: successors[0] requires validation_witness_schema: 1`. That failure is identical at the parent commit and is owned by Plan 185; this plan never executes the fixture.

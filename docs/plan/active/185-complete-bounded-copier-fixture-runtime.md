@@ -1,6 +1,6 @@
 # Complete the bounded Copier fixture runtime
 
-status: backlog
+status: in_progress
 primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup without relying on unaccepted checker changes
 task_types:
   - template_workflow
@@ -23,7 +23,8 @@ context_files:
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
   - docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
   - docs/plan/checked/2026/08/16-31/141-separate-synthetic-copier-version-tags.md
-  - docs/plan/active/205-integrate-bounded-copier-fixture-validator.md
+  - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
+  - scripts/project_workflow/copier_fixture_validator.py
   - tests/test-copier-migration.py
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -44,7 +45,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh"}
 predecessor_plans:
-  - docs/plan/active/205-integrate-bounded-copier-fixture-validator.md
+  - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
 replan_source: docs/plan/active/183-build-bounded-copier-transition-fixture.md
 replan_contract: docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
 integration_gates:
