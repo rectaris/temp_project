@@ -352,20 +352,6 @@
           ],
           "authoritative_validation": [
             "sh -n tests/copier-update.sh",
-            "python3 scripts/project_workflow/copier_fixture.py --check tests/copier-update.sh",
-            "git diff --check"
-          ],
-          "authoritative_validation_digest": "sha256:bc84d9107468616bfd2d9b35d046615506f44180705864963d9382be4b8dd5fb",
-          "path": "docs/plan/active/185-complete-bounded-copier-fixture-runtime.md",
-          "validation_witness_map_digest": "sha256:d962a8a4add5e3e9a0e90495bbd7aabf21846b0e1e7495cfe71d66c26d5e4d67",
-          "validation_witness_schema": 1
-        },
-        {
-          "acceptance_digests": [
-            "sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1"
-          ],
-          "authoritative_validation": [
-            "sh -n tests/copier-update.sh",
             "python3 tests/test-copier-fixture.py",
             "python3 scripts/project_workflow/copier_fixture.py --check tests/copier-update.sh",
             "python3 scripts/check-copier-template.py",

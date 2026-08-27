@@ -23,7 +23,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
-  - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
+  - docs/plan/replanned/2026/08/16-31/185-complete-bounded-copier-fixture-runtime.md
   - docs/plan/active/186-bind-connected-copier-fixture-checker.md
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
 required_specs:

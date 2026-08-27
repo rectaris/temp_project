@@ -1,9 +1,6 @@
 # Complete the bounded Copier fixture runtime
 
-status: replan_required
-replan_reason_codes:
-  - scope_drift
-primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup without relying on unaccepted checker changes
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -47,18 +44,16 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
-replan_source: docs/plan/active/183-build-bounded-copier-transition-fixture.md
-replan_contract: docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
-integration_gates:
-  - Plan 205 must be checked and its exact checked archive path must replace this active predecessor before implementation
-  - in the same parent-owned activation update, add scripts/project_workflow/copier_fixture_validator.py emitted by checked Plan 205 as exact read-only context
-  - preserve the dirty scripts/check-copier-template.py candidate through preservation_scope without editing, staging, or committing it in this slice
-  - Plan 186 must start only after this plan is checked and its exact checked archive path replaces the active dependency
-  - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
-successor_plans:
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
   - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
-  - docs/plan/active/186-bind-connected-copier-fixture-checker.md
-  - docs/plan/active/187-verify-plan183-successor-acceptance.md
+replan_contract: docs/plan/replanned/contracts/185-complete-bounded-copier-fixture-runtime.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/226-scope-fixture-alternate-path-rule.md
+  - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
+  - docs/plan/active/228-verify-plan185-runtime-acceptance.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
 checked_summary_ja: Copier fixtureの固有version、bounded同期、子process回収、provenance順序、guardian cleanupを確定する。
