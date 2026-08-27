@@ -1,7 +1,6 @@
 # Integrate the bounded Copier fixture validator
 
-status: deferred
-completion_deferred_reason: Plan 204 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 implementation_tier: 2
 primary_invariant: the checked lexical, function, and execution projections plus Copier operation rules reject every missing, reordered, duplicated, unreachable, or alternate-path bounded fixture operation through the exact check CLI
 replan_sources:
@@ -66,7 +65,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:97c3ea5b9905b9928471e61108bd1cb44c0e3ee87e766e42e5754531e5fb3c02","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
-  - docs/plan/active/204-derive-bounded-shell-execution-graph.md
+  - docs/plan/checked/2026/08/16-31/204-derive-bounded-shell-execution-graph.md
 checked_summary_ja: checked字句、関数表、実行graphの上にCopier固有のoperation規則とmutation contractを接続する。
 
 ## Decisions
