@@ -169,3 +169,4 @@ id	path
 223	docs/plan/checked/2026/08/16-31/223-reconstruct-backlog-resident-shell-lineage.md
 202	docs/plan/checked/2026/08/16-31/202-freeze-bounded-shell-lexical-projection.md
 203	docs/plan/checked/2026/08/16-31/203-derive-bounded-shell-function-table.md
+204	docs/plan/checked/2026/08/16-31/204-derive-bounded-shell-execution-graph.md
