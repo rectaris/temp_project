@@ -1,6 +1,6 @@
 # Resolve fixture destinations and aliases fail-closed
 
-status: in_progress
+status: replan_required
 primary_invariant: the bounded fixture checker settles a written path into a comparable destination and collects every alias a reachable operation may create, and reports the result unproven whenever the written shell text does not determine it, while every existing rule keeps rejecting and accepting exactly the operations it rejects and accepts today
 task_types:
   - template_workflow
@@ -58,6 +58,9 @@ integration_gates:
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
   - do not change which operations any existing rule reports in this plan; the resolution model is added, not applied
   - Plan 231 must start only after this plan is checked and its exact checked archive path replaces the active dependency
+replan_reason_codes:
+  - multiple_independent_invariants
+  - parent_remediation_budget_exhausted
 checked_summary_ja: fixture checkerに送り先と別名の解決模型を追加し、決まらない場合は未証明として扱う。
 
 ## Decisions
