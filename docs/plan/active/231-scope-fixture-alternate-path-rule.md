@@ -23,7 +23,7 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
-  - docs/plan/active/233-collect-fixture-aliases-from-a-modelled-grammar.md
+  - docs/plan/checked/2026/08/16-31/233-collect-fixture-aliases-from-a-modelled-grammar.md
   - tests/copier-update.sh
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md

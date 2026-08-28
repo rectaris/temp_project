@@ -175,3 +175,4 @@ id	path
 229	docs/plan/checked/2026/08/16-31/229-maintain-companion-baseline-in-reconstruction.md
 236	docs/plan/checked/2026/08/16-31/236-accept-a-bounded-fixture-construct-set.md
 235	docs/plan/checked/2026/08/16-31/235-settle-fixture-words-from-a-modelled-grammar.md
+233	docs/plan/checked/2026/08/16-31/233-collect-fixture-aliases-from-a-modelled-grammar.md

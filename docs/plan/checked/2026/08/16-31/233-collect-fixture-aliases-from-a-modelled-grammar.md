@@ -1,6 +1,6 @@
 # Collect fixture aliases from a modelled grammar
 
-status: in_progress
+status: checked
 primary_invariant: the bounded fixture checker collects the alias paths a reachable operation may create only from commands whose name, options, and operands are all written in the grammar the checker enumerates, reports the alias set unplaced for every other spelling, and leaves every existing rule rejecting and accepting exactly the operations it rejects and accepts today
 task_types:
   - template_workflow
