@@ -176,3 +176,4 @@ id	path
 236	docs/plan/checked/2026/08/16-31/236-accept-a-bounded-fixture-construct-set.md
 235	docs/plan/checked/2026/08/16-31/235-settle-fixture-words-from-a-modelled-grammar.md
 233	docs/plan/checked/2026/08/16-31/233-collect-fixture-aliases-from-a-modelled-grammar.md
+231	docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md

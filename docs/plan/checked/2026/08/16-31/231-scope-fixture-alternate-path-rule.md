@@ -1,6 +1,6 @@
 # Scope the fixture alternate-path rule to the sanctioned destination
 
-status: in_progress
+status: checked
 primary_invariant: the bounded fixture checker rejects a second Copier update path only when it can reach the same downstream destination as the sanctioned update child, and keeps every accepted legacy lane and every existing bypass rejection unchanged
 task_types:
   - template_workflow

@@ -23,7 +23,7 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
-  - docs/plan/active/231-scope-fixture-alternate-path-rule.md
+  - docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md
   - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
