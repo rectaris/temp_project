@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from project_workflow import copier_fixture_validator  # noqa: E402
+from project_workflow import shell_execution  # noqa: E402
+from project_workflow import shell_functions  # noqa: E402
+from project_workflow import shell_lexical  # noqa: E402
 from project_workflow.copier_fixture_validator import (  # noqa: E402
     CopierFixtureError,
     RULE_ALTERNATE_PATH,
@@ -1241,6 +1244,333 @@ class AlternatePathTest(ContractSupportTest):
             RULE_ALTERNATE_PATH,
             "second Copier update path",
         )
+
+
+class NameBindingTest(unittest.TestCase):
+    """The surfaces that decide which names a fixture may bind.
+
+    Every case here is a spelling one of the stopped review rounds reported. A
+    name a fixture may bind through any surface must be reported unsettled, and
+    a surface written in a form the checker does not enumerate must leave the
+    name unsettled rather than settled.
+    """
+
+    def build(self, body: str):
+        """Return the derived fixture for one written body."""
+
+        text = "#!/bin/sh\nset -eu\n" + body
+        records = shell_lexical.project(text)
+        table = shell_functions.derive(records)
+        graph = shell_execution.derive(records, table)
+        return copier_fixture_validator._Fixture(text, records, table, graph)
+
+    def unsettled(self, body: str) -> frozenset:
+        """Return every name the checker cannot settle in one written body."""
+
+        return self.build(body).unsettled_names()
+
+    def test_a_standalone_assignment_settles_its_name(self):
+        self.assertNotIn("dest", self.unsettled('dest=/tmp/one\nprintf %s "$dest"\n'))
+
+    def test_a_second_assignment_written_as_one_command_unsettles_its_name(self):
+        self.assertIn("other", self.unsettled('dest=/tmp/one other=/tmp/two\n'))
+
+    def test_a_prefix_assignment_unsettles_its_name(self):
+        self.assertIn("dest", self.unsettled('dest=/tmp/one printf %s x\n'))
+
+    def test_a_prefix_assignment_written_with_a_redirection_unsettles_its_name(self):
+        self.assertIn("dest", self.unsettled('dest=>/dev/null printf %s x\n'))
+
+    def test_a_prefix_assignment_written_with_a_substitution_unsettles_its_name(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one other=$(printf x) printf %s y\n'),
+        )
+
+    def test_a_prefix_assignment_written_with_a_quoted_value_unsettles_its_name(self):
+        self.assertIn("dest", self.unsettled('dest="/tmp/one; two" printf %s x\n'))
+
+    def test_a_quoted_name_opens_an_assignment(self):
+        self.assertIn("dest", self.unsettled('de"st"=/tmp/one printf %s x\n'))
+
+    def test_a_quoted_equals_opens_no_assignment(self):
+        self.assertNotIn("dest", self.unsettled('printf %s "dest=/tmp/one"\n'))
+
+    def test_an_escaped_equals_opens_no_assignment(self):
+        self.assertNotIn("dest", self.unsettled('printf %s dest\\=/tmp/one\n'))
+
+    def test_an_assigning_command_unsettles_its_operand(self):
+        self.assertIn("dest", self.unsettled('read -r dest\n'))
+
+    def test_an_assigning_command_unsettles_a_quoted_operand(self):
+        self.assertIn("dest", self.unsettled("read -r 'dest'\n"))
+
+    def test_an_exported_name_is_unsettled(self):
+        self.assertIn("dest", self.unsettled('export dest=/tmp/one\n'))
+
+    def test_a_launcher_that_stays_in_the_shell_unsettles_every_bare_operand(self):
+        self.assertIn("dest", self.unsettled('command dest\n'))
+
+    def test_a_launcher_that_forks_settles_a_bare_operand(self):
+        self.assertNotIn(
+            "dest", self.unsettled('dest=/tmp/one\nenv dest true\n')
+        )
+
+    def test_a_command_word_carrying_a_slash_settles_a_bare_operand(self):
+        self.assertNotIn(
+            "dest", self.unsettled('dest=/tmp/one\n"$helper/run.sh" dest\n')
+        )
+
+    def test_a_command_reached_through_a_name_unsettles_its_operand(self):
+        self.assertIn("dest", self.unsettled('reader=read\n"$reader" -r dest\n'))
+
+    def test_a_command_reached_through_two_names_unsettles_its_operand(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('first=read\nsecond=$first\n"$second" -r dest\n'),
+        )
+
+    def test_a_declared_assigning_command_still_unsettles_its_operand(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('read() { :; }\nread dest\n'),
+        )
+
+    def test_a_dynamic_operand_of_an_assigning_command_unsettles_every_name(self):
+        unsettled = self.unsettled(
+            'dest=/tmp/one\nname=dest=/evil\nexport $name\n'
+        )
+        self.assertIn("dest", unsettled)
+        self.assertIn("name", unsettled)
+
+    def test_a_dynamic_operand_of_an_unresolvable_command_unsettles_every_name(self):
+        unsettled = self.unsettled(
+            'dest=/tmp/one\nrunner=export\nvalue=dest=/evil\n"$runner" "$value"\n'
+        )
+        self.assertIn("dest", unsettled)
+
+    def test_a_dynamic_named_option_target_unsettles_every_name(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nptr=dest\nprintf -v "$ptr" %s /evil\n'),
+        )
+
+    def test_a_sourced_path_operand_settles_its_names(self):
+        self.assertNotIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nlib=/tmp/lib.sh\n. "$lib"\n'),
+        )
+
+    def test_a_loop_head_unsettles_its_name(self):
+        self.assertIn("dest", self.unsettled('for dest in a b; do :; done\n'))
+
+    def test_a_continued_loop_head_unsettles_its_name(self):
+        self.assertIn("dest", self.unsettled('for \\\n  dest in a b; do :; done\n'))
+
+    def test_a_name_a_shell_keeps_itself_is_unsettled(self):
+        self.assertIn("PWD", self.unsettled('printf %s "$PWD"\n'))
+        self.assertIn("IFS", self.unsettled('printf %s "$IFS"\n'))
+
+    def test_a_first_assignment_written_under_a_condition_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('if false; then\n  dest=/tmp/one\nfi\n'),
+        )
+
+    def test_a_first_assignment_written_in_a_function_body_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('run() {\n  dest=/tmp/one\n}\nrun\n'),
+        )
+
+    def test_a_later_assignment_in_a_function_body_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nrun() {\n  dest=/tmp/two\n}\nrun\n'),
+        )
+
+    def test_a_separator_written_inside_a_quoted_span_opens_no_command(self):
+        self.assertNotIn(
+            "dest",
+            self.unsettled('printf %s "; dest=/tmp/one"\ndest=/tmp/two\n'),
+        )
+
+    def test_a_command_written_after_a_separator_is_read_as_its_own(self):
+        self.assertIn("dest", self.unsettled('printf %s x; dest=/tmp/one printf %s y\n'))
+
+    def test_a_reserved_word_never_hides_a_prefix_assignment(self):
+        self.assertIn("dest", self.unsettled('if dest=/tmp/one printf %s x; then :; fi\n'))
+
+    def test_a_heredoc_body_opens_no_command(self):
+        self.assertNotIn(
+            "dest",
+            self.unsettled('cat <<EOF\ndest=/tmp/one printf\nEOF\ndest=/tmp/two\n'),
+        )
+
+    def test_a_redirection_target_is_not_a_command_word(self):
+        self.assertNotIn(
+            "dest",
+            self.unsettled('printf %s x >/tmp/out\ndest=/tmp/two\n'),
+        )
+
+    def test_an_assignment_written_under_a_condition_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nif false; then dest=/tmp/two; fi\n'),
+        )
+
+    def test_an_assignment_written_in_a_loop_body_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nfor i in a; do dest=/tmp/two; done\n'),
+        )
+
+    def test_an_assignment_written_in_a_case_branch_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\ncase x in y) dest=/tmp/two;; esac\n'),
+        )
+
+    def test_an_assignment_written_behind_an_or_is_unsettled(self):
+        self.assertIn(
+            "dest", self.unsettled('dest=/tmp/one\nfalse || dest=/tmp/two\n')
+        )
+
+    def test_an_assignment_written_in_a_subshell_is_unsettled(self):
+        self.assertIn("dest", self.unsettled('dest=/tmp/one\n( dest=/tmp/two )\n'))
+
+    def test_an_assignment_written_in_a_pipeline_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nprintf %s x | { dest=/tmp/two; }\n'),
+        )
+
+    def test_an_assignment_written_behind_an_ampersand_is_unsettled(self):
+        self.assertIn(
+            "dest", self.unsettled('dest=/tmp/one\n{ dest=/tmp/two; } &\n')
+        )
+
+    def test_a_parenthesis_written_inside_a_quoted_span_detaches_nothing(self):
+        self.assertNotIn(
+            "dest",
+            self.unsettled('printf %s "("\ndest=/tmp/one\nprintf %s "$dest"\n'),
+        )
+
+    def test_an_assigning_parameter_expansion_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nprintf %s "${dest:=/tmp/two}"\n'),
+        )
+
+    def test_a_reading_parameter_expansion_settles_its_name(self):
+        self.assertNotIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nprintf %s "${dest:-/tmp/two}"\n'),
+        )
+
+    def test_an_arithmetic_expansion_unsettles_every_name_it_writes(self):
+        self.assertIn("dest", self.unsettled('dest=1\n: $((dest + 1))\n'))
+
+    def test_a_trap_string_unsettles_the_name_it_assigns(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\ntrap "dest=/tmp/two" EXIT\n'),
+        )
+
+    def test_an_attached_named_option_unsettles_its_name(self):
+        self.assertIn(
+            "dest", self.unsettled('dest=/safe\nprintf -vdest "%s" /evil\n')
+        )
+
+    def test_a_detached_named_option_unsettles_its_name(self):
+        self.assertIn(
+            "dest", self.unsettled('dest=/safe\nprintf -v dest "%s" /evil\n')
+        )
+
+    def test_an_arithmetic_expansion_in_a_heredoc_body_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=1\ncat <<EOF >/dev/null\n$((dest=5))\nEOF\n'),
+        )
+
+    def test_a_parameter_assignment_in_a_heredoc_body_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('cat <<EOF >/dev/null\n${dest:=/tmp/evil}\nEOF\n'),
+        )
+
+    def test_a_continued_assignment_name_is_unsettled(self):
+        self.assertIn("dest", self.unsettled('de\\\nst=/evil\n'))
+
+    def test_a_redirected_group_written_behind_an_ampersand_is_unsettled(self):
+        self.assertIn(
+            "dest", self.unsettled('{ dest=/tmp/two; } >/dev/null &\n')
+        )
+
+    def test_a_redirected_group_written_beside_a_pipe_is_unsettled(self):
+        self.assertIn(
+            "dest", self.unsettled('{ dest=/tmp/two; } 2>/dev/null | cat\n')
+        )
+
+    def test_a_group_written_with_a_heredoc_behind_an_ampersand_is_unsettled(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('{ dest=/tmp/two; } <<EOF &\nbody\nEOF\n'),
+        )
+
+    def test_a_redirected_group_that_is_not_detached_settles_its_name(self):
+        self.assertNotIn(
+            "dest",
+            self.unsettled(
+                'dest=/tmp/one\n{ dest=/tmp/two; } >/dev/null\nprintf %s "$dest"\n'
+            ),
+        )
+
+    def test_a_descriptor_variable_redirection_unsettles_its_name(self):
+        self.assertIn(
+            "dest",
+            self.unsettled('dest=/tmp/one\nexec {dest}>/dev/null\n'),
+        )
+
+    def test_an_unaccepted_construct_unsettles_every_written_name(self):
+        fixture = self.build('dest=/tmp/one\nexec {fd}>/dev/null\nother=/tmp/two\n')
+        self.assertTrue(fixture.unaccepted_constructs())
+        unsettled = fixture.unsettled_names()
+        self.assertIn("dest", unsettled)
+        self.assertIn("other", unsettled)
+        self.assertIn("fd", unsettled)
+
+    def test_a_brace_expansion_is_an_unaccepted_construct(self):
+        self.assertTrue(self.build('printf %s a{b,c}\n').unaccepted_constructs())
+
+    def test_a_quoted_brace_is_an_accepted_construct(self):
+        fixture = self.build('dest=/tmp/one\nprintf %s "{}"\n')
+        self.assertEqual(fixture.unaccepted_constructs(), ())
+        self.assertNotIn("dest", fixture.unsettled_names())
+
+    def test_a_group_brace_is_an_accepted_construct(self):
+        fixture = self.build('dest=/tmp/one\n{ printf %s x; }\n')
+        self.assertEqual(fixture.unaccepted_constructs(), ())
+        self.assertNotIn("dest", fixture.unsettled_names())
+
+    def test_the_accepted_constructs_cover_the_forms_the_grammar_reads(self):
+        fixture = self.build(
+            'dest=/tmp/one\n'
+            "printf '%s' \"$dest\" >/dev/null 2>&1\n"
+            'cat <<EOF | { printf %s x; } || true\nbody\nEOF\n'
+            '# a comment\n'
+            'run() { printf %s "$(printf y)"; }\n'
+            'for item in a b; do run; done\n'
+        )
+        self.assertEqual(fixture.unaccepted_constructs(), ())
+
+    def test_an_expanded_word_denotes_no_settled_text(self):
+        text = shell_lexical.project('"$dest"').tokens[0]
+        self.assertIsNone(copier_fixture_validator._token_text(text))
+
+    def test_a_quoted_word_denotes_its_inner_text(self):
+        text = shell_lexical.project('"de"st').tokens[0]
+        self.assertEqual(copier_fixture_validator._token_text(text), "dest")
 
 
 class SnapshotIndirectionTest(ContractSupportTest):

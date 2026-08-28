@@ -75,13 +75,19 @@ checked_summary_ja: 受理する構文そのものを列挙し、列挙外を書
 
 ## Tasks
 
-- [ ] Enumerate the token kinds, the operators, the reserved words, the redirection forms, the quoting forms, and the expansion forms the checker accepts, and report every name unsettled as soon as the fixture writes anything outside that enumeration.
-- [ ] Prove the enumeration is total over the committed fixture by reporting, for that fixture, that no unaccepted construct is written and that the names the later plans read stay settled.
-- [ ] Carry forward every binding surface the stopped plan proved, keeping each one derived from the lexical tokens and keeping the reported set a union no branch subtracts from.
-- [ ] Cover the constructs the stopped rounds recorded, including a descriptor-variable redirection, an attached named option, an expansion written inside a here-document body, a redirection written between a closing brace and the operator that detaches its group, and a continued assignment name.
-- [ ] Prove the rejecting default by writing a fixture that uses an accepted construct in an unaccepted spelling and asserting that every name it writes is reported unsettled.
-- [ ] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
+- [x] Enumerate the token kinds, the operators, the reserved words, the redirection forms, the quoting forms, and the expansion forms the checker accepts, and report every name unsettled as soon as the fixture writes anything outside that enumeration.
+- [x] Prove the enumeration is total over the committed fixture by reporting, for that fixture, that no unaccepted construct is written and that the names the later plans read stay settled.
+- [x] Carry forward every binding surface the stopped plan proved, keeping each one derived from the lexical tokens and keeping the reported set a union no branch subtracts from.
+- [x] Cover the constructs the stopped rounds recorded, including a descriptor-variable redirection, an attached named option, an expansion written inside a here-document body, a redirection written between a closing brace and the operator that detaches its group, and a continued assignment name.
+- [x] Prove the rejecting default by writing a fixture that uses an accepted construct in an unaccepted spelling and asserting that every name it writes is reported unsettled.
+- [x] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
 
 ## Validation Notes
 
 - Pending. The Plan 234 archive records the three review rounds, the twelve defects closed before review, and the descriptor-variable redirection that remained open.
+- Implemented the acceptance enumeration (`ACCEPTED_TOKEN_KINDS`, `ACCEPTED_OPERATORS`, `ACCEPTED_SEGMENT_KINDS`, and the unquoted-brace rule) with a rejecting default: any unaccepted construct reports every written name unsettled.
+- Self-review before independent review found and fixed twelve High defects carried in from the stopped plan's candidate.
+- Independent review round 1 reported one High: an operand this checker could not read was silently dropped, so `export $x`, `read $ptr`, and `printf -v "$ptr"` bound a name in real dash and bash while the checker settled it.
+- Remediation round 1 replaced the drop with an escalation and narrowed it with forking launchers, command words carrying a literal slash, and declared function names. The committed fixture reports no unaccepted construct and fifty-seven unsettled names, and the names the later plans read stay settled.
+- Independent review round 2 reported no High and no Medium finding, and confirmed the reported set stays a union no branch subtracts from. Two Low observations recorded `DIRSTACK` and the coprocess names as unmodeled bash side effects; both were closed by naming them as always unsettled.
+- Authoritative validation ran once: 188 checker tests passed, `--check tests/copier-update.sh` passed, `scripts/lint-project-workflow.sh` passed, and `tests/smoke.sh` passed.

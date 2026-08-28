@@ -190,6 +190,201 @@ EXPANSION_PATTERN = re.compile(
 # so the combination count is small in practice. The bound keeps supplied
 # bytes from making the expansion work grow without limit.
 MAX_EXPANSIONS = 64
+# --- the modelled binding surfaces ------------------------------------------
+#
+# A word is settled from what a fixture writes above it, so every place a
+# fixture may give a name a value has to be read before any word is. The
+# surfaces below are read from the lexical tokens the fixture is parsed into,
+# never from its raw text, because a quoted span, a command substitution, or a
+# continued line hides a separator from any pattern matched over raw text. A
+# surface written in a form this checker does not enumerate leaves the names it
+# is written with unsettled rather than leaving them settled.
+NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+QUOTED_SEGMENTS = ("single_quoted", "double_quoted")
+LITERAL_SEGMENT = "literal"
+# A command list ends at one of these, so the words of one command are the
+# words written between two of them.
+COMMAND_BREAKS = frozenset({";", "&", "&&", "|", "||", ";;", "(", ")"})
+CONTINUATION_KIND = "line_continuation"
+LINE_CONTINUATION = "\\\n"
+HEREDOC_KIND = "heredoc_body"
+# The words a shell reads as syntax rather than as a command name.
+LOOP_KEYWORD = "for"
+RESERVED_WORDS = frozenset(
+    {
+        "if",
+        "then",
+        "elif",
+        "else",
+        "fi",
+        "for",
+        "while",
+        "until",
+        "do",
+        "done",
+        "case",
+        "esac",
+        "in",
+        "{",
+        "}",
+        "!",
+    }
+)
+# The operators that detach what is written from the shell that writes it.
+SUBSHELL_OPEN = "("
+SUBSHELL_CLOSE = ")"
+GROUP_OPEN = "{"
+GROUP_CLOSE = "}"
+DETACHING_BREAKS = frozenset({"&", "|", "||"})
+# --- the accepted fixture constructs ----------------------------------------
+#
+# Every stopped attempt at this model failed the same way: a construct the
+# reader did not enumerate was read as if it did nothing, so the names written
+# around it stayed settled. A reader cannot list what it failed to look at, so
+# the constructs themselves are enumerated here instead. A fixture that writes
+# anything outside this enumeration is not read at all, and every name written
+# in it is reported unsettled, because a checker that does not know what a
+# construct does cannot know which names it leaves alone either.
+ACCEPTED_TOKEN_KINDS = frozenset(
+    {
+        "word",
+        "operator",
+        "newline",
+        "comment",
+        "io_number",
+        "heredoc_body",
+        "line_continuation",
+    }
+)
+ACCEPTED_OPERATORS = frozenset(
+    {
+        ";",
+        ";;",
+        "&",
+        "&&",
+        "|",
+        "||",
+        "(",
+        ")",
+        "<",
+        ">",
+        ">>",
+        "<<",
+        "<<-",
+        ">&",
+        "<&",
+        "<>",
+        ">|",
+    }
+)
+ACCEPTED_SEGMENT_KINDS = frozenset(
+    {
+        "literal",
+        "escape",
+        "single_quoted",
+        "double_quoted",
+        "parameter_expansion",
+        "command_substitution",
+        "arithmetic_expansion",
+    }
+)
+# A brace written unquoted outside a group opens a construct this checker does
+# not read, including the descriptor-variable redirection that binds the name
+# written inside it and the brace expansion that writes several words.
+BRACE_CHARACTERS = ("{", "}")
+GROUP_WORDS = frozenset({"{", "}"})
+# A command that gives a name a value this checker records no assignment for.
+ASSIGNING_COMMANDS = frozenset(
+    {
+        "export",
+        "readonly",
+        "local",
+        "declare",
+        "typeset",
+        "set",
+        "read",
+        "readarray",
+        "mapfile",
+        "getopts",
+        "unset",
+        "let",
+        "select",
+        "eval",
+        "trap",
+        "wait",
+        "coproc",
+        "source",
+        ".",
+    }
+)
+# A command whose operands are paths rather than names. A fixture that sources
+# a path gives the sourced bytes the same authority as its own, which is the
+# one boundary this checker accepts rather than reads, so an operand it cannot
+# read here names a file rather than a variable.
+PATH_OPERAND_COMMANDS = frozenset({"source", "."})
+# A command that runs another command, so the command a fixture writes may be
+# written behind one of these rather than first.
+LAUNCHER_COMMANDS = frozenset(
+    {
+        "command",
+        "builtin",
+        "env",
+        "exec",
+        "nohup",
+        "setsid",
+        "stdbuf",
+        "sudo",
+        "time",
+        "timeout",
+        "xargs",
+        "busybox",
+    }
+)
+# A launcher that runs what it is given in its own process. Nothing it runs can
+# give the shell that writes it a value, so a name written with one of these is
+# read no further.
+FORKING_LAUNCHERS = frozenset(
+    {
+        "env",
+        "nohup",
+        "setsid",
+        "stdbuf",
+        "sudo",
+        "timeout",
+        "xargs",
+        "busybox",
+    }
+)
+# A shell resolves a command word carrying a slash as a pathname, so such a word
+# never names a builtin and never gives the shell that writes it a value.
+PATH_SEPARATOR = "/"
+NAMED_OPTION = "-v"
+# An expansion a shell gives a value through rather than only reads through.
+ASSIGNING_EXPANSION = "="
+ARITHMETIC_SEGMENT = "arithmetic_expansion"
+PARAMETER_SEGMENT = "parameter_expansion"
+# A shell keeps these names itself and changes them where no assignment is
+# written, so what one of them holds is never settled from written text.
+MUTABLE_SHELL_NAMES = frozenset(
+    {
+        "PWD",
+        "OLDPWD",
+        "CDPATH",
+        "IFS",
+        "OPTIND",
+        "OPTARG",
+        "REPLY",
+        "RANDOM",
+        "SECONDS",
+        "LINENO",
+        "PPID",
+        "SHLVL",
+        "_",
+        "DIRSTACK",
+        "COPROC",
+        "COPROC_PID",
+    }
+)
 # No written path contains a null byte, so joining unresolved values with it
 # keeps every value readable in one word without inventing a new one.
 UNRESOLVED_JOINER = "\0"
@@ -648,6 +843,385 @@ def _command_assignments(records: shell_lexical.LexicalProjection) -> tuple[_Ass
     return tuple(assignments)
 
 
+def _word_letters(token: Token) -> tuple[tuple[str, bool], ...] | None:
+    """Return every letter one word denotes, paired with whether it is quoted.
+
+    A word is read letter by letter so that a quoted separator is never read as
+    the separator itself. A word carrying an expansion denotes text this
+    checker cannot read, so no letters are returned for it.
+    """
+
+    letters: list[tuple[str, bool]] = []
+    for segment in token.segments:
+        if segment.kind == LITERAL_SEGMENT:
+            letters.extend((letter, False) for letter in segment.text)
+        elif segment.kind == "escape":
+            if segment.value is None:
+                return None
+            letters.extend((letter, True) for letter in segment.value)
+        elif segment.kind == "single_quoted":
+            if segment.value is None:
+                return None
+            letters.extend((letter, True) for letter in segment.value)
+        elif segment.kind == "double_quoted":
+            for inner in segment.segments:
+                if inner.kind not in (LITERAL_SEGMENT, "escape"):
+                    return None
+                text = inner.text if inner.kind == LITERAL_SEGMENT else inner.value
+                if text is None:
+                    return None
+                letters.extend((letter, True) for letter in text)
+        else:
+            return None
+    return tuple(letters)
+
+
+def _expansion_segments(
+    segments: Sequence[shell_lexical.Segment],
+) -> tuple[shell_lexical.Segment, ...]:
+    """Return every expansion written in one word, including quoted ones.
+
+    A double-quoted span still expands, so the segments written inside it are
+    read as well. A command substitution runs in its own shell and gives no
+    value to the shell that writes it, so what is written inside one is not
+    read here.
+    """
+
+    found: list[shell_lexical.Segment] = []
+    for segment in segments:
+        if segment.kind in (ARITHMETIC_SEGMENT, PARAMETER_SEGMENT):
+            found.append(segment)
+        elif segment.kind == "double_quoted":
+            found.extend(_expansion_segments(segment.segments))
+    return tuple(found)
+
+
+def _writes_a_path(token: Token) -> bool:
+    """Report whether one command word certainly carries a slash.
+
+    A shell resolves a command word containing a slash as a pathname and runs
+    it in its own process, so such a word never names a builtin that could give
+    the writing shell a value. Only the slashes written literally are read; a
+    slash an expansion may produce is not one this checker knows about.
+    """
+
+    for segment in token.segments:
+        if segment.kind == LITERAL_SEGMENT:
+            if PATH_SEPARATOR in segment.text:
+                return True
+        elif segment.kind in ("escape", "single_quoted"):
+            if segment.value is not None and PATH_SEPARATOR in segment.value:
+                return True
+        elif segment.kind == "double_quoted":
+            for inner in segment.segments:
+                if inner.kind == LITERAL_SEGMENT and PATH_SEPARATOR in inner.text:
+                    return True
+    return False
+
+
+def _token_text(token: Token) -> str | None:
+    """Return the one text a word denotes, or nothing when it denotes more."""
+
+    letters = _word_letters(token)
+    if letters is None:
+        return None
+    return "".join(letter for letter, _ in letters)
+
+
+def _assignment_name(token: Token) -> str | None:
+    """Return the name one word assigns, or nothing when it assigns none.
+
+    A shell reads a word as an assignment when an unquoted `=` follows a name,
+    so a quoted or expanded `=` never opens one. A word whose name part carries
+    an expansion cannot open an assignment at all, because the text before the
+    `=` would then not be a written name.
+    """
+
+    name: list[str] = []
+    for segment in token.segments:
+        if segment.kind == LITERAL_SEGMENT:
+            head, marked, _ = segment.text.partition("=")
+            name.append(head)
+            if marked:
+                written = "".join(name)
+                return written if NAME_PATTERN.fullmatch(written) else None
+            continue
+        letters = _word_letters(
+            Token(kind=WORD, text=segment.text, start=token.start, end=token.end, segments=(segment,))
+        )
+        if letters is None:
+            return None
+        name.extend(letter for letter, _ in letters)
+    return None
+
+
+@dataclass(frozen=True)
+class _CommandRun:
+    """Every word one command is written with, read from the token stream."""
+
+    tokens: tuple[Token, ...]
+
+    @property
+    def named(self) -> tuple[Token, ...]:
+        """Return the words left once the leading reserved words are dropped."""
+
+        index = 0
+        while index < len(self.tokens):
+            if _token_text(self.tokens[index]) not in RESERVED_WORDS:
+                break
+            index += 1
+        return self.tokens[index:]
+
+    @property
+    def assignments(self) -> tuple[Token, ...]:
+        """Return the assignment words written in front of this command."""
+
+        assignments: list[Token] = []
+        for token in self.named:
+            if _assignment_name(token) is None:
+                break
+            assignments.append(token)
+        return tuple(assignments)
+
+    @property
+    def words(self) -> tuple[Token, ...]:
+        """Return the command word and its operands, if a command word is written."""
+
+        return self.named[len(self.assignments):]
+
+    def assignment_names(self) -> tuple[tuple[Token, str], ...]:
+        """Return every assignment word written in front of this command."""
+
+        pairs = []
+        for token in self.assignments:
+            name = _assignment_name(token)
+            if name is not None:
+                pairs.append((token, name))
+        return tuple(pairs)
+
+    def command_name(self, fixture: "_Fixture") -> str | None:
+        """Return the one command this run names, or nothing when it names more.
+
+        A command written behind a launcher, or written with an expansion, is
+        not read as one command, because the command that would run is decided
+        from text this checker does not settle here. A command a fixture
+        declares itself is read as its own name, because what a declared
+        function binds is read from its body rather than from its call.
+        """
+
+        if not self.words:
+            return None
+        written = _token_text(self.words[0])
+        if written is None or written in LAUNCHER_COMMANDS:
+            return None
+        return written
+
+
+def _segment_kinds(segments: Sequence[shell_lexical.Segment]) -> set[str]:
+    """Return every segment kind written in one word, however deeply nested."""
+
+    kinds: set[str] = set()
+    for segment in segments:
+        kinds.add(segment.kind)
+        kinds.update(_segment_kinds(segment.segments))
+        for token in segment.tokens:
+            kinds.update(_segment_kinds(token.segments))
+    return kinds
+
+
+def _unaccepted_constructs(
+    records: shell_lexical.LexicalProjection,
+) -> tuple[str, ...]:
+    """Return one description of every construct this checker does not read.
+
+    The enumeration is deliberately narrow. Widening it is a reviewed change,
+    because each construct added here is one more thing the settled answer
+    depends on.
+    """
+
+    reasons: list[str] = []
+    for token in records.tokens:
+        if token.kind not in ACCEPTED_TOKEN_KINDS:
+            reasons.append(f"a {token.kind} record at offset {token.start.offset}")
+            continue
+        if token.kind == "operator" and token.text not in ACCEPTED_OPERATORS:
+            reasons.append(
+                f"the operator {token.text!r} at offset {token.start.offset}"
+            )
+            continue
+        unread = _segment_kinds(token.segments) - ACCEPTED_SEGMENT_KINDS
+        if unread:
+            reasons.append(
+                f"a {sorted(unread)[0]} span at offset {token.start.offset}"
+            )
+            continue
+        if token.kind == "word" and token.text not in GROUP_WORDS:
+            for segment in token.segments:
+                if segment.kind != "literal":
+                    continue
+                if any(brace in segment.text for brace in BRACE_CHARACTERS):
+                    reasons.append(
+                        f"an unquoted brace at offset {segment.start.offset}"
+                    )
+                    break
+    return tuple(reasons)
+
+
+def _written_names(records: shell_lexical.LexicalProjection) -> frozenset[str]:
+    """Return every name written anywhere in one fixture.
+
+    A shell joins a continued line before it reads a name, so the names it can
+    see are the ones written in the joined text as well as the ones written in
+    the text as it stands.
+    """
+
+    joined = records.source.replace(LINE_CONTINUATION, "")
+    return frozenset(
+        NAME_PATTERN.findall(records.source) + NAME_PATTERN.findall(joined)
+    )
+
+
+def _detaching_follows(words: Sequence[Token], index: int) -> bool:
+    """Report whether a detaching operator is written after one token.
+
+    A command carries its redirections between its last word and the operator
+    that follows it, so the redirections written there are read past rather
+    than read as the following operator. A redirection is written as an
+    optional file number, the redirection operator, and the one word it
+    redirects to, and a here-document also carries its body.
+    """
+
+    position = index + 1
+    while position < len(words):
+        token = words[position]
+        if token.kind == "io_number" or token.kind == HEREDOC_KIND:
+            position += 1
+            continue
+        if token.kind == "operator" and token.text not in COMMAND_BREAKS:
+            position += 1
+            while position < len(words) and words[position].kind == HEREDOC_KIND:
+                position += 1
+            if position < len(words) and words[position].kind == WORD:
+                position += 1
+            continue
+        return token.kind == "operator" and token.text in DETACHING_BREAKS
+    return False
+
+
+def _detached_spans(
+    records: shell_lexical.LexicalProjection,
+) -> tuple[tuple[int, int], ...]:
+    """Return every extent whose assignments the surrounding shell never sees.
+
+    A shell runs a subshell, one side of a pipeline, and a command written
+    behind `&` in its own copy of itself, so an assignment written in one of
+    them leaves the surrounding shell holding whatever it held before. Every
+    such extent is read from the tokens, because a parenthesis or a `&` written
+    inside a quoted span or a here-document is not one at all. A group carries
+    its redirections after its closing brace, so the operator that detaches the
+    group is the one written past those redirections.
+    """
+
+    spans: list[tuple[int, int]] = []
+    stack: list[tuple[str, int]] = []
+    words = [token for token in records.tokens if token.kind != CONTINUATION_KIND]
+    for index, token in enumerate(words):
+        detaches = _detaching_follows(words, index)
+        if token.kind == "operator" and token.text == SUBSHELL_OPEN:
+            stack.append((SUBSHELL_OPEN, token.start.offset))
+            continue
+        if token.kind == "operator" and token.text == SUBSHELL_CLOSE:
+            while stack:
+                kind, start = stack.pop()
+                spans.append((start, token.end.offset))
+                if kind == SUBSHELL_OPEN:
+                    break
+            continue
+        if token.kind == WORD and _token_text(token) == GROUP_OPEN:
+            stack.append((GROUP_OPEN, token.start.offset))
+            continue
+        if token.kind == WORD and _token_text(token) == GROUP_CLOSE:
+            if stack and stack[-1][0] == GROUP_OPEN:
+                _, start = stack.pop()
+                if detaches:
+                    spans.append((start, token.end.offset))
+            continue
+        if token.kind == "operator" and token.text in DETACHING_BREAKS:
+            spans.append((token.start.offset, token.end.offset))
+    for _, start in stack:
+        spans.append((start, len(records.source)))
+    return tuple(spans)
+
+
+def _pipeline_extents(
+    records: shell_lexical.LexicalProjection,
+) -> tuple[tuple[int, int], ...]:
+    """Return the extent of every command list written beside `&` or `|`.
+
+    A command list ends at a newline or a `;`, so the extent between two of
+    those that carries a detaching operator is the extent a shell detaches.
+    """
+
+    extents: list[tuple[int, int]] = []
+    start: int | None = None
+    detached = False
+    for token in records.tokens:
+        if token.kind == CONTINUATION_KIND:
+            continue
+        if token.kind == "newline" or (
+            token.kind == "operator" and token.text in (";", ";;")
+        ):
+            if start is not None and detached:
+                extents.append((start, token.start.offset))
+            start = None
+            detached = False
+            continue
+        if start is None:
+            start = token.start.offset
+        if token.kind == "operator" and token.text in DETACHING_BREAKS:
+            detached = True
+    if start is not None and detached:
+        extents.append((start, len(records.source)))
+    return tuple(extents)
+
+
+def _command_runs(records: shell_lexical.LexicalProjection) -> tuple[_CommandRun, ...]:
+    """Return every command written in one fixture, read from its tokens.
+
+    A command ends where a shell ends a command list, and a redirection is
+    written with a word that is not one of the command's own, so both the
+    redirection operator and the word that follows it are dropped.
+    """
+
+    runs: list[_CommandRun] = []
+    words: list[Token] = []
+    redirected = False
+    for token in records.tokens:
+        if token.kind == CONTINUATION_KIND:
+            continue
+        if token.kind == WORD:
+            if redirected:
+                redirected = False
+                continue
+            words.append(token)
+            continue
+        redirected = False
+        if token.kind == "io_number" or token.kind == "heredoc_body":
+            continue
+        if token.kind == "newline" or (
+            token.kind == "operator" and token.text in COMMAND_BREAKS
+        ):
+            if words:
+                runs.append(_CommandRun(tokens=tuple(words)))
+                words = []
+            continue
+        if token.kind == "operator":
+            redirected = True
+    if words:
+        runs.append(_CommandRun(tuple(words)))
+    return tuple(runs)
+
+
 class _Fixture:
     """Every derived view the Copier operation contract reads."""
 
@@ -679,6 +1253,283 @@ class _Fixture:
             operation.offset: _git_subcommand(operation)[0]
             for operation in self._git_operations
         }
+        self._runs: tuple[_CommandRun, ...] | None = None
+        self._unsettled: frozenset[str] | None = None
+        self._detached: tuple[tuple[int, int], ...] | None = None
+        self._unaccepted: tuple[str, ...] | None = None
+        self._unknown_binding = False
+
+    def command_runs(self) -> tuple["_CommandRun", ...]:
+        """Return every command this fixture writes, read from its tokens.
+
+        A command is the run of words written between two of the operators a
+        shell ends a command list with. The words a shell reads as an
+        assignment come first, and the first word that is not one of them is
+        the command word, so a fixture that writes only assignments writes no
+        command word at all.
+        """
+
+        if self._runs is None:
+            self._runs = _command_runs(self.records)
+        return self._runs
+
+    def declares(self, name: str) -> bool:
+        """Report whether this fixture declares a function of one name."""
+
+        return any(
+            declaration.name == name for declaration in self.table.declarations
+        )
+
+    def written_assigned_names(self) -> frozenset[str]:
+        """Return every name written with a value this checker records no assignment for.
+
+        A fixture may write several assignments as one command, and only the
+        first of them is recorded in command position, so a name written with a
+        value where this checker holds no assignment is never settled. A
+        recorded assignment the token walk does not read as the same name is
+        never settled either, because the two readings then disagree about
+        which name carries the written value.
+        """
+
+        derived = {
+            token.start.offset: name
+            for run in self.command_runs()
+            for token, name in run.assignment_names()
+        }
+        names = {
+            name
+            for offset, name in derived.items()
+            if offset not in {item.offset for item in self.assignments}
+        }
+        names.update(
+            assignment.name
+            for assignment in self.assignments
+            if derived.get(assignment.offset) != assignment.name
+        )
+        return frozenset(names)
+
+    def prefix_assigned_names(self) -> frozenset[str]:
+        """Return every name a fixture assigns in front of a command.
+
+        A shell expands a command's words before it applies the assignments
+        written in front of that command, and such an assignment leaves the
+        shell's own value unchanged, so neither that command nor any later one
+        carries it. This checker settles with every assignment written earlier,
+        so a word that reads such a name is not settled by what is written
+        above it.
+        """
+
+        return frozenset(
+            name
+            for run in self.command_runs()
+            if run.words
+            for _, name in run.assignment_names()
+        )
+
+    def command_assigned_names(self) -> frozenset[str]:
+        """Return every name a command may give a value this checker misses.
+
+        A shell also assigns through commands such as ``export`` and ``read``,
+        and this checker reads only the assignments written in command
+        position. A name written with a value in any operand, or named by a
+        command this checker models as assigning, may therefore hold a value no
+        assignment carries. A command word this checker cannot read as one name
+        may name any command at all, so every bare operand written with it is
+        treated as a name that command may bind, unless the word carries a
+        slash or runs in its own process, because neither can name a builtin
+        that gives the writing shell a value. An operand this checker cannot
+        read as one text names a variable this checker cannot name, so such an
+        operand records that the fixture binds a name it never sees.
+        """
+
+        names: set[str] = set()
+        self._unknown_binding = False
+        for run in self.command_runs():
+            if not run.words:
+                continue
+            command = run.command_name(self)
+            if _token_text(run.words[0]) in FORKING_LAUNCHERS or _writes_a_path(
+                run.words[0]
+            ):
+                continue
+            binds = command is None or command in ASSIGNING_COMMANDS
+            named = False
+            reads_paths = command in PATH_OPERAND_COMMANDS
+            for token in run.words[1:]:
+                written = _token_text(token)
+                if written is None:
+                    if (binds or named) and not reads_paths:
+                        self._unknown_binding = True
+                    named = False
+                    continue
+                if named:
+                    names.add(written.split("=", 1)[0])
+                    named = False
+                    continue
+                if written.startswith(NAMED_OPTION):
+                    attached = written[len(NAMED_OPTION):]
+                    if attached:
+                        names.add(attached.split("=", 1)[0])
+                    else:
+                        named = True
+                    continue
+                if written.startswith("-"):
+                    continue
+                if binds:
+                    names.add(written.split("=", 1)[0])
+        return frozenset(name for name in names if NAME_PATTERN.fullmatch(name))
+
+    def loop_assigned_names(self) -> frozenset[str]:
+        """Return every name a loop head binds.
+
+        A loop head binds its name once per round from a list this checker does
+        not read, so a word written under it reads a value no assignment above
+        it carries.
+        """
+
+        names: set[str] = set()
+        for run in self.command_runs():
+            for index, token in enumerate(run.tokens[:-1]):
+                if _token_text(token) != LOOP_KEYWORD:
+                    continue
+                written = _token_text(run.tokens[index + 1])
+                if written is None or not NAME_PATTERN.fullmatch(written):
+                    continue
+                names.add(written)
+        return frozenset(names)
+
+    def function_assigned_names(self) -> frozenset[str]:
+        """Return every name a function body assigns.
+
+        A function runs where it is called, so an assignment written in its
+        body gives a value to every later reader, not only to the words written
+        under it. This checker settles a name from the assignments written
+        above the reader, so such a name is never settled.
+        """
+
+        return frozenset(
+            assignment.name
+            for assignment in self.assignments
+            if self.inside_declaration(assignment.offset)
+        )
+
+    def inherited_names(self) -> frozenset[str]:
+        """Return every name whose first written value may not be written at all.
+
+        A shell runs a fixture with the values its caller holds. An assignment
+        the fixture may not reach leaves that inherited value in place, and no
+        written text carries it, so a name whose first assignment does not
+        certainly run is never settled.
+        """
+
+        first: dict[str, _Assignment] = {}
+        for assignment in sorted(self.assignments, key=lambda item: item.offset):
+            first.setdefault(assignment.name, assignment)
+        return frozenset(
+            name
+            for name, assignment in first.items()
+            if not self._certainly_runs(assignment)
+        )
+
+    def uncertainly_assigned_names(self) -> frozenset[str]:
+        """Return every name whose written value may not be the value it holds.
+
+        A shell applies an assignment only where it reaches it, and an
+        assignment written under a condition, inside a loop, in a subshell, in
+        one side of a pipeline, or behind `&` either does not run at all or
+        runs where the surrounding shell never sees it. This checker settles a
+        name from the last assignment written above the reader, so a name any
+        of whose assignments does not certainly run where it is written is
+        never settled.
+        """
+
+        detached = self.detached_spans()
+        return frozenset(
+            assignment.name
+            for assignment in self.assignments
+            if not self._certainly_runs(assignment)
+            or any(start <= assignment.offset <= end for start, end in detached)
+        )
+
+    def detached_spans(self) -> tuple[tuple[int, int], ...]:
+        """Return every extent whose assignments the surrounding shell never sees."""
+
+        if self._detached is None:
+            self._detached = _detached_spans(self.records) + _pipeline_extents(
+                self.records
+            )
+        return self._detached
+
+    def expansion_assigned_names(self) -> frozenset[str]:
+        """Return every name an expansion may give a value to.
+
+        A shell assigns through `${name=value}` and `${name:=value}` as well as
+        through arithmetic, where `$((name=1))` and `$((name++))` both write.
+        The written form inside an expansion is not enumerated here, so every
+        name written inside an arithmetic expansion, and every name written
+        inside a parameter expansion carrying `=`, is reported unsettled. A
+        here-document body expands in the shell that writes it, so the
+        expansions written inside one are read as well.
+        """
+
+        names: set[str] = set()
+        for token in self.records.tokens:
+            if token.kind not in (WORD, HEREDOC_KIND):
+                continue
+            for segment in _expansion_segments(token.segments):
+                if segment.kind == ARITHMETIC_SEGMENT or (
+                    ASSIGNING_EXPANSION in segment.text
+                ):
+                    names.update(NAME_PATTERN.findall(segment.text))
+        return frozenset(names)
+
+    def unaccepted_constructs(self) -> tuple[str, ...]:
+        """Return one description of every construct this checker does not read."""
+
+        if self._unaccepted is None:
+            self._unaccepted = _unaccepted_constructs(self.records)
+        return self._unaccepted
+
+    def inside_declaration(self, offset: int) -> bool:
+        """Report whether one offset is written inside a function body."""
+
+        return any(
+            declaration.start.offset <= offset <= declaration.end.offset
+            for declaration in self.table.declarations
+        )
+
+    def unsettled_names(self) -> frozenset[str]:
+        """Return every name whose value this checker cannot settle.
+
+        A fixture that writes any construct this checker does not accept is not
+        read at all, and every name written in it is reported. Otherwise the
+        answer is a union of the enumerated binding surfaces, so a name is
+        settled only where every surface proves it is not bound. The one
+        boundary this checker accepts rather than reads is a sourced file: a
+        fixture that sources a path gives the sourced bytes the same authority
+        as its own, so those bytes stay part of what this checker trusts rather
+        than part of what it proves.
+        """
+
+        if self._unsettled is None:
+            if self.unaccepted_constructs():
+                self._unsettled = _written_names(self.records)
+                return self._unsettled
+            settled = (
+                MUTABLE_SHELL_NAMES
+                | self.written_assigned_names()
+                | self.prefix_assigned_names()
+                | self.command_assigned_names()
+                | self.loop_assigned_names()
+                | self.function_assigned_names()
+                | self.inherited_names()
+                | self.uncertainly_assigned_names()
+                | self.expansion_assigned_names()
+            )
+            if self._unknown_binding:
+                settled = settled | _written_names(self.records)
+            self._unsettled = settled
+        return self._unsettled
 
     def loop_extents(self) -> dict[int, int]:
         """Return the end offset of every loop the graph reports."""
