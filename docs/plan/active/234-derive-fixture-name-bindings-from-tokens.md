@@ -1,6 +1,6 @@
 # Derive fixture name bindings from lexical tokens
 
-status: in_progress
+status: replan_required
 primary_invariant: the bounded fixture checker decides which names a fixture may bind only from the lexical tokens the fixture is parsed into, reports a name unsettled whenever any binding surface may set it and whenever the surface itself is written in a form the checker does not enumerate, and leaves every existing rule rejecting and accepting exactly the operations it rejects and accepts today
 task_types:
   - template_workflow
@@ -59,6 +59,8 @@ integration_gates:
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
   - do not change which operations any existing rule reports in this plan; the model is added, not applied
   - Plan 235 must start only after this plan is checked and its exact checked archive path replaces the active dependency
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 checked_summary_ja: 名前を束縛しうる面を字句トークンから導き、読めない綴りは未解決として扱う。
 
 ## Decisions
