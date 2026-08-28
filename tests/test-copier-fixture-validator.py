@@ -2071,6 +2071,220 @@ class WordGrammarTest(unittest.TestCase):
         )
 
 
+class AliasCollectionTest(unittest.TestCase):
+    """Prove an alias is collected only from the modelled command grammar."""
+
+    module = copier_fixture_validator
+
+    def fixture(self, source: str):
+        records = self.module.shell_lexical.project(source)
+        table = self.module.shell_functions.derive(records)
+        graph = self.module.shell_execution.derive(records, table)
+        return self.module._Fixture(source, records, table, graph)
+
+    def aliases(self, body: str):
+        source = "#!/bin/sh\nset -eu\n" + body
+        links, unplaced = self.module._symlinked_paths(self.fixture(source))
+        return frozenset(self.module._path_text(path) for path in links), unplaced
+
+    def placed(self, body: str) -> frozenset[str]:
+        links, unplaced = self.aliases(body)
+        self.assertFalse(unplaced, "expected every alias of this fixture to be placed")
+        return links
+
+    def test_a_written_symbolic_link_places_both_readings(self) -> None:
+        """A second operand may name a directory, so both readings are placed."""
+
+        self.assertEqual(
+            self.placed("ln -s /tmp/one /tmp/two\n"),
+            frozenset({"/tmp/two", "/tmp/two/one"}),
+        )
+
+    def test_a_hard_link_places_no_alias(self) -> None:
+        self.assertEqual(self.placed("ln /tmp/one /tmp/two\n"), frozenset())
+
+    def test_a_plain_copy_places_no_alias(self) -> None:
+        self.assertEqual(self.placed("cp /tmp/one /tmp/two\n"), frozenset())
+
+    def test_every_symbolic_option_spelling_is_read(self) -> None:
+        for option in ("-s", "-sf", "-fs", "--symbolic", "--sym", "--s"):
+            with self.subTest(option=option):
+                self.assertIn(
+                    "/tmp/two", self.placed(f"ln {option} /tmp/one /tmp/two\n")
+                )
+
+    def test_a_launched_link_is_read_as_a_link(self) -> None:
+        for launcher in ("env", "command", "exec", "nohup"):
+            with self.subTest(launcher=launcher):
+                self.assertIn(
+                    "/tmp/two",
+                    self.placed(f"{launcher} ln -s /tmp/one /tmp/two\n"),
+                )
+
+    def test_a_command_word_this_checker_cannot_read_is_held_to_the_link_form(
+        self,
+    ) -> None:
+        """An unread command word may name a link, so a link spelling is read."""
+
+        linked, unplaced = self.aliases('runner=/bin/ln\n"$runner" -s /tmp/one /tmp/two\n')
+        self.assertEqual(linked, frozenset({"/tmp/two", "/tmp/two/one"}))
+        self.assertFalse(unplaced)
+
+    def test_an_unread_command_word_without_a_link_option_places_no_alias(self) -> None:
+        self.assertEqual(
+            self.placed('runner=/bin/cat\n"$runner" -n /tmp/one\n'), frozenset()
+        )
+
+    def test_an_option_this_checker_cannot_read_leaves_the_alias_unplaced(self) -> None:
+        """A link option written through an expansion may ask for a link."""
+
+        for body in (
+            "opt=-s\nln \"$opt\" /tmp/one /tmp/two\n",
+            "opt=-s\nln \"${opt}\" /tmp/one /tmp/two\n",
+            'ln "$(printf %s -s)" /tmp/one /tmp/two\n',
+            'opt=--symbolic\ncp "$opt" /tmp/one /tmp/two\n',
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(self.aliases(body)[1])
+
+    def test_a_word_written_with_a_slash_is_never_read_as_an_option(self) -> None:
+        """A slash is not an option letter, so such a word is an operand."""
+
+        self.assertEqual(
+            self.placed('base=/tmp\ncp "$base/one" "$base/two"\n'), frozenset()
+        )
+
+    def test_an_operand_settling_to_an_anchored_path_is_never_an_option(self) -> None:
+        self.assertEqual(
+            self.placed('one=/tmp/one\ntwo=/tmp/two\nln "$one" "$two"\n'), frozenset()
+        )
+
+    def test_a_copy_keeps_a_link_whatever_case_the_option_is_written_in(self) -> None:
+        """`-R` is a synonym of `-r`, and `-P` asks for no dereference."""
+
+        for option in ("-R", "-P", "-r", "-a", "-d", "-p"):
+            with self.subTest(option=option):
+                self.assertIn(
+                    "/tmp/three",
+                    self.placed(
+                        "ln -s /tmp/one /tmp/two\n"
+                        f"cp {option} /tmp/two /tmp/three\n"
+                    ),
+                )
+
+    def test_a_long_symbolic_option_is_read_in_every_spelling(self) -> None:
+        for option in ("--symbolic", "--symbolic-link", "--sym"):
+            with self.subTest(option=option):
+                self.assertIn(
+                    "/tmp/two",
+                    self.placed(f'runner=/bin/cp\n"$runner" {option} /tmp/one /tmp/two\n'),
+                )
+
+    def test_a_target_directory_option_leaves_the_alias_unplaced(self) -> None:
+        for option in ("-t", "-st", "--target-directory", "--target", "--t"):
+            with self.subTest(option=option):
+                _, unplaced = self.aliases(f"ln -s {option} /tmp/dir /tmp/one\n")
+                self.assertTrue(unplaced)
+
+    def test_an_operand_count_this_checker_does_not_read_leaves_it_unplaced(
+        self,
+    ) -> None:
+        for body in (
+            "ln -s /tmp/one\n",
+            "ln -s /tmp/one /tmp/two /tmp/dir\n",
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(self.aliases(body)[1])
+
+    def test_an_operand_this_checker_cannot_settle_leaves_it_unplaced(self) -> None:
+        self.assertTrue(self.aliases('ln -s /tmp/one "$(printf %s /tmp/two)"\n')[1])
+
+    def test_a_bare_double_dash_ends_the_options(self) -> None:
+        self.assertEqual(
+            self.placed("ln -s -- /tmp/one /tmp/two\n"),
+            frozenset({"/tmp/two", "/tmp/two/one"}),
+        )
+
+    def test_a_move_carries_a_tracked_alias(self) -> None:
+        self.assertEqual(
+            self.placed("ln -s /tmp/one /tmp/two\nmv /tmp/two /tmp/three\n"),
+            frozenset(
+                {"/tmp/two", "/tmp/two/one", "/tmp/three", "/tmp/three/two"}
+            ),
+        )
+
+    def test_a_move_option_never_stops_the_alias(self) -> None:
+        """A move carries a link whatever options are written with it."""
+
+        self.assertIn(
+            "/tmp/three",
+            self.placed("ln -s /tmp/one /tmp/two\nmv -f /tmp/two /tmp/three\n"),
+        )
+
+    def test_a_copy_keeps_a_link_only_with_a_preserving_option(self) -> None:
+        kept = self.placed("ln -s /tmp/one /tmp/two\ncp -a /tmp/two /tmp/three\n")
+        self.assertIn("/tmp/three", kept)
+        stored = self.placed("ln -s /tmp/one /tmp/two\ncp /tmp/two /tmp/three\n")
+        self.assertNotIn("/tmp/three", stored)
+
+    def test_a_copy_option_this_checker_cannot_read_leaves_it_unplaced(self) -> None:
+        self.assertTrue(
+            self.aliases("ln -s /tmp/one /tmp/two\ncp --reflink /tmp/two /tmp/three\n")[1]
+        )
+
+    def test_a_relocation_this_checker_cannot_read_leaves_it_unplaced(self) -> None:
+        for body in (
+            "ln -s /tmp/one /tmp/two\nmv -t /tmp/dir /tmp/two\n",
+            "ln -s /tmp/one /tmp/two\nmv /tmp/two\n",
+            'ln -s /tmp/one /tmp/two\nmv /tmp/two "$(printf %s /tmp/three)"\n',
+        ):
+            with self.subTest(body=body):
+                self.assertTrue(self.aliases(body)[1])
+
+    def test_a_relocation_of_an_untracked_path_carries_nothing(self) -> None:
+        self.assertEqual(
+            self.placed("ln -s /tmp/one /tmp/two\nmv /other/four /other/five\n"),
+            frozenset({"/tmp/two", "/tmp/two/one"}),
+        )
+
+    def test_a_chain_of_relocations_is_followed(self) -> None:
+        carried = self.placed(
+            "ln -s /tmp/one /tmp/two\n"
+            "mv /tmp/two /tmp/three\n"
+            "mv /tmp/three /tmp/four\n"
+        )
+        self.assertIn("/tmp/four", carried)
+
+    def test_an_alias_this_checker_cannot_anchor_holds_every_path(self) -> None:
+        """An unanchored alias names a directory no written text decides."""
+
+        source = '#!/bin/sh\nset -eu\nln -s /tmp/one "$outside/two"\n'
+        links, _ = self.module._symlinked_paths(self.fixture(source))
+        self.assertTrue(links, "an unanchored alias is still collected")
+        self.assertTrue(
+            self.module._may_be_linked(links, frozenset({(True, ("other", "place"))})),
+            "an unanchored alias may name any destination",
+        )
+
+    def test_a_path_a_link_holds_may_be_named_by_it(self) -> None:
+        link = (True, ("tmp", "two"))
+        self.assertTrue(self.module._may_be_ancestor(link, (True, ("tmp", "two", "x"))))
+        self.assertFalse(self.module._may_be_ancestor(link, (True, ("tmp",))))
+        self.assertFalse(self.module._may_be_ancestor(link, (True, ("tmp", "three"))))
+        self.assertTrue(self.module._may_be_ancestor(link, link))
+
+    def test_a_segment_written_with_an_expansion_never_holds_a_path(self) -> None:
+        self.assertFalse(
+            self.module._holds_path((True, ("$a",)), (True, ("$a", "x")))
+        )
+
+    def test_the_committed_fixture_places_every_alias_it_writes(self) -> None:
+        source = Path("tests/copier-update.sh").read_text(encoding="utf-8")
+        links, unplaced = self.module._symlinked_paths(self.fixture(source))
+        self.assertFalse(unplaced, "the committed fixture writes only modelled aliases")
+        self.assertTrue(links, "the committed fixture writes a symbolic link")
+
+
 class SnapshotIndirectionTest(ContractSupportTest):
     SNAPSHOT = "$project/scripts/snapshot-validation-witness-provenance.py"
 

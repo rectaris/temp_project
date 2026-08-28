@@ -77,13 +77,16 @@ checked_summary_ja: 別名の収集を列挙したコマンド文法だけに限
 
 ## Tasks
 
-- [ ] Enumerate the command grammar the checker reads for aliases: the command names, the option forms including accepted long-option abbreviations, and the operand counts, and leave every other spelling unplaced.
-- [ ] Read every reachable operation as written and through each projected dispatch, and locate the effective command behind the enumerated launcher prefixes and launcher options.
-- [ ] Collect the alias paths of each modelled link, record both the written and the directory reading of its destination, and mark the alias set unplaced when an operand is unsettled.
-- [ ] Follow tracked aliases through modelled relocations under a fixed round budget, distinguishing a move from a copy that keeps a link, and mark the set unplaced for a relocation this checker cannot read.
-- [ ] Cover every spelling the stopped plans recorded, including a launched link, an unread command word, a target-directory option, an ordinary move option, an unread copy option, and a relocation into a directory.
-- [ ] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
+- [x] Enumerate the command grammar the checker reads for aliases: the command names, the option forms including accepted long-option abbreviations, and the operand counts, and leave every other spelling unplaced.
+- [x] Read every reachable operation as written and through each projected dispatch, and locate the effective command behind the enumerated launcher prefixes and launcher options.
+- [x] Collect the alias paths of each modelled link, record both the written and the directory reading of its destination, and mark the alias set unplaced when an operand is unsettled.
+- [x] Follow tracked aliases through modelled relocations under a fixed round budget, distinguishing a move from a copy that keeps a link, and mark the set unplaced for a relocation this checker cannot read.
+- [x] Cover every spelling the stopped plans recorded, including a launched link, an unread command word, a target-directory option, an ordinary move option, an unread copy option, and a relocation into a directory.
+- [x] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
 
 ## Validation Notes
 
-- Pending. The Plan 230 archive records the three review rounds and the alias spellings each round found.
+- Independent review round 1 reported two High findings, both silent no-alias defects: an option hidden behind an expansion (`opt=-s; ln "$opt" /a /b`) was dropped instead of escalated, and `cp -R` and `cp -P` were not read as link-preserving.
+- Parent-direct remediation round 1 of 2 escalated a named `ln` or `cp` run to unplaced when a word after the command word is unreadable and not provably an operand, added `P` and case-insensitive short marks and bidirectional long-option matching to the link-preserving reading, and added five regression tests.
+- Independent review round 2 reported no High and no Medium finding and no new defect class. The single residual is the pre-disclosed Low at the static boundary: a run whose command word and option are both expansions (`c=/bin/ln; o=-s; "$c" "$o" ./a ./b`) stays a silent miss, because escalating operands on an unread command word would mark every fixture run unplaced.
+- Authoritative validation ran once after the clean review: 249 validator tests, `copier_fixture_validator.py --check tests/copier-update.sh`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check` all passed.

@@ -1633,6 +1633,376 @@ def _path_text(path: tuple[bool, tuple[str, ...]]) -> str:
     return ("/" if path[0] else "") + "/".join(path[1])
 
 
+# The commands this checker reads as writing an alias. A command written in
+# any other spelling leaves the alias set unplaced rather than carrying no
+# alias, because a link this checker never sees makes one written path name a
+# directory another written path names.
+LINK_COMMANDS = frozenset({"ln", "cp"})
+
+
+RELOCATION_COMMANDS = frozenset({"mv", "cp"})
+
+
+SYMLINK_OPTION_MARK = "s"
+
+
+# Every short option that keeps a symbolic link a link. `-R` is an exact
+# synonym of `-r` and `-P` asks for no dereference, so the marks are read
+# without regard to case.
+LINK_PRESERVING_MARKS = ("d", "a", "r", "p", "s", "P")
+
+
+LINK_PRESERVING_OPTIONS = ("no-dereference", "archive", "recursive", "symbolic")
+
+
+SYMBOLIC_OPTIONS = ("symbolic", "symbolic-link")
+
+
+TARGET_DIRECTORY_MARK = "t"
+
+
+TARGET_DIRECTORY_OPTION = "target-directory"
+
+
+OPTION_MARK = "-"
+
+
+OPTION_END = "--"
+
+
+# A relocation may carry an alias to a path a later relocation moves again, so
+# the chain is followed under a fixed budget rather than to a fixed point.
+MOVE_ROUNDS = 8
+
+
+_Path = tuple[bool, tuple[str, ...]]
+
+
+def _run_literals(run: _CommandRun) -> tuple[str | None, ...]:
+    """Return the text each word of one command reads as, or ``None`` for any other."""
+
+    return tuple(_token_text(word) for word in run.words)
+
+
+def _basename(literal: str) -> str:
+    """Return the name a written command word runs, without its directory."""
+
+    return literal.rsplit(PATH_SEPARATOR, 1)[-1]
+
+
+def _command_index(literals: tuple[str | None, ...], names: frozenset[str]) -> int:
+    """Return where one command run writes one of the named commands.
+
+    Every word is read, not only the command word, because a launcher may
+    carry its own options and this checker reads a launcher argument as the
+    command it runs. Reading one word too many keeps an alias this checker
+    cannot place from proving separation, which is the safe direction.
+    """
+
+    return next(
+        (
+            index
+            for index, literal in enumerate(literals)
+            if literal is not None and _basename(literal) in names
+        ),
+        -1,
+    )
+
+
+def _unread_command_index(literals: tuple[str | None, ...]) -> int:
+    """Return where one command run writes a command word this checker cannot read."""
+
+    return next(
+        (index for index, literal in enumerate(literals) if literal is None),
+        -1,
+    )
+
+
+def _written_options(literals: tuple[str | None, ...], index: int) -> list[str]:
+    """Return every option written after one command word, up to a bare double dash."""
+
+    options: list[str] = []
+    for literal in literals[index + 1 :]:
+        if literal == OPTION_END:
+            break
+        if literal is not None and literal.startswith(OPTION_MARK) and literal != OPTION_MARK:
+            options.append(literal)
+    return options
+
+
+def _written_operands(run: _CommandRun, literals: tuple[str | None, ...], index: int):
+    """Return every operand written after one command word.
+
+    An option this checker cannot read may take its own operand, so a run that
+    writes one is never read as writing a known operand count.
+    """
+
+    operands: list[Token] = []
+    ended = False
+    for place in range(index + 1, len(literals)):
+        literal = literals[place]
+        if not ended and literal == OPTION_END:
+            ended = True
+            continue
+        if not ended and literal is not None and literal.startswith(OPTION_MARK) and literal != OPTION_MARK:
+            continue
+        operands.append(run.words[place])
+    return operands
+
+
+def _cannot_be_an_option(
+    fixture: _Fixture, run: _CommandRun, word: Token
+) -> bool:
+    """Report whether one written word can never be read as an option.
+
+    A command reads a word as an option only when the word starts with a dash,
+    and it reads the characters after that dash as option letters. A slash is
+    not an option letter and no long option this checker reads carries one, so
+    a word written with a slash is refused as an option whatever its
+    expansions produce, and the command that writes it fails rather than
+    writing a link. A word that settles to a path anchored at the root writes
+    a slash for the same reason.
+    """
+
+    parts = _word_parts(word.text, f"p{word.start.offset}", splits=True)
+    if parts is not None and any(
+        kind == LITERAL_SEGMENT and PATH_SEPARATOR in text for kind, text in parts
+    ):
+        return True
+    settled = _settle_operand(fixture, run, word)
+    return bool(settled) and all(anchored for anchored, _ in settled)
+
+
+def _is_symlink_option(literal: str) -> bool:
+    """Report whether one option asks a link command for a symbolic link."""
+
+    if literal.startswith(OPTION_END):
+        written = literal[2:].split("=", 1)[0]
+        return bool(written) and any(
+            name.startswith(written) or written.startswith(name)
+            for name in SYMBOLIC_OPTIONS
+        )
+    cluster = literal[1:]
+    return bool(cluster) and cluster.isalpha() and SYMLINK_OPTION_MARK in cluster
+
+
+def _names_target_directory(options: list[str]) -> bool:
+    """Report whether one option list places its operands inside a directory."""
+
+    return any(
+        _abbreviates_target_directory(option)
+        if option.startswith(OPTION_END)
+        else TARGET_DIRECTORY_MARK in option[1:]
+        for option in options
+    )
+
+
+def _abbreviates_target_directory(option: str) -> bool:
+    """Report whether one long option may be written for a target directory."""
+
+    written = option[2:].split("=", 1)[0]
+    return bool(written) and TARGET_DIRECTORY_OPTION.startswith(written)
+
+
+def _preserves_link(option: str) -> bool:
+    """Report whether one copy option keeps a symbolic link a link."""
+
+    if option.startswith(OPTION_END):
+        written = option[2:].split("=", 1)[0]
+        return bool(written) and any(
+            name.startswith(written) or written.startswith(name)
+            for name in LINK_PRESERVING_OPTIONS
+        )
+    cluster = option[1:]
+    return any(
+        mark in cluster or mark.lower() in cluster.lower()
+        for mark in LINK_PRESERVING_MARKS
+    )
+
+
+def _holds_path(outer: _Path, inner: _Path) -> bool:
+    """Report whether one settled path is written above another.
+
+    A path is written above another only when both are anchored at the same
+    root, the outer path writes fewer segments, and every segment it writes is
+    the segment the inner path writes there. A segment written with an
+    expansion decides nothing, so it never places one path above another.
+    """
+
+    if outer[0] != inner[0] or len(outer[1]) >= len(inner[1]):
+        return False
+    if any(_carries_expansion(segment) for segment in outer[1]):
+        return False
+    return inner[1][: len(outer[1])] == outer[1]
+
+
+def _may_be_ancestor(link: _Path, destination: _Path) -> bool:
+    """Report whether one alias may name one destination or hold it."""
+
+    if link == destination or _holds_path(link, destination):
+        return True
+    if _holds_path(destination, link):
+        return False
+    return not _lexically_separate(link, destination)
+
+
+def _may_be_linked(links: frozenset[_Path], destinations: frozenset[_Path]) -> bool:
+    """Report whether any tracked alias may name one destination or hold it."""
+
+    return any(
+        _may_be_ancestor(link, destination)
+        for link in links
+        for destination in destinations
+    )
+
+
+def _inside_directory(directory: frozenset[_Path], named: frozenset[_Path]) -> frozenset[_Path]:
+    """Return each named path read as written inside one written directory.
+
+    A second operand may name a directory rather than the alias itself, and no
+    written text decides which, so both readings are recorded.
+    """
+
+    return frozenset(
+        (place[0], place[1] + (path[1][-1],))
+        for place in directory
+        for path in named
+        if path[1]
+    )
+
+
+def _settle_operand(fixture: _Fixture, run: _CommandRun, word: Token) -> frozenset[_Path]:
+    """Return every path one operand of a link or a relocation may name."""
+
+    bindings = fixture.bindings_at(run)
+    if bindings is None:
+        return frozenset()
+    return _settle_word(
+        word.text, bindings, fixture.unsettled_names(), f"o{word.start.offset}"
+    )
+
+
+def _symlinked_paths(fixture: _Fixture) -> tuple[frozenset[_Path], bool]:
+    """Return every path a fixture may link, and whether one cannot be placed.
+
+    A symbolic link makes one written path name another directory, so a
+    destination a link may name is not the destination it is written as. A
+    link this checker cannot place leaves every destination unproven, and a
+    command word this checker cannot read is held to the spellings a symbolic
+    link is written with, because a broader reading would call every unread
+    command a link.
+    """
+
+    links: set[_Path] = set()
+    unplaced = False
+    for run in fixture.command_runs():
+        if not run.words:
+            continue
+        literals = _run_literals(run)
+        index = _command_index(literals, LINK_COMMANDS)
+        named = index >= 0
+        if not named:
+            index = _unread_command_index(literals)
+            if index < 0:
+                continue
+        options = _written_options(literals, index)
+        if not any(
+            SYMLINK_OPTION_MARK in option[1:] or _is_symlink_option(option)
+            if named
+            else _is_symlink_option(option)
+            for option in options
+        ):
+            # An option this checker cannot read may be the one that asks for
+            # a symbolic link, so a run that writes one is never read as a run
+            # that writes no link.
+            if named and any(
+                literal is None
+                and not _cannot_be_an_option(fixture, run, run.words[place])
+                for place, literal in enumerate(literals)
+                if place > index
+            ):
+                unplaced = True
+            continue
+        operands = _written_operands(run, literals, index)
+        if len(operands) != 2 or _names_target_directory(options):
+            unplaced = True
+            continue
+        targets = _settle_operand(fixture, run, operands[0])
+        aliases = _settle_operand(fixture, run, operands[1])
+        if not targets or not aliases:
+            unplaced = True
+            continue
+        links |= aliases
+        links |= _inside_directory(aliases, targets)
+    return _moved_aliases(fixture, frozenset(links), unplaced)
+
+
+def _moves(fixture: _Fixture) -> list[tuple[frozenset[_Path], frozenset[_Path]]]:
+    """Return every relocation of one written path to another."""
+
+    relocations: list[tuple[frozenset[_Path], frozenset[_Path]]] = []
+    for run in fixture.command_runs():
+        if not run.words:
+            continue
+        literals = _run_literals(run)
+        index = _command_index(literals, RELOCATION_COMMANDS)
+        if index < 0:
+            continue
+        options = _written_options(literals, index)
+        written = literals[index]
+        moves = written is not None and _basename(written) == "mv"
+        if not moves and not any(_preserves_link(option) for option in options):
+            # A copy option this checker does not read may keep a link a link,
+            # so only a copy written without one is read as storing the file
+            # the link names.
+            if any(option.startswith(OPTION_END) for option in options):
+                relocations.append((frozenset(), frozenset()))
+            continue
+        operands = _written_operands(run, literals, index)
+        if len(operands) != 2 or _names_target_directory(options):
+            relocations.append((frozenset(), frozenset()))
+            continue
+        sources = _settle_operand(fixture, run, operands[0])
+        targets = _settle_operand(fixture, run, operands[1])
+        if sources and targets:
+            targets |= _inside_directory(targets, sources)
+        else:
+            targets = frozenset()
+        relocations.append((sources, targets))
+    return relocations
+
+
+def _moved_aliases(
+    fixture: _Fixture, links: frozenset[_Path], unplaced: bool
+) -> tuple[frozenset[_Path], bool]:
+    """Return every path a fixture may move one of its links to.
+
+    Moving a symbolic link carries the alias to the path it is moved to, so a
+    destination the moved path names is no more proven than the path it was
+    written at. A relocation this checker cannot place may move any tracked
+    alias, and a chain of relocations is followed under a fixed round budget.
+    """
+
+    carried = set(links)
+    relocations = _moves(fixture)
+    for _ in range(MOVE_ROUNDS):
+        added = False
+        for source, target in relocations:
+            if not carried:
+                break
+            if source and not _may_be_linked(frozenset(carried), source):
+                continue
+            if not target:
+                unplaced = True
+                continue
+            if not target <= carried:
+                carried |= target
+                added = True
+        if not added:
+            break
+    return frozenset(carried), unplaced
+
+
 class _Fixture:
     """Every derived view the Copier operation contract reads."""
 
@@ -1671,6 +2041,7 @@ class _Fixture:
         self._unknown_binding = False
         self._resolved: dict[int, _Bindings] = {}
         self._settled: dict[int, _Bindings] = {}
+        self._operations_by_offset: dict[int, _Operation] | None = None
 
     def command_runs(self) -> tuple["_CommandRun", ...]:
         """Return every command this fixture writes, read from its tokens.
@@ -2275,6 +2646,40 @@ class _Fixture:
             for candidate in self.operations
             if candidate.reachable and candidate.name in names
         )
+
+    def bindings_at(self, run: "_CommandRun") -> "_Bindings | None":
+        """Return the settled parts each name may hold where one command run is written.
+
+        A command written inside a function body runs where that body is
+        called, so the environment it reads is the one the operation carries
+        rather than the one written above it. A run this checker cannot place
+        against a written operation reads no environment at all, because a
+        smaller environment settles an operand to fewer paths than it may
+        name, which would prove a separation the fixture never keeps.
+        """
+
+        if not run.words:
+            return None
+        if self._operations_by_offset is None:
+            self._operations_by_offset = {
+                operation.offset: operation for operation in self.operations
+            }
+        operation = self._operations_by_offset.get(run.words[0].start.offset)
+        if operation is None:
+            # A launched command is recorded at the offset of the word the
+            # launcher runs, so the run is placed against the one operation
+            # written inside it.
+            start = run.tokens[0].start.offset
+            end = run.tokens[-1].end.offset
+            inside = [
+                candidate
+                for offset, candidate in self._operations_by_offset.items()
+                if start <= offset <= end
+            ]
+            if len(inside) != 1:
+                return None
+            operation = inside[0]
+        return self.bindings_for(operation)
 
 
 def _git_subcommand(operation: _Operation) -> tuple[str | None, tuple[str | None, ...]]:
