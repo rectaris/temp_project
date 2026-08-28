@@ -1,6 +1,6 @@
 # Settle fixture words from a modelled grammar
 
-status: in_progress
+status: checked
 primary_invariant: the bounded fixture checker settles a written word into comparable destination text only when every part of that word is written in the grammar the checker enumerates, reports the word unproven otherwise, proves two settled texts separate only when both are anchored at the root and no modelled expansion can make them name one path, and leaves every existing rule rejecting and accepting exactly the operations it rejects and accepts today
 task_types:
   - template_workflow
