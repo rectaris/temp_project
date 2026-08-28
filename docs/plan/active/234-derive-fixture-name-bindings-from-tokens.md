@@ -85,6 +85,7 @@ checked_summary_ja: 名前を束縛しうる面を字句トークンから導き
 
 ## Validation Notes
 
+- Pending. The Plan 232 archive records the three review rounds and the binding surfaces each round found.
 - The token-derived binding model was built, covered by unit cases, and reviewed independently three times. The candidate is preserved on the local branch `plan-234-candidate` at commit `40d86fc`, and its reviewed diffs are kept locally under `.agent-artifacts/review/` as `234.diff`, `234-round2.diff`, and `234-round3.diff`.
 - Focused validation passed on the candidate: 176 unit cases, the committed fixture check, and `git diff --check`. Every existing rule function stayed byte-identical to its committed form, so the model was added and never applied.
 - The parent found twelve High defects before review and closed each one: a prefix assignment written with a redirection, with a command substitution, or with a quoted value; a loop head, including a continued one; an assignment written in a subshell, in one side of a pipeline, behind `&`, behind `||`, in a loop body, or in a case branch; an assigning parameter expansion; an arithmetic expansion; and a `trap` string.
