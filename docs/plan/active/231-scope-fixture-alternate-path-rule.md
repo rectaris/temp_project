@@ -73,12 +73,19 @@ checked_summary_ja: alternate_path規則を送り先単位へ限定し、既存�
 
 ## Tasks
 
-- [ ] Reproduce the alternate_path findings by supplying the committed fixture plus an accepted transition sample to the checker.
-- [ ] Make the alternate-path rule resolve each reachable update operation's destination through the checked resolution model and reject every operation whose destination is not provably separate from the sanctioned child's destination.
-- [ ] Prove parity by checking every rejected sample of the blanket rule against the destination-aware rule, including a renamed helper, a local alias, a launched link, a moved link, and a differently written same-destination dispatch.
-- [ ] Confirm the committed tests/copier-update.sh still passes --check without editing it, and record any residual fail-closed rejection for Plan 227.
-- [ ] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
+- [x] Reproduce the alternate_path findings by supplying the committed fixture plus an accepted transition sample to the checker.
+- [x] Make the alternate-path rule resolve each reachable update operation's destination through the checked resolution model and reject every operation whose destination is not provably separate from the sanctioned child's destination.
+- [x] Prove parity by checking every rejected sample of the blanket rule against the destination-aware rule, including a renamed helper, a local alias, a launched link, a moved link, and a differently written same-destination dispatch.
+- [x] Confirm the committed tests/copier-update.sh still passes --check without editing it, and record any residual fail-closed rejection for Plan 227.
+- [x] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
 
 ## Validation Notes
 
-- Pending. The Plan 226 archive records the reproduction commands and the residual fixture rejection.
+- Reproduced the blanket rule's over-rejection by anchoring the shared test prologue to the real fixture's `tmp=$(CDPATH= cd -- "$2" && pwd -P)`. Under the previous `tmp=$2` prologue no test path could be anchored, so all 27 alternate-path rejection tests passed vacuously; the anchored prologue broke zero of the 249 pre-existing tests.
+- Made the rule destination-aware. Each reachable non-child operation flagged by `_dispatches_update` or `_runs_an_update` is accepted only when `_updates_a_separate_project` holds: the fixture places every link, the reserved destinations derived from the sanctioned child are non-empty, the candidate is provably lexically separate from them, and no tracked alias reaches either destination. Detection and reading share one function (`_update_reading`), so they cannot disagree; an unplaceable run yields `frozenset()` and rejects.
+- Narrowed three already-checked over-approximations that made the rule vacuous: `wait "$pid"` no longer binds a name (only `wait -n -p name` does); a launcher chain whose launched word is readable supplies a command name; and `_unread_command_index` reports the command-word place only, instead of the first unreadable word anywhere. Each narrowing was confirmed sound in independent review.
+- Proved parity across renamed helpers, local aliases, launched links, moved links, and differently written same-destination dispatches, and flipped four expectations that the sound model rejects where the blanket rule accepted, all toward fail-closed.
+- Independent review round 1 reported one High parity regression: `_written_inside` exempted an alias written under a derived destination, but an update walks into the directory it changes, so a link redirecting an installed workflow was accepted. Parent-direct remediation round 1 of 2 removed the exemption entirely, making `_holds_a_path` simply `not _lexically_separate`; the change is monotonically more rejecting. The exploit and both intra-destination link cases are now rejected, and a clean other-project update is still accepted. Review round 2 reported no High or Medium finding and no new defect class.
+- Residual for Plan 227: `nice copier update --defaults "$project"` is missed by `_dispatches_update`, `_runs_an_update`, and `_check_direct_invocation`. It is pre-existing and not a parity regression, because the blanket rule missed it identically. Widening `LAUNCHER_WORDS` was deliberately not attempted here, because that set also feeds the two narrowings above and value-taking launchers such as `timeout 5 cmd` would let a non-command word be read as a command name.
+- The committed `tests/copier-update.sh` is still not a transition, so `_check_alternate_paths` is not reached on it. Plan 227 completes that runtime and is the first plan where this rule becomes live; it must re-check the destination-aware rule and close the launcher residual then.
+- Authoritative suite run once, all passing: `python3 tests/test-copier-fixture-validator.py` (298 tests), `python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh`, `./scripts/lint-project-workflow.sh`, `./tests/smoke.sh`, `git diff --check`.

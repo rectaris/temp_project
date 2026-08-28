@@ -52,7 +52,7 @@ PROLOGUE = """#!/bin/sh
 set -eu
 
 root=$1
-tmp=$2
+tmp=$(CDPATH= cd -- "$2" && pwd -P)
 project="$tmp/project"
 update_source="$tmp/update-source"
 inventory="$root/tests/fixtures/fixture-source-inventory.txt"
@@ -1308,8 +1308,12 @@ class NameBindingTest(unittest.TestCase):
     def test_an_exported_name_is_unsettled(self):
         self.assertIn("dest", self.unsettled('export dest=/tmp/one\n'))
 
-    def test_a_launcher_that_stays_in_the_shell_unsettles_every_bare_operand(self):
-        self.assertIn("dest", self.unsettled('command dest\n'))
+    def test_a_launcher_that_stays_in_the_shell_reads_what_it_launches(self):
+        self.assertNotIn(
+            "dest", self.unsettled('dest=/tmp/one\ncommand true dest\n')
+        )
+        self.assertIn("dest", self.unsettled('command read -r dest\n'))
+        self.assertIn("dest", self.unsettled('command "$reader" dest\n'))
 
     def test_a_launcher_that_forks_settles_a_bare_operand(self):
         self.assertNotIn(
@@ -2283,6 +2287,381 @@ class AliasCollectionTest(unittest.TestCase):
         links, unplaced = self.module._symlinked_paths(self.fixture(source))
         self.assertFalse(unplaced, "the committed fixture writes only modelled aliases")
         self.assertTrue(links, "the committed fixture writes a symbolic link")
+
+
+class AlternatePathDestinationTest(ContractSupportTest):
+    """Cover the destination the alternate-path prohibition is bounded to."""
+
+    OTHER = "$tmp/other-project"
+    module = copier_fixture_validator
+
+    def fixture(self, source: str):
+        records = self.module.shell_lexical.project(source)
+        table = self.module.shell_functions.derive(records)
+        graph = self.module.shell_execution.derive(records, table)
+        return self.module._Fixture(source, records, table, graph)
+
+    def assert_second_path_rejected(self, inserted: str) -> None:
+        self.assert_rejected(
+            COMPLIANT + inserted, RULE_ALTERNATE_PATH, "second Copier update path"
+        )
+
+    def test_a_renamed_wrapper_reaching_the_same_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            '"$project/.project-agent-workflow/scripts/run-copier-update.sh" --force\n'
+        )
+
+    def test_an_alias_directory_reaching_the_same_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'alias_dir="$project/.project-agent-workflow/scripts"\n'
+            '"$alias_dir/update-from-copier.sh" --defaults\n'
+        )
+
+    def test_the_same_destination_written_differently_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'run_copier update -q --defaults --vcs-ref v1.4.5 "$tmp/project"\n'
+        )
+        self.assert_second_path_rejected(
+            'run_copier update -q --defaults --vcs-ref v1.4.5 "$project/"\n'
+        )
+
+    def test_an_unproven_destination_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'run_copier update -q --defaults --vcs-ref v1.4.5 "$elsewhere"\n'
+        )
+        self.assert_second_path_rejected(
+            'run_copier update -q --defaults --vcs-ref v1.4.5 "$tmp/$lane"\n'
+        )
+
+    def test_an_update_without_a_destination_is_rejected(self) -> None:
+        self.assert_second_path_rejected("run_copier update -q --defaults\n")
+
+    def test_a_relative_wrapper_reaching_the_same_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            '(cd "$project" && .project-agent-workflow/scripts/update-from-copier.sh)\n'
+        )
+
+    def test_an_update_inside_the_same_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'run_copier update -q --defaults --vcs-ref v1.4.5 "$project/nested"\n'
+        )
+
+    def test_an_update_of_the_enclosing_directory_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'run_copier update -q --defaults --vcs-ref v1.4.5 "$tmp"\n'
+        )
+
+    def test_an_update_behind_an_unknown_option_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'run_copier update --unknown-option value "$tmp/other-project"\n'
+        )
+
+    def test_an_expanded_subcommand_reaching_the_same_project_is_rejected(
+        self,
+    ) -> None:
+        self.assert_second_path_rejected(
+            'verb=update\nrun_copier "$verb" -q --defaults "$project"\n'
+        )
+
+    def test_the_same_destination_spelled_with_segments_is_rejected(self) -> None:
+        for written in (
+            "$tmp/./project",
+            "$tmp//project",
+            "$tmp/other/../project",
+            "$project/.",
+        ):
+            with self.subTest(written=written):
+                self.assert_second_path_rejected(
+                    f'run_copier update -q --defaults "{written}"\n'
+                )
+
+    def test_a_destination_above_an_expansion_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'run_copier update -q --defaults "$tmp/../elsewhere"\n'
+        )
+
+    def test_an_assignment_in_front_of_the_command_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'dest="$project"\n'
+            'dest="$tmp/other-project" run_copier update -q --defaults "$dest"\n'
+        )
+
+    def test_an_assignment_carried_across_a_continuation_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'dest="$project"\n'
+            'dest="$tmp/other-project" \\\n'
+            '  run_copier update -q --defaults "$dest"\n'
+        )
+
+    def test_an_assignment_in_front_of_another_command_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'dest="$project"\n'
+            'dest="$tmp/other-project" /bin/true\n'
+            'run_copier update -q --defaults "$dest"\n'
+        )
+
+    def test_an_unmodelled_destination_word_is_rejected(self) -> None:
+        for written in ("$tmp/pro\\ject", "//$tmp/project", "$tmp/proj*"):
+            with self.subTest(written=written):
+                self.assert_second_path_rejected(
+                    f"run_copier update -q --defaults {written}\n"
+                )
+
+    def test_a_linked_destination_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'ln -s "$project" "$tmp/project-alias"\n'
+            'run_copier update -q --defaults "$tmp/project-alias"\n'
+        )
+
+    def test_a_link_that_may_hold_the_destination_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'ln -s "$tmp/elsewhere" "$tmp"\n'
+            'run_copier update -q --defaults "$tmp/other-project"\n'
+        )
+
+    def test_a_copied_link_reaching_the_same_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'cp -s "$project" "$tmp/project-copy-alias"\n'
+            'run_copier update -q --defaults "$tmp/project-copy-alias"\n'
+        )
+
+    def test_a_link_written_inside_a_destination_is_rejected(self) -> None:
+        """An update walks into the directory it changes, so a link under it redirects the walk."""
+
+        self.assert_second_path_rejected(
+            'ln -s "$tmp/elsewhere" "$tmp/other-project/note"\n'
+            'run_copier update -q --defaults "$tmp/other-project"\n'
+        )
+        self.assert_second_path_rejected(
+            'ln -s "$tmp/elsewhere" "$project/note"\n'
+            'run_copier update -q --defaults "$tmp/other-project"\n'
+        )
+
+    def test_a_link_that_redirects_an_installed_workflow_is_rejected(self) -> None:
+        """The boundary segment the destination is derived from may itself be an alias."""
+
+        self.assert_second_path_rejected(
+            'other="$tmp/other"\n'
+            'ln -s "$project/.project-agent-workflow" '
+            '"$other/.project-agent-workflow"\n'
+            '"$other/.project-agent-workflow/scripts/update-from-copier.sh" '
+            "--defaults\n"
+        )
+
+    def test_an_escaped_quote_in_an_option_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'run_copier update --exclude "key=value\\" $tmp/other-project '
+            '--vcs-ref " "$project"\n'
+        )
+
+    def test_an_assignment_behind_a_redirection_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'dest="$project"\n'
+            'dest="$tmp/other-project" 3>&1 run_copier update -q --defaults "$dest"\n'
+        )
+
+    def test_a_link_command_written_as_a_path_is_rejected(self) -> None:
+        for written in ('/usr/bin/ln -s', 'env ln -s'):
+            with self.subTest(written=written):
+                self.assert_second_path_rejected(
+                    f'{written} "$project" "$tmp/other-project"\n'
+                    'run_copier update -q --defaults "$tmp/other-project"\n'
+                )
+
+    def test_an_escaped_separator_is_not_a_separator(self) -> None:
+        for written in (">\\&", ">\\;", ">\\|"):
+            with self.subTest(written=written):
+                self.assert_second_path_rejected(
+                    'dest="$project"\n'
+                    f'dest="$tmp/other-project" {written} '
+                    'run_copier update -q --defaults "$dest"\n'
+                )
+
+    def test_a_separator_still_ends_a_prefix_assignment(self) -> None:
+        self.assert_accepted(
+            COMPLIANT
+            + 'dest="$tmp/other-project" && '
+            + 'run_copier update -q --defaults "$dest"\n'
+        )
+
+    def test_an_assignment_that_runs_in_its_own_shell_proves_no_destination(
+        self,
+    ) -> None:
+        """A backgrounded assignment gives the writing shell no value."""
+
+        self.assert_second_path_rejected(
+            'dest="$tmp/other-project" & '
+            'run_copier update -q --defaults "$dest"\n'
+        )
+
+    def test_a_quoted_link_command_is_rejected(self) -> None:
+        for written in ("l''n -s", 'l""n -s', "nice -n 1 ln -s"):
+            with self.subTest(written=written):
+                self.assert_second_path_rejected(
+                    f'{written} "$project" "$tmp/other-project"\n'
+                    'run_copier update -q --defaults "$tmp/other-project"\n'
+                )
+
+    def test_a_continued_link_command_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'l\\\nn -s "$project" "$tmp/other-project"\n'
+            'run_copier update -q --defaults "$tmp/other-project"\n'
+        )
+
+    def test_an_unread_link_command_is_rejected(self) -> None:
+        for written in (
+            "${link_command:-ln} -s",
+            "$(printf %s ln) -s",
+            '"$linker" --symbolic',
+        ):
+            with self.subTest(written=written):
+                self.assert_second_path_rejected(
+                    f'{written} "$project" "$tmp/other-project"\n'
+                    'run_copier update -q --defaults "$tmp/other-project"\n'
+                )
+
+    def test_an_unread_command_is_not_read_as_a_link(self) -> None:
+        """The run carries no alias, and its bare operands settle no name."""
+
+        source = (
+            COMPLIANT
+            + '"$reporter" --defaults "$project" "$tmp/other-project"\n'
+            + 'run_copier update -q --defaults "$tmp/other-project"\n'
+        )
+        links, unplaced = self.module._symlinked_paths(self.fixture(source))
+        self.assertEqual(links, frozenset())
+        self.assertFalse(unplaced)
+        self.assert_second_path_rejected(
+            '"$reporter" --defaults "$project" "$tmp/other-project"\n'
+            'run_copier update -q --defaults "$tmp/other-project"\n'
+        )
+
+    def test_a_launched_link_command_is_rejected(self) -> None:
+        for written in (
+            "command ${link_command:-ln} -s",
+            "env $(printf %s ln) -s",
+            "command ln -s",
+        ):
+            with self.subTest(written=written):
+                self.assert_second_path_rejected(
+                    f'{written} "$project" "$tmp/project-alias"\n'
+                    '"$tmp/project-alias/.project-agent-workflow/scripts'
+                    '/update-from-copier.sh" --defaults\n'
+                )
+
+    def test_a_launched_ordinary_command_is_not_a_link(self) -> None:
+        self.assert_accepted(
+            COMPLIANT
+            + 'git -C "$project" commit -s -m note\n'
+            + 'run_copier update -q --defaults "$tmp/other-project"\n'
+        )
+
+    def test_an_update_of_another_project_is_accepted(self) -> None:
+        self.assert_accepted(
+            COMPLIANT
+            + f'run_copier update -q --defaults --vcs-ref v1.4.5 "{self.OTHER}"\n'
+        )
+
+    def test_a_relative_wrapper_is_rejected_wherever_it_is_written(self) -> None:
+        """No written text says which directory a relative wrapper runs in."""
+
+        self.assert_second_path_rejected(
+            f'(cd "{self.OTHER}" && '
+            ".project-agent-workflow/scripts/update-from-copier.sh)\n"
+        )
+
+    def test_a_wrapper_held_in_a_name_is_rejected(self) -> None:
+        """The command word writes no marker, so the settled path is read."""
+
+        self.assert_second_path_rejected(
+            'wrapper="$project/.project-agent-workflow/scripts'
+            '/update-from-copier.sh"\n'
+            '"$wrapper" --defaults\n'
+        )
+
+    def test_a_helper_that_updates_the_same_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            "run_copier() {\n  copier update -q \"$project\"\n}\n"
+            'run_copier update -q "$tmp/other-project"\n'
+        )
+
+    def test_an_attached_option_value_keeps_the_destination_read(self) -> None:
+        self.assert_second_path_rejected(
+            'run_copier update --vcs-ref=v1.4.5 "$project"\n'
+        )
+        self.assert_accepted(
+            COMPLIANT
+            + f'run_copier update --vcs-ref=v1.4.5 "{self.OTHER}"\n'
+        )
+
+    def test_an_option_terminator_keeps_the_destination_read(self) -> None:
+        self.assert_second_path_rejected('run_copier update -q -- "$project"\n')
+        self.assert_accepted(
+            COMPLIANT + f'run_copier update -q -- "{self.OTHER}"\n'
+        )
+
+    def test_an_option_cluster_this_checker_does_not_read_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            f'run_copier update -qf "{self.OTHER}"\n'
+        )
+
+    def test_an_option_held_in_a_name_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            f'flag=-q\nrun_copier update "$flag" "{self.OTHER}"\n'
+        )
+
+    def test_a_destination_a_branch_may_change_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            'dest="$project"\n'
+            f'if [ -d /tmp ]; then dest="{self.OTHER}"; fi\n'
+            'run_copier update -q "$dest"\n'
+        )
+
+    def test_a_destination_a_loop_binds_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            f'for dest in "$project" "{self.OTHER}"; do\n'
+            '  run_copier update -q "$dest"\n'
+            "done\n"
+        )
+
+    def test_an_alias_above_another_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            f'ln -s "$project" "$tmp"\nrun_copier update -q "{self.OTHER}"\n'
+        )
+
+    def test_an_alias_naming_another_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            f'ln -s "$project" "{self.OTHER}"\n'
+            f'run_copier update -q "{self.OTHER}"\n'
+        )
+
+    def test_an_alias_moved_onto_another_project_is_rejected(self) -> None:
+        self.assert_second_path_rejected(
+            f'ln -s "$project" "$tmp/a"\nmv "$tmp/a" "{self.OTHER}"\n'
+            f'run_copier update -q "{self.OTHER}"\n'
+        )
+
+    def test_a_wrapper_run_through_a_launcher_is_rejected(self) -> None:
+        for written in ("sh", "env"):
+            with self.subTest(written=written):
+                self.assert_second_path_rejected(
+                    f'{written} "$project/.project-agent-workflow/scripts'
+                    '/update-from-copier.sh" --defaults\n'
+                )
+
+    def test_the_committed_runtime_keeps_passing_the_check(self) -> None:
+        """Plan 227 completes the transition this rule is reached through."""
+
+        source = (ROOT / "tests" / "copier-update.sh").read_text(encoding="utf-8")
+        self.assertEqual(check(source), ())
+        self.assertFalse(self.module._is_transition(self.fixture(source)))
+
+    def test_a_copy_naming_an_update_source_is_not_an_update(self) -> None:
+        self.assert_accepted(
+            COMPLIANT
+            + 'update_source="$tmp/source"\n'
+            f'run_copier copy -q --vcs-ref v1.4.5 "$update_source" "{self.OTHER}"\n'
+        )
 
 
 class SnapshotIndirectionTest(ContractSupportTest):

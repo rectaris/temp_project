@@ -383,6 +383,12 @@ ASSIGNING_COMMANDS = frozenset(
 # one boundary this checker accepts rather than reads, so an operand it cannot
 # read here names a file rather than a variable.
 PATH_OPERAND_COMMANDS = frozenset({"source", "."})
+# A command whose bare operands name a running process rather than a variable.
+# Such a command gives the writing shell a value only through the option that
+# is written with the name, so a bare operand this checker cannot read is a
+# process identifier rather than a name it never sees.
+JOB_OPERAND_COMMANDS = frozenset({"wait"})
+JOB_NAME_OPTION = "-p"
 # A command that runs another command, so the command a fixture writes may be
 # written behind one of these rather than first.
 LAUNCHER_COMMANDS = frozenset(
@@ -1678,6 +1684,72 @@ MOVE_ROUNDS = 8
 _Path = tuple[bool, tuple[str, ...]]
 
 
+# The directory a generated project holds its installed workflow in. A command
+# word written inside it runs against the project above it whatever the script
+# is named, so the destination of such a dispatch is read from the path rather
+# than from the name.
+WORKFLOW_DIRECTORY = ".project-agent-workflow"
+# The Copier subcommand that changes a project in place. Every other
+# subcommand writes a project this checker reads from its own operands, so
+# only this one names a destination the sanctioned child may share.
+UPDATE_SUBCOMMAND = "update"
+# The options this checker reads a Copier update as writing. An option written
+# in any other spelling may take an operand this checker would read as the
+# destination, so a dispatch that writes one names no destination at all.
+COPIER_FLAG_OPTIONS = frozenset(
+    {
+        "-f",
+        "-q",
+        "--force",
+        "--quiet",
+        "--defaults",
+        "--overwrite",
+        "--pretend",
+        "--trust",
+        "--unsafe",
+        "--skip-answered",
+        "--skip-tasks",
+    }
+)
+COPIER_VALUE_OPTIONS = frozenset(
+    {
+        "-r",
+        "-x",
+        "-d",
+        "-a",
+        "--vcs-ref",
+        "--exclude",
+        "--data",
+        "--data-file",
+        "--answers-file",
+        "--conflict",
+        "--context-lines",
+        "--skip",
+    }
+)
+# A launcher runs the command written after it, so the command word of a
+# dispatch may be written behind one of these rather than first.
+LAUNCHER_WORDS = LAUNCHER_COMMANDS | FORKING_LAUNCHERS
+# One dispatch writes few launcher prefixes, and the bound keeps supplied
+# bytes from making the walk long.
+LAUNCHER_ROUNDS = 4
+
+
+def _launched_command(literals: tuple[str | None, ...]) -> str | None:
+    """Return the command one bounded chain of launchers runs, when it is written.
+
+    A launcher runs the command written after its own options, so a run whose
+    own command word is a launcher names the command this checker reads behind
+    it rather than no command at all.
+    """
+
+    places = _command_word_places(literals)
+    if len(places) < 2:
+        return None
+    written = literals[places[-1]]
+    return None if written is None else _basename(written)
+
+
 def _run_literals(run: _CommandRun) -> tuple[str | None, ...]:
     """Return the text each word of one command reads as, or ``None`` for any other."""
 
@@ -1710,12 +1782,20 @@ def _command_index(literals: tuple[str | None, ...], names: frozenset[str]) -> i
 
 
 def _unread_command_index(literals: tuple[str | None, ...]) -> int:
-    """Return where one command run writes a command word this checker cannot read."""
+    """Return where one command run writes a command word this checker cannot read.
 
-    return next(
-        (index for index, literal in enumerate(literals) if literal is None),
-        -1,
-    )
+    Only the command word is read, because a run whose command word names an
+    ordinary command runs that command whatever its operands expand to. An
+    operand this checker cannot read never turns a written command into a link
+    command, so reading one as a command word would call an ordinary run a
+    link and leave every destination unproven.
+    """
+
+    places = _command_word_places(literals)
+    if not places:
+        return -1
+    place = places[-1]
+    return place if literals[place] is None else -1
 
 
 def _written_options(literals: tuple[str | None, ...], index: int) -> list[str]:
@@ -2132,11 +2212,16 @@ class _Fixture:
             if not run.words:
                 continue
             command = run.command_name(self)
+            if command is None:
+                command = _launched_command(_run_literals(run))
             if _token_text(run.words[0]) in FORKING_LAUNCHERS or _writes_a_path(
                 run.words[0]
             ):
                 continue
             binds = command is None or command in ASSIGNING_COMMANDS
+            names_jobs = command in JOB_OPERAND_COMMANDS
+            binds = binds and not names_jobs
+            mark = JOB_NAME_OPTION if names_jobs else NAMED_OPTION
             named = False
             reads_paths = command in PATH_OPERAND_COMMANDS
             for token in run.words[1:]:
@@ -2150,8 +2235,8 @@ class _Fixture:
                     names.add(written.split("=", 1)[0])
                     named = False
                     continue
-                if written.startswith(NAMED_OPTION):
-                    attached = written[len(NAMED_OPTION):]
+                if written.startswith(mark):
+                    attached = written[len(mark):]
                     if attached:
                         names.add(attached.split("=", 1)[0])
                     else:
@@ -3921,26 +4006,283 @@ def _check_guardian(fixture: _Fixture) -> list[Finding]:
 
 
 def _check_alternate_paths(fixture: _Fixture, child: _Operation) -> list[Finding]:
-    """Reject every Copier update path other than the sanctioned update child.
+    """Reject every Copier update path that may reach the sanctioned destination.
 
-    An alternate path is rejected wherever it is written, not only while the
-    update child is live, because a second update before or after the child
-    changes the same project through an unbounded path.
+    An alternate path is read wherever it is written, not only while the update
+    child is live, because a second update before or after the child changes
+    the same project through an unbounded path. A dispatch is accepted only
+    when this checker proves that the directory it updates is written apart
+    from the directory the update child updates, so a destination it cannot
+    read is rejected exactly as the blanket prohibition rejected it.
     """
 
+    reserved = _update_destinations(fixture, child)
+    links, unplaced = _symlinked_paths(fixture)
     findings: list[Finding] = []
     for operation in fixture.operations:
         if operation.offset == child.offset or not operation.reachable:
             continue
-        if _dispatches_update(fixture, operation):
-            findings.append(
-                Finding(
-                    RULE_ALTERNATE_PATH,
-                    "a second Copier update path runs outside the update child",
-                    operation.position,
-                )
+        if not _dispatches_update(fixture, operation) and not _runs_an_update(
+            fixture, operation
+        ):
+            continue
+        if _updates_a_separate_project(
+            fixture, operation, reserved, links, unplaced
+        ):
+            continue
+        findings.append(
+            Finding(
+                RULE_ALTERNATE_PATH,
+                "a second Copier update path runs outside the update child",
+                operation.position,
             )
+        )
     return findings
+
+
+def _updates_a_separate_project(
+    fixture: _Fixture,
+    operation: _Operation,
+    reserved: frozenset[_Path],
+    links: frozenset[_Path],
+    unplaced: bool,
+) -> bool:
+    """Report whether one dispatch updates a directory written apart from the child's.
+
+    Both destinations must be read, they must be written apart, and no alias
+    the fixture may write may name a directory that holds either of them. A
+    link this checker cannot place leaves every destination unproven, because
+    an unseen link is what makes two separately written paths name one
+    directory.
+    """
+
+    if unplaced or not reserved:
+        return False
+    candidate = _update_destinations(fixture, operation)
+    if not _paths_are_lexically_separate(reserved, candidate):
+        return False
+    return not any(
+        _holds_a_path(link, path)
+        for link in links
+        for path in reserved | candidate
+    )
+
+
+def _holds_a_path(link: _Path, path: _Path) -> bool:
+    """Report whether one alias may name a directory that holds one path.
+
+    Only an alias written apart from the path never reaches it. An alias
+    written inside the path is not exempt: an update walks into the directory
+    it changes, so a link written anywhere under that directory redirects the
+    walk to whatever it names, which is how two separately written paths come
+    to name one project.
+    """
+
+    return not _lexically_separate(link, path)
+
+
+def _run_for(fixture: _Fixture, operation: _Operation) -> _CommandRun | None:
+    """Return the written command run one operation is read from.
+
+    An operation is recorded at the offset of the word the shell runs, so a
+    launched command is placed against the one run that writes it. A run this
+    checker cannot place against exactly one operation reads nothing, because
+    a smaller reading settles a destination this fixture never keeps.
+    """
+
+    runs = fixture.command_runs()
+    named = [
+        run
+        for run in runs
+        if run.words and run.words[0].start.offset == operation.offset
+    ]
+    if len(named) == 1:
+        return named[0]
+    inside = [
+        run
+        for run in runs
+        if run.words
+        and run.tokens[0].start.offset <= operation.offset <= run.tokens[-1].end.offset
+    ]
+    if len(inside) == 1:
+        return inside[0]
+    return None
+
+
+def _command_word_places(literals: tuple[str | None, ...]) -> tuple[int, ...]:
+    """Return every place one command run may write its command word at.
+
+    A launcher runs the command written after its own options, so the command
+    word of a dispatch is either the first word or the word one bounded chain
+    of launchers reaches. A word this checker cannot read ends the chain,
+    because no written text says what it launches.
+    """
+
+    places: list[int] = []
+    place = 0
+    for _ in range(LAUNCHER_ROUNDS):
+        if place >= len(literals):
+            break
+        places.append(place)
+        literal = literals[place]
+        if literal is None or _basename(literal) not in LAUNCHER_WORDS:
+            break
+        place += 1
+        while place < len(literals):
+            written = literals[place]
+            if written is None:
+                break
+            if written.startswith(OPTION_MARK) and written != OPTION_END:
+                place += 1
+                continue
+            if "=" in written and not written.startswith(OPTION_MARK):
+                place += 1
+                continue
+            if written == OPTION_END:
+                place += 1
+            break
+    return tuple(places)
+
+
+def _workflow_destinations(paths: frozenset[_Path]) -> frozenset[_Path] | None:
+    """Return the project each installed-workflow path updates.
+
+    A command word written inside the installed workflow directory runs
+    against the project that holds it, so the destination is the path above
+    that directory. A word that may name such a script proves no destination
+    unless every path it may name is one, because the path this checker cannot
+    place is the one that runs.
+    """
+
+    if not paths or not any(
+        WORKFLOW_DIRECTORY in segments for _, segments in paths
+    ):
+        return None
+    destinations: set[_Path] = set()
+    for anchored, segments in paths:
+        if WORKFLOW_DIRECTORY not in segments:
+            return frozenset()
+        index = segments.index(WORKFLOW_DIRECTORY)
+        if index + 1 >= len(segments):
+            # The directory itself is not a script the shell runs.
+            return frozenset()
+        if not index and not anchored:
+            # Nothing is written above the workflow directory, so the project
+            # it belongs to is the one the working directory decides.
+            return frozenset()
+        destinations.add((anchored, segments[:index]))
+    return frozenset(destinations)
+
+
+def _copier_destinations(
+    fixture: _Fixture, run: _CommandRun, literals: tuple[str | None, ...], place: int
+) -> frozenset[_Path]:
+    """Return every project one written Copier update may change.
+
+    Only the enumerated options are read, so an option written in any other
+    spelling may take the word this checker would otherwise read as the
+    destination and the dispatch names no destination at all. An update writes
+    exactly one destination, so any other operand count is unread as well.
+    """
+
+    if place + 1 >= len(literals) or literals[place + 1] != UPDATE_SUBCOMMAND:
+        return frozenset()
+    operands: list[Token] = []
+    index = place + 2
+    ended = False
+    while index < len(literals):
+        written = literals[index]
+        if written is None or ended:
+            operands.append(run.words[index])
+            index += 1
+            continue
+        if written == OPTION_END:
+            ended = True
+            index += 1
+            continue
+        if written.startswith(OPTION_MARK) and written != OPTION_MARK:
+            if written.startswith(OPTION_END) and "=" in written:
+                index += 1
+                continue
+            if written in COPIER_FLAG_OPTIONS:
+                index += 1
+                continue
+            if written in COPIER_VALUE_OPTIONS:
+                index += 2
+                continue
+            return frozenset()
+        operands.append(run.words[index])
+        index += 1
+    if len(operands) != 1:
+        return frozenset()
+    return _settle_operand(fixture, run, operands[0])
+
+
+def _update_reading(
+    fixture: _Fixture, operation: _Operation
+) -> frozenset[_Path] | None:
+    """Return every project one operation may update, or ``None`` when it updates none."""
+
+    run = _run_for(fixture, operation)
+    if run is None or not run.words:
+        return frozenset() if _writes_an_update(operation.text) else None
+    literals = _run_literals(run)
+    places = _command_word_places(literals)
+    for place in places:
+        settled = _workflow_destinations(
+            _settle_operand(fixture, run, run.words[place])
+        )
+        if settled is not None:
+            return settled
+        if _names_an_installed_workflow(run.words[place].text):
+            return frozenset()
+    for place in places:
+        written = literals[place]
+        if written is None or not _mentions(written, COPIER_MARKER):
+            continue
+        if place + 1 < len(literals) and literals[place + 1] == UPDATE_SUBCOMMAND:
+            return _copier_destinations(fixture, run, literals, place)
+    return None
+
+
+def _names_an_installed_workflow(written: str) -> bool:
+    """Report whether one written command word runs a script of an installed workflow.
+
+    The written text is read as well as the settled path, because a word this
+    checker cannot settle still runs the update wrapper it writes, and a
+    dispatch this checker skips is a dispatch it never rejects.
+    """
+
+    return _mentions(written, WORKFLOW_DIRECTORY) or _mentions(
+        written, UPDATE_WRAPPER_MARKER
+    )
+
+
+def _writes_an_update(text: str) -> bool:
+    """Report whether one written operation may carry a Copier update.
+
+    A run this checker cannot place against exactly one operation reads no
+    words at all, so the operation text is read instead. Reading one operation
+    too many leaves its destination unproven, which is the safe direction.
+    """
+
+    return _names_an_installed_workflow(text) or (
+        _mentions(text, COPIER_MARKER) and _mentions(text, UPDATE_MARKER)
+    )
+
+
+def _runs_an_update(fixture: _Fixture, operation: _Operation) -> bool:
+    """Report whether the written words of one operation run a Copier update."""
+
+    return _update_reading(fixture, operation) is not None
+
+
+def _update_destinations(
+    fixture: _Fixture, operation: _Operation
+) -> frozenset[_Path]:
+    """Return every project one operation may update, or nothing when unproven."""
+
+    return _update_reading(fixture, operation) or frozenset()
 
 
 def _dispatches_update(fixture: _Fixture, operation: _Operation) -> bool:
