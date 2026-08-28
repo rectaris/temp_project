@@ -1,6 +1,6 @@
 # Settle fixture words from a modelled grammar
 
-status: in_progress
+status: replan_required
 primary_invariant: the bounded fixture checker settles a written word into comparable destination text only when every part of that word is written in the grammar the checker enumerates, reports the word unproven otherwise, and proves two settled texts separate only when no modelled expansion can make them name one path, while every existing rule keeps rejecting and accepting exactly the operations it rejects and accepts today
 task_types:
   - template_workflow
@@ -59,6 +59,9 @@ integration_gates:
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
   - do not change which operations any existing rule reports in this plan; the model is added, not applied
   - Plan 233 must start only after this plan is checked and its exact checked archive path replaces the active dependency
+replan_reason_codes:
+  - multiple_independent_invariants
+  - parent_remediation_budget_exhausted
 checked_summary_ja: fixture checkerの語の解決を列挙した文法だけに限定し、外れた綴りは未証明として扱う。
 
 ## Decisions
