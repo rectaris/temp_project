@@ -190,6 +190,67 @@ EXPANSION_PATTERN = re.compile(
 # so the combination count is small in practice. The bound keeps supplied
 # bytes from making the expansion work grow without limit.
 MAX_EXPANSIONS = 64
+
+
+# The grammar this checker settles a written word from. A word is settled
+# only when every character of it is written in one of these forms, so a
+# spelling this checker does not enumerate is unproven by construction
+# rather than read as the literal text it happens to be written with.
+WORD_LITERAL_PATTERN = re.compile(r"[A-Za-z0-9._+,:@%/-]")
+
+
+BRACED_NAME_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+PLAIN_NAME_PATTERN = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+SUBSTITUTION_START = "$("
+
+
+SUBSTITUTION_END = ")"
+
+
+ARITHMETIC_START = "$(("
+
+
+BACKQUOTE_MARK = "`"
+
+
+QUOTE_MARKS = ('"', "'")
+
+
+# A quoted span may carry the separators that end a command, so it is removed
+# before the text between an assignment and a command word is read.
+QUOTED_SPAN_PATTERN = re.compile(r"\"[^\"]*\"|\'[^\']*\'")
+
+
+# The one command list this checker reads as naming an absolute directory. A
+# shell writes an absolute path for ``pwd`` and for a directory change that
+# succeeds before it, and no other list is modelled, so every other
+# substitution names a directory this checker cannot anchor.
+ABSOLUTE_SUBSTITUTION_PATTERN = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*"
+    r"(?:cd[ \t][^&|;]*&&[ \t]*)?"
+    r"(?:command[ \t]+)?pwd(?:[ \t]+-P)?[ \t]*$"
+)
+
+
+ABSOLUTE_SHELL_COMMAND = "pwd"
+
+
+OPAQUE_MARK = "$"
+
+
+ABSOLUTE_OPAQUE_MARK = "$!"
+
+
+# A fixture may assign a name from its own value, so each name is settled at
+# the offset its own assignment is written and the settled texts are bounded.
+SETTLED_TEXTS = 32
+
+
+SETTLED_SEGMENTS = 64
 # --- the modelled binding surfaces ------------------------------------------
 #
 # A word is settled from what a fixture writes above it, so every place a
@@ -1222,6 +1283,356 @@ def _command_runs(records: shell_lexical.LexicalProjection) -> tuple[_CommandRun
     return tuple(runs)
 
 
+_Parts = tuple[tuple[str, str], ...]
+
+
+_Bindings = dict[str, tuple[_Parts, ...] | None]
+
+
+def _unquoted(word: str) -> str:
+    """Return one written word with its quote marks removed."""
+
+    written: list[str] = []
+    quote: str | None = None
+    for character in word:
+        if quote is None and character in QUOTE_MARKS:
+            quote = character
+            continue
+        if quote is not None and character == quote:
+            quote = None
+            continue
+        written.append(character)
+    return "".join(written)
+
+
+def _word_parts(
+    word: str, origin: str, splits: bool = True, anchored: bool = True
+) -> _Parts | None:
+    """Return the modelled parts of one written word, or ``None`` for any other.
+
+    A part is written text, a name the shell expands, or a command
+    substitution this checker reads as one opaque unit. A quote decides what
+    the shell does with an expansion: a dollar sign inside single quotes is
+    text the shell keeps, and an unquoted expansion in a command word is split
+    into fields and matched against path names, so neither is modelled.
+
+    A substitution is read only where it is bound to a name, which ``splits``
+    reports: an assignment runs it once and every later reader of that name
+    reads the one value it produced, while a substitution written in a command
+    word runs again each time that command runs. The bound value is named by
+    ``origin`` and its place in the value, so two readers of one binding carry
+    one name and two bindings never do.
+    """
+
+    parts: list[tuple[str, str]] = []
+    literal: list[str] = []
+    quote: str | None = None
+    index = 0
+
+    def flush() -> None:
+        if literal:
+            parts.append(("literal", "".join(literal)))
+            literal.clear()
+
+    while index < len(word):
+        character = word[index]
+        if quote is None and character in QUOTE_MARKS:
+            quote = character
+            index += 1
+            continue
+        if quote is not None and character == quote:
+            quote = None
+            index += 1
+            continue
+        if character == "$" and quote != "'":
+            if splits and quote is None:
+                return None
+            match = BRACED_NAME_PATTERN.match(word, index) or PLAIN_NAME_PATTERN.match(
+                word, index
+            )
+            if match is not None:
+                flush()
+                parts.append(("name", match.group(1)))
+                index = match.end()
+                continue
+            if splits:
+                return None
+            end = _substitution_end(word, index)
+            if end < 0:
+                return None
+            inside = word[index + len(SUBSTITUTION_START) : end - 1]
+            absolute = anchored and (
+                ABSOLUTE_SUBSTITUTION_PATTERN.fullmatch(inside.strip()) is not None
+            )
+            flush()
+            mark = ABSOLUTE_OPAQUE_MARK if absolute else OPAQUE_MARK
+            parts.append(("opaque", f"{mark}{origin}:{index}"))
+            index = end
+            continue
+        if WORD_LITERAL_PATTERN.fullmatch(character) is None:
+            return None
+        literal.append(character)
+        index += 1
+    if quote is not None:
+        return None
+    flush()
+    return tuple(parts) or None
+
+
+def _substitution_end(word: str, index: int) -> int:
+    """Return where one modelled command substitution ends, or ``-1``.
+
+    A command substitution names a path this checker cannot compute, so it is
+    read as one opaque unit and never as the text inside it. Only the plain
+    form is modelled: an arithmetic expansion, a nested substitution, a
+    backquote, or an unterminated span is not.
+    """
+
+    if not word.startswith(SUBSTITUTION_START, index):
+        return -1
+    if word.startswith(ARITHMETIC_START, index):
+        return -1
+    end = word.find(SUBSTITUTION_END, index)
+    if end < 0:
+        return -1
+    inside = word[index + len(SUBSTITUTION_START) : end]
+    if SUBSTITUTION_START in inside or BACKQUOTE_MARK in inside or "(" in inside:
+        return -1
+    return end + 1
+
+
+def _settled_path(parts: _Parts) -> tuple[bool, tuple[str, ...]] | None:
+    """Return one written word as an anchored sequence of path segments.
+
+    Segments are built from the modelled parts rather than from the written
+    text, so a substitution that carries separators never divides into
+    segments this checker compares. An empty or current segment names the same
+    directory and is dropped. A parent segment is not modelled at all: the
+    directory it names depends on whether the segment above it is a link,
+    which no written text decides.
+    """
+
+    absolute = _anchors_a_path(parts[0])
+    segments: list[str] = []
+    current = ""
+
+    def close(segment: str) -> bool:
+        if segment in ("", "."):
+            return True
+        if segment == "..":
+            return False
+        segments.append(segment)
+        return len(segments) <= SETTLED_SEGMENTS
+
+    for kind, text in parts:
+        if kind == "literal":
+            written = text.split("/")
+            current += written[0]
+            for piece in written[1:]:
+                if not close(current):
+                    return None
+                current = piece
+            continue
+        current += "$" + text if kind == "name" else text
+    if not close(current):
+        return None
+    if not segments and not absolute:
+        return None
+    return absolute, tuple(segments)
+
+
+def _anchors_a_path(part: tuple[str, str]) -> bool:
+    """Report whether one leading part names a directory from the root.
+
+    Written text names it when it starts at the root. A substitution names it
+    only in the one command list this checker reads as writing an absolute
+    path, because every other value may name a directory the working directory
+    decides, and a fixture may change that directory between two readers.
+    """
+
+    kind, text = part
+    if kind == "literal":
+        return text.startswith("/")
+    return kind == "opaque" and text.startswith(ABSOLUTE_OPAQUE_MARK)
+
+
+def _carries_expansion(segment: str) -> bool:
+    """Report whether one settled segment still depends on an expansion.
+
+    The modelled literal characters exclude the dollar sign, so a segment that
+    writes one carries a name or a substitution whose value this checker never
+    reads.
+    """
+
+    return "$" in segment
+
+
+def _carries_substitution(values: tuple[_Parts, ...]) -> bool:
+    """Report whether any settled value depends on a command substitution."""
+
+    return any(kind == "opaque" for parts in values for kind, _ in parts)
+
+
+def _merge_binding(
+    bindings: _Bindings, name: str, settled: tuple[_Parts, ...] | None
+) -> None:
+    """Add one more value a name may hold, keeping an unread value unproven."""
+
+    if name in bindings and bindings[name] is None:
+        return
+    if settled is None:
+        bindings[name] = None
+        return
+    held = bindings.get(name) or ()
+    bindings[name] = held + tuple(value for value in settled if value not in held)
+
+
+def _resolve_parts(
+    parts: _Parts, bindings: _Bindings, unsettled: frozenset[str]
+) -> tuple[_Parts, ...] | None:
+    """Return every part sequence one word may carry once its names are read.
+
+    A bound value carries no name of its own, because it was read where it was
+    written, so replacing a name always removes one and the walk terminates. A
+    name this checker cannot settle, or a walk that grows past the text bound,
+    proves nothing and yields ``None``. A name no assignment binds keeps the
+    value the surrounding shell holds, which is one value at every reader, so
+    it stays in the sequence as an unread unit.
+    """
+
+    done: set[_Parts] = set()
+    pending: list[_Parts] = [parts]
+    seen: set[_Parts] = {parts}
+    while pending:
+        if len(done) + len(pending) > SETTLED_TEXTS:
+            return None
+        current = pending.pop()
+        index = next(
+            (place for place, (kind, _) in enumerate(current) if kind == "name"),
+            None,
+        )
+        if index is None:
+            done.add(current)
+            continue
+        name = current[index][1]
+        if name in unsettled:
+            return None
+        if name in bindings:
+            held = bindings[name]
+            if held is None:
+                return None
+            grown = tuple(
+                current[:index] + value + current[index + 1 :] for value in held
+            )
+        else:
+            grown = (current[:index] + (("opaque", "$" + name),) + current[index + 1 :],)
+        for candidate in grown:
+            if candidate not in seen:
+                seen.add(candidate)
+                pending.append(candidate)
+    return tuple(sorted(done))
+
+
+def _settle_word(
+    word: str,
+    bindings: _Bindings,
+    unsettled: frozenset[str] = frozenset(),
+    origin: str = "w",
+    splits: bool = True,
+) -> frozenset[tuple[bool, tuple[str, ...]]]:
+    """Return every path one written word may name, or nothing when unproven."""
+
+    parts = _word_parts(word, origin, splits)
+    if parts is None:
+        return frozenset()
+    resolved = _resolve_parts(parts, bindings, unsettled)
+    if resolved is None:
+        return frozenset()
+    settled: set[tuple[bool, tuple[str, ...]]] = set()
+    for candidate in resolved:
+        path = _settled_path(candidate)
+        if path is None:
+            return frozenset()
+        settled.add(path)
+    return frozenset(settled)
+
+
+def _settle_written_word(
+    fixture: _Fixture, operation: _Operation, word: str
+) -> frozenset[tuple[bool, tuple[str, ...]]]:
+    """Return every path one word of one operation may name."""
+
+    return _settle_word(
+        word, fixture.bindings_for(operation), fixture.unsettled_names()
+    )
+
+
+def _paths_are_lexically_separate(
+    reserved: frozenset[tuple[bool, tuple[str, ...]]],
+    candidate: frozenset[tuple[bool, tuple[str, ...]]],
+) -> bool:
+    """Report whether no written candidate path spells a reserved path.
+
+    This answers what the written text decides. A link written by the fixture
+    can still make two separately written paths name one directory, so a caller
+    that needs directory separation must also prove that no alias it tracks
+    lies on either path.
+    """
+
+    if not reserved or not candidate:
+        return False
+    return all(
+        _lexically_separate(left, right) for left in reserved for right in candidate
+    )
+
+
+def _lexically_separate(
+    left: tuple[bool, tuple[str, ...]], right: tuple[bool, tuple[str, ...]]
+) -> bool:
+    """Report whether two settled paths are written as separate directories.
+
+    Two paths are written apart only when they start from the same anchor,
+    differ in a segment both write entirely as text, and write no expansion at
+    or after that segment. An expansion written there may name the same
+    directory the other path names, which removes the difference the written
+    text carries. A path written inside the other is never apart, because an
+    update there changes the same files.
+    """
+
+    if left == right:
+        return False
+    if not left[0] or not right[0]:
+        # A path this checker cannot anchor at the root names a directory the
+        # working directory decides, and a fixture may change that directory
+        # between two readers, so no written text keeps such paths apart.
+        return False
+    first, second = left[1], right[1]
+    if first and second and first[0] != second[0] and (
+        _carries_expansion(first[0]) or _carries_expansion(second[0])
+    ):
+        # Two anchors this checker reads as separate expansions may still name
+        # one directory, because their values are written nowhere.
+        return False
+    length = min(len(first), len(second))
+    index = next(
+        (position for position in range(length) if first[position] != second[position]),
+        length,
+    )
+    if index == length:
+        return False
+    return not any(
+        _carries_expansion(segment)
+        for segments in (first, second)
+        for segment in segments[index:]
+    )
+
+
+def _path_text(path: tuple[bool, tuple[str, ...]]) -> str:
+    """Return one settled path as the text a message reads."""
+
+    return ("/" if path[0] else "") + "/".join(path[1])
+
+
 class _Fixture:
     """Every derived view the Copier operation contract reads."""
 
@@ -1258,6 +1669,8 @@ class _Fixture:
         self._detached: tuple[tuple[int, int], ...] | None = None
         self._unaccepted: tuple[str, ...] | None = None
         self._unknown_binding = False
+        self._resolved: dict[int, _Bindings] = {}
+        self._settled: dict[int, _Bindings] = {}
 
     def command_runs(self) -> tuple["_CommandRun", ...]:
         """Return every command this fixture writes, read from its tokens.
@@ -1750,6 +2163,118 @@ class _Fixture:
             for region in operation.loop_regions:
                 regions.setdefault(region, []).append(operation)
         return regions
+
+    def bindings_before(self, offset: int) -> "_Bindings":
+        """Return the settled parts each name may hold before one written offset.
+
+        A shell evaluates an assignment where it is written, so each written
+        value is settled against the names bound above it rather than against
+        the names bound where the value is later read. A name whose value this
+        checker cannot read is bound to ``None``, which proves nothing.
+        """
+
+        cached = self._resolved.get(offset)
+        if cached is not None:
+            return cached
+        unsettled = self.unsettled_names()
+        bindings: _Bindings = {}
+        for assignment in sorted(self.assignments, key=lambda item: item.offset):
+            if assignment.offset >= offset:
+                break
+            self._bind_value(bindings, assignment, unsettled)
+        self._resolved[offset] = bindings
+        return bindings
+    def _bind_value(
+        self, bindings: "_Bindings", assignment: _Assignment, unsettled: frozenset[str]
+    ) -> None:
+        """Bind one written assignment to the parts its value settles to.
+
+        A command substitution is one evaluation, so the parts it produces are
+        comparable across two readers only when the assignment that ran it runs
+        exactly once. An assignment written under a condition or inside a
+        function body may run again with another value, so a value that carries
+        a substitution is bound to ``None`` there.
+        """
+
+        parts = _word_parts(
+            assignment.value,
+            f"a{assignment.offset}",
+            splits=False,
+            anchored=self._anchors_a_substitution(),
+        )
+        settled = None if parts is None else _resolve_parts(parts, bindings, unsettled)
+        single = self._certainly_runs(assignment) and not self._inside_declaration(
+            assignment.offset
+        )
+        if settled is not None and not single and _carries_substitution(settled):
+            settled = None
+        if self._certainly_runs(assignment):
+            bindings[assignment.name] = settled
+            return
+        _merge_binding(bindings, assignment.name, settled)
+    def _anchors_a_substitution(self) -> bool:
+        """Report whether the modelled absolute command is the shell's own.
+
+        A fixture may declare a function whose name is the command this
+        checker reads as writing an absolute path, and that function writes
+        whatever it likes, so no substitution is anchored where one is
+        declared.
+        """
+
+        return not any(
+            declaration.name == ABSOLUTE_SHELL_COMMAND
+            for declaration in self.table.declarations
+        )
+    def _inside_declaration(self, offset: int) -> bool:
+        """Report whether one offset is written inside a function body."""
+
+        return any(
+            declaration.start.offset <= offset <= declaration.end.offset
+            for declaration in self.table.declarations
+        )
+    def bindings_for(self, operation: _Operation) -> "_Bindings":
+        """Return the settled parts each name may hold where one operation runs.
+
+        A function body runs where it is called, not where it is written, so a
+        name the body reads carries the value its call site holds. Every
+        reachable call environment is added to the environment written above
+        the body, and a function called from another function runs where that
+        caller runs, so the call sites are followed outward. Each call site is
+        visited once and a fixture writes finitely many, so the walk always
+        terminates.
+        """
+
+        cached = self._settled.get(operation.offset)
+        if cached is not None:
+            return cached
+        bindings: _Bindings = dict(self.bindings_before(operation.offset))
+        pending = list(self._call_offsets(operation.offset))
+        visited = set(pending)
+        while pending:
+            offset = pending.pop()
+            for name, held in self.bindings_before(offset).items():
+                _merge_binding(bindings, name, held)
+            for further in self._call_offsets(offset):
+                if further not in visited:
+                    visited.add(further)
+                    pending.append(further)
+        self._settled[operation.offset] = bindings
+        return bindings
+    def _call_offsets(self, offset: int) -> tuple[int, ...]:
+        """Return where every reachable call of an enclosing function runs."""
+
+        names = {
+            declaration.name
+            for declaration in self.table.declarations
+            if declaration.start.offset <= offset <= declaration.end.offset
+        }
+        if not names:
+            return ()
+        return tuple(
+            candidate.offset
+            for candidate in self.operations
+            if candidate.reachable and candidate.name in names
+        )
 
 
 def _git_subcommand(operation: _Operation) -> tuple[str | None, tuple[str | None, ...]]:

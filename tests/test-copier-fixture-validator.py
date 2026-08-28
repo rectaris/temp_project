@@ -7,7 +7,7 @@ executed, so the contract is proven against supplied bytes only.
 """
 
 from __future__ import annotations
-
+import pathlib
 import io
 import subprocess
 import sys
@@ -1571,6 +1571,504 @@ class NameBindingTest(unittest.TestCase):
     def test_a_quoted_word_denotes_its_inner_text(self):
         text = shell_lexical.project('"de"st').tokens[0]
         self.assertEqual(copier_fixture_validator._token_text(text), "dest")
+
+
+class WordGrammarTest(unittest.TestCase):
+    """Prove a word settles only when the modelled grammar writes all of it."""
+
+    module = copier_fixture_validator
+
+    def fixture(self, source: str):
+        records = self.module.shell_lexical.project(source)
+        table = self.module.shell_functions.derive(records)
+        graph = self.module.shell_execution.derive(records, table)
+        return self.module._Fixture(source, records, table, graph)
+
+    def bind(self, values: dict[str, tuple[str, ...]] | None):
+        """Return one binding map holding only values written as plain text.
+
+        A substitution is bound only where an assignment runs it once, which
+        this helper cannot express, so it refuses a value that carries one and
+        every test that needs one builds a fixture instead.
+        """
+
+        bindings: dict[str, object] = {}
+        for name, texts in (values or {}).items():
+            settled: list[object] = []
+            for index, text in enumerate(texts):
+                parts = self.module._word_parts(text, f"a{name}{index}", splits=False)
+                if parts is None:
+                    settled = None
+                    break
+                self.assertFalse(
+                    self.module._carries_substitution((parts,)),
+                    "bind() holds only values written as plain text",
+                )
+                grown = self.module._resolve_parts(parts, bindings, frozenset())
+                if grown is None:
+                    settled = None
+                    break
+                settled.extend(grown)
+            bindings[name] = None if settled is None else tuple(settled)
+        return bindings
+
+    def settle(self, word: str, values: dict[str, tuple[str, ...]] | None = None):
+        return self.module._settle_word(word, self.bind(values), origin=word)
+
+    def settled_word(self, source: str, word: str, command: str = "printf"):
+        """Return every path one word names where one fixture command runs."""
+
+        fixture = self.fixture(source)
+        operation = next(
+            item
+            for item in fixture.operations
+            if item.reachable and item.name == command
+        )
+        return self.module._settle_written_word(fixture, operation, word)
+
+    def test_a_word_outside_the_grammar_is_unproven(self) -> None:
+        for word in (
+            '"$1"',
+            '"$@"',
+            '"$*/x"',
+            '"$$/x"',
+            '"$!/x"',
+            '"$-/x"',
+            '"$?/x"',
+            '"${x:-ln}"',
+            '"${x#/a}"',
+            "'$dest'",
+            "'a\"b'",
+            '"$tmp/*"',
+            '"$tmp/a?"',
+            '"$tmp/[ab]"',
+            '"~/p"',
+            '"$tmp/a\\b"',
+            '"$tmp/a b"',
+            '"$tmp',
+            '""',
+            "",
+            '"$((1 + 1))/x"',
+            '"$(printf %s $(echo x))"',
+            '"$(printf %s x"',
+            '"a;b"',
+            '"a|b"',
+            '"a>b"',
+            '"a&b"',
+        ):
+            with self.subTest(word=word):
+                self.assertEqual(
+                    self.settle(word, {"tmp": ("/tmp",), "dest": ("/tmp/a",)}),
+                    frozenset(),
+                )
+
+    def test_an_unquoted_expansion_in_a_command_word_is_unproven(self) -> None:
+        """A shell splits an unquoted expansion into fields it may not model."""
+
+        for word in ("$tmp/x", "${tmp}/x", "$(printf %s /tmp)/x", "a$tmp"):
+            with self.subTest(word=word):
+                self.assertEqual(self.settle(word, {"tmp": ("/tmp",)}), frozenset())
+
+    def test_an_assignment_reads_its_value_without_splitting_it(self) -> None:
+        settled = self.settled_word(
+            'base=$(pwd -P)\nprintf %s "$base/x"\n', '"$base/x"'
+        )
+        self.assertEqual(len(settled), 1)
+        self.assertEqual(next(iter(settled))[1][1:], ("x",))
+
+    def test_a_backquote_never_settles(self) -> None:
+        self.assertEqual(self.settle('"`printf %s /tmp`/x"'), frozenset())
+
+    def test_a_modelled_word_settles_to_its_segments(self) -> None:
+        for word, values, expected in (
+            ("/a/b", {}, (True, ("a", "b"))),
+            ('"$tmp/p"', {"tmp": ("/tmp",)}, (True, ("tmp", "p"))),
+            ('"${tmp}/p"', {"tmp": ("/tmp",)}, (True, ("tmp", "p"))),
+            ("/a//b/./c/", {}, (True, ("a", "b", "c"))),
+            ('"$t/x"', {}, (False, ("$t", "x"))),
+        ):
+            with self.subTest(word=word):
+                self.assertEqual(self.settle(word, values), frozenset({expected}))
+
+    def test_a_substitution_in_a_command_word_is_unproven(self) -> None:
+        """A command word runs its substitution again each time it runs."""
+
+        for word in ('"$(cat anchor)/a"', '"$(pwd -P)/a"'):
+            with self.subTest(word=word):
+                self.assertEqual(
+                    self.settled_word(f"printf %s {word}\n", word), frozenset()
+                )
+
+    def test_a_bound_substitution_settles_as_one_opaque_segment(self) -> None:
+        source = 'base=$(CDPATH= cd -- /tmp && pwd -P)\nprintf %s "$base/x"\n'
+        settled = self.settled_word(source, '"$base/x"')
+        self.assertEqual(len(settled), 1)
+        anchored, segments = next(iter(settled))
+        self.assertTrue(anchored)
+        self.assertTrue(self.module._carries_expansion(segments[0]))
+        self.assertEqual(segments[1:], ("x",))
+
+    def test_only_the_modelled_command_list_anchors_a_substitution(self) -> None:
+        """Any other list may write a path the working directory decides."""
+
+        for value in (
+            "$(mktemp -d)",
+            "$(printf %s x; pwd)",
+            "$(printf .)",
+            "$(cd /tmp && printf %s x)",
+        ):
+            source = f'base={value}\nprintf %s "$base/x"\n'
+            with self.subTest(value=value):
+                settled = self.settled_word(source, '"$base/x"')
+                self.assertEqual({anchored for anchored, _ in settled}, {False})
+
+    def test_a_declared_command_never_anchors_a_substitution(self) -> None:
+        source = (
+            "pwd() { printf %s relative; }\n"
+            "base=$(cd /tmp && pwd)\n"
+            'printf %s "$base/x"\n'
+        )
+        settled = self.settled_word(source, '"$base/x"')
+        self.assertEqual({anchored for anchored, _ in settled}, {False})
+
+    def test_a_special_parameter_is_never_settled(self) -> None:
+        """A special parameter names text no assignment in the fixture writes."""
+
+        for word in ('"$0"', '"$1/x"', '"$@"', '"$#"', '"$?"', '"$$/x"', '"$!"'):
+            with self.subTest(word=word):
+                self.assertEqual(self.settle(word), frozenset())
+
+    def test_a_substitution_list_writing_more_than_one_command_is_unanchored(
+        self,
+    ) -> None:
+        """Only the one modelled list anchors a path; every other list does not."""
+
+        for value in (
+            "$(cd /tmp && pwd && printf %s /evil)",
+            "$(pwd; printf %s /evil)",
+            "$(printf %s /evil && pwd)",
+            "$(cd /tmp && pwd | tr -d x)",
+        ):
+            with self.subTest(value=value):
+                source = f"base={value}\nprintf %s \"$base/x\"\n"
+                settled = self.settled_word(source, '"$base/x"')
+                self.assertNotIn(True, {anchored for anchored, _ in settled})
+
+    def test_the_committed_fixture_anchors_only_the_modelled_list(self) -> None:
+        """The committed fixture writes both a modelled and an unmodelled list."""
+
+        source = Path("tests/copier-update.sh").read_text(encoding="utf-8")
+        fixture = self.fixture(source)
+        bindings = fixture.bindings_before(len(source))
+        unsettled = fixture.unsettled_names()
+        self.assertEqual(
+            self.module._settle_word('"$root"', bindings, unsettled),
+            frozenset(),
+            "a nested substitution is outside the grammar",
+        )
+        self.assertEqual(
+            {anchored for anchored, _ in self.module._settle_word(
+                '"$tmp/x"', bindings, unsettled
+            )},
+            {True},
+            "the modelled command list anchors the path it writes",
+        )
+
+    def test_a_parent_segment_is_never_modelled(self) -> None:
+        """A parent segment names a directory the links above it decide."""
+
+        for word in ('"$t/.."', "../a", "/a/b/../c", "/a/..", '"/tmp/a/../b"'):
+            with self.subTest(word=word):
+                self.assertEqual(self.settle(word), frozenset())
+
+    def test_every_value_a_name_may_hold_is_settled(self) -> None:
+        """A name bound more than once settles to every value it may hold."""
+
+        self.assertEqual(
+            self.settle('"$dest/x"', {"dest": ("/tmp/one", "/tmp/two")}),
+            frozenset({(True, ("tmp", "one", "x")), (True, ("tmp", "two", "x"))}),
+        )
+
+    def test_a_name_the_binding_surfaces_report_unsettled_is_unproven(self) -> None:
+        """A name a branch may rebind is reported unsettled, so it proves nothing.
+
+        The binding surfaces report which names this checker settles, and a
+        name written under a condition is one of them. The parts each value
+        carries are still enumerated, but the word that reads the name is
+        unproven, because a value this checker never settles may name any path
+        at all.
+        """
+
+        source = (
+            "dest=/tmp/one\n"
+            "if [ -d /tmp ]; then\n  dest=/tmp/two\nfi\n"
+            'printf %s "$dest"\n'
+        )
+        fixture = self.fixture(source)
+        self.assertIn("dest", fixture.unsettled_names())
+        self.assertEqual(self.settled_word(source, '"$dest"'), frozenset())
+
+    def test_a_value_outside_the_grammar_leaves_the_word_unproven(self) -> None:
+        self.assertEqual(self.settle('"$dest/x"', {"dest": ("/tmp/*",)}), frozenset())
+
+    def test_a_value_is_read_where_the_assignment_is_written(self) -> None:
+        """A shell settles a value once, not again where the name is read."""
+
+        source = "y=/tmp/old\nx=$y\ny=/tmp/new\nprintf %s \"$x\"\n"
+        self.assertEqual(
+            self.settled_word(source, '"$x"'), frozenset({(True, ("tmp", "old"))})
+        )
+
+    def test_a_self_referential_value_terminates(self) -> None:
+        source = 't=$t/x\nprintf %s "$t"\n'
+        self.assertEqual(
+            self.settled_word(source, '"$t"'), frozenset({(False, ("$t", "x"))})
+        )
+
+    def test_a_settlement_past_the_text_bound_is_unproven(self) -> None:
+        values = {
+            f"n{index}": tuple(f"/v{index}-{choice}" for choice in range(4))
+            for index in range(4)
+        }
+        word = '"' + "".join(f"$n{index}" for index in range(4)) + '"'
+        self.assertEqual(self.settle(word, values), frozenset())
+
+    def test_a_long_word_settles_without_growing(self) -> None:
+        """Repeated names settle once each rather than once per combination."""
+
+        source = (
+            "".join(f"n{index}=/a\n" for index in range(20))
+            + 'printf %s "'
+            + "/".join(f"$n{index}" for index in range(20))
+            + '"\n'
+        )
+        word = '"' + "/".join(f"$n{index}" for index in range(20)) + '"'
+        self.assertEqual(
+            self.settled_word(source, word), frozenset({(True, ("a",) * 20)})
+        )
+
+    def test_a_call_site_value_reaches_a_function_body(self) -> None:
+        source = (
+            "dest=/tmp/first\n"
+            'inner() { printf %s "$dest"; }\n'
+            "outer() { inner; }\n"
+            "dest=/tmp/second\n"
+            "outer\n"
+        )
+        self.assertEqual(
+            self.settled_word(source, '"$dest"'),
+            frozenset({(True, ("tmp", "first")), (True, ("tmp", "second"))}),
+        )
+
+    def test_a_name_a_command_may_assign_is_never_settled(self) -> None:
+        for assigning in (
+            "export dest=/tmp/actual",
+            "readonly dest=/tmp/actual",
+            "read dest",
+            "getopts x dest",
+            'assign=export\n"$assign" dest=/tmp/actual',
+            "command export dest=/tmp/actual",
+            "printf -v dest /tmp/actual",
+        ):
+            source = f'dest=/tmp/outer\n{assigning}\nprintf %s "$dest"\n'
+            with self.subTest(assigning=assigning):
+                fixture = self.fixture(source)
+                self.assertIn("dest", fixture.unsettled_names())
+
+    def test_a_name_written_with_a_value_anywhere_is_never_settled(self) -> None:
+        """Only the first assignment of one command is recorded in position."""
+
+        for written in (
+            "other=x dest=/tmp/new",
+            'dest=/tmp/new other="a b" printf %s x',
+            'export de"st"=/tmp/new',
+            "unset dest",
+        ):
+            source = f'dest=/tmp/old\n{written}\nprintf %s "$dest"\n'
+            with self.subTest(written=written):
+                fixture = self.fixture(source)
+                self.assertIn("dest", fixture.unsettled_names())
+                self.assertEqual(self.settled_word(source, '"$dest"'), frozenset())
+
+    def test_a_name_the_shell_keeps_itself_is_never_settled(self) -> None:
+        """A shell changes these names where no assignment is written."""
+
+        for name in ("PWD", "OLDPWD", "IFS", "OPTIND", "REPLY"):
+            with self.subTest(name=name):
+                fixture = self.fixture(f'printf %s "${name}/x"\n')
+                self.assertIn(name, fixture.unsettled_names())
+                self.assertEqual(
+                    self.settled_word(f'printf %s "${name}/x"\n', f'"${name}/x"'),
+                    frozenset(),
+                )
+
+    def test_a_name_a_function_body_assigns_is_never_settled(self) -> None:
+        """A function runs where it is called, so its assignment reaches later."""
+
+        source = (
+            "set_dest() { dest=/tmp/new; }\n"
+            "dest=/tmp/old\n"
+            "set_dest\n"
+            'printf %s "$dest"\n'
+        )
+        fixture = self.fixture(source)
+        self.assertIn("dest", fixture.unsettled_names())
+        self.assertEqual(self.settled_word(source, '"$dest"'), frozenset())
+
+    def test_a_name_a_loop_head_binds_is_never_settled(self) -> None:
+        source = (
+            "dest=/tmp/old\nfor dest in /tmp/new; do\n"
+            '  printf %s "$dest"\ndone\n'
+        )
+        continued = (
+            "dest=/tmp/old\nfor \\\n dest in /tmp/new; do\n"
+            '  printf %s "$dest"\ndone\n'
+        )
+        for written in (source, continued):
+            with self.subTest(written=written):
+                fixture = self.fixture(written)
+                self.assertIn("dest", fixture.unsettled_names())
+                self.assertEqual(self.settled_word(written, '"$dest"'), frozenset())
+
+    def test_a_prefix_assigned_name_is_never_settled(self) -> None:
+        for prefix in (
+            'dest=/tmp/new printf %s "$dest"',
+            'dest=/tmp/new other=x printf %s "$dest"',
+            'dest=/tmp/new \\\n  printf %s "$dest"',
+        ):
+            source = f'dest=/tmp/old\n{prefix}\n'
+            with self.subTest(prefix=prefix):
+                fixture = self.fixture(source)
+                self.assertIn("dest", fixture.unsettled_names())
+
+    def test_a_standalone_assignment_is_not_a_prefix_assignment(self) -> None:
+        fixture = self.fixture('dest=/tmp/old\nprintf %s "$dest"\n')
+        self.assertNotIn("dest", fixture.prefix_assigned_names())
+
+    def test_two_paths_are_separate_only_when_written_text_keeps_them_apart(
+        self,
+    ) -> None:
+        for left, right, expected in (
+            ('"$x/a"', '"$x/b"', False),
+            ('"/tmp/a"', '"/tmp/b"', True),
+            ('"${x}a"', '"${x}/a"', False),
+            ('"/tmp/a"', '"/tmp//a"', False),
+            ('"/tmp/a/$tail"', '"/tmp/b/$tail"', False),
+            ('"/tmp/a"', '"/tmp/a/b"', False),
+            ('"/tmp/a"', '"/tmp/a"', False),
+            ("project", "/tmp/project", False),
+            ("project", "other", False),
+            ('"$x/a"', '"/tmp/a"', False),
+        ):
+            with self.subTest(left=left, right=right):
+                self.assertIs(
+                    self.module._paths_are_lexically_separate(
+                        self.settle(left), self.settle(right)
+                    ),
+                    expected,
+                )
+
+    def test_a_path_this_checker_cannot_anchor_is_never_separate(self) -> None:
+        """A fixture may change the directory a relative path starts from."""
+
+        source = (
+            "base=$(printf .)\n"
+            'printf %s "$base/scripts"\n'
+            "cd scripts\n"
+            'printf %s "$base/other"\n'
+        )
+        fixture = self.fixture(source)
+        commands = [
+            item
+            for item in fixture.operations
+            if item.reachable and item.name == "printf"
+        ]
+        left = self.module._settle_written_word(fixture, commands[0], '"$base/scripts"')
+        right = self.module._settle_written_word(fixture, commands[1], '"$base/other"')
+        self.assertTrue(left)
+        self.assertTrue(right)
+        self.assertFalse(self.module._paths_are_lexically_separate(left, right))
+
+    def test_one_binding_read_twice_is_one_anchor(self) -> None:
+        source = (
+            'base=$(pwd -P)\nprintf %s "$base/a"\nprintf %s "$base/b"\n'
+        )
+        fixture = self.fixture(source)
+        commands = [
+            item
+            for item in fixture.operations
+            if item.reachable and item.name == "printf"
+        ]
+        left = self.module._settle_written_word(fixture, commands[0], '"$base/a"')
+        right = self.module._settle_written_word(fixture, commands[1], '"$base/b"')
+        self.assertTrue(
+            self.module._paths_are_lexically_separate(left, right)
+        )
+        self.assertFalse(
+            self.module._paths_are_lexically_separate(
+                left,
+                self.module._settle_written_word(
+                    fixture, commands[1], '"$base/a/b"'
+                ),
+            )
+        )
+
+    def test_a_repeated_binding_never_anchors_a_comparison(self) -> None:
+        """An assignment that may run again may hold another value."""
+
+        source = (
+            "if [ -d /tmp ]; then\n  base=$(pwd -P)\nfi\n"
+            'printf %s "$base/a"\n'
+        )
+        self.assertEqual(self.settled_word(source, '"$base/a"'), frozenset())
+
+    def test_an_unproven_side_is_never_separate(self) -> None:
+        settled = self.settle("/tmp/a")
+        self.assertFalse(
+            self.module._paths_are_lexically_separate(settled, frozenset())
+        )
+        self.assertFalse(
+            self.module._paths_are_lexically_separate(frozenset(), settled)
+        )
+
+    def test_the_committed_fixture_settles_the_paths_it_writes(self) -> None:
+        """The words are read from the fixture rather than written here."""
+
+        source = (ROOT / "tests" / "copier-update.sh").read_text(encoding="utf-8")
+        fixture = self.fixture(source)
+        self.assertNotIn("tmp", fixture.unsettled_names())
+        written: dict[str, tuple[object, frozenset]] = {}
+        for operation in fixture.operations:
+            if not operation.reachable:
+                continue
+            for word in operation.text.split():
+                if not word.startswith('"$tmp/') or word in written:
+                    continue
+                settled = self.module._settle_written_word(fixture, operation, word)
+                if len(settled) == 1:
+                    written[word] = (operation, settled)
+        self.assertGreaterEqual(len(written), 2)
+        for word, (_, settled) in written.items():
+            with self.subTest(word=word):
+                anchored, segments = next(iter(settled))
+                self.assertTrue(anchored)
+                self.assertTrue(self.module._carries_expansion(segments[0]))
+                self.assertEqual(
+                    len(segments), len(word.strip('"').rstrip("/").split("/"))
+                )
+        paths = [settled for _, settled in written.values()]
+        separate = [
+            self.module._paths_are_lexically_separate(left, right)
+            for index, left in enumerate(paths)
+            for right in paths[index + 1 :]
+        ]
+        self.assertIn(True, separate)
+        first = next(iter(written.values()))[1]
+        anchored, segments = next(iter(first))
+        inside = (anchored, segments + ("inside",))
+        self.assertFalse(
+            self.module._paths_are_lexically_separate(first, frozenset({inside}))
+        )
 
 
 class SnapshotIndirectionTest(ContractSupportTest):

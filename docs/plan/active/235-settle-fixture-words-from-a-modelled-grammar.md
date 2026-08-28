@@ -79,13 +79,17 @@ checked_summary_ja: 語の解決を列挙した文法だけに限定し、根か
 
 ## Tasks
 
-- [ ] Enumerate the word grammar the checker settles: the quoting forms, the literal path characters, and the expansion forms it models, and report unproven for any word that writes anything else.
-- [ ] Settle each modelled name against the bindings Plan 236 derives, resolving each binding where it is written and following call sites outward under a visited set, under a fixed settlement bound.
-- [ ] Anchor a path only from written text that starts at the root or from a substitution the checker reads as one parsed command list, and report every other path unanchored.
-- [ ] Prove two anchored paths separate only when they start from one anchor and no expansion is written at or after the first differing segment, and record the alias precondition the caller must meet.
-- [ ] Cover every spelling the stopped plan recorded, including an unquoted expansion the shell splits, a special parameter, a substitution written in a command word, a value read where it is written, a parent segment, and a substitution list that writes more than one command.
-- [ ] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
+- [x] Enumerate the word grammar the checker settles: the quoting forms, the literal path characters, and the expansion forms it models, and report unproven for any word that writes anything else.
+- [x] Settle each modelled name against the bindings Plan 236 derives, resolving each binding where it is written and following call sites outward under a visited set, under a fixed settlement bound.
+- [x] Anchor a path only from written text that starts at the root or from a substitution the checker reads as one parsed command list, and report every other path unanchored.
+- [x] Prove two anchored paths separate only when they start from one anchor and no expansion is written at or after the first differing segment, and record the alias precondition the caller must meet.
+- [x] Cover every spelling the stopped plan recorded, including an unquoted expansion the shell splits, a special parameter, a substitution written in a command word, a value read where it is written, a parent segment, and a substitution list that writes more than one command.
+- [x] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
 
 ## Validation Notes
 
-- Pending. The Plan 232 archive records the three review rounds and the spellings each round found.
+- Ported the word grammar the preserved branch `plan-232-candidate` proved, and rebuilt it on the Plan 236 binding surfaces: a word settles only when its quoting, its literal characters, and each expansion it writes are all enumerated forms, and every other spelling is unproven by construction.
+- Changed one behaviour from the candidate: a name Plan 236 reports unsettled now leaves the word unproven instead of settling to the union of its branch values. Independent review confirmed the change is correctly over-strict, because a union may omit the value the branch does not write.
+- Added coverage for the spellings the stopped plan recorded and for the two the port left uncovered: a special parameter, and a substitution list writing more than one command. The committed fixture anchors only its modelled `pwd` list and leaves its nested substitution unproven.
+- Independent review round 1 reported no High, no Medium, and no Low finding, and confirmed the grammar is a total whitelist, that a mis-parsed substitution degrades to unproven, that path normalization keeps the directory a shell names, and that an anchor read from a substitution can never manufacture a separation.
+- Authoritative validation ran once: 222 checker tests passed, `--check tests/copier-update.sh` passed, `scripts/lint-project-workflow.sh` passed, `tests/smoke.sh` passed, and `git diff --check` reported nothing.
