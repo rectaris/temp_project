@@ -38,3 +38,4 @@ id	path	contract
 197	docs/plan/replanned/2026/08/16-31/197-freeze-bounded-shell-structure-parser.md	docs/plan/replanned/contracts/197-freeze-bounded-shell-structure-parser.json
 198	docs/plan/replanned/2026/08/16-31/198-integrate-bounded-copier-fixture-validator.md	docs/plan/replanned/contracts/197-freeze-bounded-shell-structure-parser.json
 185	docs/plan/replanned/2026/08/16-31/185-complete-bounded-copier-fixture-runtime.md	docs/plan/replanned/contracts/185-complete-bounded-copier-fixture-runtime.json
+226	docs/plan/replanned/2026/08/16-31/226-scope-fixture-alternate-path-rule.md	docs/plan/replanned/contracts/226-scope-fixture-alternate-path-rule.json

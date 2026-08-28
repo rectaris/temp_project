@@ -45,7 +45,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh"}
 predecessor_plans:
-  - docs/plan/active/226-scope-fixture-alternate-path-rule.md
+  - docs/plan/active/231-scope-fixture-alternate-path-rule.md
 successor_plans:
   - docs/plan/active/226-scope-fixture-alternate-path-rule.md
   - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md

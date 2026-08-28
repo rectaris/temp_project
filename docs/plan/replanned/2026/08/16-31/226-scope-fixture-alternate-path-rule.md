@@ -1,7 +1,6 @@
 # Scope the fixture alternate-path rule to the sanctioned destination
 
-status: replan_required
-primary_invariant: the bounded fixture checker rejects a second Copier update path only when it can reach the same downstream destination as the sanctioned update child, and keeps every accepted legacy lane and every existing bypass rejection unchanged
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -45,23 +44,17 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
-successor_plans:
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
   - docs/plan/active/226-scope-fixture-alternate-path-rule.md
-  - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
-  - docs/plan/active/228-verify-plan185-runtime-acceptance.md
+replan_contract: docs/plan/replanned/contracts/226-scope-fixture-alternate-path-rule.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/230-resolve-fixture-destinations-fail-closed.md
+  - docs/plan/active/231-scope-fixture-alternate-path-rule.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
-replan_sources:
-  - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
-replan_contract: docs/plan/replanned/contracts/185-complete-bounded-copier-fixture-runtime.json
-integration_gates:
-  - do not edit tests/copier-update.sh in this plan; Plan 227 owns the fixture runtime
-  - keep the existing second-update-path rejections passing; a rename or alias bypass must stay rejected
-  - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
-  - Plan 227 must start only after this plan is checked and its exact checked archive path replaces the active dependency
-replan_reason_codes:
-  - multiple_independent_invariants
-  - parent_remediation_budget_exhausted
 checked_summary_ja: fixture checkerのalternate_path規則を送り先単位へ限定し、既存の正規laneとbypass拒否を保つ。
 
 ## Decisions
@@ -81,6 +74,7 @@ checked_summary_ja: fixture checkerのalternate_path規則を送り先単位へ�
 
 ## Validation Notes
 
+- Pending. The 37 rejected lanes and the two cleanup findings are recorded in the Plan 185 archive.
 - Reproduced the 37 alternate_path findings by checking the committed tests/copier-update.sh together with an accepted transition sample. A destination-aware rule reduced them to one residual alternate_path at fixture line 691, beside the release_path and guardian findings at line 21 that Plan 227 owns.
 - Built the destination-aware rule as a candidate and preserved it on the local branch `plan-226-candidate`. It reached 160 passing tests, a clean `--check tests/copier-update.sh`, and a clean `git diff --check`, and it was never committed to `dev`.
 - Ran seven independent review rounds against that candidate. Each round cleared its predecessor findings and each round found new ones: 1 finding, then 4, 3, 2, 2, 1, and 3. The parent remediation budget of two rounds was exhausted at round three.
