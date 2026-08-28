@@ -1,7 +1,6 @@
 # Scope the fixture alternate-path rule to the sanctioned destination
 
-status: deferred
-completion_deferred_reason: Plan 230 must be checked so the fail-closed resolution model exists before the alternate-path rule consumes it
+status: in_progress
 primary_invariant: the bounded fixture checker rejects a second Copier update path only when it can reach the same downstream destination as the sanctioned update child, and keeps every accepted legacy lane and every existing bypass rejection unchanged
 task_types:
   - template_workflow
@@ -46,9 +45,9 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
-  - docs/plan/active/233-collect-fixture-aliases-from-a-modelled-grammar.md
+  - docs/plan/checked/2026/08/16-31/233-collect-fixture-aliases-from-a-modelled-grammar.md
 successor_plans:
-  - docs/plan/active/230-resolve-fixture-destinations-fail-closed.md
+  - docs/plan/replanned/2026/08/16-31/230-resolve-fixture-destinations-fail-closed.md
   - docs/plan/active/231-scope-fixture-alternate-path-rule.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
@@ -60,7 +59,7 @@ integration_source_ids:
 integration_gates:
   - do not edit tests/copier-update.sh in this plan; Plan 227 owns the fixture runtime
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
-  - Plan 230 must be checked and its exact checked archive path must replace this active predecessor before implementation
+  - Plan 233 is checked and its exact checked archive path replaces this predecessor
   - prove parity against the blanket rule: no operation the current rule rejects may become accepted
   - Plan 227 must start only after this plan is checked and its exact checked archive path replaces the active dependency
 checked_summary_ja: alternate_path規則を送り先単位へ限定し、既存のbypass拒否と正規laneを保つ。
@@ -68,7 +67,7 @@ checked_summary_ja: alternate_path規則を送り先単位へ限定し、既存�
 ## Decisions
 
 - Reconstruct the validation method rather than the requirement. The rule's own docstring already describes a same-project prohibition, so making the implementation destination aware restores the intended boundary instead of weakening it.
-- Consume the checked resolution model and add no new resolution here. A rejection this plan cannot prove separate is a Plan 230 gap, not a rule change.
+- Consume the checked resolution model and add no new resolution here. A rejection this plan cannot prove separate is a gap in the checked Plan 233 chain, not a rule change.
 - Prove parity explicitly. The rule it replaces rejects every reachable update dispatch, so acceptance requires that no operation the blanket rule rejects becomes accepted.
 - Own the checker and its test together, because the rule change is only acceptable with the mutation coverage that proves the prohibition still holds.
 
