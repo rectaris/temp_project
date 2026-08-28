@@ -6,4 +6,3 @@ id	path	status
 231	docs/plan/active/231-scope-fixture-alternate-path-rule.md	deferred
 233	docs/plan/active/233-collect-fixture-aliases-from-a-modelled-grammar.md	deferred
 235	docs/plan/active/235-settle-fixture-words-from-a-modelled-grammar.md	deferred
-236	docs/plan/active/236-accept-a-bounded-fixture-construct-set.md	in_progress

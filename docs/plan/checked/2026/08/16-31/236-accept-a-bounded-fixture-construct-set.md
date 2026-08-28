@@ -1,6 +1,6 @@
 # Accept a bounded fixture construct set
 
-status: in_progress
+status: checked
 primary_invariant: the bounded fixture checker enumerates the shell constructs it accepts, reports every name in the fixture unsettled as soon as the fixture writes any construct outside that set, decides from the lexical tokens alone which names each accepted construct may bind, and leaves every existing rule rejecting and accepting exactly the operations it rejects and accepts today
 task_types:
   - template_workflow
