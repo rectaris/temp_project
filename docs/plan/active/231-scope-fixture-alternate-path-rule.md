@@ -23,7 +23,7 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
-  - docs/plan/active/230-resolve-fixture-destinations-fail-closed.md
+  - docs/plan/active/233-collect-fixture-aliases-from-a-modelled-grammar.md
   - tests/copier-update.sh
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
@@ -46,7 +46,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
-  - docs/plan/active/230-resolve-fixture-destinations-fail-closed.md
+  - docs/plan/active/233-collect-fixture-aliases-from-a-modelled-grammar.md
 successor_plans:
   - docs/plan/active/230-resolve-fixture-destinations-fail-closed.md
   - docs/plan/active/231-scope-fixture-alternate-path-rule.md

@@ -1,7 +1,6 @@
 # Resolve fixture destinations and aliases fail-closed
 
-status: replan_required
-primary_invariant: the bounded fixture checker settles a written path into a comparable destination and collects every alias a reachable operation may create, and reports the result unproven whenever the written shell text does not determine it, while every existing rule keeps rejecting and accepting exactly the operations it rejects and accepts today
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -45,22 +44,17 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
-successor_plans:
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
   - docs/plan/active/230-resolve-fixture-destinations-fail-closed.md
-  - docs/plan/active/231-scope-fixture-alternate-path-rule.md
+replan_contract: docs/plan/replanned/contracts/230-resolve-fixture-destinations-fail-closed.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/232-settle-fixture-words-from-a-modelled-grammar.md
+  - docs/plan/active/233-collect-fixture-aliases-from-a-modelled-grammar.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
-replan_sources:
-  - docs/plan/active/226-scope-fixture-alternate-path-rule.md
-replan_contract: docs/plan/replanned/contracts/226-scope-fixture-alternate-path-rule.json
-integration_gates:
-  - do not edit tests/copier-update.sh in this plan; Plan 227 owns the fixture runtime
-  - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
-  - do not change which operations any existing rule reports in this plan; the resolution model is added, not applied
-  - Plan 231 must start only after this plan is checked and its exact checked archive path replaces the active dependency
-replan_reason_codes:
-  - multiple_independent_invariants
-  - parent_remediation_budget_exhausted
 checked_summary_ja: fixture checkerに送り先と別名の解決模型を追加し、決まらない場合は未証明として扱う。
 
 ## Decisions
