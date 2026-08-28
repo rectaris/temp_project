@@ -1,6 +1,6 @@
 # Scope the fixture alternate-path rule to the sanctioned destination
 
-status: in_progress
+status: replan_required
 primary_invariant: the bounded fixture checker rejects a second Copier update path only when it can reach the same downstream destination as the sanctioned update child, and keeps every accepted legacy lane and every existing bypass rejection unchanged
 task_types:
   - template_workflow
@@ -59,6 +59,9 @@ integration_gates:
   - keep the existing second-update-path rejections passing; a rename or alias bypass must stay rejected
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
   - Plan 227 must start only after this plan is checked and its exact checked archive path replaces the active dependency
+replan_reason_codes:
+  - multiple_independent_invariants
+  - parent_remediation_budget_exhausted
 checked_summary_ja: fixture checkerのalternate_path規則を送り先単位へ限定し、既存の正規laneとbypass拒否を保つ。
 
 ## Decisions
