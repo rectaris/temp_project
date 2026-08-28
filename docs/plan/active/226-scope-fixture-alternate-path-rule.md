@@ -78,4 +78,10 @@ checked_summary_ja: fixture checkerのalternate_path規則を送り先単位へ�
 
 ## Validation Notes
 
-- Pending. The 37 rejected lanes and the two cleanup findings are recorded in the Plan 185 archive.
+- Reproduced the 37 alternate_path findings by checking the committed tests/copier-update.sh together with an accepted transition sample. A destination-aware rule reduced them to one residual alternate_path at fixture line 691, beside the release_path and guardian findings at line 21 that Plan 227 owns.
+- Built the destination-aware rule as a candidate and preserved it on the local branch `plan-226-candidate`. It reached 160 passing tests, a clean `--check tests/copier-update.sh`, and a clean `git diff --check`, and it was never committed to `dev`.
+- Ran seven independent review rounds against that candidate. Each round cleared its predecessor findings and each round found new ones: 1 finding, then 4, 3, 2, 2, 1, and 3. The parent remediation budget of two rounds was exhausted at round three.
+- Every round-seven finding is a regression against the rule this plan replaces, because that rule rejects every reachable update dispatch unconditionally. Reproduced all three: a function body that settles a destination against its definition value rather than its call environment, a launcher option that hides the effective command, and a symbolic link moved to a second path.
+- Diagnosed the cause as two coupled invariants. Rejecting only a provably shared destination is sound only over a resolution model that reports unproven whenever the written shell text does not determine a destination or an alias. This plan owns the rule, so every resolution gap surfaced as a rule defect and could not be validated apart.
+- Authoritative validation was never run, because the review gate never cleared.
+- Stopping under `multiple_independent_invariants` and `parent_remediation_budget_exhausted`. The requirement is unchanged and moves to the successors.
