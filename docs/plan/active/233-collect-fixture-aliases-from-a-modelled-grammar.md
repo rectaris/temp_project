@@ -1,7 +1,6 @@
 # Collect fixture aliases from a modelled grammar
 
-status: deferred
-completion_deferred_reason: Plan 232 must be checked so a word settles only from the modelled grammar before aliases are collected from it
+status: in_progress
 primary_invariant: the bounded fixture checker collects the alias paths a reachable operation may create only from commands whose name, options, and operands are all written in the grammar the checker enumerates, reports the alias set unplaced for every other spelling, and leaves every existing rule rejecting and accepting exactly the operations it rejects and accepts today
 task_types:
   - template_workflow
@@ -47,9 +46,9 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
-  - docs/plan/active/235-settle-fixture-words-from-a-modelled-grammar.md
+  - docs/plan/checked/2026/08/16-31/235-settle-fixture-words-from-a-modelled-grammar.md
 successor_plans:
-  - docs/plan/active/232-settle-fixture-words-from-a-modelled-grammar.md
+  - docs/plan/replanned/2026/08/16-31/232-settle-fixture-words-from-a-modelled-grammar.md
   - docs/plan/active/233-collect-fixture-aliases-from-a-modelled-grammar.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
@@ -62,7 +61,7 @@ integration_gates:
   - do not edit tests/copier-update.sh in this plan; Plan 227 owns the fixture runtime
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
   - do not change which operations any existing rule reports in this plan; the model is added, not applied
-  - Plan 232 must be checked and its exact checked archive path must replace this active predecessor before implementation
+  - Plan 235 must be checked and its exact checked archive path must replace this active predecessor before implementation
   - Plan 231 must start only after this plan is checked and its exact checked archive path replaces the active dependency
 checked_summary_ja: 別名の収集を列挙したコマンド文法だけに限定し、読めない綴りは配置不明として扱う。
 
