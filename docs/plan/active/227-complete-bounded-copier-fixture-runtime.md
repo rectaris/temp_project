@@ -1,7 +1,6 @@
 # Complete the bounded Copier fixture runtime
 
-status: deferred
-completion_deferred_reason: Plan 226 must be checked so the destination-aware alternate-path rule admits the existing lanes before the transition runtime is added
+status: in_progress
 primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup under the checked destination-aware checker
 task_types:
   - template_workflow
@@ -45,9 +44,9 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh"}
 predecessor_plans:
-  - docs/plan/active/231-scope-fixture-alternate-path-rule.md
+  - docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md
 successor_plans:
-  - docs/plan/active/226-scope-fixture-alternate-path-rule.md
+  - docs/plan/replanned/2026/08/16-31/226-scope-fixture-alternate-path-rule.md
   - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
   - docs/plan/active/228-verify-plan185-runtime-acceptance.md
 inherited_acceptance_digests:
@@ -56,7 +55,7 @@ replan_sources:
   - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
 replan_contract: docs/plan/replanned/contracts/185-complete-bounded-copier-fixture-runtime.json
 integration_gates:
-  - Plan 226 must be checked and its exact checked archive path must replace this active predecessor before implementation
+  - Plan 231 is checked at docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md and supplies the destination-aware alternate-path rule this plan validates against
   - do not edit scripts/project_workflow/copier_fixture_validator.py in this plan
   - Plan 228 must start only after this plan is checked and its exact checked archive path replaces the active dependency
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
@@ -64,7 +63,7 @@ checked_summary_ja: Copier fixtureの固有version、bounded同期、子process�
 
 ## Decisions
 
-- Keep the original Plan 185 runtime requirement unchanged. Only its blocking validation method moved to Plan 226.
+- Keep the original Plan 185 runtime requirement unchanged. Only its blocking validation method moved to the Plan 226 lineage, which was restructured and finished as checked Plan 231.
 - Validate the runtime only with the checked bounded fixture validator and do not use a broad checker as acceptance authority.
 - Preserve the committed v1.4.4 downstream active plan, its replanned source archive, and its replan contract as the pre-schema compatibility input captured by the v1.4.5 migration.
 - Use bounded parent implementation because this high-risk process lifecycle cannot use the writable runner.
