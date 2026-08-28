@@ -1,7 +1,7 @@
 # Settle fixture words from a modelled grammar
 
 status: deferred
-completion_deferred_reason: Plan 234 must be checked so every binding surface is derived from lexical tokens before a word is settled against the bindings
+completion_deferred_reason: Plan 236 must be checked so every binding surface is derived from lexical tokens and every accepted construct is enumerated before a word is settled against the bindings
 primary_invariant: the bounded fixture checker settles a written word into comparable destination text only when every part of that word is written in the grammar the checker enumerates, reports the word unproven otherwise, proves two settled texts separate only when both are anchored at the root and no modelled expansion can make them name one path, and leaves every existing rule rejecting and accepting exactly the operations it rejects and accepts today
 task_types:
   - template_workflow
@@ -47,9 +47,9 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
-  - docs/plan/active/236-accept-a-bounded-fixture-construct-set.md
+  - docs/plan/checked/2026/08/16-31/236-accept-a-bounded-fixture-construct-set.md
 successor_plans:
-  - docs/plan/active/234-derive-fixture-name-bindings-from-tokens.md
+  - docs/plan/replanned/2026/08/16-31/234-derive-fixture-name-bindings-from-tokens.md
   - docs/plan/active/235-settle-fixture-words-from-a-modelled-grammar.md
 inherited_acceptance_digests:
   - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
@@ -62,7 +62,7 @@ integration_gates:
   - do not edit tests/copier-update.sh in this plan; Plan 227 owns the fixture runtime
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
   - do not change which operations any existing rule reports in this plan; the model is added, not applied
-  - Plan 234 must be checked and its exact checked archive path must replace this active predecessor before implementation
+  - Plan 236 must be checked and its exact checked archive path must replace this active predecessor before implementation
   - Plan 233 must start only after this plan is checked and its exact checked archive path replaces the active dependency
 checked_summary_ja: 語の解決を列挙した文法だけに限定し、根から辿れる語だけを比較する。
 
@@ -81,7 +81,7 @@ checked_summary_ja: 語の解決を列挙した文法だけに限定し、根か
 ## Tasks
 
 - [ ] Enumerate the word grammar the checker settles: the quoting forms, the literal path characters, and the expansion forms it models, and report unproven for any word that writes anything else.
-- [ ] Settle each modelled name against the bindings Plan 234 derives, resolving each binding where it is written and following call sites outward under a visited set, under a fixed settlement bound.
+- [ ] Settle each modelled name against the bindings Plan 236 derives, resolving each binding where it is written and following call sites outward under a visited set, under a fixed settlement bound.
 - [ ] Anchor a path only from written text that starts at the root or from a substitution the checker reads as one parsed command list, and report every other path unanchored.
 - [ ] Prove two anchored paths separate only when they start from one anchor and no expansion is written at or after the first differing segment, and record the alias precondition the caller must meet.
 - [ ] Cover every spelling the stopped plan recorded, including an unquoted expansion the shell splits, a special parameter, a substitution written in a command word, a value read where it is written, a parent segment, and a substitution list that writes more than one command.
