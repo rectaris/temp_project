@@ -1,7 +1,6 @@
 # Verify Plan 185 runtime acceptance
 
-status: deferred
-completion_deferred_reason: Plans 226 and 227 must be checked before their combined result can be verified against the unchanged Plan 185 acceptance
+status: in_progress
 primary_invariant: the checked destination-aware checker and the checked fixture runtime jointly satisfy the unchanged Plan 185 acceptance, and every downstream plan that referenced Plan 185 resolves to this lineage
 task_types:
   - template_workflow
@@ -45,8 +44,8 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"scripts/lint-project-workflow.sh"}
 predecessor_plans:
-  - docs/plan/active/231-scope-fixture-alternate-path-rule.md
-  - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
+  - docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md
+  - docs/plan/checked/2026/08/16-31/227-complete-bounded-copier-fixture-runtime.md
 successor_plans:
   - docs/plan/active/226-scope-fixture-alternate-path-rule.md
   - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
