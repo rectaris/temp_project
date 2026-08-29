@@ -2949,13 +2949,61 @@ def replan_lineage_pairs() -> dict[str, set[str]]:
     return pairs
 
 
+def restate_checked_reference(
+    text: str, reference: str, archive: str
+) -> str | None:
+    """Restate every whole-token occurrence of one former active path.
+
+    ``str.replace`` is boundary blind, so a longer path token that merely contains
+    the reference, such as one carrying a ``.bak`` suffix or a leading directory
+    segment, would be rewritten into a path that names no plan. Report that text as
+    unadmitted instead of restating part of it. Trailing sentence punctuation is not
+    part of the token, so a reference written at the end of a sentence still moves.
+    """
+
+    parts: list[str] = []
+    index = 0
+    while True:
+        found = text.find(reference, index)
+        if found < 0:
+            break
+        end = found + len(reference)
+        preceding = text[found - 1 : found] if found else ""
+        following = text[end : end + 2]
+        if preceding and preceding in PATH_TOKEN_CHARACTERS:
+            return None
+        if following[:1] and (
+            following[0] in PATH_TOKEN_CHARACTERS - {"."}
+            or (following[0] == "." and following[1:2].isalnum())
+        ):
+            return None
+        parts.append(text[index:found])
+        parts.append(archive)
+        index = end
+    parts.append(text[index:])
+    return "".join(parts)
+
+
 def validate_lineage_reference_transition(
     before: dict[str, str | list[str]],
     after: dict[str, str | list[str]],
     replacements: list[dict[str, Any]],
     label: str,
 ) -> None:
+    """Admit only a reference this repository can still resolve, restated exactly.
+
+    Two replacement classes are admitted. A reference naming a replanned source
+    moves to one checked successor the consuming contract records, because the
+    source itself has no checked archive. A reference naming a plan that was
+    archived as checked moves to that archive, which is the same resolution the
+    activation route performs and which a backlog successor cannot reach through
+    an activation record, because backlog deferral removes the stopped reason
+    that record requires. Everything else rejects, and neither class may change
+    plan identity or status.
+    """
+
     pairs = replan_lineage_pairs()
+    checked_pairs = activation_checked_pairs()
     id_pairs = {
         (Path(source).name[:3], Path(target).name[:3])
         for source, targets in pairs.items()
@@ -2968,15 +3016,36 @@ def validate_lineage_reference_transition(
         if references:
             if len(references) != 1:
                 raise RestructureError(
-                    f"{label} replacement {index} must name exactly one replanned source"
+                    f"{label} replacement {index} must name exactly one unresolvable reference"
                 )
-            candidates = pairs.get(references[0])
+            reference = references[0]
+            candidates = pairs.get(reference)
+            archive = checked_pairs.get(reference)
+            if archive is not None and (ROOT / reference).exists():
+                raise RestructureError(
+                    f"{label} replacement {index} names a path that still resolves"
+                )
+            if candidates and archive is not None:
+                raise RestructureError(
+                    f"{label} replacement {index} names both a replanned source and a checked archive"
+                )
+            if archive is not None:
+                expected = restate_checked_reference(old, reference, archive)
+                if expected is None:
+                    raise RestructureError(
+                        f"{label} replacement {index} extends that reference into a longer path token"
+                    )
+                if new != expected:
+                    raise RestructureError(
+                        f"{label} replacement {index} does not restate that reference as its checked archive"
+                    )
+                continue
             if not candidates:
                 raise RestructureError(
-                    f"{label} replacement {index} names no replanned source with a checked successor"
+                    f"{label} replacement {index} names no checked archive and no replanned source with a checked successor"
                 )
             expected = {
-                old.replace(references[0], candidate) for candidate in candidates
+                old.replace(reference, candidate) for candidate in candidates
             }
             if new not in expected:
                 raise RestructureError(

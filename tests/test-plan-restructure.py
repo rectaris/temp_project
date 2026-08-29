@@ -16,6 +16,7 @@ import unittest
 import shutil
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -6359,6 +6360,203 @@ class PlanRestructureTest(unittest.TestCase):
                 "lineage",
             )
         self.assertIn("requires an unstarted plan", str(started.exception))
+
+    def test_lineage_rebinding_admits_a_checked_archive_of_the_same_plan(
+        self,
+    ) -> None:
+        """A backlog successor cannot reach an activation record, so it rebinds here."""
+
+        module, successor_path, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("checked_lineage")
+        )
+        self.assertEqual(
+            module.activation_checked_pairs().get(successor_path), checked_path
+        )
+        self.assertNotIn(successor_path, module.replan_lineage_pairs())
+        before = {
+            "status": "backlog",
+            "predecessor_plans": [successor_path],
+            "write_scope": ["docs/agent/spec-index.yaml"],
+        }
+        after = {**before, "predecessor_plans": [checked_path]}
+        accepted = [
+            {
+                "scope": "manifest",
+                "field": "predecessor_plans",
+                "old": f"  - {successor_path}\n",
+                "new": f"  - {checked_path}\n",
+                "count": 1,
+            }
+        ]
+        module.validate_lineage_reference_transition(
+            before, after, accepted, "lineage"
+        )
+
+        wrong = copy.deepcopy(accepted)
+        wrong[0]["new"] = "  - docs/plan/checked/2020/01/01-15/099-other.md\n"
+        with self.assertRaises(module.RestructureError) as target:
+            module.validate_lineage_reference_transition(
+                before, after, wrong, "lineage"
+            )
+        self.assertIn("restate that reference as its checked archive", str(target.exception))
+
+        absent = copy.deepcopy(accepted)
+        absent[0]["old"] = "  - docs/plan/active/099-absent.md\n"
+        with self.assertRaises(module.RestructureError) as missing:
+            module.validate_lineage_reference_transition(
+                before, after, absent, "lineage"
+            )
+        self.assertIn("names no checked archive", str(missing.exception))
+
+        paired = copy.deepcopy(accepted)
+        paired[0]["old"] = f"  - {successor_path}\n  - {self.source_path}\n"
+        with self.assertRaises(module.RestructureError) as several:
+            module.validate_lineage_reference_transition(
+                before, after, paired, "lineage"
+            )
+        self.assertIn("exactly one unresolvable reference", str(several.exception))
+
+        with mock.patch.object(
+            module,
+            "replan_lineage_pairs",
+            return_value={successor_path: {checked_path}},
+        ):
+            with self.assertRaises(module.RestructureError) as both:
+                module.validate_lineage_reference_transition(
+                    before, after, accepted, "lineage"
+                )
+        self.assertIn("both a replanned source and a checked archive", str(both.exception))
+
+        resident = self.repo / successor_path
+        resident.parent.mkdir(parents=True, exist_ok=True)
+        resident.write_text("# resident\n", encoding="utf-8")
+        try:
+            with self.assertRaises(module.RestructureError) as live:
+                module.validate_lineage_reference_transition(
+                    before, after, accepted, "lineage"
+                )
+        finally:
+            resident.unlink()
+        self.assertIn("still resolves", str(live.exception))
+
+        with self.assertRaises(module.RestructureError) as started:
+            module.validate_lineage_reference_transition(
+                {**before, "status": "in_progress"},
+                {**after, "status": "in_progress"},
+                accepted,
+                "lineage",
+            )
+        self.assertIn("requires an unstarted plan", str(started.exception))
+
+        repeated = [
+            {
+                "scope": "manifest",
+                "field": "context_files",
+                "old": f"  - {successor_path}\n  - {successor_path}\n",
+                "new": f"  - {checked_path}\n  - {checked_path}\n",
+                "count": 1,
+            }
+        ]
+        module.validate_lineage_reference_transition(
+            before, after, repeated, "lineage"
+        )
+        partial = copy.deepcopy(repeated)
+        partial[0]["new"] = f"  - {checked_path}\n  - {successor_path}\n"
+        with self.assertRaises(module.RestructureError) as half_moved:
+            module.validate_lineage_reference_transition(
+                before, after, partial, "lineage"
+            )
+        self.assertIn(
+            "restate that reference as its checked archive", str(half_moved.exception)
+        )
+
+        longer = copy.deepcopy(accepted)
+        longer[0]["old"] = f"  - {successor_path}.bak\n"
+        longer[0]["new"] = f"  - {checked_path}.bak\n"
+        with self.assertRaises(module.RestructureError) as token:
+            module.validate_lineage_reference_transition(
+                before, after, longer, "lineage"
+            )
+        self.assertIn("extends that reference into a longer path token", str(token.exception))
+
+        mixed = copy.deepcopy(accepted)
+        mixed[0]["old"] = f"  - {successor_path}\n  - {successor_path}.bak\n"
+        mixed[0]["new"] = f"  - {checked_path}\n  - {checked_path}.bak\n"
+        with self.assertRaises(module.RestructureError) as sibling:
+            module.validate_lineage_reference_transition(
+                before, after, mixed, "lineage"
+            )
+        self.assertIn(
+            "extends that reference into a longer path token", str(sibling.exception)
+        )
+
+        leading = copy.deepcopy(accepted)
+        leading[0]["old"] = f"  - some/{successor_path}\n"
+        leading[0]["new"] = f"  - some/{checked_path}\n"
+        with self.assertRaises(module.RestructureError) as prefix:
+            module.validate_lineage_reference_transition(
+                before, after, leading, "lineage"
+            )
+        self.assertIn(
+            "extends that reference into a longer path token", str(prefix.exception)
+        )
+
+        sentence = copy.deepcopy(accepted)
+        sentence[0]["scope"] = "body"
+        sentence[0]["field"] = "body"
+        sentence[0]["old"] = f"The contract is defined by {successor_path}. Follow it.\n"
+        sentence[0]["new"] = f"The contract is defined by {checked_path}. Follow it.\n"
+        module.validate_lineage_reference_transition(
+            before, after, sentence, "lineage"
+        )
+
+    def test_a_reference_with_two_checked_archives_is_ambiguous(self) -> None:
+        """An active path that names two archives proves no single target."""
+
+        module, successor_path, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("ambiguous_lineage")
+        )
+        duplicate = (
+            f"docs/plan/checked/1999/01/01-15/{Path(successor_path).name}"
+        )
+        target = self.repo / duplicate
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            (self.repo / checked_path).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        index = self.repo / "docs/plan/checked.md"
+        index.write_text(
+            index.read_text(encoding="utf-8")
+            + f"{Path(successor_path).name[:3]}\t{duplicate}\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(module.RestructureError) as ambiguous:
+            module.activation_checked_pairs()
+        self.assertIn("multiple checked archives", str(ambiguous.exception))
+        with self.assertRaises(module.RestructureError) as rebinding:
+            module.validate_lineage_reference_transition(
+                {
+                    "status": "backlog",
+                    "predecessor_plans": [successor_path],
+                    "write_scope": ["docs/agent/spec-index.yaml"],
+                },
+                {
+                    "status": "backlog",
+                    "predecessor_plans": [checked_path],
+                    "write_scope": ["docs/agent/spec-index.yaml"],
+                },
+                [
+                    {
+                        "scope": "manifest",
+                        "field": "predecessor_plans",
+                        "old": f"  - {successor_path}\n",
+                        "new": f"  - {checked_path}\n",
+                        "count": 1,
+                    }
+                ],
+                "lineage",
+            )
+        self.assertIn("multiple checked archives", str(rebinding.exception))
 
     def test_lifecycle_evolution_admits_a_rebound_backlog_baseline(self) -> None:
         module = self.load_restructure_module("lifecycle_backlog_module")

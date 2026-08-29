@@ -186,3 +186,4 @@ id	path
 186	docs/plan/checked/2026/08/16-31/186-bind-connected-copier-fixture-checker.md
 238	docs/plan/checked/2026/08/16-31/238-reject-unmodelled-copier-writes-to-the-sanctioned-destination.md
 242	docs/plan/checked/2026/08/16-31/242-git-managed-shared-html.md
+243	docs/plan/checked/2026/08/16-31/243-admit-lineage-rebinding-for-checked-predecessors.md
