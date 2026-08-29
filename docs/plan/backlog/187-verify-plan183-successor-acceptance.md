@@ -46,7 +46,7 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/227-complete-bounded-copier-fixture-runtime.md
-  - docs/plan/active/186-bind-connected-copier-fixture-checker.md
+  - docs/plan/checked/2026/08/16-31/186-bind-connected-copier-fixture-checker.md
 replan_source: docs/plan/active/183-build-bounded-copier-transition-fixture.md
 replan_contract: docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
 integration_gates:

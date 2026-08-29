@@ -1,3 +1,3 @@
 # Active Plan
 
-id	path	status
+No active development items.
