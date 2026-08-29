@@ -1,6 +1,6 @@
 # Complete the bounded Copier fixture runtime
 
-status: in_progress
+status: checked
 primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup under the checked destination-aware checker
 task_types:
   - template_workflow
