@@ -1,6 +1,6 @@
 # Resolve a relative update wrapper against its subshell directory
 
-status: in_progress
+status: ready_to_archive
 primary_invariant: a relative installed-workflow command word inside a subshell whose working directory is settled resolves to that directory, and stays unproven whenever the directory is not settled
 task_types:
   - template_workflow
