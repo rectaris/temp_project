@@ -4022,9 +4022,7 @@ def _check_alternate_paths(fixture: _Fixture, child: _Operation) -> list[Finding
     for operation in fixture.operations:
         if operation.offset == child.offset or not operation.reachable:
             continue
-        if not _dispatches_update(fixture, operation) and not _runs_an_update(
-            fixture, operation
-        ):
+        if not _runs_an_update(fixture, operation):
             continue
         if _updates_a_separate_project(
             fixture, operation, reserved, links, unplaced
@@ -4229,9 +4227,10 @@ def _update_reading(
     literals = _run_literals(run)
     places = _command_word_places(literals)
     for place in places:
-        settled = _workflow_destinations(
-            _settle_operand(fixture, run, run.words[place])
-        )
+        paths = _settle_operand(fixture, run, run.words[place])
+        if _names_no_update_script(paths):
+            continue
+        settled = _workflow_destinations(paths)
         if settled is not None:
             return settled
         if _names_an_installed_workflow(run.words[place].text):
@@ -4242,7 +4241,88 @@ def _update_reading(
             continue
         if place + 1 < len(literals) and literals[place + 1] == UPDATE_SUBCOMMAND:
             return _copier_destinations(fixture, run, literals, place)
+    if _forwards_an_update(fixture, operation):
+        return frozenset()
     return None
+
+
+def _names_an_update_script(name: str) -> bool:
+    """Report whether one written script name may run a Copier update.
+
+    An installed workflow holds scripts that never update anything, and the
+    name of a script is written text this checker reads. Only a name that
+    says it carries a Copier update is read as one.
+
+    This reading holds one invariant on the installed workflow it reads: an
+    installed script that can carry a Copier update says both words in its
+    own name. A future update entry point that drops either word would be
+    read as no update, so a new update entry point must keep that name.
+    """
+
+    return _mentions(name, COPIER_MARKER) and _mentions(name, UPDATE_MARKER)
+
+
+def _names_no_update_script(paths: frozenset[_Path]) -> bool:
+    """Report whether every path one command word may name runs no Copier update.
+
+    A command word inside an installed workflow runs an update only when its
+    own written name says so. A name that carries an expansion, a path that
+    names no installed workflow, and a reading that settled nothing all prove
+    nothing, so they leave the operation unproven instead.
+    """
+
+    if not paths:
+        return False
+    for _, segments in paths:
+        if WORKFLOW_DIRECTORY not in segments:
+            return False
+        if segments.index(WORKFLOW_DIRECTORY) + 1 >= len(segments):
+            return False
+        name = segments[-1]
+        if _carries_expansion(name) or _names_an_update_script(name):
+            return False
+    return True
+
+
+def _forwards_an_update(fixture: _Fixture, operation: _Operation) -> bool:
+    """Report whether one operation carries an update its own words never write.
+
+    A dispatch may run the update wrapper from inside an interpreter string,
+    from behind a command prefix, or through a helper that runs one of its own
+    arguments. The words of the run say nothing about any of these, so every
+    value the expansion may carry is read instead, and a match leaves the
+    destination unproven rather than accepted.
+    """
+
+    return any(
+        _forwarded_dispatch_updates(fixture, operation, dispatch.lower())
+        for dispatch in fixture.dispatches(operation)
+    )
+
+
+def _forwarded_dispatch_updates(
+    fixture: _Fixture, operation: _Operation, dispatch: str
+) -> bool:
+    """Report whether one expansion of one operation may carry a Copier update."""
+
+    words = dispatch.split()
+    word = words[0] if words else ""
+    if _mentions(word, UPDATE_WRAPPER_MARKER):
+        return True
+    if _mentions(dispatch, UPDATE_WRAPPER_MARKER) and (
+        _is_interpreter(word)
+        or _strip(word) in COMMAND_PREFIXES
+        or _forwards_to_interpreter(fixture, operation.name)
+        or _forwards_positional(fixture, operation.name)
+    ):
+        return True
+    if not _mentions(word, COPIER_MARKER):
+        return False
+    return any(
+        _strip(text) == UPDATE_SUBCOMMAND
+        for text in words[1:]
+        if not _strip(text).startswith(OPTION_MARK)
+    )
 
 
 def _names_an_installed_workflow(written: str) -> bool:
@@ -4250,11 +4330,15 @@ def _names_an_installed_workflow(written: str) -> bool:
 
     The written text is read as well as the settled path, because a word this
     checker cannot settle still runs the update wrapper it writes, and a
-    dispatch this checker skips is a dispatch it never rejects.
+    dispatch this checker skips is a dispatch it never rejects. A command word
+    whose own name says it carries a Copier update is read the same way,
+    because the name is what the fixture writes about what runs.
     """
 
-    return _mentions(written, WORKFLOW_DIRECTORY) or _mentions(
-        written, UPDATE_WRAPPER_MARKER
+    return (
+        _mentions(written, WORKFLOW_DIRECTORY)
+        or _mentions(written, UPDATE_WRAPPER_MARKER)
+        or _names_an_update_script(written)
     )
 
 
@@ -4283,40 +4367,6 @@ def _update_destinations(
     """Return every project one operation may update, or nothing when unproven."""
 
     return _update_reading(fixture, operation) or frozenset()
-
-
-def _dispatches_update(fixture: _Fixture, operation: _Operation) -> bool:
-    """Report whether one command runs a Copier update.
-
-    Naming the update wrapper is not running it: a fixture legitimately checks
-    that the wrapper exists before starting it. Only a command word that
-    resolves to the wrapper, or to a Copier dispatch that carries an update,
-    is an update path. Every value an expansion may carry is read, because one
-    of them is what runs.
-    """
-
-    return any(
-        _dispatch_runs_update(fixture, operation, dispatch.lower())
-        for dispatch in fixture.dispatches(operation)
-    )
-
-
-def _dispatch_runs_update(
-    fixture: _Fixture, operation: _Operation, dispatch: str
-) -> bool:
-    word = dispatch.split(" ", 1)[0]
-    if _mentions(word, UPDATE_WRAPPER_MARKER):
-        return True
-    if _mentions(dispatch, UPDATE_WRAPPER_MARKER) and (
-        _is_interpreter(word)
-        or _strip(word) in COMMAND_PREFIXES
-        or _forwards_to_interpreter(fixture, operation.name)
-        or _forwards_positional(fixture, operation.name)
-    ):
-        return True
-    if not _mentions(word, COPIER_MARKER):
-        return False
-    return _mentions(dispatch, UPDATE_MARKER)
 
 
 def _forwards_positional(fixture: _Fixture, name: str | None) -> bool:

@@ -2664,6 +2664,116 @@ class AlternatePathDestinationTest(ContractSupportTest):
         )
 
 
+class ResolutionAuthorityTest(ContractSupportTest):
+    """Cover the resolution model as the single authority on what runs an update."""
+
+    WRAPPER = "$other/.project-agent-workflow/scripts/update-from-copier.sh"
+
+    def assert_second_path_rejected(self, inserted: str) -> None:
+        self.assert_rejected(
+            COMPLIANT + 'other="$tmp/other"\n' + inserted,
+            RULE_ALTERNATE_PATH,
+            "second Copier update path",
+        )
+
+    def test_a_wrapper_inside_an_interpreter_string_is_rejected(self) -> None:
+        """The words of the run say nothing about what the string runs."""
+
+        self.assert_second_path_rejected(
+            "sh -c '\"$1/.project-agent-workflow/scripts/update-from-copier.sh\" "
+            '--defaults\' _ "$other"\n'
+        )
+
+    def test_a_wrapper_behind_a_command_prefix_is_rejected(self) -> None:
+        """A prefix that is no launcher still runs the word written after it."""
+
+        self.assert_second_path_rejected('nice "%s" --defaults\n' % self.WRAPPER)
+
+    def test_a_wrapper_a_helper_forwards_is_rejected(self) -> None:
+        """A helper that runs one of its own arguments runs what the call site writes."""
+
+        self.assert_second_path_rejected(
+            "runit() {\n"
+            '  "$1" --defaults\n'
+            "}\n"
+            'runit "%s"\n' % self.WRAPPER
+        )
+
+    def test_a_wrapper_a_helper_interprets_is_rejected(self) -> None:
+        """A helper that runs an interpreter on its arguments runs the written script."""
+
+        self.assert_second_path_rejected(
+            "runsh() {\n  sh \"$1\"\n}\n" 'runsh "%s"\n' % self.WRAPPER
+        )
+
+    def test_an_update_carried_by_an_expansion_is_rejected(self) -> None:
+        """A command word this checker never reads still carries the subcommand."""
+
+        self.assert_second_path_rejected(
+            "tool=copier\n" '"$tool" update -q --defaults "$other"\n'
+        )
+
+    def test_a_copy_whose_operands_write_the_update_word_is_accepted(self) -> None:
+        """A copy is proved to be no update, so the words its operands write are read only as paths."""
+
+        self.assert_accepted(
+            COMPLIANT
+            + 'src="$tmp/update-source"\n'
+            'out="$tmp/other-update"\n'
+            'run_copier copy -q -f --vcs-ref v1.2.1 "$src" "$out"\n'
+        )
+
+    def test_an_update_of_a_separate_project_stays_accepted(self) -> None:
+        self.assert_accepted(
+            COMPLIANT
+            + 'out="$tmp/other"\n'
+            'run_copier update -q --defaults "$out"\n'
+        )
+
+    def test_a_non_update_script_of_an_installed_workflow_is_accepted(self) -> None:
+        """A script of an installed workflow runs an update only when its name says so."""
+
+        self.assert_accepted(
+            COMPLIANT
+            + 'other="$tmp/other"\n'
+            '"$other/.project-agent-workflow/scripts/context-compress.sh" doc tag\n'
+        )
+        self.assert_accepted(
+            COMPLIANT + ".project-agent-workflow/scripts/context-compress.sh doc tag\n"
+        )
+
+    def test_an_update_script_of_an_installed_workflow_is_still_read(self) -> None:
+        """A name that writes both marks keeps its unanchored destination unproven."""
+
+        self.assert_second_path_rejected(
+            ".project-agent-workflow/scripts/run-copier-update.sh --force\n"
+        )
+
+    def test_a_script_name_written_by_an_expansion_is_unproven(self) -> None:
+        """A name this checker cannot read may be the update wrapper itself."""
+
+        self.assert_second_path_rejected(
+            ".project-agent-workflow/scripts/$script --defaults\n"
+        )
+
+    def test_a_read_script_name_keeps_its_destination_read(self) -> None:
+        """Reading the name settles what runs, not which project it runs against."""
+
+        self.assert_accepted(
+            COMPLIANT
+            + 'other="$tmp/other"\n'
+            "script=update-from-copier.sh\n"
+            '"$other/.project-agent-workflow/scripts/$script" --defaults\n'
+        )
+        self.assert_rejected(
+            COMPLIANT
+            + "script=update-from-copier.sh\n"
+            '"$project/.project-agent-workflow/scripts/$script" --defaults\n',
+            RULE_ALTERNATE_PATH,
+            "second Copier update path",
+        )
+
+
 class SnapshotIndirectionTest(ContractSupportTest):
     SNAPSHOT = "$project/scripts/snapshot-validation-witness-provenance.py"
 
