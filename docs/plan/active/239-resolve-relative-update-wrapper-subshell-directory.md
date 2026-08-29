@@ -1,6 +1,6 @@
 # Resolve a relative update wrapper against its subshell directory
 
-status: deferred
+status: in_progress
 primary_invariant: a relative installed-workflow command word inside a subshell whose working directory is settled resolves to that directory, and stays unproven whenever the directory is not settled
 task_types:
   - template_workflow
@@ -55,7 +55,6 @@ integration_gates:
   - do not admit a relative command word whose subshell directory does not settle; the checked Plan 231 decision that an unanchored destination stays unproven holds everywhere else
   - leave the unresolved-dispatch admission unchanged; independent review found relaxing it unsound for a fixture that is not a transition
   - Plan 227 resumes only after this plan is checked and its exact checked archive path replaces the active dependency
-completion_deferred_reason: Plan 237 established the resolution model as the single update authority and this plan extends that model to a relative command word, so it starts only after Plan 237 is checked.
 
 ## Decisions
 
