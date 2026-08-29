@@ -17,9 +17,10 @@ script cannot prove any operation contract.
 The contract has two layers:
 
 - Copier operation rules apply to every supplied fixture. They require unique
-  version commits, exactly one inventory-driven copy and staging region, and
-  no direct invocation of the migration snapshot script or the `copier`
-  binary. These rules describe operations the fixture already owns, so they
+  version commits, exactly one inventory-driven copy and staging region, no
+  direct invocation of the migration snapshot script or the `copier` binary,
+  and no redefinition or shadowing of a command a bound observation runs.
+  These rules describe operations the fixture already owns, so they
   hold for a fixture that carries no migration transition region.
 - Transition rules apply only when the supplied fixture writes a bounded
   migration transition, which is anchored on the transition event vocabulary
@@ -77,6 +78,7 @@ if __package__:
         EFFECT_CONTINUE,
         EFFECT_EXIT,
         EFFECT_RETURN,
+        EFFECT_SOURCE,
         EFFECT_TRAP,
         ExecutionGraph,
         LOOP_BODY,
@@ -109,6 +111,7 @@ else:  # pragma: no cover - exercised by the documented direct CLI contract
         EFFECT_CONTINUE,
         EFFECT_EXIT,
         EFFECT_RETURN,
+        EFFECT_SOURCE,
         EFFECT_TRAP,
         ExecutionGraph,
         LOOP_BODY,
@@ -126,6 +129,7 @@ __all__ = [
     "RULE_BOUNDED_POLL",
     "RULE_CHILD_PID",
     "RULE_CHILD_REAP",
+    "RULE_COMMAND_SHADOWING",
     "RULE_DIRECT_INVOCATION",
     "RULE_GUARDIAN",
     "RULE_INVENTORY_REGION",
@@ -144,6 +148,7 @@ RULE_STRUCTURE = "structure"
 RULE_VERSION_COMMIT = "version_commit"
 RULE_INVENTORY_REGION = "inventory_region"
 RULE_DIRECT_INVOCATION = "direct_invocation"
+RULE_COMMAND_SHADOWING = "command_shadowing"
 RULE_UPDATE_CHILD = "update_child"
 RULE_CHILD_PID = "child_pid"
 RULE_BOUNDED_POLL = "bounded_poll"
@@ -159,6 +164,7 @@ RULES = (
     RULE_VERSION_COMMIT,
     RULE_INVENTORY_REGION,
     RULE_DIRECT_INVOCATION,
+    RULE_COMMAND_SHADOWING,
     RULE_UPDATE_CHILD,
     RULE_CHILD_PID,
     RULE_BOUNDED_POLL,
@@ -532,6 +538,94 @@ TRANSITION_MARKERS = (
 )
 TERMINATION_SIGNALS = ("term", "sigterm", "15")
 FORCED_SIGNALS = ("kill", "sigkill", "9")
+# The commands one bound observation of the fixture runs. Every rule above
+# reads the written text of an operation, so a fixture that gives one of these
+# names another meaning keeps that committed text while the observation it
+# performs stops happening: `grep` no longer reads the attempt state, `[` no
+# longer compares the poll counter, `kill` no longer signals the child, `read`
+# no longer turns the inventory loop, and `touch` no longer performs the
+# release. The name itself is therefore protected, rather than any single
+# spelling of one redefinition.
+OBSERVED_COMMANDS = (
+    frozenset(
+        {
+            # the bounded poll limit tests and the positive guardian test
+            "[",
+            "test",
+            # the published transition identifier the cleanup handler reads
+            "cat",
+            # the pending and consumed attempt-state assertions
+            "grep",
+            # the guardian identifier recovered from the attempt state
+            "sed",
+            # the child termination, the forced termination, and the
+            # guardian stop
+            "kill",
+            # the poll turn and the termination grace period
+            "sleep",
+            # the bounded child reap
+            "wait",
+            # the guarded exit one bounded poll is proved by
+            "exit",
+            # the cleanup handler every release path is read through
+            "trap",
+            # the inventory loop that drives the copy and staging region
+            "read",
+            # the working directory a Copier write destination is placed from
+            "cd",
+            # the version commits and the inventory staging
+            "git",
+        }
+    )
+    | RELEASE_COMMANDS
+)
+# The observed names a shell resolves as a builtin or a function before it
+# searches `PATH`. A written helper file of one of these names is never the
+# command that runs, so only a declaration can rebind them.
+OBSERVED_BUILTINS = frozenset({"[", "cd", "exit", "kill", "read", "test", "trap", "wait"})
+# A shell finds a command written as a bare name through `PATH`, so a helper
+# file the fixture writes under a searched directory rebinds the command a
+# bound observation runs just as a declaration does.
+SHADOWED_HELPER_COMMANDS = OBSERVED_COMMANDS - OBSERVED_BUILTINS
+# The commands that put a written helper file in place. A redirection writes
+# one as well, and it is read from every operation rather than from this set.
+HELPER_WRITING_COMMANDS = frozenset({"cp", "install", "ln", "mv", "tee", "touch"})
+# The helper-writing commands whose every operand is a path they create. The
+# remaining ones write their last operand, and write inside it when that
+# operand names a directory.
+HELPER_OPERAND_COMMANDS = frozenset({"touch", "tee"})
+# The name of the command search path, its element separator, and the commands
+# that give a name a value without writing it in command position.
+SEARCH_PATH_NAME = "PATH"
+SEARCH_PATH_SEPARATOR = ":"
+EXPORTING_COMMANDS = frozenset({"export", "readonly", "declare", "typeset"})
+# The command that runs another command with an environment it is given, and
+# the commands that bind the name written as their operand rather than reading
+# it as data.
+ENVIRONMENT_COMMANDS = frozenset({"env"})
+NAME_BINDING_COMMANDS = frozenset({"read", "unset", "getopts"})
+# The pieces of one written word that a shell given that word as a program
+# would read as separate words.
+CARRIED_WORD_PATTERN = re.compile(r"[^\s;|&()<>'\"$`]+")
+ESCAPE_MARK = "\\"
+# The written words that open a compound command and the words that close it.
+# A compound the shell may run again is kept apart, because it expands a
+# redirection word once per pass.
+ENCLOSURE_CLOSERS = {
+    "}": frozenset({"{"}),
+    SUBSHELL_CLOSE: frozenset({SUBSHELL_OPEN}),
+    "fi": frozenset({"if"}),
+    "done": frozenset({"for", "while", "until"}),
+    "esac": frozenset({"case"}),
+}
+ENCLOSURE_OPENERS = frozenset({"{", "if", "for", "while", "until", "case"})
+SUBSHELL_OPEN = "("
+SUBSHELL_CLOSE = ")"
+REPEATING_ENCLOSURES = frozenset({"for", "while", "until"})
+# `hash -p` binds one command name to one path ahead of every `PATH` lookup,
+# which is a third way to rebind a name that no checked projection rejects.
+COMMAND_HASH = "hash"
+HASH_PATH_OPTION = "p"
 
 
 class CopierFixtureError(ValueError):
@@ -578,6 +672,13 @@ class _Operation:
     text: str
     redirect_targets: tuple[str, ...] = ()
     conditional_kinds: tuple[frozenset[str], ...] = ()
+    deferred: bool = False
+    """Whether the graph resolves no call site that gives this command values.
+
+    A body reached only through a trap action or a dispatch whose command word
+    is an expansion holds no call environment, so its words are settled
+    against every value the fixture ever binds instead.
+    """
 
     def skippable(self, ignore: frozenset[str] = frozenset()) -> bool:
         """Report whether control can skip this operation.
@@ -1568,9 +1669,33 @@ def _settle_written_word(
 ) -> frozenset[tuple[bool, tuple[str, ...]]]:
     """Return every path one word of one operation may name."""
 
+    if operation.deferred:
+        return _settle_deferred_word(fixture, word)
     return _settle_word(
         word, fixture.bindings_for(operation), fixture.unsettled_names()
     )
+
+
+def _settle_deferred_word(
+    fixture: _Fixture, word: str
+) -> frozenset[tuple[bool, tuple[str, ...]]]:
+    """Return every path one word of an unmodelled body may name.
+
+    No call site the graph resolves says which values such a body holds, and a
+    trap action or a dispatch the graph cannot read runs it at a point no
+    written text fixes, so every value the fixture binds anywhere is read.
+    That names more files than the shell creates and never fewer.
+    """
+
+    unsettled = fixture.unsettled_names()
+    read = _read_names(word)
+    settled: set[tuple[bool, tuple[str, ...]]] = set()
+    for place in _binding_places(fixture, len(fixture.text)):
+        bindings = fixture.bindings_before(place)
+        if not read <= frozenset(bindings):
+            continue
+        settled |= _settle_word(word, bindings, unsettled)
+    return frozenset(settled)
 
 
 def _paths_are_lexically_separate(
@@ -1774,7 +1899,18 @@ def _launched_command(literals: tuple[str | None, ...]) -> str | None:
 def _run_literals(run: _CommandRun) -> tuple[str | None, ...]:
     """Return the text each word of one command reads as, or ``None`` for any other."""
 
-    return tuple(_token_text(word) for word in run.words)
+    return _word_literals(run.words)
+
+
+def _word_literals(words: Sequence[Token]) -> tuple[str | None, ...]:
+    """Return the text each of one command's words reads as, or ``None`` for any other.
+
+    The words are read as a sequence rather than from a written run, because a
+    command written inside an expansion is placed against no written run and
+    still writes the words the checked graph records for it.
+    """
+
+    return tuple(_token_text(word) for word in words)
 
 
 def _basename(literal: str) -> str:
@@ -1831,7 +1967,7 @@ def _written_options(literals: tuple[str | None, ...], index: int) -> list[str]:
     return options
 
 
-def _written_operands(run: _CommandRun, literals: tuple[str | None, ...], index: int):
+def _written_operands(words: Sequence[Token], literals: tuple[str | None, ...], index: int):
     """Return every operand written after one command word.
 
     An option this checker cannot read may take its own operand, so a run that
@@ -1847,7 +1983,7 @@ def _written_operands(run: _CommandRun, literals: tuple[str | None, ...], index:
             continue
         if not ended and literal is not None and literal.startswith(OPTION_MARK) and literal != OPTION_MARK:
             continue
-        operands.append(run.words[place])
+        operands.append(words[place])
     return operands
 
 
@@ -2024,7 +2160,7 @@ def _symlinked_paths(fixture: _Fixture) -> tuple[frozenset[_Path], bool]:
             ):
                 unplaced = True
             continue
-        operands = _written_operands(run, literals, index)
+        operands = _written_operands(run.words, literals, index)
         if len(operands) != 2 or _names_target_directory(options):
             unplaced = True
             continue
@@ -2059,7 +2195,7 @@ def _moves(fixture: _Fixture) -> list[tuple[frozenset[_Path], frozenset[_Path]]]
             if any(option.startswith(OPTION_END) for option in options):
                 relocations.append((frozenset(), frozenset()))
             continue
-        operands = _written_operands(run, literals, index)
+        operands = _written_operands(run.words, literals, index)
         if len(operands) != 2 or _names_target_directory(options):
             relocations.append((frozenset(), frozenset()))
             continue
@@ -4613,6 +4749,1887 @@ def _forwards_positional(fixture: _Fixture, name: str | None) -> bool:
     return False
 
 
+def _check_command_shadowing(fixture: _Fixture) -> list[Finding]:
+    """Reject a fixture that gives an observed command name another meaning.
+
+    Every other rule reads what one operation is written as. A rebinding of the
+    command name leaves that written text exactly as committed while the
+    command it names stops being the command the observation depends on, so the
+    assertion still reads as present and proves nothing. The defect class is
+    the rebinding itself, not one spelling of it, so every name a bound
+    observation runs is rejected rather than only the names one known mutation
+    happens to take.
+
+    Five ways to rebind a name are reachable in the shells this fixture may
+    run under: a function declaration, an alias, a helper file a `PATH` lookup
+    finds first, a search path written for one command rather than for the
+    shell, and a `hash -p` entry that wins over any lookup. The alias is
+    already rejected by the checked execution graph, whose parse-time
+    expansion has no bounded graph, and a duplicate or nested declaration is
+    already rejected by the checked function table; this rule never restates
+    them. The remaining four are rejected here.
+
+    One boundary is explicit. A directory the fixture puts on the search path
+    without writing its contents, and the search path its caller already holds,
+    are outside the supplied bytes, so a command installed there is not
+    something this checker proves anything about.
+    """
+
+    findings: list[Finding] = []
+    for declaration in fixture.table.declarations:
+        if declaration.name not in OBSERVED_COMMANDS:
+            continue
+        findings.append(
+            Finding(
+                RULE_COMMAND_SHADOWING,
+                f"the fixture declares `{declaration.name}` as a function, "
+                "which makes every bound observation that runs it vacuous",
+                declaration.start,
+            )
+        )
+    findings.extend(_hashed_lookups(fixture))
+    findings.extend(_prefixed_lookups(fixture))
+    findings.extend(_shadowing_helpers(fixture))
+    return findings
+
+
+def _operation_words(operation: _Operation) -> tuple[Token, ...]:
+    """Return the words the checked graph records for one operation.
+
+    A command written inside an expansion is placed against no written run,
+    so reading its operands from a run would read a command that writes files
+    and a command that writes nothing exactly alike. The checked graph records
+    the words of both, so every operand reading is taken from there.
+    """
+
+    return operation.node.words
+
+
+def _hashed_lookups(fixture: _Fixture) -> list[Finding]:
+    """Reject a `hash` entry that binds a command name to a written path.
+
+    `hash -p path name` is consulted before `PATH`, so it rebinds a name
+    without declaring anything and without writing a file the search path
+    reaches. Every word is read rather than the resolved command name alone,
+    because a launcher such as `command` or `builtin` carries the same entry,
+    and the words that follow are read as written rather than as the options
+    this checker can settle, because a word it cannot read may be that option.
+    A body reached only by a call the graph cannot resolve is read as well,
+    because the entry it writes rebinds the name for the whole shell.
+    """
+
+    findings: list[Finding] = []
+    deferred: list[tuple[_Operation, Position | None]] = []
+    for declaration in _deferred_bodies(fixture):
+        deferred.extend(
+            (operation, declaration.name_token.start)
+            for operation in _deferred_operations(fixture, declaration) or ()
+        )
+    reachable = [
+        (operation, operation.position)
+        for operation in fixture.operations
+        if operation.reachable
+    ]
+    reported: set[int | None] = set()
+    for operation, position in reachable + deferred:
+        written = None if operation.position is None else operation.position.offset
+        if written in reported:
+            # The same statement is read once as a modelled command and once
+            # as a deferred one, and it binds the one name either way.
+            continue
+        literals = _word_literals(_operation_words(operation))
+        index = _command_index(literals, frozenset({COMMAND_HASH}))
+        if index < 0:
+            continue
+        if not any(
+            option is None
+            or (
+                option.startswith(OPTION_MARK)
+                and option != OPTION_MARK
+                and HASH_PATH_OPTION in option[1:]
+            )
+            for option in literals[index + 1 :]
+        ):
+            continue
+        reported.add(written)
+        findings.append(
+            Finding(
+                RULE_COMMAND_SHADOWING,
+                "the fixture binds a command name through `hash`, which is "
+                "read before the command a bound observation runs",
+                position,
+            )
+        )
+    return findings
+
+
+def _prefixed_lookups(fixture: _Fixture) -> list[Finding]:
+    """Reject a search path written for one command rather than for the shell.
+
+    A value written in front of one command, and a value `env` carries, decide
+    what that command resolves to, so a search path written there settles what
+    the observation runs from text this checker never sees. Every word of the
+    run is read, because a launcher and a declared wrapper both forward to the
+    command the observation depends on while the word written first is neither.
+    The admission therefore requires proof that the run reaches no observed
+    command: a word this checker cannot read, and a call into a function whose
+    body this checker would have to follow, are both refused.
+    """
+
+    findings: list[Finding] = []
+    for run in fixture.command_runs() + _nested_runs(fixture):
+        if not run.words:
+            continue
+        if not _writes_a_search_path(fixture, run):
+            continue
+        named = _reached_by_lookup(
+            fixture,
+            _run_literals(run),
+            tuple(word.text for word in run.words),
+        )
+        if named is None:
+            continue
+        findings.append(
+            Finding(
+                RULE_COMMAND_SHADOWING,
+                f"the fixture writes a search path in front of {named}, "
+                "which decides what a bound observation runs",
+                run.words[0].start,
+            )
+        )
+    return findings
+
+
+def _reached_by_lookup(
+    fixture: _Fixture,
+    literals: tuple[str | None, ...],
+    words: tuple[str, ...] = (),
+) -> str | None:
+    """Return how one run reaches an observed command, or nothing when it cannot.
+
+    Every word is read, not only the command word, because a program that
+    execs its own argument reaches an observed command while being written
+    first itself, and no list of such programs is bounded. A word is read for
+    the command names it carries as well as for the name it is, because an
+    interpreter given a program text runs the commands written inside that one
+    word, and a word this checker cannot resolve is read for the names its
+    written text carries, because that text is still written here. A word that
+    could be a program text at all is refused rather than searched, because
+    the shell unquoting this checker does not perform would decide which names
+    that text holds. A launcher
+    may also reach a command written as an expansion, and a
+    function this fixture declares runs the commands its body writes, so
+    neither proves the observation is untouched. A run this checker reads
+    completely, whose words carry no observed command name, reaches none.
+    """
+
+    if not literals:
+        return None
+    first = literals[0]
+    if first is None:
+        return "a command this checker cannot read"
+    name = _basename(first)
+    if fixture.declares(name):
+        return f"the declared `{name}` wrapper"
+    index = _command_index(literals, OBSERVED_COMMANDS)
+    if index >= 0:
+        return f"`{_basename(literals[index] or '')}`"
+    for place, literal in enumerate(literals):
+        source = literal
+        if source is None and place < len(words):
+            source = words[place]
+        carried = _carried_command(source)
+        if carried is not None:
+            return f"`{carried}`"
+        if place and source is not None and _may_carry_a_program(source):
+            return "a command this checker cannot read"
+    if name not in LAUNCHER_COMMANDS:
+        return None
+    if any(literal is None for literal in literals[1:]):
+        return "a command this checker cannot read"
+    if any(fixture.declares(_basename(literal)) for literal in literals[1:] if literal):
+        return "a command this checker cannot read"
+    return None
+
+
+def _may_carry_a_program(written: str) -> bool:
+    """Report whether one written word could hold a program rather than data.
+
+    A program text is written as several words separated by blanks, and a
+    shell splits such a word into commands and arguments this checker would
+    have to unquote to read. That unquoting is not performed here, so a word
+    written with a blank is refused instead of searched. A word written
+    without a blank spells one name, which the caller reads directly.
+    """
+
+    return any(character.isspace() for character in written)
+
+
+def _carried_command(literal: str | None) -> str | None:
+    """Return the observed command name one written word carries, if any.
+
+    A word given to an interpreter carries a whole program, so the observed
+    names written inside it are found by reading the word as the shell would
+    read a command line. This is deliberately read for every word rather than
+    for the words of a listed set of interpreters, because the set of programs
+    that run a program text they are given is not bounded. The escape a shell
+    removes before it reads a command name is removed here as well, so a name
+    written with one is read as the name it resolves to.
+    """
+
+    if literal is None:
+        return None
+    for piece in CARRIED_WORD_PATTERN.findall(literal):
+        for name in (_basename(piece), _basename(piece.replace(ESCAPE_MARK, ""))):
+            if name in OBSERVED_COMMANDS:
+                return name
+    return None
+
+
+def _nested_runs(fixture: _Fixture) -> tuple[_CommandRun, ...]:
+    """Return every command written inside an expansion the shell runs.
+
+    The checked lexical projection reports the record sequence of each such
+    region, so a command written there is read exactly as a command written at
+    the top level. Without it a search path written inside an expansion would
+    decide what an observation runs while this checker read the expansion as
+    one opaque word.
+    """
+
+    runs: list[_CommandRun] = []
+    for region in shell_lexical.executable_regions(fixture.records):
+        runs.extend(
+            _command_runs(shell_lexical.LexicalProjection(fixture.text, region))
+        )
+    return tuple(runs)
+
+
+def _writes_a_search_path(fixture: _Fixture, run: _CommandRun) -> bool:
+    """Report whether one run gives the search path a value for its command alone.
+
+    A value written in front of the command is one such form. A value carried
+    as an argument of the command that builds an environment is the other,
+    because that command searches with the value it was given. Every other
+    command reads such a word as data, so only these two forms are read here,
+    and a value an exporting command carries changes the shell's own search
+    path and is read where the searched directories are.
+    """
+
+    if any(name == SEARCH_PATH_NAME for _, name in run.assignment_names()):
+        return True
+    place = _command_index(_run_literals(run), ENVIRONMENT_COMMANDS)
+    if place < 0:
+        return False
+    return any(
+        _assignment_name(token) == SEARCH_PATH_NAME
+        for token in run.words[place + 1 :]
+    )
+
+
+def _search_path_values(fixture: _Fixture, run: _CommandRun) -> tuple[Token, ...]:
+    """Return every word that gives the search path a value the shell keeps.
+
+    A value written in front of a command applies to that command alone and
+    leaves the shell's own search path unchanged, so it is read by the
+    prefix rule instead of here.
+    """
+
+    if not run.words:
+        return tuple(
+            token for token, name in run.assignment_names() if name == SEARCH_PATH_NAME
+        )
+    command = run.command_name(fixture)
+    if command is None or _basename(command) not in EXPORTING_COMMANDS:
+        return ()
+    return tuple(
+        token
+        for token in run.words[1:]
+        if _assignment_name(token) == SEARCH_PATH_NAME
+    )
+
+
+def _binds_the_search_path_unreadably(fixture: _Fixture) -> bool:
+    """Report whether the fixture gives the search path a value no word carries.
+
+    A shell also binds a name through `read`, through `unset`, through a loop
+    head, and through any command this checker cannot read as one name, and
+    none of them writes the value this checker settles the searched
+    directories from. A fixture that binds the search path that way searches
+    wherever that value points. Only a command that binds the name it is given
+    is read this way, because every other command reads such a word as data,
+    and only the fixture's own shell is read, because a binding written inside
+    an expansion is left behind with the subshell that made it.
+    """
+
+    for run in fixture.command_runs():
+        for index, token in enumerate(run.tokens[:-1]):
+            if _token_text(token) != LOOP_KEYWORD:
+                continue
+            if _token_text(run.tokens[index + 1]) == SEARCH_PATH_NAME:
+                return True
+        if not run.words:
+            continue
+        if not _binds_a_written_name(fixture, run):
+            continue
+        for token in run.words[1:]:
+            if _token_text(token) == SEARCH_PATH_NAME:
+                return True
+    return False
+
+
+def _binds_a_written_name(fixture: _Fixture, run: _CommandRun) -> bool:
+    """Report whether one run binds the name written as its operand.
+
+    The command is read past every launcher, because a launcher runs the
+    command written after it and binds nothing itself, and reading an
+    unresolved command word as unreadable would make every launcher bind the
+    name it merely carries. An option written after a launcher belongs to that
+    launcher rather than to the command it runs, so it is read past as well. A
+    command word this checker cannot read may be any command, so it is read as
+    binding.
+    """
+
+    launched = False
+    for literal in _run_literals(run):
+        if literal is None:
+            return True
+        name = _basename(literal)
+        if name in LAUNCHER_COMMANDS:
+            launched = True
+            continue
+        if launched and literal.startswith(OPTION_MARK) and literal != OPTION_MARK:
+            # The option belongs to the launcher, so the command it runs is
+            # written further on and is the command that binds.
+            continue
+        return name in NAME_BINDING_COMMANDS or fixture.declares(name)
+    return False
+
+
+def _path_elements(parts: _Parts) -> tuple[_Parts, ...]:
+    """Split the modelled parts of one search-path value into its elements.
+
+    The separator is read from the modelled literal parts only, so a separator
+    an expansion may carry never divides one written element into two.
+    """
+
+    elements: list[list[tuple[str, str]]] = [[]]
+    for kind, text in parts:
+        if kind != LITERAL_SEGMENT or SEARCH_PATH_SEPARATOR not in text:
+            elements[-1].append((kind, text))
+            continue
+        pieces = text.split(SEARCH_PATH_SEPARATOR)
+        elements[-1].append((kind, pieces[0]))
+        for piece in pieces[1:]:
+            elements.append([(kind, piece)])
+    # An empty literal piece is the separator itself rather than written text.
+    # An element left with no part at all is the working directory, which no
+    # written text names, so it stays empty and is reported by the caller.
+    return tuple(
+        tuple(part for part in element if part != (LITERAL_SEGMENT, ""))
+        for element in elements
+    )
+
+
+def _searched_directories(fixture: _Fixture) -> tuple[frozenset[_Path], bool]:
+    """Return every directory the fixture puts on the command search path.
+
+    A helper file rebinds a command only where the shell looks for it, so the
+    prohibition is anchored on the search path the fixture writes rather than
+    on the name a written file happens to take. The element that names the
+    search path the caller already holds is skipped: no written text says what
+    it holds, and every fixture keeps it. An element this checker cannot
+    settle, an element no written text anchors at the root, and a search path
+    bound by something other than a written assignment all name a directory
+    this checker cannot compare, so they are reported and every written helper
+    is then read as reachable through the search path.
+    """
+
+    inherited: _Parts = (("name", SEARCH_PATH_NAME),)
+    searched: set[_Path] = set()
+    unplaced = _binds_the_search_path_unreadably(fixture)
+    unsettled = fixture.unsettled_names()
+    for run in fixture.command_runs():
+        for token in _search_path_values(fixture, run):
+            name = _assignment_name(token)
+            if name is None:
+                continue
+            value = token.text[len(name) + 1 :]
+            bindings = fixture.bindings_before(token.start.offset)
+            parts = _word_parts(value, f"p{token.start.offset}")
+            if parts is None:
+                unplaced = True
+                continue
+            for element in _path_elements(parts):
+                if element == inherited:
+                    continue
+                resolved = None if not element else _resolve_parts(
+                    element, bindings, unsettled
+                )
+                if resolved is None:
+                    unplaced = True
+                    continue
+                for candidate in resolved:
+                    path = _settled_path(candidate)
+                    if path is None or not path[0]:
+                        # A relative element names the directory the shell is
+                        # in, which the fixture may change between two readers.
+                        unplaced = True
+                    else:
+                        searched.add(path)
+    return frozenset(searched), unplaced
+
+
+def _may_be_one_directory(left: _Path, right: _Path) -> bool:
+    """Report whether two settled paths may name one directory.
+
+    A path this checker cannot anchor at the root names a directory the
+    working directory decides, so it may name any directory. Two anchored
+    paths are read from what they write in common: a segment both write the
+    same way names the same directory, because a name no assignment binds and
+    a substitution one assignment ran hold one value at every reader, so the
+    segments written alike at the start and at the end are removed from both.
+    What is left is written apart, and a segment that carries an expansion may
+    stand for any number of directories and for none, so the two are proved
+    apart only where a segment both write entirely as text places one of them
+    at a depth or under a name the other cannot take.
+    """
+
+    if not left[0] or not right[0]:
+        return True
+    first, second = left[1], right[1]
+    while first and second and first[0] == second[0]:
+        first, second = first[1:], second[1:]
+    while first and second and first[-1] == second[-1]:
+        first, second = first[:-1], second[:-1]
+    if not first and not second:
+        return True
+    if not first or not second:
+        # One path ends where the other still writes directories, so the two
+        # name one directory only when what is written between them may stand
+        # for no directory at all.
+        return any(_carries_expansion(segment) for segment in first + second)
+    if not _carries_expansion(first[0]) and not _carries_expansion(second[0]):
+        # The two write different names at one depth below what they share.
+        return False
+    if not _carries_expansion(first[-1]) and not _carries_expansion(second[-1]):
+        # The two write different names for the directory itself.
+        return False
+    return True
+
+
+def _reaches_a_searched_directory(
+    directory: _Path, searched: frozenset[_Path]
+) -> bool:
+    """Report whether one directory may be one the command search path names."""
+
+    return any(_may_be_one_directory(directory, entry) for entry in searched)
+
+
+def _written_name(word: str) -> str | None:
+    """Return the name one written word ends with, read from its literal text.
+
+    A word this checker cannot settle still says what the file it writes is
+    called whenever the word ends in written text. A word that ends in an
+    expansion names a file this checker cannot name at all.
+    """
+
+    parts = _word_parts(word, "n", splits=False)
+    if not parts:
+        return None
+    kind, text = parts[-1]
+    if kind != LITERAL_SEGMENT:
+        return None
+    return text.rsplit(PATH_SEPARATOR, 1)[-1] or None
+
+
+TAKES_THE_NEXT_WORD = object()
+
+
+# The name that ends one path written inside a word this checker cannot read.
+# A helper takes the name its path ends with, so the text is read for those
+# names rather than for every name it happens to spell.
+CARRIED_PATH_PATTERN = re.compile(r"/([A-Za-z0-9_.+-]+)")
+
+
+# The commands this checker reads as taking their operands as data rather than
+# as a name of a file to create. A message, a pattern and a condition name no
+# file the run creates, so a path written inside one of their words is not read
+# as a helper. The set is written closed rather than as every observed command,
+# because `sed` writes the file its script names with `w`, `git` writes the
+# files a subcommand names, and `trap` takes a program text.
+DATA_OPERAND_COMMANDS = frozenset(
+    {
+        "printf",
+        "echo",
+        "true",
+        "false",
+        ":",
+        "test",
+        "[",
+        "cd",
+        "exit",
+        "kill",
+        "sleep",
+        "wait",
+        "read",
+        "grep",
+        "cat",
+        "rm",
+        "sed",
+    }
+)
+
+
+def _sed_regex_address(name: str) -> str:
+    """Return the way `sed` writes a match to select the lines it acts on.
+
+    `sed` reads a match written between two slashes, and reads one written
+    between two of any other character when a backslash opens it. The name
+    holds the character such a match closes with while the way is read.
+    """
+    return (
+        "/(?:\\\\+\n|\\\\(?s:.)|[^\\\\/\n])*/[IM]*"
+        "|\\\\(?P<" + name + ">[^\\\\\n])"
+        "(?:\\\\+\n|\\\\(?s:.)|(?!(?P=" + name + "))[^\\\\\n])*(?P=" + name + ")[IM]*"
+    )
+
+
+# The place an address stands in before the command it selects for, written
+# as `sed` writes one: a line number, a step, the last line, or a match, one
+# of them or two of them, and a negation after them. The last line is read
+# with a backslash before it as well, because a fixture that writes the
+# address inside a quoted word writes the backslash the quote asks for.
+SED_ADDRESS = (
+    "(?:[0-9]+(?:~[0-9]+)?|\\\\?\\$|" + _sed_regex_address("first") + ")"
+    "(?:,(?:[0-9]+|\\\\?\\$|[+~][0-9]+|" + _sed_regex_address("second") + "))?"
+    "[ \t]*!?"
+)
+
+
+# The place a `w` stands in as a command of its own: where a script starts,
+# where the option letters before it end, where the name of an option that
+# carries its script ends, after a separator, or after a quote, with an
+# address before it or none and blanks around it. A blank of its own is not
+# read as a place a command starts at, because `sed` separates commands with
+# a separator or a newline rather than a blank, and a blank stands inside a
+# match and inside a replacement as readily as between them.
+SED_COMMAND_WRITE = (
+    "(?:^-[A-Za-z]+|^--[A-Za-z-]+=|^|[;{}\n\"'])"
+    "[ \t]*(?:" + SED_ADDRESS + ")?[ \t]*[wW]"
+)
+
+
+# The place a `w` stands in as the flag of a substitution: after the whole of
+# a substitution written with any delimiter, and after the other flags.
+SED_FLAG_WRITE = (
+    "(?<![A-Za-z_])s(?P<delimiter>[^\\\\\n])"
+    "(?:\\\\+\n|\\\\(?s:.)|(?!(?P=delimiter))[^\\\\\n])*(?P=delimiter)"
+    "(?:\\\\+\n|\\\\(?s:.)|(?!(?P=delimiter))[^\\\\\n])*(?P=delimiter)"
+    "[0-9gpeiImM]*[wW]"
+)
+
+
+# The way a command names a file to write inside its script. `sed` writes with
+# `w`, as a command of its own or as the flag of a substitution, and the name
+# to write follows it with or without a blank between. A script is read as
+# writing exactly when it spells a `w` in one of those two places, because a
+# `w` anywhere else in a script stands inside a match, a replacement, or a
+# word the script only reads. Reading the place rather than the letter keeps a
+# name a script writes glued to the `w`, which `sed` writes as readily as a
+# name a blank follows, from being read as a word.
+SED_WRITE_PATTERN = re.compile(
+    "(?:" + SED_COMMAND_WRITE + ")|(?:" + SED_FLAG_WRITE + ")"
+)
+SCRIPT_WRITE_PATTERNS = {"sed": SED_WRITE_PATTERN}
+
+
+# The place a text a script carries starts at. `sed` reads everything after an
+# `a`, an `i`, or a `c` as the text that command adds to its output rather
+# than as further commands, so the letter is read where a command stands, the
+# same places a `w` is read from.
+SED_TEXT_COMMAND = re.compile(
+    "(?:^-[A-Za-z]+|^--[A-Za-z-]+=|^|[;{}\n\"'])"
+    "[ \t]*(?:" + SED_ADDRESS + ")?[ \t]*[aic]"
+)
+SCRIPT_TEXT_COMMANDS = {"sed": SED_TEXT_COMMAND}
+
+
+# The whole of a substitution or a transliteration, written with any
+# delimiter. A delimiter is written with the same characters a script
+# separates commands with, so the inside of such a command is read past
+# rather than read as the commands it is written between.
+SED_SUBSTITUTION = re.compile(
+    "(?<![A-Za-z_])[sy](?P<mark>[^\\\\\n])"
+    "(?:\\\\+\n|\\\\(?s:.)|(?!(?P=mark))[^\\\\\n])*(?P=mark)"
+    "(?:\\\\+\n|\\\\(?s:.)|(?!(?P=mark))[^\\\\\n])*(?P=mark)"
+    "[0-9gpeiImM]*"
+)
+SCRIPT_ENCLOSED_COMMANDS = {"sed": SED_SUBSTITUTION}
+
+
+# The place a `w` stands in as the flag of a substitution a blank divides it
+# from. `sed` reads the flags of a substitution across blanks, so a flag is
+# written after the delimiter that ends the substitution with blanks before
+# it, between the flags, and before the `w` that names a file to write. A
+# transliteration carries no flags at all, so a `w` after one is read as
+# extra characters and `sed` runs no such script.
+SED_TRAILING_WRITE = re.compile(
+    "[ \t]+(?:[0-9]+|[gpeiImM]|[ \t])*[wW]"
+)
+SCRIPT_TRAILING_WRITES = {"sed": SED_TRAILING_WRITE}
+
+
+# The way a script runs a command of its own. `sed` runs one with `e`, as a
+# command of its own, which runs the text after it or the line it is reading,
+# and as the flag of a substitution, which runs what the substitution puts in
+# its place. A run given such a script writes whatever the command it runs
+# writes, which is not written in the script as a file to write, so the whole
+# of every word is read for the helper names it carries, the way a word given
+# to a shell is read. The letters an option is written with are read as no
+# place a command stands at here, because the `e` of `-e` is the option
+# rather than the command and a script glued to that option carries the text
+# to run in a word of its own.
+SED_COMMAND_EXECUTE = "(?:^|[;{}\n\"'])[ \t]*(?:" + SED_ADDRESS + ")?[ \t]*e"
+SED_FLAG_EXECUTE = (
+    "(?<![A-Za-z_])s(?P<mark_e>[^\\\\\n])"
+    "(?:\\\\+\n|\\\\(?s:.)|(?!(?P=mark_e))[^\\\\\n])*(?P=mark_e)"
+    "(?:\\\\+\n|\\\\(?s:.)|(?!(?P=mark_e))[^\\\\\n])*(?P=mark_e)"
+    "[0-9gpiImM]*e"
+)
+SED_EXECUTE_PATTERN = re.compile(
+    "(?:" + SED_COMMAND_EXECUTE + ")|(?:" + SED_FLAG_EXECUTE + ")"
+)
+SCRIPT_EXECUTE_PATTERNS = {"sed": SED_EXECUTE_PATTERN}
+SED_TRAILING_EXECUTE = re.compile(
+    "[ \t]+(?:[0-9]+|[gpeiImM]|[ \t])*e"
+)
+SCRIPT_TRAILING_EXECUTES = {"sed": SED_TRAILING_EXECUTE}
+
+
+def _script_text_end(written: str, start: int) -> int:
+    """Return where the text a script carries from one place ends.
+
+    A text runs to the end of the line it starts on, and runs on to the line
+    after it when a backslash ends that line, which is how a script carries a
+    text of more than one line and how it carries one written after the
+    backslash the command is spelled with.
+
+    A word written between double quotes carries every backslash the script
+    reads written twice, because that is what those quotes ask for, so the
+    backslashes such a word ends a line with are counted as half of what is
+    written. A backslash a backslash escapes ends the text rather than
+    carrying it on, so the count is read for whether it is odd.
+    """
+
+    doubled = written.startswith('"')
+    place = start
+    while True:
+        stop = written.find("\n", place)
+        if stop < 0:
+            return len(written)
+        slashes = 0
+        while stop - 1 - slashes >= start and written[stop - 1 - slashes] == "\\":
+            slashes += 1
+        if doubled:
+            slashes //= 2
+        if slashes % 2 == 0:
+            return stop
+        place = stop + 1
+
+
+# The option letters a word carries before the script glued to them. A script
+# is written in the same word as the option that carries it, with the option
+# letters written before it and with no blank between, so the letters are
+# blanked out to leave the script where a script starts. The letters are
+# blanked rather than cut away, so every place the script spells is read at
+# the offset the word writes it at. A word of option letters that carries no
+# script is left as nothing at all this way, so the `e` of `-e` is never read
+# as the command `e`. The letters are read to the first one that carries a
+# value and no further, because what follows that letter is the value rather
+# than more options, so the `s` of a substitution glued to `-e` is left where
+# it stands.
+SCRIPT_OPTION_PREFIX = re.compile("^(?:--[A-Za-z-]+=|-[A-Za-z]*?[efil])")
+
+
+def _script_start(written: str) -> str:
+    """Return one word with the option letters before its script blanked out."""
+
+    match = SCRIPT_OPTION_PREFIX.match(written)
+    if match is None:
+        return written
+    return " " * match.end() + written[match.end() :]
+
+
+def _script_commands(name: str | None, written: str) -> str:
+    """Return one script with the text its commands carry blanked out.
+
+    A text a script carries is written where commands are written but is read
+    as none of them, so a `w` inside such a text names no file the run
+    creates. Blanking the text keeps every other place in the script where it
+    is, so a write written after a text is still found where it stands. The
+    option letters a script is glued to are blanked the same way, so a script
+    written in the word of the option that carries it is read from where the
+    script starts.
+    """
+
+    pattern = SCRIPT_TEXT_COMMANDS.get(name)
+    if pattern is None:
+        return written
+    written = _script_start(written)
+    enclosed = SCRIPT_ENCLOSED_COMMANDS[name]
+    letters = list(written)
+    place = 0
+    while True:
+        match = pattern.search(written, place)
+        if match is None:
+            return "".join(letters)
+        run = enclosed.search(written, place)
+        while run is not None and run.end() <= match.start():
+            # A substitution the letter stands after encloses nothing of it,
+            # so the one that stands over it is looked for past that one.
+            run = enclosed.search(written, run.end())
+        if run is not None and run.start() < match.start() < run.end():
+            # The letter stands inside a substitution rather than where a
+            # command does, because a delimiter is written with the same
+            # characters a script separates commands with.
+            place = max(run.end(), place + 1)
+            continue
+        stop = _script_text_end(written, match.end())
+        for index in range(match.end(), stop):
+            letters[index] = " "
+        place = max(stop, match.end() + 1)
+
+
+# A command that supplies the operands of the command it runs from what it
+# reads. The file such a run creates is named by nothing written.
+WORD_SUPPLYING_COMMANDS = frozenset({"xargs"})
+
+
+def _resolved_command(words: tuple[Token, ...]) -> str | None:
+    """Return the name one run runs, read past what is written before it.
+
+    A run may be written with assignments and with launchers before the
+    command it runs, and neither of them is the command. Nothing is returned
+    for a run whose command word this checker cannot read, because such a run
+    may run anything.
+    """
+
+    for token in words:
+        if _assignment_name(token) is not None:
+            continue
+        literal = _word_literals((token,))[0]
+        if literal is None:
+            return None
+        name = _basename(literal)
+        if name in LAUNCHER_COMMANDS:
+            continue
+        return name
+    return None
+
+
+def _script_runs(name: str | None, written: str) -> tuple[re.Match[str], ...]:
+    """Return the whole of every substitution one script is written with.
+
+    The runs are read from the start of the script and none of them stands
+    inside another, because a delimiter that opens one is read to the end of
+    the command it opens before the next one is looked for.
+    """
+
+    enclosed = SCRIPT_ENCLOSED_COMMANDS.get(name)
+    if enclosed is None:
+        return ()
+    found = []
+    place = 0
+    while True:
+        run = enclosed.search(written, place)
+        if run is None:
+            return tuple(found)
+        found.append(run)
+        place = max(run.end(), run.start() + 1)
+
+
+def _script_encloses(
+    name: str | None, written: str, start: int, offset: int
+) -> bool:
+    """Report whether one place in a script stands inside a substitution.
+
+    A substitution is written between delimiters a script also separates
+    commands with, so a place inside one is not a place a command stands at,
+    however many substitutions are written before it. The place is read as
+    inside only when a substitution opens before the place is read from and
+    ends after the letter the command is spelled with, so a command written
+    straight after a substitution, whose own delimiter stands before it, and
+    the flag of the substitution the place is read from, are both left where
+    they stand rather than read as inside a run.
+    """
+
+    return any(
+        run.start() < start and offset < run.end()
+        for run in _script_runs(name, written)
+    )
+
+
+def _script_trailing_writes(
+    name: str | None, written: str
+) -> tuple[re.Match[str], ...]:
+    """Return every place a script spells a write at after a substitution.
+
+    `sed` reads the flags of a substitution across the blanks written between
+    them, and the delimiter that ends a substitution is read as no separator
+    at all, so a write written that way is found from the end of the run
+    rather than from a character before it.
+    """
+
+    return _script_trailing_places(name, written, SCRIPT_TRAILING_WRITES)
+
+
+def _script_trailing_places(
+    name: str | None,
+    written: str,
+    patterns: dict[str, "re.Pattern[str]"],
+) -> tuple[re.Match[str], ...]:
+    """Return every place a script spells one of these after a substitution."""
+
+    pattern = patterns.get(name)
+    if pattern is None:
+        return ()
+    found = []
+    for run in _script_runs(name, written):
+        if written[run.start() : run.start() + 1] != "s":
+            continue
+        match = pattern.match(written, run.end())
+        if match is not None:
+            found.append(match)
+    return tuple(found)
+
+
+def _script_writes(name: str | None, written: str) -> tuple[re.Match[str], ...]:
+    """Return every place one script spells a write at.
+
+    The text the script carries is read as no command at all, and a place
+    inside a substitution is read as none either, so what is left is every
+    place the script names a file to write from. The place is read at the
+    letter the write is spelled with rather than at the character that stands
+    before it, because that character is the end of the substitution the write
+    follows as readily as a separator of its own.
+    """
+
+    return _script_places(
+        name, written, SCRIPT_WRITE_PATTERNS, SCRIPT_TRAILING_WRITES
+    )
+
+
+def _script_executes(name: str | None, written: str) -> tuple[re.Match[str], ...]:
+    """Return every place one script spells a command of its own at.
+
+    A script that runs a command writes whatever that command writes, which
+    the script names nowhere, so a run given such a script is read the way a
+    run given a shell text is read rather than as a run whose operands are
+    data.
+    """
+
+    return _script_places(
+        name, written, SCRIPT_EXECUTE_PATTERNS, SCRIPT_TRAILING_EXECUTES
+    )
+
+
+def _script_places(
+    name: str | None,
+    written: str,
+    patterns: dict[str, "re.Pattern[str]"],
+    trailing: dict[str, "re.Pattern[str]"],
+) -> tuple[re.Match[str], ...]:
+    """Return every place one script spells one of these commands at."""
+
+    pattern = patterns.get(name)
+    if pattern is None:
+        return ()
+    commands = _script_commands(name, written)
+    found: dict[int, re.Match[str]] = {}
+    place = 0
+    while True:
+        match = pattern.search(commands, place)
+        if match is None:
+            break
+        if _script_encloses(name, commands, match.start(), match.end() - 1):
+            place = match.start() + 1
+            continue
+        found.setdefault(match.end(), match)
+        place = max(match.end(), match.start() + 1)
+    for match in _script_trailing_places(name, commands, trailing):
+        found.setdefault(match.end(), match)
+    return tuple(match for _, match in sorted(found.items()))
+
+
+def _reads_operands_as_data(words: tuple[Token, ...]) -> bool:
+    """Report whether one run is written as a command this checker models.
+
+    A run written as one of these commands reads its operands as data, so a
+    path written inside a word of such a run names no file the run creates.
+    Every other run may be an interpreter given a program text, which creates
+    the files that text writes.
+
+    Only a bare name is read this way. A command written as a path is a file
+    the fixture supplies rather than the utility that name usually reaches, so
+    `./printf` is not read as a command that only writes a message.
+    """
+
+    name = _resolved_command(words)
+    if name is None or name not in DATA_OPERAND_COMMANDS:
+        return False
+    if _runs_a_script_command(words):
+        return False
+    if any(
+        _assignment_name(token) is None and "/" in token.text for token in words[:1]
+    ):
+        return False
+    return not _writes_through_a_script(words)
+
+
+def _script_write_words(words: tuple[Token, ...]) -> tuple[Token, ...]:
+    """Return every word of one run that names a file to write in its script.
+
+    A script names the file to write inside the word the script is written
+    with, so no other operand of the run is the name it writes. The command
+    word a launcher is written before, and every file the run only reads, are
+    left out that way.
+    """
+
+    name = _resolved_command(words)
+    pattern = SCRIPT_WRITE_PATTERNS.get(name)
+    if pattern is None:
+        return ()
+    return tuple(token for token in words[1:] if _script_writes(name, token.text))
+
+
+def _writes_through_a_script(words: tuple[Token, ...]) -> bool:
+    """Report whether one run names a file to write inside its own script."""
+
+    return bool(_script_write_words(words))
+
+
+def _runs_a_script_command(words: tuple[Token, ...]) -> bool:
+    """Report whether one run is given a script that runs a command of its own.
+
+    Such a script writes what the command it runs writes rather than what the
+    script names, so the run is not read as one whose operands are data and
+    not read as one whose script names the file it writes either.
+    """
+
+    name = _resolved_command(words)
+    if name not in SCRIPT_EXECUTE_PATTERNS:
+        return False
+    return any(_script_executes(name, token.text) for token in words[1:])
+
+
+def _carried_names(written: str) -> frozenset[str]:
+    """Return every helper name one word this checker cannot read writes.
+
+    An interpreter given a program text creates the files that text writes,
+    and the shell unquoting needed to read such a text is not performed here,
+    so a word this checker cannot read is refused rather than settled: it
+    names a destination this checker cannot place. The name a written helper
+    takes is the name its path ends with, so every path ending the text writes
+    is read and the ones that name an observed command are reported. A word
+    this checker can read is not read this way, because the operation it
+    belongs to is already settled as the write it is written as.
+    """
+
+    if _word_parts(written, "c", splits=False) is not None:
+        return frozenset()
+    return _path_endings(written)
+
+
+def _path_endings(written: str) -> frozenset[str]:
+    """Return every helper name a path written inside one text ends with."""
+
+    return frozenset(
+        name
+        for name in CARRIED_PATH_PATTERN.findall(written)
+        if name in SHADOWED_HELPER_COMMANDS
+    )
+
+
+def _carried_helpers(words: tuple[Token, ...]) -> frozenset[str]:
+    """Return every helper name the operands of one operation write unreadably.
+
+    The command word is not read this way, because a word run as a command
+    writes nothing by being written, and a run this checker models is not read
+    this way at all, because its operands are data or a destination this
+    checker already settles.
+    """
+
+    if _reads_operands_as_data(words):
+        return frozenset()
+    written = () if _runs_a_script_command(words) else _script_write_words(words)
+    if written:
+        # A script names the file to write after the write itself, so only the
+        # text following each write is read. A path the script matches or
+        # writes into its output names no file the run creates.
+        name = _resolved_command(words)
+        names = set()
+        for token in written:
+            if _word_parts(token.text, "c", splits=False) is not None:
+                continue
+            for match in _script_writes(name, token.text):
+                names |= _path_endings(token.text[match.end():])
+        return frozenset(names)
+    names = set()
+    for place, token in enumerate(words):
+        if place:
+            names |= _carried_names(token.text)
+    return frozenset(names)
+
+
+def _cannot_name_an_option(
+    fixture: _Fixture, operation: _Operation, word: Token
+) -> bool:
+    """Report whether one written word can never be read as an option.
+
+    This is the operand reading of `_cannot_be_an_option` for a command placed
+    against no written run. A word written with a slash, and a word that
+    settles to a path anchored at the root, both write a character no option
+    letter carries, so no command reads them as an option.
+    """
+
+    parts = _word_parts(word.text, f"o{word.start.offset}", splits=True)
+    if parts is not None and any(
+        kind == LITERAL_SEGMENT and PATH_SEPARATOR in text for kind, text in parts
+    ):
+        return True
+    settled = _settle_written_word(fixture, operation, word.text)
+    return bool(settled) and all(anchored for anchored, _ in settled)
+
+
+def _target_directory_value(written: str) -> object | None:
+    """Return the directory one written option carries, read from the word itself.
+
+    The option writes its value attached to the option letter, after an equals
+    sign, or as the next word. The word is read as written rather than as the
+    text it settles to, because a value that carries an expansion leaves the
+    settled reading empty while the option it is attached to is still written.
+    """
+
+    if written.startswith(OPTION_END):
+        name, separator, value = written[2:].partition("=")
+        if not _abbreviates_target_directory(f"{OPTION_END}{name}"):
+            return None
+        if not separator:
+            return TAKES_THE_NEXT_WORD
+        return value
+    letters = written[1:]
+    place = letters.find(TARGET_DIRECTORY_MARK)
+    if place < 0:
+        return None
+    return letters[place + 1 :] or TAKES_THE_NEXT_WORD
+
+
+def _target_directories(
+    fixture: _Fixture, operation: _Operation, words: Sequence[Token], index: int
+) -> tuple[bool, frozenset[_Path], bool, list[Token]]:
+    """Return the directory one operation places its operands inside.
+
+    A command written with this option creates every operand it is given
+    inside the directory the option names, so the operands are sources and
+    none of them is the destination. A target directory this checker cannot
+    settle leaves the destination unknown, which is reported so the caller
+    never reads the operation as writing in place. A word this checker cannot
+    read at all may be the option itself, so it is read that way unless it can
+    never be an option.
+    """
+
+    present = False
+    directories: set[_Path] = set()
+    unknown = False
+    named = False
+    sources: list[Token] = []
+    ended = False
+    for place in range(index + 1, len(words)):
+        token = words[place]
+        written = token.text
+        if not ended and written == OPTION_END:
+            ended = True
+            continue
+        if named:
+            settled = _settle_written_word(fixture, operation, written)
+            directories |= settled
+            unknown = unknown or not settled
+            named = False
+            continue
+        if not ended and written.startswith(OPTION_MARK) and written != OPTION_MARK:
+            value = _target_directory_value(written)
+            if value is None:
+                continue
+            present = True
+            if value is TAKES_THE_NEXT_WORD:
+                named = True
+                continue
+            settled = _settle_written_word(fixture, operation, str(value))
+            directories |= settled
+            unknown = unknown or not settled
+            continue
+        if (
+            not ended
+            and _word_literals((token,))[0] is None
+            and not _cannot_name_an_option(fixture, operation, token)
+        ):
+            # The word may expand to the target-directory option, and then the
+            # destination is a directory no written text names here. The word
+            # is kept as a source as well, because when it is not that option
+            # it is the operand it was written as, and the name it ends with
+            # still says what file the command creates.
+            present = True
+            unknown = True
+            sources.append(token)
+            continue
+        sources.append(token)
+    if named:
+        unknown = True
+    return present, frozenset(directories), unknown, sources
+
+
+def _helper_paths(
+    fixture: _Fixture, operation: _Operation
+) -> tuple[frozenset[_Path], frozenset[tuple[_Path, str]], tuple[str, ...], bool]:
+    """Return what one operation creates, read from the words the graph records.
+
+    A redirection creates the path it writes. A helper-writing command creates
+    its last operand, and when that operand names a directory it creates the
+    source basename inside it, which no written text decides between. A command
+    written with a target-directory option creates every remaining operand
+    inside the directory that option names. The written words are returned as
+    well, because a word this checker cannot settle still says what the file it
+    creates is called, and a destination this checker cannot read at all is
+    reported so the caller never reads the operation as writing nothing. Every
+    branch reports an unsettled destination that way, because a path this
+    checker cannot place is not a path it has proved lies outside the searched
+    directories.
+    """
+
+    created: set[_Path] = set()
+    inside: set[tuple[_Path, str]] = set()
+    words: list[str] = list(operation.redirect_targets)
+    unsettled = False
+    for target in operation.redirect_targets:
+        settled_target = _settle_written_word(fixture, operation, target)
+        created |= settled_target
+        unsettled = unsettled or not settled_target
+    recorded = _operation_words(operation)
+    ran = _resolved_command(recorded)
+    for token in _script_write_words(recorded):
+        # The script names the file to write inside its own word, after the
+        # write it spells, so the path each write is followed by is settled as
+        # well as the word itself. A script written in the word of the option
+        # that carries it writes the option letters before the path, which
+        # name no directory the path lies in.
+        created |= _settle_written_word(fixture, operation, token.text)
+        for match in _script_writes(ran, token.text):
+            tail = token.text[match.end() :].lstrip(" \t")
+            settled_tail = _settle_written_word(fixture, operation, tail)
+            created |= settled_tail
+            if settled_tail:
+                continue
+            # A path written with a value this checker cannot place is not a
+            # path it has proved lies outside a searched directory, so the
+            # name that path ends with is read as reachable.
+            created |= {(False, (ending,)) for ending in _path_endings(tail)}
+    literals = _word_literals(recorded)
+    index = _command_index(literals, HELPER_WRITING_COMMANDS)
+    if index < 0:
+        return frozenset(created), frozenset(inside), tuple(words), unsettled
+    written = literals[index]
+    command = None if written is None else _basename(written)
+    present, directories, unknown, sources = _target_directories(
+        fixture, operation, recorded, index
+    )
+    if present:
+        words.extend(source.text for source in sources)
+        for source in sources:
+            settled = _settle_written_word(fixture, operation, source.text)
+            names = {
+                segments[-1] for _, segments in settled if segments
+            } or {_written_name(source.text)}
+            for name in names:
+                if not name:
+                    continue
+                inside.update((directory, name) for directory in directories)
+        return frozenset(created), frozenset(inside), tuple(words), unknown or unsettled
+    operands = _written_operands(recorded, literals, index)
+    words.extend(operand.text for operand in operands)
+    settled = [
+        _settle_written_word(fixture, operation, operand.text) for operand in operands
+    ]
+    if command in HELPER_OPERAND_COMMANDS:
+        for paths in settled:
+            created |= paths
+            unsettled = unsettled or not paths
+        return frozenset(created), frozenset(inside), tuple(words), unsettled
+    if len(operands) < 2:
+        # The destination is not written as a second operand, so the one
+        # written word is read as both the created path and a directory a
+        # source name may be created inside.
+        places = [path for paths in settled for path in paths]
+        created.update(places)
+        return (
+            frozenset(created),
+            frozenset(inside),
+            tuple(words),
+            unsettled or any(not paths for paths in settled),
+        )
+    destinations = settled[-1]
+    created |= destinations
+    unsettled = unsettled or not destinations
+    for paths in settled[:-1]:
+        for _, segments in paths:
+            if not segments:
+                continue
+            inside.update((destination, segments[-1]) for destination in destinations)
+    return frozenset(created), frozenset(inside), tuple(words), unsettled
+
+
+def _body_operations(
+    fixture: _Fixture, token: Token
+) -> tuple[_Operation, ...] | None:
+    """Return the commands of the declared body one record lies inside.
+
+    A function body runs where it is called, not where it is written, so a
+    redirection written there is expanded against the values its call sites
+    hold. The checked graph already folds every reachable call environment
+    into the values each body command holds, so the body commands are what the
+    redirection word is settled against. Nothing is returned for a record
+    written outside every declared body.
+    """
+
+    offset = token.start.offset
+    for declaration in fixture.table.declarations:
+        start = declaration.open_brace.start.offset
+        end = declaration.close_brace.end.offset
+        if not start <= offset <= end:
+            continue
+        return tuple(
+            operation
+            for operation in fixture.operations
+            if start <= operation.offset <= end
+        )
+    return None
+
+
+def _opens_an_enclosure(token: Token, starts: frozenset[int]) -> bool:
+    """Report whether one written record opens a compound command.
+
+    A reserved word opens a compound only where a command may start, so the
+    same text written as an operand is data and is read as data. A subshell is
+    opened by an operator record, which is never an operand.
+    """
+
+    if token.kind == shell_lexical.OPERATOR:
+        return token.text == SUBSHELL_OPEN
+    return (
+        token.kind == shell_lexical.WORD
+        and token.text in ENCLOSURE_OPENERS
+        and token.start.offset in starts
+    )
+
+
+def _closes_an_enclosure(token: Token, starts: frozenset[int]) -> bool:
+    """Report whether one written record closes a compound command."""
+
+    if token.kind == shell_lexical.OPERATOR:
+        return token.text == SUBSHELL_CLOSE
+    return (
+        token.kind == shell_lexical.WORD
+        and token.text in ENCLOSURE_CLOSERS
+        and token.start.offset in starts
+    )
+
+
+def _expansion_places(
+    fixture: _Fixture, limit: int, enclosure: tuple[int, bool] | None, alone: bool
+) -> tuple[int, ...]:
+    """Return the offsets one detached redirection word may be expanded at.
+
+    A shell expands the redirection word of a compound before it runs the
+    body, so the values live where the compound starts are the ones it uses.
+    A compound the shell may run again expands the word once per pass, so the
+    values its body binds are read as well. A word the walk has already read
+    as carrying no compound is expanded where it is written, exactly as a
+    command word is. A word this checker cannot place against any compound is
+    read against every place written before it, which names more files than
+    the shell creates and never fewer.
+    """
+
+    if enclosure is None:
+        return (limit,) if alone else _binding_places(fixture, limit)
+    start, repeats = enclosure
+    if not repeats:
+        return (start,)
+    return (start,) + tuple(
+        place for place in _binding_places(fixture, limit) if place >= start
+    )
+
+
+def _binding_places(fixture: _Fixture, limit: int) -> tuple[int, ...]:
+    """Return every written offset before one point where the values may differ.
+
+    A value changes where an assignment is written and where a command runs,
+    so those offsets are the points a redirection word may be expanded
+    against. The point the word itself is written at is included, because the
+    last command before it may leave the values it reads unchanged.
+    """
+
+    places = {limit}
+    for operation in fixture.operations:
+        if operation.offset <= limit:
+            places.add(operation.offset)
+    for run in fixture.command_runs():
+        if run.tokens and run.tokens[0].start.offset <= limit:
+            places.add(run.tokens[0].start.offset)
+    return tuple(sorted(places))
+
+
+def _read_names(written: str) -> frozenset[str]:
+    """Return every name one written word reads."""
+
+    parts = _word_parts(written, "r", splits=False)
+    if parts is None:
+        return frozenset()
+    return frozenset(text for kind, text in parts if kind == "name")
+
+
+def _detached_redirections(
+    fixture: _Fixture,
+) -> tuple[tuple[_Operation, str, frozenset[_Path]], ...]:
+    """Return every write redirection no single command carries.
+
+    A redirection written on a group, a subshell, or a loop creates a file
+    just as one written on a command does, but it belongs to no command node,
+    so the graph never reports it. The written records are read directly here,
+    and each occurrence is kept apart by the position it is written at, because
+    two commands may redirect to the same written word while the values they
+    hold name different files.
+
+    The shell expands such a word before it runs the enclosed body, while the
+    word itself is written after that body, so no single command holds the
+    values the shell uses. The word is therefore settled against every command
+    written before it and the results are joined, which names every file the
+    redirection may create and never reads a value bound inside the body as
+    the only one. A command that binds nothing the word reads settles it to
+    nothing, so a joined result is empty only when no written command names
+    the file at all. Only a place that holds every name the word reads is
+    joined, because a place written before those names exist reads the word as
+    text the shell never produces.
+
+    The value the shell expands is the one live where the enclosing compound
+    starts, so that place is read rather than every place in the fixture. A
+    compound the shell may run more than once expands the word again on each
+    pass, so a value its body binds is joined as well.
+    """
+
+    if not fixture.operations:
+        return ()
+    index = _token_index(fixture.records)
+    carried: set[int] = set()
+    for operation in fixture.operations:
+        located = _locate(index, operation.node)
+        if located is None:
+            continue
+        pending = False
+        for token in _command_span(*located):
+            if token.kind == shell_lexical.OPERATOR:
+                pending = token.text in WRITE_REDIRECTIONS
+                continue
+            if pending and token.kind == shell_lexical.WORD:
+                carried.add(token.start.offset)
+            pending = False
+    ordered = sorted(fixture.operations, key=lambda operation: operation.offset)
+    detached: list[tuple[_Operation, str, frozenset[_Path]]] = []
+    regions = [
+        fixture.records.tokens,
+        *shell_lexical.executable_regions(fixture.records),
+    ]
+    for region in regions:
+        pending = False
+        open_enclosures: list[tuple[str, int]] = []
+        closed: tuple[int, bool] | None = None
+        # Nothing has been read yet, so a redirection written here carries no
+        # compound and is expanded where it is written.
+        alone = True
+        starts = _command_positions(
+            shell_lexical.LexicalProjection(fixture.text, region)
+        )
+        for token in region:
+            if _opens_an_enclosure(token, starts):
+                open_enclosures.append((token.text, token.start.offset))
+                closed = None
+                alone = True
+                pending = False
+                continue
+            if _closes_an_enclosure(token, starts):
+                opener, offset = (
+                    open_enclosures[-1] if open_enclosures else ("", -1)
+                )
+                if opener in ENCLOSURE_CLOSERS[token.text]:
+                    open_enclosures.pop()
+                    closed = (offset, opener in REPEATING_ENCLOSURES)
+                else:
+                    # The written enclosures do not balance here, so no
+                    # compound is known and the conservative reading is used.
+                    closed = None
+                    alone = False
+                pending = False
+                continue
+            if token.kind == shell_lexical.OPERATOR:
+                if token.text not in REDIRECTIONS:
+                    # The redirections a compound carries end here, so the
+                    # compound is no longer the one a later word belongs to.
+                    closed = None
+                    alone = True
+                pending = token.text in WRITE_REDIRECTIONS
+                continue
+            if token.kind == shell_lexical.NEWLINE:
+                # A compound carries its redirections on its own line, so the
+                # list ends here and a later word belongs to no compound.
+                closed = None
+                alone = True
+                pending = False
+                continue
+            if token.kind != shell_lexical.WORD:
+                pending = False
+                continue
+            if not pending:
+                closed = None
+                alone = False
+                continue
+            pending = False
+            if token.start.offset in carried:
+                continue
+            preceding = [
+                operation
+                for operation in ordered
+                if operation.offset <= token.start.offset
+            ] or [ordered[0]]
+            read = _read_names(token.text)
+            settled: set[_Path] = set()
+            if not read:
+                # A word written without an expansion names one file whatever
+                # any command binds, so one reading settles it.
+                settled |= _settle_written_word(fixture, preceding[-1], token.text)
+            else:
+                body = _body_operations(fixture, token)
+                if body is not None:
+                    if not any(operation.reachable for operation in body):
+                        # No call the graph resolves reaches the body. A call
+                        # it cannot resolve is read from the records instead,
+                        # so nothing is settled here.
+                        continue
+                    for operation in body:
+                        settled |= _settle_written_word(
+                            fixture, operation, token.text
+                        )
+                else:
+                    for place in _expansion_places(
+                        fixture, token.start.offset, closed, alone
+                    ):
+                        bindings = fixture.bindings_before(place)
+                        if not read <= frozenset(bindings):
+                            continue
+                        settled |= _settle_word(
+                            token.text, bindings, fixture.unsettled_names()
+                        )
+            detached.append((preceding[-1], token.text, frozenset(settled)))
+    return tuple(detached)
+
+
+def _may_name_a_function(fixture: _Fixture, node: object) -> bool:
+    """Report whether one dispatch this checker cannot read may call a body.
+
+    A shell looks a command word up as a function only when the word holds no
+    slash, so a dispatch written with a path, and one that settles only to
+    paths, runs a file and never a declared body. A dispatch whose values this
+    checker cannot settle may name anything, so it is read as naming a body.
+    """
+
+    if not node.words:
+        return True
+    written = node.words[0]
+    parts = _word_parts(written.text, f"d{written.start.offset}", splits=False)
+    if parts is not None and any(
+        kind == LITERAL_SEGMENT and PATH_SEPARATOR in text for kind, text in parts
+    ):
+        return False
+    settled = _settle_deferred_word(fixture, written.text)
+    if not settled:
+        return True
+    return any(len(segments) < 2 and not anchored for anchored, segments in settled)
+
+
+def _deferred_bodies(fixture: _Fixture) -> tuple[object, ...]:
+    """Return every declared body a call outside the checked graph may reach.
+
+    The graph folds a body into the calls it can resolve, so a body it
+    resolves no call for holds no command node at all. A body is still run by
+    a registered trap action, by a dispatch whose command word is an
+    expansion, and by an included file, and each of those really creates the
+    files the body writes. Such a body is returned here so that the helpers it
+    writes are read from the written records rather than passed over. A body
+    the graph does resolve a call for is returned as well, because a resolved
+    call does not exhaust the calls a body gets: a deferred call may run it
+    again with values the resolved call never held. A body such a body calls
+    is reached as well, so the deferred names are closed over the calls the
+    collected bodies make, over the actions they register, and over the files
+    they include.
+    """
+
+    graph = fixture.graph
+    if graph.is_fully_resolved:
+        return ()
+    every = bool(graph.included_sources) or any(
+        _may_name_a_function(fixture, node) for node in graph.dynamic_commands
+    )
+    named: set[str] = set()
+    for node in graph.trap_registrations:
+        for value in node.argument_values:
+            if value is None:
+                # The action is an expansion, so it may name any body.
+                every = True
+                continue
+            named.update(NAME_PATTERN.findall(value))
+    declared = {
+        declaration.name: declaration for declaration in fixture.table.declarations
+    }
+    pending = [name for name in named if name in declared]
+    while pending and not every:
+        declaration = declared[pending.pop()]
+        operations = _deferred_operations(fixture, declaration)
+        if operations is None:
+            # The body is not readable on its own, so it may call any other.
+            every = True
+            break
+        for operation in operations:
+            if operation.effect == EFFECT_SOURCE:
+                # The included file may call any body.
+                every = True
+                break
+            if operation.effect == EFFECT_TRAP:
+                registered: set[str] = set()
+                for value in operation.node.argument_values:
+                    if value is None:
+                        every = True
+                        break
+                    registered.update(NAME_PATTERN.findall(value))
+                if every:
+                    break
+                for called in registered & set(declared) - named:
+                    named.add(called)
+                    pending.append(called)
+                continue
+            if operation.node.dynamic:
+                every = _may_name_a_function(fixture, operation.node)
+                if every:
+                    break
+                continue
+            called = operation.name
+            if called in declared and called not in named:
+                named.add(called)
+                pending.append(called)
+    return tuple(
+        declaration
+        for declaration in fixture.table.declarations
+        if every or declaration.name in named
+    )
+
+
+def _deferred_operations(
+    fixture: _Fixture, declaration: object
+) -> tuple[_Operation, ...] | None:
+    """Return one deferred operation per command of an unmodelled body.
+
+    The body records are read through the same checked projections the rest of
+    this module consumes, so no text is read a second time here, and every
+    command the derivation records is returned as an operation whose values
+    are settled against the whole fixture. Nothing is returned for a body
+    those projections do not accept on its own, because it says nothing about
+    which of its words are written.
+    """
+
+    body = declaration.body
+    records = shell_lexical.LexicalProjection(fixture.text, body)
+    try:
+        table = shell_functions.derive(records)
+        graph = shell_execution.derive(records, table)
+    except (ShellFunctionError, ShellExecutionError):
+        return None
+    start = declaration.open_brace.start.offset
+    return tuple(
+        _Operation(
+            node=node,
+            offset=node.words[0].start.offset if node.words else start,
+            reachable=True,
+            conditional=True,
+            text=fixture.text,
+            deferred=True,
+        )
+        for node in graph.commands
+    )
+
+
+def _deferred_redirections(declaration: object) -> tuple[str, ...]:
+    """Return every word an unmodelled body redirects a write to.
+
+    A redirection belongs to no command node whenever a compound carries it,
+    so the written records are read here as well, and the regions a
+    substitution encloses are read with them.
+    """
+
+    body = declaration.body
+    targets: list[str] = []
+    for region in (body, *shell_lexical.executable_regions(body)):
+        pending = False
+        for token in region:
+            if token.kind == shell_lexical.OPERATOR:
+                pending = token.text in WRITE_REDIRECTIONS
+                continue
+            if pending and token.kind == shell_lexical.WORD:
+                targets.append(token.text)
+            pending = False
+    return tuple(targets)
+
+
+def _writes_where_no_word_names(fixture: _Fixture) -> bool:
+    """Report whether the fixture puts a file in place without writing where.
+
+    A command that puts a file in place takes its destination from the words
+    it is written with, and `xargs` supplies those words from what it reads
+    instead. Such a command creates a file no written text names at all, so
+    nothing about it says the file is not a helper, and the fixture is read
+    the way one whose search path this checker cannot place is read.
+    """
+
+    for operation in _every_operation(fixture):
+        recorded = _operation_words(operation)
+        if _resolved_command(recorded) not in HELPER_WRITING_COMMANDS:
+            continue
+        literals = _word_literals(recorded)
+        if not any(
+            literal is not None and _basename(literal) in WORD_SUPPLYING_COMMANDS
+            for literal in literals
+        ):
+            # A command written with no destination of its own and nothing to
+            # supply one creates no file.
+            continue
+        created, inside, words, _ = _helper_paths(fixture, operation)
+        if not created and not inside and not words:
+            return True
+    return False
+
+
+def _every_operation(fixture: _Fixture) -> tuple[_Operation, ...]:
+    """Return every command this checker reads, including unmodelled bodies."""
+
+    operations = [
+        operation for operation in fixture.operations if operation.reachable
+    ]
+    for declaration in _deferred_bodies(fixture):
+        operations.extend(_deferred_operations(fixture, declaration) or ())
+    return tuple(operations)
+
+
+def _loop_lists(fixture: _Fixture) -> dict[int, tuple[Token, ...]]:
+    """Return the words each `for` head iterates, keyed by where the head starts."""
+
+    lists: dict[int, tuple[Token, ...]] = {}
+    for node in fixture.graph.nodes:
+        if node.name != LOOP_KEYWORD or node.token is None:
+            continue
+        lists[node.token.start.offset] = node.words
+    return lists
+
+
+def _loop_list_paths(fixture: _Fixture, operation: _Operation) -> frozenset[_Path]:
+    """Return every path the list of a `for` head enclosing one operation names.
+
+    A `for` head binds its name once per round, and this checker settles no
+    name a loop head binds, so a word written under it that reads that name is
+    reported as unsettled with no name of its own. The list is written in full
+    where the head is, though, so the file such a word creates is one of the
+    paths the list names.
+    """
+
+    lists = _loop_lists(fixture)
+    settled: set[_Path] = set()
+    for enclosure in operation.node.enclosures:
+        if enclosure.kind != LOOP_BODY or enclosure.token is None:
+            continue
+        for word in lists.get(enclosure.token.start.offset, ()):
+            settled |= _settle_written_word(fixture, operation, word.text)
+    return frozenset(settled)
+
+
+def _shadowing_helpers(fixture: _Fixture) -> list[Finding]:
+    """Reject every helper file the fixture writes into a searched directory.
+
+    A helper is written either through a redirection or as the operand of a
+    command that puts a file in place. Both readings settle the written word
+    against the values the operation holds, so a helper named through a
+    variable is read as the name it carries. A created path no written text
+    anchors at the root names a directory the shell decides, and the shell may
+    be in a searched directory, so such a path is read as reachable. A created
+    path is compared against a searched directory by what both are written
+    with rather than by their text, because a substitution that reads the
+    working directory names a directory `cd` decides, so two paths written
+    apart may still name one directory. A fixture
+    whose search path this checker cannot place, and an operation whose
+    destination it cannot read, prove nothing about where a written file is
+    found, so every helper they name is rejected on the name the word is
+    written with. A word this checker cannot read at all is refused rather
+    than settled, because an interpreter given a program text creates the
+    files that text writes, and a command that takes its destination from what
+    it reads names no file at all, so the fixture is then read for every
+    helper name it writes anywhere. A redirection written on a group or a loop
+    carries no command of its own, so it is read from the written records as
+    well.
+    """
+
+    searched, unplaced = _searched_directories(fixture)
+    if not searched and not unplaced:
+        return []
+    unnamed = _writes_where_no_word_names(fixture)
+    unplaced = unplaced or unnamed
+    findings: dict[tuple[str, int | None], Finding] = {}
+
+    def record(name: str, position: Position | None) -> None:
+        findings.setdefault(
+            (name, None if position is None else position.offset),
+            Finding(
+                RULE_COMMAND_SHADOWING,
+                f"the fixture writes a `{name}` helper the command search path "
+                "it puts in place can reach before the command a bound "
+                "observation runs",
+                position,
+            ),
+        )
+
+    if unnamed:
+        # The file that command creates is named by nothing written, so every
+        # helper name the fixture writes anywhere may be the name it takes.
+        for operation in _every_operation(fixture):
+            recorded = _operation_words(operation)
+            literals = _word_literals(recorded)
+            # The word a launcher chain runs is a command name rather than a
+            # path, so the reading starts after the command this run resolves.
+            start = max(
+                _command_index(literals, OBSERVED_COMMANDS),
+                _command_index(literals, HELPER_WRITING_COMMANDS),
+                0,
+            )
+            for place, token in enumerate(recorded):
+                if place <= start:
+                    continue
+                name = _written_name(token.text)
+                if name in SHADOWED_HELPER_COMMANDS:
+                    record(name, operation.position)
+    for operation in fixture.operations:
+        if not operation.reachable:
+            continue
+        created, inside, words, unknown = _helper_paths(fixture, operation)
+        for anchored, segments in created:
+            if not segments or segments[-1] not in SHADOWED_HELPER_COMMANDS:
+                continue
+            reached = _reaches_a_searched_directory(
+                (anchored, segments[:-1]), searched
+            )
+            if unplaced or not anchored or reached:
+                record(segments[-1], operation.position)
+        for directory, name in inside:
+            if name not in SHADOWED_HELPER_COMMANDS:
+                continue
+            reached = _reaches_a_searched_directory(directory, searched)
+            if unplaced or not directory[0] or reached:
+                record(name, operation.position)
+        for name in _carried_helpers(_operation_words(operation)):
+            record(name, operation.position)
+        if unknown:
+            for anchored, segments in _loop_list_paths(fixture, operation):
+                if not segments or segments[-1] not in SHADOWED_HELPER_COMMANDS:
+                    continue
+                reached = _reaches_a_searched_directory(
+                    (anchored, segments[:-1]), searched
+                )
+                if unplaced or not anchored or reached:
+                    record(segments[-1], operation.position)
+        if not unplaced and not unknown:
+            continue
+        for word in words:
+            name = _written_name(word)
+            if name in SHADOWED_HELPER_COMMANDS:
+                record(name, operation.position)
+    for operation, target, settled in _detached_redirections(fixture):
+        for anchored, segments in settled:
+            if not segments or segments[-1] not in SHADOWED_HELPER_COMMANDS:
+                continue
+            reached = _reaches_a_searched_directory(
+                (anchored, segments[:-1]), searched
+            )
+            if unplaced or not anchored or reached:
+                record(segments[-1], operation.position)
+        if not settled or unplaced:
+            name = _written_name(target)
+            if name in SHADOWED_HELPER_COMMANDS:
+                record(name, operation.position)
+    for declaration in _deferred_bodies(fixture):
+        position = declaration.name_token.start
+        operations = _deferred_operations(fixture, declaration)
+        if operations is None:
+            for token in declaration.body:
+                if token.kind != shell_lexical.WORD:
+                    continue
+                name = _written_name(token.text)
+                if name in SHADOWED_HELPER_COMMANDS:
+                    record(name, position)
+                for carried in _carried_names(token.text):
+                    record(carried, position)
+            continue
+        for operation in operations:
+            created, inside, words, unknown = _helper_paths(fixture, operation)
+            for anchored, segments in created:
+                if not segments or segments[-1] not in SHADOWED_HELPER_COMMANDS:
+                    continue
+                reached = _reaches_a_searched_directory(
+                    (anchored, segments[:-1]), searched
+                )
+                if unplaced or not anchored or reached:
+                    record(segments[-1], position)
+            for directory, name in inside:
+                if name not in SHADOWED_HELPER_COMMANDS:
+                    continue
+                reached = _reaches_a_searched_directory(directory, searched)
+                if unplaced or not directory[0] or reached:
+                    record(name, position)
+            for name in _carried_helpers(_operation_words(operation)):
+                record(name, position)
+            if not unplaced and not unknown:
+                continue
+            for word in words:
+                name = _written_name(word)
+                if name in SHADOWED_HELPER_COMMANDS:
+                    record(name, position)
+        for target in _deferred_redirections(declaration):
+            settled = _settle_deferred_word(fixture, target)
+            for anchored, segments in settled:
+                if not segments or segments[-1] not in SHADOWED_HELPER_COMMANDS:
+                    continue
+                reached = _reaches_a_searched_directory(
+                    (anchored, segments[:-1]), searched
+                )
+                if unplaced or not anchored or reached:
+                    record(segments[-1], position)
+            if not settled or unplaced:
+                name = _written_name(target)
+                if name in SHADOWED_HELPER_COMMANDS:
+                    record(name, position)
+    return list(findings.values())
+
+
 def _check_unresolved_dispatch(fixture: _Fixture) -> list[Finding]:
     """Reject a Copier update reached through an unresolved dispatch.
 
@@ -4708,6 +6725,7 @@ def check(source: str | bytes) -> tuple[Finding, ...]:
     findings = list(_check_version_commits(fixture))
     findings.extend(_check_inventory_region(fixture))
     findings.extend(_check_direct_invocation(fixture))
+    findings.extend(_check_command_shadowing(fixture))
     findings.extend(_check_unresolved_dispatch(fixture))
     if _is_transition(fixture):
         findings.extend(_check_transition(fixture))
