@@ -1,6 +1,6 @@
 # Restore the resolution model as the single update authority
 
-status: in_progress
+status: checked
 primary_invariant: no bounded fixture rule rejects an operation the checked resolution model proves is not a Copier update of the sanctioned destination, and every spelling the blanket detector uniquely catches still rejects
 task_types:
   - template_workflow
