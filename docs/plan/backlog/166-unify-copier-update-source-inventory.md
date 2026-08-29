@@ -25,7 +25,7 @@ context_files:
   - docs/plan/checked/2026/08/16-31/203-derive-bounded-shell-function-table.md
   - docs/plan/checked/2026/08/16-31/204-derive-bounded-shell-execution-graph.md
   - docs/plan/checked/2026/08/16-31/205-integrate-bounded-copier-fixture-validator.md
-  - docs/plan/active/186-bind-connected-copier-fixture-checker.md
+  - docs/plan/checked/2026/08/16-31/186-bind-connected-copier-fixture-checker.md
   - docs/plan/replanned/2026/08/16-31/130-map-acceptance-validation-witnesses.md
   - tests/validation_tools/plan.py
 required_specs:

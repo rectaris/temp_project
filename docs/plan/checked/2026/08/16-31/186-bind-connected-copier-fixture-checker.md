@@ -1,6 +1,6 @@
 # Bind the connected Copier fixture checker
 
-status: in_progress
+status: checked
 primary_invariant: the focused checker rejects removal, duplication, redefinition, or bypass of every committed fixture operation needed to witness the unchanged Plan 183 acceptance
 task_types:
   - template_workflow
@@ -75,15 +75,21 @@ checked_summary_ja: committed fixtureの必須操作の欠落、重複、再定�
 
 ## Tasks
 
-- [ ] Re-admit only checker behavior that remains valid against checked Plans 182, 227, and 191 without changing the committed fixture.
-- [ ] Bind the ready emission, wrapper release polling loop, parent ready polling loop, and cleanup, ready-failure, and normal release blocks.
-- [ ] Reject removal or bypass of the committed v1.4.4 pre-schema active plan, replanned source archive, replan contract, and consumed-record assertion for that active plan.
-- [ ] Require exactly one bounded waiter, guardian-stop helper, state-assertion helper, and guardian-PID-reader helper, and inspect each helper's required behavior.
-- [ ] Retain unique version ordering, one-inventory copy and staging, direct-script prohibition, update-process reap and PID clearing, pending then consumed ordering, positive guardian PID, and guardian cleanup checks.
-- [ ] Complete fresh independent review and focused validation with zero unresolved High or Medium findings.
-- [ ] Archive and commit only scripts/check-copier-template.py plus parent-owned lifecycle files.
+- [x] Re-admit only checker behavior that remains valid against checked Plans 182, 227, and 191 without changing the committed fixture.
+- [x] Bind the ready emission, wrapper release polling loop, parent ready polling loop, and cleanup, ready-failure, and normal release blocks.
+- [x] Reject removal or bypass of the committed v1.4.4 pre-schema active plan, replanned source archive, replan contract, and consumed-record assertion for that active plan.
+- [x] Require exactly one bounded waiter, guardian-stop helper, state-assertion helper, and guardian-PID-reader helper, and inspect each helper's required behavior.
+- [x] Retain unique version ordering, one-inventory copy and staging, direct-script prohibition, update-process reap and PID clearing, pending then consumed ordering, positive guardian PID, and guardian cleanup checks.
+- [x] Complete fresh independent review and focused validation with zero unresolved High or Medium findings.
+- [x] Archive and commit only scripts/check-copier-template.py plus parent-owned lifecycle files.
 
 ## Validation Notes
 
 - Mutation probes should cover removal of each ready, polling, release, helper, state, process ownership, and guardian edge.
 - Do not execute tests/copier-update.sh in this slice.
+- A read-only mutation sweep of 94 probes removed and duplicated every bound operation in a scratch copy of the fixture; all 94 were rejected and the committed fixture was never written.
+- The independent review returned one High and two Medium findings on unbound post-update witness assertions, unbound intra-region ordering, and unbound pre-schema construction sites. All three were closed by binding those operations and their order, and a 20-case probe of the reported mutations now rejects all 20.
+- Focused validation passed on the accepted candidate: sh -n tests/copier-update.sh, python3 tests/test-copier-fixture-validator.py (327 tests), python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh, python3 scripts/check-copier-template.py, git diff --check.
+- scripts/lint-project-workflow.sh and tests/smoke.sh passed.
+- The activation gate that promotes tests/copier-update.sh from preservation_scope into context_files was not executable. The promotion requires the predecessor's checked-archive commit to add or change that blob, but Plan 227 was archived in 6fcc959 separately from its implementation commit 7aa4701, so the durable engine cannot admit the promotion. The fixture stayed in preservation_scope and was read only.
+- tests/test-copier-fixture-validator.py carried a stale assertion that the committed fixture was not a transition, which Plan 227 made false. It was corrected in a separate commit outside this plan's write scope.
