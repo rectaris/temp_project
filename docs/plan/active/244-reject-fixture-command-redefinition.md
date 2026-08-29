@@ -1,6 +1,8 @@
 # Reject fixture command redefinition
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 primary_invariant: the focused checker rejects a fixture that redefines or shadows any shell command a bound transition observation depends on, so no bound assertion can be made vacuous while its committed text survives
 task_types:
   - template_workflow
@@ -73,7 +75,7 @@ checked_summary_ja: bound観測が依存するcommandの再定義やshadowingを
 
 ## Tasks
 
-- [ ] Reproduce the admission by defining grep, test, and touch as no-op functions in a scratch copy of the committed fixture.
+- [x] Reproduce the admission by defining grep, test, and touch as no-op functions in a scratch copy of the committed fixture.
 - [ ] Reject redefinition or shadowing of every command a bound transition observation depends on, and keep the committed fixture accepted unchanged.
 - [ ] Add mutation coverage for a function definition, an alias, and a shadowing helper for each protected command.
 - [ ] Complete fresh independent review and focused validation with zero unresolved High or Medium findings.
@@ -82,3 +84,9 @@ checked_summary_ja: bound観測が依存するcommandの再定義やshadowingを
 ## Validation Notes
 
 - Pending. The reproduction is recorded in the Plan 187 replanned archive as High finding 1.
+- Reproduced the admission: no-op `grep`, `test`, and `touch` declarations appended to a scratch copy of `tests/copier-update.sh` were accepted by the checker before this work.
+- A `command_shadowing` rule was implemented in the working tree and passed every declared validation command: `python3 tests/test-copier-fixture-validator.py` (381 tests OK), `python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh`, `python3 scripts/check-copier-template.py`, and `git diff --check`.
+- Three independent reviews were run against the working-tree diff. The first returned 2 High and 3 Medium findings, the second returned 4 High and 2 Medium findings after the first parent-direct remediation, and the third returned 2 High and 2 Medium findings after the second parent-direct remediation.
+- The remaining findings are that a prefixed search path still reaches an observed command through an unlisted forwarder such as `nice`, that an option word the checker cannot read is dropped rather than reported, and that two search-path binding readings reject fixtures that only mention `PATH` as data.
+- Two independently reviewed parent-direct remediation rounds therefore left High and Medium findings, which is the `parent_remediation_budget_exhausted` stop condition. Execution stopped before completion and archival, and no product change was committed.
+- The working-tree changes to `scripts/project_workflow/copier_fixture_validator.py` and `tests/test-copier-fixture-validator.py` are preserved uncommitted for the restructuring transaction to record in successor `preservation_scope`.
