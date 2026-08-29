@@ -736,6 +736,46 @@ def require_git_retirement_alignment() -> None:
         fail("Copier ownership does not preserve generated-project Git-retirement configuration")
 
 
+SHARED_HUMAN_REPORT_ROOT = "docs/human-report/"
+
+
+def require_shared_human_report_boundary() -> None:
+    """Keep published team reports project owned and outside every Copier inventory."""
+    for source in sorted(template_source_files()):
+        if source.removeprefix("template/").startswith(SHARED_HUMAN_REPORT_ROOT):
+            fail(f"Copier template must not own shared human report content: {source}")
+    for generated in GENERATED_REQUIRED:
+        if generated.startswith(SHARED_HUMAN_REPORT_ROOT):
+            fail(f"generated inventory must not own shared human report content: {generated}")
+
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    managed, _, remainder = ownership.partition("seeded_project_owned:")
+    if not remainder:
+        fail("Copier ownership is missing the seeded_project_owned section")
+    if SHARED_HUMAN_REPORT_ROOT in managed:
+        fail("Copier ownership must not claim shared human report content as managed")
+
+    policy = read("template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md")
+    for marker in (
+        "`docs/human-report/<report-id>/report.json` is the reviewed structured source.",
+        "It never stages and never commits.",
+        "`publish --supersede`",
+        "It never manages `docs/human-report/`",
+        "Automatic commits are not implemented.",
+    ):
+        if marker not in policy:
+            fail(f"generated human reporting policy missing shared-report marker: {marker}")
+
+    generator = read("template/.project-agent-workflow/scripts/human-report.py")
+    for marker in (
+        'SHARED_ROOT = Path("docs/human-report")',
+        'commands.add_parser("publish"',
+        'commands.add_parser("verify-shared"',
+    ):
+        if marker not in generator:
+            fail(f"generated human report CLI missing shared-report marker: {marker}")
+
+
 PLAN_WORKFLOW_ALIGNED_SECTIONS = (
     "Implementation Tiers",
     "Bounded Descope",
@@ -2406,6 +2446,7 @@ def main() -> int:
     require_hook_logging_parity()
     require_root_pre_tool_hardening()
     require_orchestration_policy_markers()
+    require_shared_human_report_boundary()
     require_template_manifest_complete()
 
     fixture_answers: list[dict[str, str]] = []

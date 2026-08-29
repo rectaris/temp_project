@@ -74,6 +74,16 @@ class HumanReportTest(unittest.TestCase):
             json.dumps({"version": 1, "mode": mode}), encoding="utf-8"
         )
 
+    def set_shared_mode(self, shared_mode: str) -> None:
+        (self.root / ".project-agent-workflow/human-report.json").write_text(
+            json.dumps({"version": 1, "mode": "agent_select_local", "shared_mode": shared_mode}),
+            encoding="utf-8",
+        )
+
+    def published(self, report_id: str = "team-decision") -> tuple[Path, Path]:
+        directory = self.root / "docs/human-report" / report_id
+        return directory / "report.json", directory / "index.html"
+
     def write_report(self, report: dict[str, object]) -> Path:
         path = self.root / "report.json"
         path.write_text(json.dumps(report), encoding="utf-8")
@@ -219,6 +229,109 @@ class HumanReportTest(unittest.TestCase):
         symlinked = self.run_cli("render", report_path.name, "--report-id", "safe-id")
         self.assertEqual(symlinked.returncode, 2)
         self.assertIn("symlink output root", symlinked.stderr)
+
+    def test_shared_publication_needs_explicit_configuration(self) -> None:
+        report_path = self.write_report(self.complex_report())
+        refused = self.run_cli("publish", report_path.name, "--report-id", "team-decision")
+        self.assertEqual(refused.returncode, 4)
+        self.assertIn("disabled by project configuration", refused.stderr)
+        self.assertFalse((self.root / "docs/human-report").exists())
+
+        self.set_shared_mode("explicit_publish")
+        allowed = self.run_cli("publish", report_path.name, "--report-id", "team-decision")
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        self.assertEqual(
+            allowed.stdout.split(),
+            ["docs/human-report/team-decision/report.json", "docs/human-report/team-decision/index.html"],
+        )
+        self.assertIn("never stages or commits", allowed.stderr)
+
+    def test_shared_publication_records_provenance_and_detects_stale_sources(self) -> None:
+        self.set_shared_mode("explicit_publish")
+        report_path = self.write_report(self.complex_report())
+        self.assertEqual(self.run_cli("publish", report_path.name, "--report-id", "team-decision").returncode, 0)
+        source, html = self.published()
+
+        document = json.loads(source.read_text(encoding="utf-8"))
+        expected_hash = hashlib.sha256((self.root / "docs/source.md").read_bytes()).hexdigest()
+        self.assertEqual(document["schema_version"], 1)
+        self.assertEqual(document["generator_version"], 1)
+        self.assertEqual(document["report_id"], "team-decision")
+        self.assertEqual(document["sources"], [{"path": "docs/source.md", "sha256": expected_hash}])
+        self.assertTrue(document["source_commit"])
+        self.assertRegex(document["generated_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+        rendered = html.read_text(encoding="utf-8")
+        for marker in ("team-decision", expected_hash, document["generated_at"], "&lt;script&gt;alert(1)&lt;/script&gt;"):
+            self.assertIn(marker, rendered)
+        self.assertNotIn("<script", rendered)
+
+        fresh = self.run_cli("verify-shared")
+        self.assertEqual(fresh.returncode, 0, fresh.stderr)
+        self.assertIn("fresh shared human report: docs/human-report/team-decision", fresh.stdout)
+
+        (self.root / "docs/source.md").write_text("# Source\n\nChanged evidence.\n", encoding="utf-8")
+        stale = self.run_cli("verify-shared")
+        self.assertEqual(stale.returncode, 4)
+        self.assertIn("recorded source docs/source.md changed", stale.stderr)
+
+    def test_shared_publication_requires_explicit_supersede_and_stops_at_conflicts(self) -> None:
+        self.set_shared_mode("explicit_publish")
+        report_path = self.write_report(self.complex_report())
+        self.assertEqual(self.run_cli("publish", report_path.name, "--report-id", "team-decision").returncode, 0)
+        source, html = self.published()
+        first = html.read_text(encoding="utf-8")
+
+        blocked = self.run_cli("publish", report_path.name, "--report-id", "team-decision")
+        self.assertEqual(blocked.returncode, 4)
+        self.assertIn("pass --supersede", blocked.stderr)
+        self.assertEqual(html.read_text(encoding="utf-8"), first)
+
+        superseded = self.run_cli("publish", report_path.name, "--report-id", "team-decision", "--supersede")
+        self.assertEqual(superseded.returncode, 0, superseded.stderr)
+        self.assertEqual(html.read_text(encoding="utf-8"), first)
+
+        source.write_text(
+            "<<<<<<< HEAD\n" + source.read_text(encoding="utf-8") + "=======\n>>>>>>> other\n", encoding="utf-8"
+        )
+        conflicted = self.run_cli("verify-shared")
+        self.assertEqual(conflicted.returncode, 4)
+        self.assertIn("merge conflict marker", conflicted.stderr)
+
+    def test_shared_publication_gates_reject_unsafe_content_and_tampered_output(self) -> None:
+        self.set_shared_mode("explicit_publish")
+        report = self.complex_report()
+        safety = report["content_safety"]
+        assert isinstance(safety, dict)
+        safety["contains_raw_logs"] = True
+        raw_logs = self.run_cli("publish", self.write_report(report).name, "--report-id", "team-decision")
+        self.assertEqual(raw_logs.returncode, 3)
+        self.assertFalse((self.root / "docs/human-report").exists())
+
+        report = self.complex_report()
+        report["summary"] = "Token " + "ghp_" + "a" * 30
+        secret = self.run_cli("publish", self.write_report(report).name, "--report-id", "team-decision")
+        self.assertEqual(secret.returncode, 3)
+        self.assertFalse((self.root / "docs/human-report").exists())
+
+        report_path = self.write_report(self.complex_report())
+        self.assertEqual(self.run_cli("publish", report_path.name, "--report-id", "team-decision").returncode, 0)
+        _, html = self.published()
+        html.write_text(
+            html.read_text(encoding="utf-8")
+            .replace("<h1>", '<script src="https://example.invalid/x.js"></script><h1>')
+            .replace('<html lang="en">', "<html>"),
+            encoding="utf-8",
+        )
+        tampered = self.run_cli("verify-shared")
+        self.assertEqual(tampered.returncode, 4)
+        for marker in (
+            "not the deterministic rendering",
+            "forbidden <script> element",
+            "external reference attribute src",
+            "must declare a document language",
+        ):
+            self.assertIn(marker, tampered.stderr)
 
 
 if __name__ == "__main__":

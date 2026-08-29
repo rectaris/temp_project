@@ -28,6 +28,7 @@ def main() -> int:
     profile_answers = (
         ("primary_language", "Primary language"),
         ("human_report_mode", "Human report mode"),
+        ("human_report_shared_mode", "Shared human report mode"),
         ("codex_hooks_mode", "Codex hooks mode"),
         ("skillspector_mode", "SkillSpector mode"),
         ("external_access_profile", "External access profile"),
@@ -43,6 +44,10 @@ def main() -> int:
     require(
         f'"mode": "{answers["human_report_mode"]}"' in human_report_config,
         "managed human report config does not reflect human_report_mode",
+    )
+    require(
+        f'"shared_mode": "{answers["human_report_shared_mode"]}"' in human_report_config,
+        "managed human report config does not reflect human_report_shared_mode",
     )
 
     conditional_files = (

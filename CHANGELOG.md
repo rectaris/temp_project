@@ -2,6 +2,11 @@
 
 ## 未リリース
 
+- チーム共有用の HTML 報告を、project 所有の Git 追跡先 `docs/human-report/<report-id>/` へ明示コマンドで公開できるようにしました。
+  公開は `human_report_shared_mode` で選択し、構造化 source を review 対象、HTML をそこから決定的に導出する公開物として扱います。
+  公開コマンドは stage も commit もせず、上書きは明示 supersede だけを受け付けます。
+  `verify-shared` は記録した source hash、決定的再生成、公開ゲート、merge conflict 標識を照合して、陳腐化や改変を fail-closed で停止します。
+
 - plan境界で本文を含まないsession checkpointを発行し、異なる観測済みroot sessionから一度だけ後続planを開始するstaged経路を追加しました。
   agent log manifestにはprovider観測tokenと決定的proxy countを分離して保存し、独立reviewは継承turn 0の限定packetと1回の再review上限へ結合します。
 - 権威検証の失敗後は、失敗した操作と終了statusを実行台帳へ固定し、読み取り専用の再現証拠が一つの影響対象invariantを確認するまで修復planの作成を拒否するようにしました。

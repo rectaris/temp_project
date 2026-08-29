@@ -898,6 +898,8 @@ validate_common_lane() {
   grep -q "ci_autofix_mode: $expected_ci_autofix" "$out/.copier-answers.yml"
   grep -q 'human_report_mode: agent_select_local' "$out/.copier-answers.yml"
   grep -q '"mode": "agent_select_local"' "$out/.project-agent-workflow/human-report.json"
+  grep -q 'human_report_shared_mode: disabled' "$out/.copier-answers.yml"
+  test ! -e "$out/docs/human-report"
   grep -Fq "CI autofix mode: \`$expected_ci_autofix\`" "$out/.project-agent-workflow/AGENTS.md"
   if [ "$expected_ci_autofix" = "disabled" ]; then
     test ! -f "$out/.github/workflows/codex-ci-autofix.yml"

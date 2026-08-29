@@ -56,10 +56,13 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
     template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
+    template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md \
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+    template/.project-agent-workflow/human-report.json.jinja \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/human-report.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/planlib.py \
@@ -108,10 +111,13 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
     template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
+    template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md \
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+    template/.project-agent-workflow/human-report.json.jinja \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/human-report.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/planlib.py \
@@ -772,6 +778,130 @@ PY
   rm "$out/$input"
 }
 
+run_shared_human_report_smoke() {
+  out=$1
+  shared="$out-shared"
+  clone="$out-shared-clone"
+  config=.project-agent-workflow/human-report.json
+  input=shared-human-report.json
+  source_path=docs/plan/README.md
+  rm -rf "$shared" "$clone"
+  cp -a "$out" "$shared"
+  grep -q '"shared_mode": "explicit_publish"' "$shared/$config"
+  python3 - "$shared/$input" "$source_path" <<'SHARED_INPUT_PY'
+from pathlib import Path
+import json
+import sys
+
+report = {
+    "version": 1,
+    "title": "Shared <team> decision",
+    "language": "en",
+    "audience": "developer",
+    "purpose": "decision",
+    "summary": "Compare three shared publication options.",
+    "facts": [
+        {
+            "label": "Plan policy",
+            "value": "The generated plan README is present.",
+            "certainty": "confirmed",
+            "source": sys.argv[2],
+        }
+    ],
+    "decisions": [
+        {
+            "question": "Which option should the team select?",
+            "options": [
+                {"label": label, "summary": label, "advantages": [], "disadvantages": []}
+                for label in ("A", "B", "C")
+            ],
+            "recommendation": "A",
+            "reason": "Shared publication smoke.",
+        }
+    ],
+    "relations": [],
+    "risks": [],
+    "next_actions": [],
+    "presentation": {
+        "explicit_html": False,
+        "needs_cross_comparison": True,
+        "needs_filtering": False,
+    },
+    "content_safety": {
+        "reviewed": True,
+        "contains_raw_logs": False,
+        "contains_unredacted_sensitive_data": False,
+    },
+    "sources": [sys.argv[2]],
+}
+Path(sys.argv[1]).write_text(json.dumps(report), encoding="utf-8")
+SHARED_INPUT_PY
+  sed -i 's/"shared_mode": "explicit_publish"/"shared_mode": "disabled"/' "$shared/$config"
+  if (cd "$shared" && python3 .project-agent-workflow/scripts/human-report.py publish "$input" --report-id team-decision >/dev/null 2>&1); then
+    echo "shared human report published while the shared mode was disabled" >&2
+    exit 1
+  fi
+  test ! -e "$shared/docs/human-report"
+  sed -i 's/"shared_mode": "disabled"/"shared_mode": "explicit_publish"/' "$shared/$config"
+
+  published=$(cd "$shared" && python3 .project-agent-workflow/scripts/human-report.py publish "$input" --report-id team-decision 2>/dev/null)
+  test "$published" = "docs/human-report/team-decision/report.json
+docs/human-report/team-decision/index.html"
+  for path in docs/human-report/team-decision/report.json docs/human-report/team-decision/index.html; do
+    test -f "$shared/$path"
+    if git -C "$shared" check-ignore "$path" >/dev/null 2>&1; then
+      echo "shared human report is Git ignored: $path" >&2
+      exit 1
+    fi
+  done
+  html="$shared/docs/human-report/team-decision/index.html"
+  grep -q '&lt;team&gt;' "$html"
+  grep -q 'team-decision' "$html"
+  grep -q "$source_path" "$html"
+  if grep -q '<script' "$html"; then
+    echo "shared human report HTML carries a script element" >&2
+    exit 1
+  fi
+  published_hash=$(python3 - "$shared/docs/human-report/team-decision/report.json" <<'SHARED_PROVENANCE_PY'
+from pathlib import Path
+import json
+import sys
+
+document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if document["schema_version"] != 1 or document["generator_version"] != 1:
+    raise SystemExit("shared human report provenance schema changed")
+for key in ("report_id", "generated_at", "source_commit"):
+    if not document[key]:
+        raise SystemExit(f"shared human report provenance is missing {key}")
+print(document["sources"][0]["sha256"])
+SHARED_PROVENANCE_PY
+)
+  grep -q "$published_hash" "$html"
+  (cd "$shared" && python3 .project-agent-workflow/scripts/human-report.py verify-shared >/dev/null)
+  if (cd "$shared" && python3 .project-agent-workflow/scripts/human-report.py publish "$input" --report-id team-decision >/dev/null 2>&1); then
+    echo "shared human report was replaced without an explicit supersede" >&2
+    exit 1
+  fi
+
+  rm "$shared/$input"
+  git -C "$shared" add -A
+  git -C "$shared" -c user.email=smoke@example.invalid -c user.name=smoke commit -qm "Publish the shared human report"
+  git clone -q "$shared" "$clone"
+  for path in docs/human-report/team-decision/report.json docs/human-report/team-decision/index.html; do
+    test -f "$clone/$path"
+    cmp -s "$shared/$path" "$clone/$path"
+  done
+  (cd "$clone" && python3 .project-agent-workflow/scripts/human-report.py verify-shared >/dev/null)
+
+  printf '\nStale detection line.\n' >>"$clone/$source_path"
+  if (cd "$clone" && python3 .project-agent-workflow/scripts/human-report.py verify-shared >/dev/null 2>&1); then
+    echo "shared human report freshness validator accepted a changed source" >&2
+    exit 1
+  fi
+  (cd "$clone" && python3 .project-agent-workflow/scripts/human-report.py verify-shared 2>&1 >/dev/null | grep -q 'changed')
+  rm -rf "$shared" "$clone"
+}
+
 run_external_policy_smoke() {
   out=$1
   policy="$out/.agent-artifacts/external-services-configured.yaml"
@@ -910,7 +1040,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
 done
 
 tab=$(printf '\t')
-while IFS="$tab" read -r case_name primary_language human_report_mode codex_hooks_mode skillspector_mode external_access_profile mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
+while IFS="$tab" read -r case_name primary_language human_report_mode human_report_shared_mode codex_hooks_mode skillspector_mode external_access_profile mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
   [ "$case_name" != "case" ] || continue
   [ -n "$case_name" ] || continue
   fixture="$tmp/$case_name.answers.yml"
@@ -921,6 +1051,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode codex_hook
     printf 'project_purpose: Exercise Copier pairwise generation.\n'
     printf 'primary_language: %s\n' "$primary_language"
     printf 'human_report_mode: %s\n' "$human_report_mode"
+    printf 'human_report_shared_mode: %s\n' "$human_report_shared_mode"
     printf 'codex_hooks_mode: %s\n' "$codex_hooks_mode"
     printf 'skillspector_mode: %s\n' "$skillspector_mode"
     printf 'external_access_profile: %s\n' "$external_access_profile"
@@ -952,6 +1083,7 @@ answers = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = {
     "primary_language": "mixed",
     "human_report_mode": "agent_select_local",
+    "human_report_shared_mode": "disabled",
     "codex_hooks_mode": "install_templates",
     "skillspector_mode": "disabled",
     "external_access_profile": "restricted",
@@ -995,6 +1127,7 @@ run_pre_v1_plan_compatibility_smoke "$tmp/typescript"
 run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
 run_human_report_smoke "$tmp/typescript"
+run_shared_human_report_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"
 
 bad_design=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh backlog bad-human-design --summary "Bad human design." --summary-ja "設計承認の不整合を確認する。")

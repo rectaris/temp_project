@@ -143,6 +143,14 @@ human_report_mode:
     AI エージェントが判断してローカル生成する: agent_select_local
   default: "agent_select_local"
 
+human_report_shared_mode:
+  type: str
+  help: チームで共有する HTML 報告を Git 追跡先へ公開する機能を選んでください。
+  choices:
+    無効にする: disabled
+    明示コマンドで公開し人が確認して commit する: explicit_publish
+  default: "disabled"
+
 codex_hooks_mode:
   type: str
   help: Codex hooks の導入方法を選んでください。

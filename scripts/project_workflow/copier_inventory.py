@@ -409,6 +409,7 @@ QUESTIONS = {
     "project_purpose",
     "primary_language",
     "human_report_mode",
+    "human_report_shared_mode",
     "codex_hooks_mode",
     "skillspector_mode",
     "external_access_profile",
@@ -421,6 +422,7 @@ QUESTIONS = {
 EXPECTED_CHOICE_VALUES = {
     "primary_language": {"typescript", "python", "mixed", "docs"},
     "human_report_mode": {"disabled", "agent_select_local"},
+    "human_report_shared_mode": {"disabled", "explicit_publish"},
     "codex_hooks_mode": {"disabled", "install_templates", "enable_local_logging"},
     "skillspector_mode": {"disabled", "document_optional"},
     "external_access_profile": {"restricted", "task_scoped_default_allow"},
@@ -432,6 +434,7 @@ EXPECTED_CHOICE_VALUES = {
 
 EXPECTED_DEFAULT_VALUES = {
     "human_report_mode": "agent_select_local",
+    "human_report_shared_mode": "disabled",
     "external_access_profile": "restricted",
     "ci_autofix_mode": "disabled",
 }
