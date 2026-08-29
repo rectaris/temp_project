@@ -18,9 +18,54 @@ tmp=$(CDPATH= cd -- "$tmp" && pwd -P)
 source_head_before=$(git -C "$root" rev-parse HEAD)
 source_status_before=$(git -C "$root" status --porcelain=v1 --untracked-files=all)
 
+# Transition state of the v1.4.5 validation-witness migration lane. The
+# release path, the attempt-state path, and both process identifiers are
+# written before the handler is registered so every early exit can release the
+# held update child and stop the detached guardian under `set -u`.
+v145_release="$tmp/v145-guardian-release"
+v145_attempt=
+update_pid=
+guardian_pid=0
+
 cleanup() {
   result=$?
   trap - EXIT HUP INT TERM
+  touch "$v145_release" 2>/dev/null || true
+  # Plan 183 settled the same bounded update-process wait for the cleanup
+  # path, so the released child is waited for and retired here before the
+  # guardian identifier is read and the temporary root is removed.
+  if [ -n "$update_pid" ]; then
+    cleanup_waited=0
+    while [ "$cleanup_waited" -lt 30 ]; do
+      if ! kill -0 "$update_pid" 2>/dev/null; then
+        break
+      fi
+      cleanup_waited=$((cleanup_waited + 1))
+      sleep 1
+    done
+    if kill -0 "$update_pid" 2>/dev/null; then
+      kill -TERM "$update_pid" 2>/dev/null || true
+      sleep 5
+      kill -KILL "$update_pid" 2>/dev/null || true
+    fi
+    wait "$update_pid" 2>/dev/null || true
+    update_pid=
+  fi
+  # An exit between the guardian start and the pending assertion leaves this
+  # handler without the identifier, so recover it from the published attempt
+  # state of the quiescent child before the temporary root is removed.
+  case "$guardian_pid" in
+    ''|*[!0-9]*) guardian_pid=0 ;;
+  esac
+  if [ "$guardian_pid" -eq 0 ] && [ -n "$v145_attempt" ] && [ -f "$v145_attempt" ]; then
+    guardian_pid=$(sed -n 's/^ *"guardian_pid": *\([0-9][0-9]*\),\{0,1\} *$/\1/p' "$v145_attempt" 2>/dev/null || true)
+    case "$guardian_pid" in
+      ''|*[!0-9]*) guardian_pid=0 ;;
+    esac
+  fi
+  if [ "$guardian_pid" -gt 0 ]; then
+    kill -TERM "$guardian_pid" 2>/dev/null || true
+  fi
   source_head_after=$(git -C "$root" rev-parse HEAD 2>/dev/null || true)
   source_status_after=$(git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null || true)
   if [ "$source_head_after" != "$source_head_before" ] || [ "$source_status_after" != "$source_status_before" ]; then
@@ -687,8 +732,13 @@ EOF
   fixture_git "$out" add docs/agent/SPEC_PRODUCT.md docs/agent/PROJECT_ENVIRONMENT.md docs/agent/PROJECT_UI_DESIGN.md
   fixture_git "$out" commit -m "Add local project notes" >/dev/null
   if [ "$lane" = "earliest-supported" ]; then
+    # Only this lane dispatches a Copier update, and it always updates the
+    # `earliest-supported` project. The destination is therefore written as
+    # that one anchored path so the dispatch names a readable project instead
+    # of an unresolved lane parameter.
+    [ "$out" = "$tmp/earliest-supported" ]
     status_before=$(fixture_git "$out" status --porcelain=v1)
-    if run_copier update -q -f --trust --vcs-ref "$target_ref" "$out" >/dev/null 2>&1; then
+    if run_copier update -q -f --trust --vcs-ref "$target_ref" "$tmp/earliest-supported" >/dev/null 2>&1; then
       echo "direct pre-v1 copier update unexpectedly succeeded" >&2
       exit 1
     fi
@@ -1631,5 +1681,251 @@ if ! fixture_git "$wrapper_conflict_out" ls-files -u | grep -q .; then
   echo "v1.2.2-to-v1.2.3 fixture did not create a real index conflict" >&2
   exit 1
 fi
+
+# The synthetic v1.4.4 boundary is this template without the installed
+# validation-witness policy marker, so the before migration reads the
+# committed downstream project as pre-schema.
+v145_marker='validation-witness-migration-provenance-schema: 1'
+v145_policy="$update_source/template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -qF "$v145_marker" "$v145_policy"
+sed -i "s/$v145_marker/validation-witness-migration-provenance-boundary: absent/" "$v145_policy"
+if grep -qF "$v145_marker" "$v145_policy"; then
+  echo "the synthetic v1.4.4 policy still installs the validation-witness boundary" >&2
+  exit 1
+fi
+fixture_git "$update_source" add -- template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
+fixture_git "$update_source" -c user.email=ci@example.invalid -c user.name=CI \
+  commit -qm "Create the pre-schema v1.4.4 boundary"
+# The clone carries the released tags of this template, so both synthetic
+# boundaries replace whatever the clone already names.
+fixture_git "$update_source" tag -f v1.4.4
+
+# The synchronization command runs as its own migration of the synthetic
+# v1.4.5 boundary, ordered directly after the before migration that publishes
+# the pending attempt. It emits the ready event once that migration has
+# returned and holds the update child until this fixture writes the release
+# path, which is how the fixture observes the pending state, the guardian
+# identifier, and the release paths without naming the migration command.
+v145_ready="$tmp/v145-guardian-ready"
+v145_hold="$tmp/v145-hold-before-stage.sh"
+cat >"$v145_hold" <<EOF_V145_HOLD
+#!/bin/sh
+set -eu
+: >"$v145_ready"
+held=0
+while [ "\$held" -lt 600 ]; do
+  if [ -e "$v145_release" ]; then
+    exit 0
+  fi
+  if [ ! -d "$tmp" ]; then
+    echo "the fixture temporary root disappeared while the update was held" >&2
+    exit 1
+  fi
+  held=\$((held + 1))
+  sleep 1
+done
+echo "the fixture release event was not observed" >&2
+exit 1
+EOF_V145_HOLD
+chmod +x "$v145_hold"
+
+sed -i "s/validation-witness-migration-provenance-boundary: absent/$v145_marker/" "$v145_policy"
+grep -qF "$v145_marker" "$v145_policy"
+python3 - "$update_source/copier.yml" "$v145_hold" <<'PY_V145_MIGRATION'
+import re
+import sys
+from pathlib import Path
+
+configuration = Path(sys.argv[1])
+hold = sys.argv[2]
+text = configuration.read_text(encoding="utf-8")
+if "'" in hold or "\n" in hold:
+    raise SystemExit("the fixture synchronization command path is not quotable")
+starts = [match.start() for match in re.finditer(r"^  - version: ", text, re.MULTILINE)]
+if not starts:
+    raise SystemExit("the fixture source declares no versioned Copier migration")
+selected = [
+    (start, stop)
+    for start, stop in zip(starts, starts[1:] + [len(text)])
+    if text[start:stop].startswith("  - version: v1.4.5\n")
+    and "_stage == 'before'" in text[start:stop]
+]
+if len(selected) != 1:
+    raise SystemExit("the v1.4.5 before-stage migration is not written exactly once")
+stop = selected[0][1]
+if stop not in starts:
+    raise SystemExit("the v1.4.5 before-stage migration is written last")
+entry = (
+    "  - version: v1.4.5\n"
+    "    command:\n"
+    f"      - '{hold}'\n"
+    "    when: \"[[ _stage == 'before' ]]\"\n"
+)
+configuration.write_text(text[:stop] + entry + text[stop:], encoding="utf-8")
+PY_V145_MIGRATION
+fixture_git "$update_source" add -- copier.yml \
+  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
+fixture_git "$update_source" -c user.email=ci@example.invalid -c user.name=CI \
+  commit -qm "Create the v1.4.5 validation-witness boundary"
+fixture_git "$update_source" tag -f v1.4.5
+
+v145_project="$tmp/v145-project"
+v145_plan="docs/plan/active/902-pre-schema-integration.md"
+v145_contract="docs/plan/replanned/contracts/901-source.json"
+v145_archive="docs/plan/replanned/2026/08/16-31/901-source.md"
+v145_record="$v145_project/.project-agent-workflow-migration/validation-witness-provenance-v1.json"
+v145_log="$tmp/v145-update.log"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.4.4 \
+  --data-file "$root/tests/fixtures/python.answers.yml" "$update_source" "$v145_project" >/dev/null
+grep -q '^_commit: v1.4.4$' "$v145_project/.copier-answers.yml"
+if grep -qF "$v145_marker" "$v145_project/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"; then
+  echo "the generated v1.4.4 project already installs the validation-witness boundary" >&2
+  exit 1
+fi
+
+mkdir -p "$v145_project/docs/plan/active" \
+  "$v145_project/docs/plan/replanned/contracts" \
+  "$v145_project/docs/plan/replanned/2026/08/16-31"
+cat >"$v145_project/$v145_plan" <<'EOF_V145_PLAN'
+# Pre-schema integration
+
+status: in_progress
+primary_invariant: preserve the committed integration identity
+replan_contract: docs/plan/replanned/contracts/901-source.json
+acceptance:
+  - Preserve the pre-schema acceptance.
+validation:
+  - python3 scripts/validate-changes.py --all
+checked_summary_ja: 移行前の統合計画を保持する。
+
+## Tasks
+
+- [ ] Preserve the integration boundary.
+EOF_V145_PLAN
+cat >"$v145_project/$v145_archive" <<'EOF_V145_ARCHIVE'
+# Replanned source
+
+status: replanned
+EOF_V145_ARCHIVE
+python3 - "$v145_project" "$v145_plan" "$v145_contract" "$v145_archive" <<'PY_V145_CONTRACT'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+project = Path(sys.argv[1])
+plan_path = sys.argv[2]
+contract_path = sys.argv[3]
+archive_path = sys.argv[4]
+
+
+def digest(raw: bytes) -> str:
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+plan_raw = (project / plan_path).read_bytes()
+acceptance = ["Preserve the pre-schema acceptance."]
+contract = {
+    "archive_path": archive_path,
+    "contract_path": contract_path,
+    "schema_version": 1,
+    "successors": [
+        {
+            "acceptance_digests": [digest(item.encode("utf-8")) for item in acceptance],
+            "content": plan_raw.decode("utf-8"),
+            "content_digest": digest(plan_raw),
+            "integration": True,
+            "path": plan_path,
+        }
+    ],
+}
+(project / contract_path).write_text(
+    json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY_V145_CONTRACT
+fixture_git "$v145_project" init -b main >/dev/null
+fixture_git "$v145_project" config user.email "ci@example.invalid"
+fixture_git "$v145_project" config user.name "CI"
+fixture_git "$v145_project" add -A
+fixture_git "$v145_project" commit -qm "Create the pre-schema v1.4.4 project"
+v145_git_dir=$(fixture_git "$v145_project" rev-parse --path-format=absolute --absolute-git-dir)
+v145_attempt="$v145_git_dir/project-agent-workflow/validation-witness-provenance-v1.attempt.json"
+
+# Plan 183 settled a bounded wait on the update process itself, so this
+# fixture reads the identifier it started. The identifier stays its own
+# unreaped child until this wait retires it, and the forced signals run only
+# while that child is still live.
+"$v145_project/.project-agent-workflow/scripts/update-from-copier.sh" \
+  --defaults --vcs-ref v1.4.5 >"$v145_log" 2>&1 &
+update_pid=$!
+
+v145_ready_waited=0
+while [ "$v145_ready_waited" -lt 300 ]; do
+  if [ -e "$v145_ready" ]; then
+    break
+  fi
+  v145_ready_waited=$((v145_ready_waited + 1))
+  sleep 1
+done
+if [ ! -e "$v145_ready" ]; then
+  touch "$v145_release"
+  echo "the guardian ready event was not observed" >&2
+  cat "$v145_log" >&2
+  exit 1
+fi
+
+grep -q '"state": "pending"' "$v145_attempt"
+guardian_pid=$(sed -n 's/^ *"guardian_pid": *\([0-9][0-9]*\),\{0,1\} *$/\1/p' "$v145_attempt")
+case "$guardian_pid" in
+  ''|*[!0-9]*)
+    echo "the guardian PID was not read from the pending attempt state" >&2
+    exit 1
+    ;;
+esac
+[ "$guardian_pid" -gt 0 ]
+
+touch "$v145_release"
+
+v145_exit_waited=0
+while [ "$v145_exit_waited" -lt 30 ]; do
+  if ! kill -0 "$update_pid" 2>/dev/null; then
+    break
+  fi
+  v145_exit_waited=$((v145_exit_waited + 1))
+  sleep 1
+done
+v145_update_status=0
+v145_reaped=0
+if ! kill -0 "$update_pid" 2>/dev/null; then
+  wait "$update_pid" || v145_update_status=$?
+  v145_reaped=1
+fi
+if [ "$v145_reaped" -eq 0 ]; then
+  kill -TERM "$update_pid" 2>/dev/null || true
+  sleep 5
+  kill -KILL "$update_pid" 2>/dev/null || true
+fi
+wait "$update_pid" 2>/dev/null || true
+update_pid=
+if [ "$v145_reaped" -ne 1 ] || [ "$v145_update_status" -ne 0 ]; then
+  echo "the v1.4.4-to-v1.4.5 transition update did not complete" >&2
+  cat "$v145_log" >&2
+  exit 1
+fi
+
+grep -q '"state": "consumed"' "$v145_attempt"
+grep -q '^_commit: v1.4.5$' "$v145_project/.copier-answers.yml"
+grep -qF "$v145_marker" "$v145_project/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q '"migration_version": "v1.4.5"' "$v145_record"
+grep -q '"previous_template_ref": "v1.4.4"' "$v145_record"
+grep -q "\"path\": \"$v145_plan\"" "$v145_record"
+test -f "$v145_project/$v145_contract"
+test -f "$v145_project/$v145_archive"
+if find "$v145_project" -name '*.rej' -print -quit | grep -q .; then
+  echo "the v1.4.5 transition produced rejection files" >&2
+  exit 1
+fi
+fixture_git "$v145_project" diff --check
 
 echo "copier update test passed"
