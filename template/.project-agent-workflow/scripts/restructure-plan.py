@@ -78,6 +78,9 @@ ARCHIVE_PATH_RE = re.compile(
 CONTRACT_PATH_RE = re.compile(r"docs/plan/replanned/contracts/[0-9]{3}-[a-z0-9][a-z0-9-]*\.json")
 COMPANION_PATH = "docs/plan/replanned/baselines/live-validation-successors-v1.json"
 REBIND_BASELINE_PATH = "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
+PRE_BOUNDARY_PATH = (
+    "docs/plan/replanned/baselines/pre-boundary-lifecycle-reconciliations-v1.json"
+)
 COMPANION_PLAN_PATH = "docs/plan/active/190-migrate-live-plan-contracts.md"
 SHA_RE = re.compile(r"sha256:[0-9a-f]{64}")
 CHECKED_PATH_RE = re.compile(
@@ -109,7 +112,7 @@ JOURNAL_TRANSITIONS = {
     "complete": set(),
     "rolled_back": set(),
 }
-REBIND_KINDS = {"rebind", "activation", "reservation"}
+REBIND_KINDS = {"rebind", "activation", "reservation", "lineage_rebind"}
 RESERVATION_FIELDS = {
     "write_scope",
     "preservation_scope",
@@ -130,6 +133,11 @@ ACTIVATION_FIELDS = {
     "predecessor_plans",
     "integration_gates",
     "preservation_scope",
+}
+LINEAGE_REBIND_FIELDS = {
+    "context_files",
+    "predecessor_plans",
+    "integration_gates",
 }
 VALIDATION_REPLACEMENT_FIELDS = {
     "focused_validation",
@@ -1836,6 +1844,8 @@ def apply_exact_replacements(
         allowed_fields = ACTIVATION_FIELDS
     elif kind == "reservation":
         allowed_fields = RESERVATION_FIELDS
+    elif kind == "lineage_rebind":
+        allowed_fields = LINEAGE_REBIND_FIELDS
     else:
         allowed_fields = REBIND_FIELDS
     seen: set[tuple[str, str, str, str, int]] = set()
@@ -2897,6 +2907,104 @@ def activation_checked_pairs() -> dict[str, str]:
     return pairs
 
 
+def replan_lineage_pairs() -> dict[str, set[str]]:
+    """Map each replanned source's former active path to its checked successors.
+
+    A plan that names a predecessor which was later replanned can never be
+    activated, because activation resolves an active path only to the checked
+    archive carrying the same plan id and a replanned source has no checked
+    archive. The replan contract already records which successors replaced that
+    source, so a reference may move to one of those successors once it is checked.
+    """
+    checked = activation_checked_pairs()
+    pairs: dict[str, set[str]] = {}
+    if not REPLANNED_INDEX.is_file():
+        return pairs
+    for _, archive_path, contract_path in replanned_rows(
+        REPLANNED_INDEX.read_text(encoding="utf-8")
+    ):
+        source_active = f"docs/plan/active/{Path(archive_path).name}"
+        try:
+            contract = json.loads(
+                read_regular_file(ROOT / contract_path, contract_path)
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RestructureError(
+                f"invalid durable contract for lineage rebinding: {contract_path}"
+            ) from exc
+        successors = contract.get("successors")
+        if not isinstance(successors, list):
+            raise RestructureError(
+                f"contract has no successor list: {contract_path}"
+            )
+        for successor in successors:
+            if not isinstance(successor, dict):
+                continue
+            successor_path = successor.get("path")
+            if not isinstance(successor_path, str):
+                continue
+            checked_path = checked.get(successor_path)
+            if checked_path is not None:
+                pairs.setdefault(source_active, set()).add(checked_path)
+    return pairs
+
+
+def validate_lineage_reference_transition(
+    before: dict[str, str | list[str]],
+    after: dict[str, str | list[str]],
+    replacements: list[dict[str, Any]],
+    label: str,
+) -> None:
+    pairs = replan_lineage_pairs()
+    id_pairs = {
+        (Path(source).name[:3], Path(target).name[:3])
+        for source, targets in pairs.items()
+        for target in targets
+    }
+    for index, replacement in enumerate(replacements, start=1):
+        old = replacement["old"]
+        new = replacement["new"]
+        references = list(dict.fromkeys(ACTIVE_REFERENCE_RE.findall(old)))
+        if references:
+            if len(references) != 1:
+                raise RestructureError(
+                    f"{label} replacement {index} must name exactly one replanned source"
+                )
+            candidates = pairs.get(references[0])
+            if not candidates:
+                raise RestructureError(
+                    f"{label} replacement {index} names no replanned source with a checked successor"
+                )
+            expected = {
+                old.replace(references[0], candidate) for candidate in candidates
+            }
+            if new not in expected:
+                raise RestructureError(
+                    f"{label} replacement {index} does not resolve to a checked successor of that source"
+                )
+            continue
+        admitted = {
+            old.replace(source_id, successor_id)
+            for source_id, successor_id in id_pairs
+            if source_id != successor_id and source_id in old
+        }
+        if old in admitted or new not in admitted:
+            raise RestructureError(
+                f"{label} replacement {index} does not restate one replanned source as a checked successor"
+            )
+    if any(
+        before.get(field) != after.get(field)
+        for field in REBIND_PROTECTED_FIELDS | {"completion_deferred_reason"}
+    ):
+        raise RestructureError(
+            f"{label} lineage rebinding changes protected plan identity"
+        )
+    if scalar(after, "status") not in {"deferred", "backlog"}:
+        raise RestructureError(
+            f"{label} lineage rebinding requires an unstarted plan"
+        )
+
+
 def validate_activation_reference_transition(
     after: dict[str, str | list[str]],
     after_content: str,
@@ -3006,9 +3114,14 @@ def validate_rebinding_specs(
             raise RestructureError("one transaction may rebind each live plan once")
         seen_paths.add(plan_path)
         live = live_successors.get(plan_path)
-        if live is None or live["lifecycle"] != "active":
+        allowed_lifecycles = (
+            {"active", "backlog"} if kind == "lineage_rebind" else {"active"}
+        )
+        if live is None or live["lifecycle"] not in allowed_lifecycles:
             raise RestructureError(
-                f"rebindings[{index}] must target one exact active contract successor"
+                f"rebindings[{index}] must target one exact unstarted contract successor"
+                if kind == "lineage_rebind"
+                else f"rebindings[{index}] must target one exact active contract successor"
             )
         if spec["owning_contract_path"] != live["contract_path"]:
             raise RestructureError(
@@ -3023,8 +3136,9 @@ def validate_rebinding_specs(
             or not SHA_RE.fullmatch(spec["updated_content_digest"])
         ):
             raise RestructureError(f"rebindings[{index}] has an invalid digest")
-        target = ROOT / plan_path
-        original_content = read_regular_file(target, plan_path).decode("utf-8")
+        live_path = live.get("live_path") or plan_path
+        target = ROOT / live_path
+        original_content = read_regular_file(target, live_path).decode("utf-8")
         if sha256(original_content.encode("utf-8")) != spec["original_content_digest"]:
             raise RestructureError(
                 f"rebindings[{index}] original content is stale"
@@ -3069,6 +3183,17 @@ def validate_rebinding_specs(
                 raise RestructureError(
                     f"rebindings[{index}] initial rebind cannot promote preservation"
                 )
+        elif kind == "lineage_rebind":
+            if spec["promoted_preservation_path"] is not None:
+                raise RestructureError(
+                    f"rebindings[{index}] lineage rebinding cannot promote preservation"
+                )
+            validate_lineage_reference_transition(
+                before,
+                after,
+                spec["replacements"],
+                f"rebindings[{index}]",
+            )
         else:
             protected = REBIND_PROTECTED_FIELDS - {"status", "preservation_scope"}
             if any(before.get(field) != after.get(field) for field in protected):
@@ -3127,7 +3252,7 @@ def validate_rebinding_specs(
             {key: value for key, value in record.items() if key != "record_digest"}
         )
         records.append(record)
-        updated_files.append((plan_path, original_content, updated_content))
+        updated_files.append((live_path, original_content, updated_content))
         updated_statuses[plan_path] = scalar(after, "status")
         effective_projections[plan_path] = resulting_projection
     all_records = [*existing_records, *records]
@@ -3445,6 +3570,78 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 record["record_digest"] for record in reservation_records
             ],
         }
+    if operation == "rebind_lineage":
+        exact_object(
+            spec,
+            {"schema_version", "operation", "source_head", "rebindings"},
+            "schema-3 lineage rebind specification",
+        )
+        if spec["source_head"] != current_head():
+            raise RestructureError("source HEAD mismatch")
+        repository_state = verify_repository_contracts()
+        expected_dirty = dirty_product_paths()
+        transaction_id = canonical_digest(
+            {
+                "source_head": spec["source_head"],
+                "specification": spec,
+            }
+        )
+        active_text, rows, records_by_path = current_active_records()
+        checked_paths = {path for _, path in checked_rows()}
+        rebind_records, updated_files, _ = validate_rebinding_specs(
+            spec["rebindings"],
+            repository_state=repository_state,
+            transaction_id=transaction_id,
+            authorized_old_references=checked_paths | set(records_by_path),
+            authorized_new_references=checked_paths | set(records_by_path),
+            allowed_kinds={"lineage_rebind"},
+        )
+        new_records = dict(records_by_path)
+        for path, _, content in updated_files:
+            if path in new_records:
+                new_records[path] = (new_records[path][0], parse_manifest(content))
+        validate_active_predecessors(new_records)
+        replanned_text = (
+            REPLANNED_INDEX.read_text(encoding="utf-8")
+            if REPLANNED_INDEX.exists()
+            else "# Replanned Plan Index\n\nid\tpath\tcontract\n"
+        )
+        baseline = {
+            "schema_version": 1,
+            "records": [
+                *repository_state["rebind_records"],
+                *rebind_records,
+            ],
+        }
+        return {
+            "operation": "rebind",
+            "transaction_id": transaction_id,
+            "source_head": spec["source_head"],
+            "active_text": active_text,
+            "active_new": render_active(rows),
+            "replanned_text": replanned_text,
+            "replanned_new": replanned_text,
+            "replanned_existed": REPLANNED_INDEX.exists(),
+            "source_files": [],
+            "destinations": [],
+            "updated_files": updated_files,
+            "baseline_new": json.dumps(
+                baseline,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            "baseline_original": repository_state["rebind_baseline_content"],
+            "expected_dirty_product_paths": expected_dirty,
+            "expected_dirty_product_snapshot": dirty_product_snapshot(
+                expected_dirty
+            ),
+            "result_path": REBIND_BASELINE_PATH,
+            "rebind_record_digests": [
+                record["record_digest"] for record in rebind_records
+            ],
+        }
     if operation == "rebind":
         exact_object(
             spec,
@@ -3553,7 +3750,7 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
     )
     if operation != "reconstruct":
         raise RestructureError(
-            "schema-3 operation must be reconstruct, rebind, or reserve"
+            "schema-3 operation must be reconstruct, rebind, rebind_lineage, or reserve"
         )
     source_head = spec["source_head"]
     if (
@@ -5865,6 +6062,144 @@ def rebind_baseline_content() -> str | None:
     return read_regular_file(path, REBIND_BASELINE_PATH).decode("utf-8")
 
 
+def blob_bytes_at_commit(commit: str, relative: str) -> bytes | None:
+    result = subprocess.run(
+        ["git", "cat-file", "-e", f"{commit}:{relative}"],
+        cwd=ROOT,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return None
+    return run_git("show", f"{commit}:{relative}")
+
+
+def load_pre_boundary_reconciliations() -> dict[str, dict[str, str]]:
+    """Read the frozen registry of plans archived before the lifecycle rule was enforced.
+
+    A plan that left `deferred` without an activation record can no longer be
+    corrected in band, because a rebinding targets one live active successor and
+    the plan already resides in an immutable checked archive. The registry closes
+    exactly those cases: every entry binds the expected chain baseline, the archive
+    path, and the archive bytes, and every entry must already be archived at a
+    boundary commit that the registry itself names. The file is write-once, so a
+    defect introduced after the registry was committed can never be admitted here.
+    """
+    path = ROOT / PRE_BOUNDARY_PATH
+    if not path.exists():
+        if path.is_symlink():
+            raise RestructureError(
+                "pre-boundary lifecycle reconciliation registry is a symlink"
+            )
+        return {}
+    reject_symlink_ancestors(PRE_BOUNDARY_PATH, include_target=True)
+    published = read_regular_file(path, PRE_BOUNDARY_PATH)
+    try:
+        registry = json.loads(published)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RestructureError(
+            "invalid pre-boundary lifecycle reconciliation registry"
+        ) from exc
+    exact_object(
+        registry,
+        {"schema_version", "boundary_commit", "reconciliations"},
+        "pre-boundary lifecycle reconciliation registry",
+    )
+    entries = registry["reconciliations"]
+    if registry["schema_version"] != 1 or not isinstance(entries, list) or not entries:
+        raise RestructureError(
+            "pre-boundary lifecycle reconciliation registry schema mismatch"
+        )
+    boundary = registry["boundary_commit"]
+    if not isinstance(boundary, str) or not re.fullmatch(r"[0-9a-f]{40}", boundary):
+        raise RestructureError(
+            "pre-boundary lifecycle reconciliation boundary commit is invalid"
+        )
+    if not commit_is_ancestor_of_head(boundary):
+        raise RestructureError(
+            "pre-boundary lifecycle reconciliation boundary commit is unreachable"
+        )
+    committed = committed_file_bytes(PRE_BOUNDARY_PATH)
+    if committed is not None:
+        if committed != published:
+            raise RestructureError(
+                "pre-boundary lifecycle reconciliation registry is not write-once"
+            )
+        history = run_git(
+            "log", "--all", "--format=%H", "--", PRE_BOUNDARY_PATH
+        ).decode("utf-8").split()
+        if len(history) != 1:
+            raise RestructureError(
+                "pre-boundary lifecycle reconciliation registry was rewritten"
+            )
+    reconciliations: dict[str, dict[str, str]] = {}
+    for index, raw in enumerate(entries):
+        entry = exact_object(
+            raw,
+            {"plan_path", "baseline_digest", "archive_path", "archive_digest", "reason"},
+            f"pre-boundary reconciliation {index}",
+        )
+        label = f"pre-boundary reconciliation {index}"
+        plan_path = normalized_path(
+            entry["plan_path"], PLAN_PATH_RE, f"{label} plan path"
+        )
+        archive_path = normalized_path(
+            entry["archive_path"], CHECKED_PATH_RE, f"{label} archive path"
+        )
+        if plan_path in reconciliations:
+            raise RestructureError(f"{label} duplicates a reconciled plan")
+        if Path(plan_path).name != Path(archive_path).name:
+            raise RestructureError(f"{label} archive is not the same plan")
+        if (ROOT / plan_path).exists():
+            raise RestructureError(f"{label} plan is still live at its active path")
+        for field in ("baseline_digest", "archive_digest"):
+            if not isinstance(entry[field], str) or not SHA_RE.fullmatch(entry[field]):
+                raise RestructureError(f"{label} {field} is invalid")
+        if not isinstance(entry["reason"], str) or not entry["reason"].strip():
+            raise RestructureError(f"{label} records no reason")
+        reject_symlink_ancestors(archive_path, include_target=True)
+        archive_file = ROOT / archive_path
+        if not archive_file.is_file():
+            raise RestructureError(f"{label} archive is missing")
+        archive_bytes = read_regular_file(archive_file, archive_path)
+        if sha256(archive_bytes) != entry["archive_digest"]:
+            raise RestructureError(f"{label} archive bytes changed")
+        if scalar(
+            parse_manifest(archive_bytes.decode("utf-8")), "status"
+        ) != "checked":
+            raise RestructureError(f"{label} archive is not a checked completion")
+        if blob_bytes_at_commit(boundary, archive_path) != archive_bytes:
+            raise RestructureError(
+                f"{label} archive was not committed before the boundary"
+            )
+        reconciliations[plan_path] = {
+            "baseline_digest": entry["baseline_digest"],
+            "archive_path": archive_path,
+            "archive_digest": entry["archive_digest"],
+        }
+    return reconciliations
+
+
+def reconciled_pre_boundary_archive(
+    reconciliations: dict[str, dict[str, str]],
+    path: str,
+    baseline_content: str,
+    state: dict[str, Any],
+) -> bool:
+    entry = reconciliations.get(path)
+    if entry is None:
+        return False
+    label = f"pre-boundary reconciliation {path}"
+    if state["lifecycle"] != "checked" or state.get("live_path") != entry["archive_path"]:
+        raise RestructureError(f"{label} does not describe the live archive")
+    if sha256(state["live_content"].encode("utf-8")) != entry["archive_digest"]:
+        raise RestructureError(f"{label} archive digest mismatch")
+    if sha256(baseline_content.encode("utf-8")) != entry["baseline_digest"]:
+        raise RestructureError(f"{label} baseline digest mismatch")
+    return True
+
+
 def compare_contract_identity(
     original: dict[str, str | list[str]],
     base: dict[str, str | list[str]],
@@ -6118,6 +6453,13 @@ def verify_rebind_records(
             "rebind baseline targets unknown live successors: " + ", ".join(unknown)
         )
     pending = pending_reservations or {}
+    reconciliations = load_pre_boundary_reconciliations()
+    unreconciled = sorted(set(reconciliations) - set(live_successors))
+    if unreconciled:
+        raise RestructureError(
+            "pre-boundary reconciliation targets unknown live successors: "
+            + ", ".join(unreconciled)
+        )
     effective: dict[str, dict[str, Any]] = {}
     for path, state in live_successors.items():
         projection = state["base_projection"]
@@ -6163,17 +6505,26 @@ def verify_rebind_records(
                         f"legacy stopped successor {path}",
                     )
                 else:
-                    validate_lifecycle_evolution(
+                    baseline_content = (
                         committed_plan_bytes(
                             pending_commit,
                             path,
                             f"pending reservation {path}",
                         )
                         if pending_commit is not None
-                        else state["base_content"],
-                        state["live_content"],
-                        f"live successor lifecycle: {path}",
+                        else state["base_content"]
                     )
+                    if not reconciled_pre_boundary_archive(
+                        reconciliations,
+                        path,
+                        baseline_content,
+                        state,
+                    ):
+                        validate_lifecycle_evolution(
+                            baseline_content,
+                            state["live_content"],
+                            f"live successor lifecycle: {path}",
+                        )
             effective[path] = projection
             continue
         previous_content: str | None = None
@@ -6245,6 +6596,15 @@ def verify_rebind_records(
                     raise RestructureError(
                         f"{label} reservation changes protected plan identity"
                     )
+            elif record["kind"] == "lineage_rebind":
+                if record["promoted_preservation_path"] is not None:
+                    raise RestructureError(f"{label} has an invalid promotion")
+                validate_lineage_reference_transition(
+                    before,
+                    after,
+                    record["replacements"],
+                    label,
+                )
             else:
                 protected = REBIND_PROTECTED_FIELDS - {"status", "preservation_scope"}
                 if any(before.get(field) != after.get(field) for field in protected):
@@ -6312,11 +6672,17 @@ def verify_rebind_records(
                     f"replanned successor stop projection mismatch: {path}"
                 )
         else:
-            validate_lifecycle_evolution(
+            if not reconciled_pre_boundary_archive(
+                reconciliations,
+                path,
                 previous_content,
-                state["live_content"],
-                f"rebind baseline final projection: {path}",
-            )
+                state,
+            ):
+                validate_lifecycle_evolution(
+                    previous_content,
+                    state["live_content"],
+                    f"rebind baseline final projection: {path}",
+                )
         live_manifest = parse_manifest(state["live_content"])
         if validation_projection(
             live_manifest,
@@ -6391,6 +6757,7 @@ def verify_prerequisite_lifecycle(
     return {
         "live_content": target.read_text(encoding="utf-8"),
         "live_manifest": live,
+        "live_path": str(target.relative_to(ROOT)),
         "lifecycle": lifecycle,
     }
 
@@ -6685,6 +7052,9 @@ def verify_schema_three_contract(
             "expected_preservation": successor["preservation_scope"],
             "live_manifest": live_manifest,
             "live_content": live_content,
+            "live_path": (
+                str(live_file.relative_to(ROOT)) if live_file is not None else None
+            ),
             "lifecycle": lifecycle,
             "replan_original_content": replan_original_content,
             "enforce_projection_semantics": True,
@@ -7125,6 +7495,11 @@ def verify_repository_contracts(
                 "expected_preservation": expected_preservation,
                 "live_manifest": live_successor_manifest,
                 "live_content": live_content,
+                "live_path": (
+                    str(live_successor_file.relative_to(ROOT))
+                    if live_successor_file is not None
+                    else None
+                ),
                 "lifecycle": lifecycle,
                 "replan_original_content": replan_original_content,
                 "enforce_projection_semantics": schema_version == 2,

@@ -1,0 +1,34 @@
+{
+  "boundary_commit": "6fcc959f4908b38ef2846f6d3e4abff67c3639dd",
+  "reconciliations": [
+    {
+      "archive_digest": "sha256:8587d13180bc3f87f76d19cad883eb921d90d4909902d0fa893b73a2cb36bae3",
+      "archive_path": "docs/plan/checked/2026/08/16-31/227-complete-bounded-copier-fixture-runtime.md",
+      "baseline_digest": "sha256:68caefeb24bc6b62eaf74b16a8beb4c36286133fc8c9a640ff1f30e147d737ca",
+      "plan_path": "docs/plan/active/227-complete-bounded-copier-fixture-runtime.md",
+      "reason": "started from deferred without an activation record before the boundary commit"
+    },
+    {
+      "archive_digest": "sha256:728e596b9f2291072082e2eb90ce2fe5ee2f32da3fc0ccb029e543b52438785f",
+      "archive_path": "docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md",
+      "baseline_digest": "sha256:a6f0c0c7637f905dcaf9d4b882abd7f0eeedbd3823babbde9dd1a2d8c486e95c",
+      "plan_path": "docs/plan/active/231-scope-fixture-alternate-path-rule.md",
+      "reason": "started from deferred without an activation record before the boundary commit"
+    },
+    {
+      "archive_digest": "sha256:0bd8d110c8f49b35a8b4ee20cedf699a438fcdec7f4aea9a59e96b19410cddf5",
+      "archive_path": "docs/plan/checked/2026/08/16-31/233-collect-fixture-aliases-from-a-modelled-grammar.md",
+      "baseline_digest": "sha256:c006f30a391811e8aa075b9fa85c9301442dc61511943e4c7dcf31e5dacd23c3",
+      "plan_path": "docs/plan/active/233-collect-fixture-aliases-from-a-modelled-grammar.md",
+      "reason": "started from deferred without an activation record before the boundary commit"
+    },
+    {
+      "archive_digest": "sha256:0baefdc6a8ab22a56696bc537bf817a10c5cc95d849940e5950d1857ddf5be87",
+      "archive_path": "docs/plan/checked/2026/08/16-31/235-settle-fixture-words-from-a-modelled-grammar.md",
+      "baseline_digest": "sha256:982894a1a9bd956581d29d158a377fc80c80c8d2c10efa307387744007c0c89f",
+      "plan_path": "docs/plan/active/235-settle-fixture-words-from-a-modelled-grammar.md",
+      "reason": "started from deferred without an activation record before the boundary commit"
+    }
+  ],
+  "schema_version": 1
+}

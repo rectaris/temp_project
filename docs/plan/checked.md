@@ -180,3 +180,4 @@ id	path
 237	docs/plan/checked/2026/08/16-31/237-restore-the-resolution-model-as-the-single-update-authority.md
 239	docs/plan/checked/2026/08/16-31/239-resolve-relative-update-wrapper-subshell-directory.md
 227	docs/plan/checked/2026/08/16-31/227-complete-bounded-copier-fixture-runtime.md
+240	docs/plan/checked/2026/08/16-31/240-reconcile-pre-boundary-lifecycle-and-replanned-lineage.md

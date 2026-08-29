@@ -6166,6 +6166,224 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertFalse((self.repo / str(successor["path"])).exists())
         self.assertEqual(self.run_verify().returncode, 0)
 
+    def prepare_replanned_source_with_checked_successor(
+        self, label: str
+    ) -> tuple[object, str, str]:
+        """Replan the source and archive its first successor as a committed state."""
+        self.assertEqual(self.run_command().returncode, 0)
+        successor_path = "docs/plan/active/002-data.md"
+        checked_path = self.check_successor(successor_path)
+        self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+        return self.load_restructure_module(label), successor_path, checked_path
+
+    def write_pre_boundary_registry(
+        self,
+        module,
+        entries: list[dict[str, str]],
+        boundary: str,
+    ) -> Path:
+        path = self.repo / module.PRE_BOUNDARY_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "boundary_commit": boundary,
+                    "reconciliations": entries,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_pre_boundary_registry_admits_only_frozen_committed_archives(self) -> None:
+        module, successor_path, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("pre_boundary_module")
+        )
+        boundary = git(self.repo, "rev-parse", "HEAD")
+        archive = self.repo / checked_path
+        archive_bytes = archive.read_bytes()
+        entry = {
+            "plan_path": successor_path,
+            "baseline_digest": digest(b"deferred baseline"),
+            "archive_path": checked_path,
+            "archive_digest": digest(archive_bytes),
+            "reason": "archived before the activation record was enforced",
+        }
+        registry = self.write_pre_boundary_registry(module, [entry], boundary)
+        loaded = module.load_pre_boundary_reconciliations()
+        self.assertEqual(loaded[successor_path]["archive_path"], checked_path)
+        archive.write_bytes(archive_bytes + b"\ndrift\n")
+        with self.assertRaises(module.RestructureError) as drifted:
+            module.load_pre_boundary_reconciliations()
+        self.assertIn("archive bytes changed", str(drifted.exception))
+        archive.write_bytes(archive_bytes)
+        self.write_pre_boundary_registry(
+            module, [entry], git(self.repo, "rev-parse", "HEAD~1")
+        )
+        with self.assertRaises(module.RestructureError) as early:
+            module.load_pre_boundary_reconciliations()
+        self.assertIn("not committed before the boundary", str(early.exception))
+        self.write_pre_boundary_registry(module, [entry], boundary)
+        (self.repo / successor_path).write_text("status: deferred\n", encoding="utf-8")
+        with self.assertRaises(module.RestructureError) as live:
+            module.load_pre_boundary_reconciliations()
+        self.assertIn("still live at its active path", str(live.exception))
+        (self.repo / successor_path).unlink()
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "record the reconciliation registry")
+        registry.write_text(
+            registry.read_text(encoding="utf-8").replace(
+                "activation record", "activation  record", 1
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(module.RestructureError) as rewritten:
+            module.load_pre_boundary_reconciliations()
+        self.assertIn("not write-once", str(rewritten.exception))
+
+    def test_pre_boundary_reconciliation_binds_the_baseline_and_archive(self) -> None:
+        module, successor_path, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("pre_boundary_bind")
+        )
+        archive_bytes = (self.repo / checked_path).read_bytes()
+        baseline = "status: deferred\n"
+        self.write_pre_boundary_registry(
+            module,
+            [
+                {
+                    "plan_path": successor_path,
+                    "baseline_digest": digest(baseline),
+                    "archive_path": checked_path,
+                    "archive_digest": digest(archive_bytes),
+                    "reason": "archived before the activation record was enforced",
+                }
+            ],
+            git(self.repo, "rev-parse", "HEAD"),
+        )
+        reconciliations = module.load_pre_boundary_reconciliations()
+        state = {
+            "lifecycle": "checked",
+            "live_path": checked_path,
+            "live_content": archive_bytes.decode("utf-8"),
+        }
+        self.assertTrue(
+            module.reconciled_pre_boundary_archive(
+                reconciliations, successor_path, baseline, state
+            )
+        )
+        self.assertFalse(
+            module.reconciled_pre_boundary_archive(
+                reconciliations, "docs/plan/active/404-other.md", baseline, state
+            )
+        )
+        with self.assertRaises(module.RestructureError) as mismatched:
+            module.reconciled_pre_boundary_archive(
+                reconciliations, successor_path, "status: in_progress\n", state
+            )
+        self.assertIn("baseline digest mismatch", str(mismatched.exception))
+        with self.assertRaises(module.RestructureError) as relocated:
+            module.reconciled_pre_boundary_archive(
+                reconciliations,
+                successor_path,
+                baseline,
+                {**state, "lifecycle": "active", "live_path": successor_path},
+            )
+        self.assertIn("does not describe the live archive", str(relocated.exception))
+
+    def test_lineage_rebinding_admits_only_checked_successors_of_that_source(
+        self,
+    ) -> None:
+        module, _, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("lineage_module")
+        )
+        self.assertEqual(
+            module.replan_lineage_pairs(), {self.source_path: {checked_path}}
+        )
+        before = {
+            "status": "backlog",
+            "predecessor_plans": [self.source_path],
+            "write_scope": ["docs/agent/spec-index.yaml"],
+        }
+        after = {**before, "predecessor_plans": [checked_path]}
+        accepted = [
+            {
+                "scope": "manifest",
+                "field": "predecessor_plans",
+                "old": f"  - {self.source_path}\n",
+                "new": f"  - {checked_path}\n",
+                "count": 1,
+            },
+            {
+                "scope": "body",
+                "field": "body",
+                "old": "Plan 001 acceptance",
+                "new": "Plan 002 acceptance",
+                "count": 1,
+            },
+        ]
+        module.validate_lineage_reference_transition(
+            before, after, accepted, "lineage"
+        )
+        unrelated = copy.deepcopy(accepted)
+        unrelated[0]["new"] = "  - docs/plan/checked/2020/01/01-15/099-other.md\n"
+        with self.assertRaises(module.RestructureError) as target:
+            module.validate_lineage_reference_transition(
+                before, after, unrelated, "lineage"
+            )
+        self.assertIn("checked successor of that source", str(target.exception))
+        unadmitted = copy.deepcopy(accepted)
+        unadmitted[1]["new"] = "Plan 099 acceptance"
+        with self.assertRaises(module.RestructureError) as identifier:
+            module.validate_lineage_reference_transition(
+                before, after, unadmitted, "lineage"
+            )
+        self.assertIn("restate one replanned source", str(identifier.exception))
+        with self.assertRaises(module.RestructureError) as protected:
+            module.validate_lineage_reference_transition(
+                before,
+                {**after, "write_scope": ["docs/agent/other.md"]},
+                accepted,
+                "lineage",
+            )
+        self.assertIn("protected plan identity", str(protected.exception))
+        with self.assertRaises(module.RestructureError) as started:
+            module.validate_lineage_reference_transition(
+                {**before, "status": "in_progress"},
+                {**after, "status": "in_progress"},
+                accepted,
+                "lineage",
+            )
+        self.assertIn("requires an unstarted plan", str(started.exception))
+
+    def test_lineage_rebinding_cannot_edit_fields_outside_its_kind(self) -> None:
+        module = self.load_restructure_module("lineage_fields_module")
+        self.assertEqual(
+            module.LINEAGE_REBIND_FIELDS,
+            {"context_files", "predecessor_plans", "integration_gates"},
+        )
+        original = "status: backlog\nwrite_scope:\n  - docs/agent/spec-index.yaml\n\n# Plan\n"
+        with self.assertRaises(module.RestructureError) as rejected:
+            module.apply_exact_replacements(
+                original,
+                [
+                    {
+                        "scope": "manifest",
+                        "field": "write_scope",
+                        "old": "  - docs/agent/spec-index.yaml\n",
+                        "new": "  - docs/agent/other.md\n",
+                        "count": 1,
+                    }
+                ],
+                kind="lineage_rebind",
+                label="lineage",
+            )
+        self.assertIn("unauthorized field", str(rejected.exception))
+
 
 COUPLED_ACCEPTANCE_CLAUSES: tuple[dict[str, object], ...] = (
     {

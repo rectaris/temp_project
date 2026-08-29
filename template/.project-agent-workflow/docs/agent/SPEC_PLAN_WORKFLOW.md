@@ -236,6 +236,24 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - Resolve every successor to exactly one of the active index, `docs/plan/backlog/`, the checked archive, or the replanned archive. Presence in two locations, or in none, is rejected.
 - Reactivate a deferred successor by moving it back under `docs/plan/active/`, restoring an active status, and re-adding its active index row.
 
+### Replanned Predecessor Lineage Rebinding
+
+- A plan whose `predecessor_plans`, `context_files`, `integration_gates`, or body still name an active path that was later replanned can never be activated, because activation resolves an active path only to the checked archive carrying the same plan id and a replanned source has no such archive. Move that reference with the `rebind_lineage` operation instead of restructuring the referring plan.
+- Run the operation with `python3 .project-agent-workflow/scripts/restructure-plan.py <lineage-spec.json>` using `operation: rebind_lineage` and only `kind: lineage_rebind` records. It appends to the same immutable rebind record chain and is verified with every other record.
+- Rebind only a plan that has not started: the live successor must carry `status: deferred` or `status: backlog`, and it must resolve either in the active index or under `docs/plan/backlog/`.
+- Admit a replacement only when the replan contract that consumed the source already records a checked successor. A path replacement must name exactly one replanned source and resolve to one checked successor of that same contract; an identifier replacement must restate exactly one such source id as one of its checked successor ids.
+- Restrict manifest edits to `predecessor_plans`, `context_files`, and `integration_gates`. Preserve `status`, `completion_deferred_reason`, acceptance, inherited digests, write scope, preservation scope, contract identity, and every other byte.
+- Lineage rebinding never changes `successor_plans`, `replan_sources`, or `replan_contract`. Those fields are contract identity, not resolvable references.
+
+### Pre-Boundary Lifecycle Reconciliation
+
+- Leaving `status: deferred` requires a durable activation record. A plan that left `deferred` by direct edit and then reached an immutable checked archive has no in-band correction, because a rebinding targets one live active successor. Such a plan freezes lineage verification and therefore every restructuring operation.
+- Close exactly those historical cases with the write-once registry `docs/plan/replanned/baselines/pre-boundary-lifecycle-reconciliations-v1.json`. Each entry binds the plan path, the expected chain-final baseline digest, the checked archive path, the archive bytes digest, and a reason.
+- The registry names one `boundary_commit` that must be an ancestor of `HEAD`, and every reconciled archive must already exist with those exact bytes at that commit. A defect introduced after the boundary can never be admitted.
+- Every entry must resolve to a `checked` archive of the same plan id whose active path no longer exists, whose live bytes match the recorded digest, and whose rebind-chain baseline matches the recorded baseline digest. Any drift rejects.
+- The registry is write-once: once committed, its live bytes must equal its committed bytes and it must have exactly one commit in history. It admits nothing else and weakens no other lifecycle rule.
+- Do not use the registry for new work. A plan that leaves `deferred` after the boundary must record an activation record.
+
 ### Coupled Lineage Reconstruction
 
 - Use a schema-3 contract when one stopped source plan and one or more immutable dependent plans must be replaced together. Keep `sources` ordered and non-empty, and bind each source's live content digest, deterministically derived `replan_required` digest, acceptance records, archive path, reason codes, and, for a contract-successor source, its owning historical contract path and digest.
