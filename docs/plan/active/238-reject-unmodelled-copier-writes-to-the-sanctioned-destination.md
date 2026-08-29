@@ -1,6 +1,6 @@
 # Reject unmodelled Copier writes to the sanctioned destination
 
-status: backlog
+status: in_progress
 primary_invariant: no fixture operation writes the sanctioned destination through a Copier command other than the modelled update without the checker rejecting it
 task_types:
   - template_workflow
