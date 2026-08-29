@@ -1,7 +1,6 @@
 # Complete the bounded Copier fixture runtime
 
-status: deferred
-completion_deferred_reason: Plan 239 must be checked so the two relative wrapper self-update lanes resolve against their subshell directory; Plan 237 already restored the resolution model as the single update authority
+status: in_progress
 primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup under the checked destination-aware checker
 task_types:
   - template_workflow
@@ -45,7 +44,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh"}
 predecessor_plans:
-  - docs/plan/active/239-resolve-relative-update-wrapper-subshell-directory.md
+  - docs/plan/checked/2026/08/16-31/239-resolve-relative-update-wrapper-subshell-directory.md
 successor_plans:
   - docs/plan/replanned/2026/08/16-31/226-scope-fixture-alternate-path-rule.md
   - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
@@ -57,7 +56,8 @@ replan_sources:
 replan_contract: docs/plan/replanned/contracts/185-complete-bounded-copier-fixture-runtime.json
 integration_gates:
   - Plan 231 is checked at docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md and supplies the destination-aware alternate-path rule this plan validates against
-  - Plan 237 must be checked and its exact checked archive path must replace this active predecessor before implementation resumes
+  - Plan 237 is checked at docs/plan/checked/2026/08/16-31/237-restore-the-resolution-model-as-the-single-update-authority.md and made the resolution model the single update authority
+  - Plan 239 is checked at docs/plan/checked/2026/08/16-31/239-resolve-relative-update-wrapper-subshell-directory.md and resolves the two relative wrapper self-update lanes
   - do not edit scripts/project_workflow/copier_fixture_validator.py in this plan
   - Plan 228 must start only after this plan is checked and its exact checked archive path replaces the active dependency
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
@@ -88,3 +88,4 @@ checked_summary_ja: Copier fixtureの固有version、bounded同期、子process�
 - The fixture-only alternative was measured and rejected. Removing the substring `update` from the fixture's own directory and variable names reduces the 22 rejections to eight, silences a substring detector without changing behavior, and is the bypass shape Plan 186 is chartered to reject.
 - Independent review co-signed the `repair_required` classification for the resolution-model defect and confirmed the diagnosis mechanically. It declined to co-sign bundling the two relative wrapper self-update lanes into the same repair, because their destination is genuinely unanchored, the checked Plan 231 decision that no working-directory model exists must stay unchanged, and their only remaining fix changes what `_check_unresolved_dispatch` admits, which is a second independently validatable invariant.
 - Execution stopped as `repair_required`. This plan keeps its unchanged write scope, acceptance digest, validation authority, invariant boundary, and safety conditions, and resumes through a fresh run after Plan 237 is checked.
+- Execution resumed after Plan 237 and Plan 239 were checked. Reproducing the transition with the same read-only command now returns 3 findings rather than 24: the `release_path` and `guardian` findings at line 21 and the `alternate_path` finding at line 691, all of which are this plan's own runtime work.
