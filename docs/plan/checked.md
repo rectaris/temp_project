@@ -178,3 +178,4 @@ id	path
 233	docs/plan/checked/2026/08/16-31/233-collect-fixture-aliases-from-a-modelled-grammar.md
 231	docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md
 237	docs/plan/checked/2026/08/16-31/237-restore-the-resolution-model-as-the-single-update-authority.md
+239	docs/plan/checked/2026/08/16-31/239-resolve-relative-update-wrapper-subshell-directory.md

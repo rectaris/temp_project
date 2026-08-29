@@ -1,6 +1,6 @@
 # Resolve a relative update wrapper against its subshell directory
 
-status: ready_to_archive
+status: checked
 primary_invariant: a relative installed-workflow command word inside a subshell whose working directory is settled resolves to that directory, and stays unproven whenever the directory is not settled
 task_types:
   - template_workflow
@@ -55,6 +55,7 @@ integration_gates:
   - do not admit a relative command word whose subshell directory does not settle; the checked Plan 231 decision that an unanchored destination stays unproven holds everywhere else
   - leave the unresolved-dispatch admission unchanged; independent review found relaxing it unsound for a fixture that is not a transition
   - Plan 227 resumes only after this plan is checked and its exact checked archive path replaces the active dependency
+checked_summary_ja: 相対パスで書かれた更新ラッパーを、そのサブシェルが確定させた作業ディレクトリに解決し、確定しない場合は未証明のまま却下する。
 
 ## Decisions
 
