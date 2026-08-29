@@ -1693,6 +1693,11 @@ WORKFLOW_DIRECTORY = ".project-agent-workflow"
 # subcommand writes a project this checker reads from its own operands, so
 # only this one names a destination the sanctioned child may share.
 UPDATE_SUBCOMMAND = "update"
+# The enclosure a subshell opens and the command that changes a directory
+# inside it. A relative command word runs against the directory its own
+# subshell settles, so only these two names are read to place such a word.
+SUBSHELL_ENCLOSURE = "subshell"
+DIRECTORY_CHANGE = "cd"
 # The options this checker reads a Copier update as writing. An option written
 # in any other spelling may take an operand this checker would read as the
 # destination, so a dispatch that writes one names no destination at all.
@@ -4142,7 +4147,9 @@ def _command_word_places(literals: tuple[str | None, ...]) -> tuple[int, ...]:
     return tuple(places)
 
 
-def _workflow_destinations(paths: frozenset[_Path]) -> frozenset[_Path] | None:
+def _workflow_destinations(
+    paths: frozenset[_Path], directory: frozenset[_Path]
+) -> frozenset[_Path] | None:
     """Return the project each installed-workflow path updates.
 
     A command word written inside the installed workflow directory runs
@@ -4150,6 +4157,10 @@ def _workflow_destinations(paths: frozenset[_Path]) -> frozenset[_Path] | None:
     that directory. A word that may name such a script proves no destination
     unless every path it may name is one, because the path this checker cannot
     place is the one that runs.
+
+    A word that writes nothing above the installed workflow directory names
+    the project its working directory decides, so it is placed only when the
+    subshell that runs it settles one directory of its own.
     """
 
     if not paths or not any(
@@ -4167,9 +4178,95 @@ def _workflow_destinations(paths: frozenset[_Path]) -> frozenset[_Path] | None:
         if not index and not anchored:
             # Nothing is written above the workflow directory, so the project
             # it belongs to is the one the working directory decides.
-            return frozenset()
+            if not directory:
+                return frozenset()
+            destinations.update(directory)
+            continue
         destinations.add((anchored, segments[:index]))
     return frozenset(destinations)
+
+
+def _subshell_marks(operation: _Operation) -> tuple[int, ...] | None:
+    """Return where every enclosure around one operation opens.
+
+    An enclosure this checker cannot place has no offset to compare, so the
+    whole path is unread rather than compared against a missing one.
+    """
+
+    marks: list[int] = []
+    for enclosure in operation.node.enclosures:
+        if enclosure.token is None:
+            return None
+        marks.append(enclosure.token.start.offset)
+    return tuple(marks)
+
+
+def _inside_subshell(operation: _Operation, mark: int) -> bool:
+    """Report whether one operation runs inside the subshell opened at a mark."""
+
+    return any(
+        enclosure.kind == SUBSHELL_ENCLOSURE
+        and enclosure.token is not None
+        and enclosure.token.start.offset == mark
+        for enclosure in operation.node.enclosures
+    )
+
+
+def _subshell_directory(
+    fixture: _Fixture, operation: _Operation
+) -> frozenset[_Path]:
+    """Return the one directory one subshell settles for the operation it runs.
+
+    A relative command word is placed only when its own subshell writes the
+    directory it runs in and nothing else it runs can write another one. The
+    subshell must therefore hold exactly two operations, the word and one
+    directory change written before it on the same enclosure path, and that
+    change must settle to one anchored path.
+
+    Reading the whole subshell rather than the operations written before the
+    word is what keeps the reading sound. A directory change carried by a
+    called function runs in the same shell, and a change written after the word
+    still runs before it on the second turn of a loop, so a subshell that runs
+    anything besides the change and the word leaves the directory unwritten.
+    """
+
+    marks = _subshell_marks(operation)
+    if marks is None or operation.node.call_path:
+        return frozenset()
+    if operation.loop_regions:
+        # A repeated word runs under whatever the previous turn left behind.
+        # The loop a word sits in is read rather than the enclosure it carries,
+        # because a loop condition and a branch condition share one enclosure.
+        return frozenset()
+    opens = [
+        enclosure.token.start.offset
+        for enclosure in operation.node.enclosures
+        if enclosure.kind == SUBSHELL_ENCLOSURE
+    ]
+    if len(opens) != 1:
+        return frozenset()
+    inside = [
+        other
+        for other in fixture.operations
+        if _inside_subshell(other, opens[0])
+    ]
+    before = [other for other in inside if other.offset < operation.offset]
+    if len(inside) != 2 or len(before) != 1:
+        return frozenset()
+    change = before[0]
+    if change.node.name != DIRECTORY_CHANGE or change.node.call_path:
+        return frozenset()
+    carried = _subshell_marks(change)
+    if carried is None or carried != marks[: len(carried)]:
+        # The change runs on a separate path, so the word never follows it.
+        return frozenset()
+    run = _run_for(fixture, change)
+    if run is None or len(run.words) != 2:
+        return frozenset()
+    places = _settle_operand(fixture, run, run.words[1])
+    if len(places) != 1 or not next(iter(places))[0]:
+        return frozenset()
+    return places
 
 
 def _copier_destinations(
@@ -4230,7 +4327,9 @@ def _update_reading(
         paths = _settle_operand(fixture, run, run.words[place])
         if _names_no_update_script(paths):
             continue
-        settled = _workflow_destinations(paths)
+        settled = _workflow_destinations(
+            paths, _subshell_directory(fixture, operation)
+        )
         if settled is not None:
             return settled
         if _names_an_installed_workflow(run.words[place].text):

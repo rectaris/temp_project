@@ -2562,11 +2562,20 @@ class AlternatePathDestinationTest(ContractSupportTest):
             + f'run_copier update -q --defaults --vcs-ref v1.4.5 "{self.OTHER}"\n'
         )
 
-    def test_a_relative_wrapper_is_rejected_wherever_it_is_written(self) -> None:
-        """No written text says which directory a relative wrapper runs in."""
+    def test_a_relative_wrapper_is_placed_by_its_subshell_directory(self) -> None:
+        """The subshell writes the directory, so the wrapper reaches it."""
+
+        self.assert_accepted(
+            COMPLIANT
+            + f'(cd "{self.OTHER}" && '
+            ".project-agent-workflow/scripts/update-from-copier.sh)\n"
+        )
+
+    def test_a_relative_wrapper_reaching_the_child_is_rejected(self) -> None:
+        """A settled subshell directory places the wrapper on the child."""
 
         self.assert_second_path_rejected(
-            f'(cd "{self.OTHER}" && '
+            '(cd "$project" && '
             ".project-agent-workflow/scripts/update-from-copier.sh)\n"
         )
 
@@ -2771,6 +2780,146 @@ class ResolutionAuthorityTest(ContractSupportTest):
             '"$project/.project-agent-workflow/scripts/$script" --defaults\n',
             RULE_ALTERNATE_PATH,
             "second Copier update path",
+        )
+
+
+class SubshellDirectoryTest(ContractSupportTest):
+    """Cover the directory a subshell settles for a relative command word."""
+
+    OTHER = "$tmp/other-project"
+    WRAPPER = ".project-agent-workflow/scripts/update-from-copier.sh"
+
+    def assert_second_path_rejected(self, inserted: str) -> None:
+        self.assert_rejected(
+            COMPLIANT + inserted, RULE_ALTERNATE_PATH, "second Copier update path"
+        )
+
+    def test_a_settled_subshell_directory_places_the_wrapper(self) -> None:
+        """One directory change written before the word settles the project."""
+
+        self.assert_accepted(
+            COMPLIANT + f'(cd "{self.OTHER}" && {self.WRAPPER} --defaults)\n'
+        )
+
+    def test_a_settled_subshell_directory_reaching_the_child_is_rejected(
+        self,
+    ) -> None:
+        """The settled directory is the sanctioned child, so the word reaches it."""
+
+        self.assert_second_path_rejected(
+            f'(cd "$project" && {self.WRAPPER} --defaults)\n'
+        )
+
+    def test_a_wrapper_with_no_subshell_stays_unplaced(self) -> None:
+        """Nothing written says which directory the word runs in."""
+
+        self.assert_second_path_rejected(f"{self.WRAPPER} --defaults\n")
+
+    def test_two_directory_changes_leave_the_wrapper_unplaced(self) -> None:
+        """A second change leaves no single directory the word runs in."""
+
+        self.assert_second_path_rejected(
+            f'(cd "{self.OTHER}" && cd "$tmp" && {self.WRAPPER} --defaults)\n'
+        )
+
+    def test_an_unsettled_directory_leaves_the_wrapper_unplaced(self) -> None:
+        """A directory this checker cannot place proves no destination."""
+
+        self.assert_second_path_rejected(
+            f'(cd "$tmp/$lane" && {self.WRAPPER} --defaults)\n'
+        )
+
+    def test_a_relative_directory_leaves_the_wrapper_unplaced(self) -> None:
+        """A directory that is not anchored is placed by nothing written."""
+
+        self.assert_second_path_rejected(
+            f'(cd other-project && {self.WRAPPER} --defaults)\n'
+        )
+
+    def test_a_directory_change_outside_the_subshell_is_unread(self) -> None:
+        """A change written outside the subshell settles no directory inside it."""
+
+        self.assert_second_path_rejected(
+            f'cd "{self.OTHER}"\n(: && {self.WRAPPER} --defaults)\n'
+        )
+
+    def test_a_directory_change_written_after_the_word_is_unread(self) -> None:
+        """A change the word never runs under settles no directory for it."""
+
+        self.assert_second_path_rejected(
+            f'({self.WRAPPER} --defaults && cd "{self.OTHER}")\n'
+        )
+
+    def test_a_directory_change_in_another_branch_is_unread(self) -> None:
+        """A change on a separate enclosure path never runs before the word."""
+
+        self.assert_second_path_rejected(
+            f'(if [ -d "{self.OTHER}" ]; then cd "{self.OTHER}"; fi\n'
+            f"{self.WRAPPER} --defaults)\n"
+        )
+
+    def test_a_change_carried_by_a_called_function_leaves_it_unplaced(
+        self,
+    ) -> None:
+        """A called function moves the same directory the word runs in."""
+
+        self.assert_second_path_rejected(
+            "goto() {\n  cd \"$1\"\n}\n"
+            f'(cd "{self.OTHER}" && goto "$project" && {self.WRAPPER} --force)\n'
+        )
+
+    def test_any_other_operation_before_the_word_leaves_it_unplaced(
+        self,
+    ) -> None:
+        """Only a subshell that runs the change alone writes its directory."""
+
+        self.assert_second_path_rejected(
+            f'(cd "{self.OTHER}" && : && {self.WRAPPER} --defaults)\n'
+        )
+
+    def test_a_sourced_file_before_the_word_leaves_it_unplaced(self) -> None:
+        """A sourced file runs in the same shell and may move the directory."""
+
+        self.assert_second_path_rejected(
+            f'(cd "{self.OTHER}" && . "$tmp/lib.sh" && {self.WRAPPER})\n'
+        )
+
+    def test_a_change_written_after_the_word_leaves_it_unplaced(self) -> None:
+        """A later change still runs before the word on a second turn."""
+
+        self.assert_second_path_rejected(
+            f'(cd "{self.OTHER}" && {self.WRAPPER} && cd "$project")\n'
+        )
+
+    def test_a_change_carried_by_a_loop_leaves_the_word_unplaced(self) -> None:
+        """The second turn of the loop runs the word in the changed directory."""
+
+        self.assert_second_path_rejected(
+            f'o="{self.OTHER}"\n(cd "$o"\n'
+            f'for i in 1 2; do {self.WRAPPER} --force; cd "$project"; done)\n'
+        )
+
+    def test_a_repeated_word_leaves_it_unplaced(self) -> None:
+        """A word one loop may run again is placed by no single directory."""
+
+        self.assert_second_path_rejected(
+            f'(cd "{self.OTHER}"\nfor i in 1 2; do {self.WRAPPER} --force; done)\n'
+        )
+
+    def test_a_word_repeated_by_a_loop_condition_is_unplaced(self) -> None:
+        """A loop condition runs again under the directory the body left."""
+
+        self.assert_second_path_rejected(
+            f'o="{self.OTHER}"\n'
+            f'while (cd "$o" && {self.WRAPPER} --force); do o="$project"; done\n'
+        )
+
+    def test_a_branch_condition_still_places_the_word(self) -> None:
+        """A branch condition runs once, so its subshell settles a directory."""
+
+        self.assert_accepted(
+            COMPLIANT
+            + f'if (cd "{self.OTHER}" && {self.WRAPPER} --force); then :; fi\n'
         )
 
 

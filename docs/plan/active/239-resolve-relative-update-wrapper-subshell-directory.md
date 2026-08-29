@@ -65,12 +65,20 @@ integration_gates:
 
 ## Tasks
 
-- [ ] Read the enclosing subshell of a reachable operation and collect the directory changes that precede it inside that same subshell.
-- [ ] Resolve a relative installed-workflow command word against the settled operand of a single preceding directory change, and keep it unproven when the subshell holds no directory change, more than one, or an operand that does not settle.
-- [ ] Add regression tests covering the settled subshell form, a subshell with two directory changes, a directory change whose operand carries an unsettled expansion, and a relative command word with no enclosing subshell.
-- [ ] Confirm the two wrapper self-update lanes of the committed fixture no longer report an alternate path when the fixture is read as a transition, without editing the fixture.
-- [ ] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
+- [x] Read the enclosing subshell of a reachable operation and collect the directory changes that precede it inside that same subshell.
+- [x] Resolve a relative installed-workflow command word against the settled operand of a single preceding directory change, and keep it unproven when the subshell holds no directory change, more than one, or an operand that does not settle.
+- [x] Add regression tests covering the settled subshell form, a subshell with two directory changes, a directory change whose operand carries an unsettled expansion, and a relative command word with no enclosing subshell.
+- [x] Confirm the two wrapper self-update lanes of the committed fixture no longer report an alternate path when the fixture is read as a transition, without editing the fixture.
+- [x] Complete independent review with zero unresolved High or Medium findings, then run the authoritative validation suite once.
 
 ## Validation Notes
 
-- Pending. The Plan 227 stop record and the Plan 237 record hold the reproduction that isolates these two lanes and the independent review ruling that they need a separate classification.
+- `_subshell_directory` places a relative installed-workflow command word only when its subshell holds exactly two operations, the word and one directory change written before it on a prefix enclosure path, the change is a two-word `cd` with an empty call path whose operand settles to one anchored path, and the word sits in no loop region.
+- `_workflow_destinations` gained the settled directory as a second argument. The branch that reads a path writing nothing above the installed workflow directory now returns that directory, and still returns an unproven empty set when none settles.
+- Independent review round 1 reported one High. A directory change carried by a called function runs in the same shell and moved the subshell into the sanctioned child while the model settled a decoy directory. Reproduced verbatim, then repaired by counting every operation of the subshell rather than only the directory changes.
+- Independent review round 2 reported a second High through a different mechanism. A loop back edge runs an operation written after the word before the word on the second turn, so an offset-ordered reading settled a decoy directory. Reproduced verbatim, then repaired by reading the whole subshell at any offset and refusing to place a repeated word.
+- Independent review round 3 returned no High and no Medium. It exercised roughly thirty constructs, including background and guarded decoys, brace groups, pipelines, nested subshells, transitive function calls, and a planted symlink alias, and found no remaining way a relative word reaches the sanctioned child unrejected.
+- The round 3 Low proposed adding the branch-condition enclosure kind to the repeat guard. That exact change would reject the committed fixture lanes, because the execution graph gives a branch condition and a loop condition the same enclosure kind. The guard was instead made self-contained by reading the loop regions the operation model already carries, which rejects a loop condition and a loop body while keeping a branch condition placeable.
+- Differential evidence against the committed validator: a corpus parity harness over 409 samples reports 0 loosened and 0 tightened readings, and a targeted probe of subshell shapes loosens exactly the chartered lane.
+- The committed tests/copier-update.sh was neither edited nor executed. Its reproduction as a transition fell from 5 findings to 3, and all 3 are Plan 227 runtime work.
+- Authoritative validation run once: 327 tests pass, `--check tests/copier-update.sh` passes, `scripts/lint-project-workflow.sh` exits 0, `tests/smoke.sh` passes, `git diff --check` is clean.
