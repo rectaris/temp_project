@@ -1,6 +1,6 @@
 # Verify Plan 185 runtime acceptance
 
-status: in_progress
+status: checked
 primary_invariant: the checked destination-aware checker and the checked fixture runtime jointly satisfy the unchanged Plan 185 acceptance, and every downstream plan that referenced Plan 185 resolves to this lineage
 task_types:
   - template_workflow
@@ -72,10 +72,19 @@ checked_summary_ja: Plan 226と227の結果が変更のないPlan 185 acceptance
 
 ## Tasks
 
-- [ ] Confirm checked Plans 226 and 227 jointly satisfy the unchanged Plan 185 acceptance item.
-- [ ] Rebind Plan 186 and Plan 187 predecessor and lineage references from the archived Plan 185 to the checked Plan 227 archive.
-- [ ] Confirm repository lineage verification and the workflow lint still pass after the rebinding.
+- [x] Confirm checked Plans 226 and 227 jointly satisfy the unchanged Plan 185 acceptance item.
+- [x] Rebind Plan 186 and Plan 187 predecessor and lineage references from the archived Plan 185 to the checked Plan 227 archive.
+- [x] Confirm repository lineage verification and the workflow lint still pass after the rebinding.
 
 ## Validation Notes
 
 - Pending. This plan starts only after Plans 226 and 227 are checked.
+- Plan 185's single acceptance item is carried unchanged by both checked successors. Plan 226 was itself replanned into the checked Plan 231, so the checked pair proving the item is Plan 231 and Plan 227, and both archives carry the same inherited digest `sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1`.
+- Earliest-witness clause: both archives declare `validation_witness_schema: 1` and map that digest to a focused witness. Plan 231 uses `python3 tests/test-copier-fixture-validator.py` and Plan 227 uses `python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh`, so the fixture lane reaches a narrower safe preflight instead of first proving itself in the authoritative suite. Repository lineage verification rechecks both maps mechanically.
+- One-inventory clause: `tests/copier-update.sh` lines 143 to 154 read `tests/fixtures/orchestration/copier-update-source-inventory.txt` once and drive both the fixture copy and the Git staging of every candidate path from that single loop.
+- Plan 186 and Plan 187 were rebound with the `rebind_lineage` operation rather than by hand. Their predecessor, integration-gate, and body references to the replanned Plan 185 now name the checked archive `docs/plan/checked/2026/08/16-31/227-complete-bounded-copier-fixture-runtime.md`.
+- The `replan_source` and `replan_sources` fields of both plans still name the Plan 185 active path, and their context entries still name the Plan 185 replanned archive. Both are contract identity and resolved archive references, so they are correct as they stand.
+- This plan could not start until the lineage ledger was repaired. Plans 240 and 241 restored lineage verification and added the bounded rebinding route; both are checked.
+- Focused validation passed: `python3 scripts/restructure-plan.py --verify`, `scripts/lint-project-workflow.sh`, and `git diff --check`.
+- The authoritative suite passed once: `python3 scripts/restructure-plan.py --verify`, `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `git diff --check`.
+- No helper agents were used.

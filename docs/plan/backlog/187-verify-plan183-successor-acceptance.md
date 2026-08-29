@@ -45,13 +45,13 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 predecessor_plans:
-  - docs/plan/active/185-complete-bounded-copier-fixture-runtime.md
+  - docs/plan/checked/2026/08/16-31/227-complete-bounded-copier-fixture-runtime.md
   - docs/plan/active/186-bind-connected-copier-fixture-checker.md
 replan_source: docs/plan/active/183-build-bounded-copier-transition-fixture.md
 replan_contract: docs/plan/replanned/contracts/183-build-bounded-copier-transition-fixture.json
 integration_gates:
-  - Plans 185 and 186 must be checked and their exact checked archive paths must replace active context paths before focused validation
-  - after Plans 185 and 186 are checked, remove both preservation entries and add scripts/check-copier-template.py and tests/copier-update.sh as exact read-only context in the same parent-owned activation update
+  - Plans 227 and 186 must be checked and their exact checked archive paths must replace active context paths before focused validation
+  - after Plans 227 and 186 are checked, remove both preservation entries and add scripts/check-copier-template.py and tests/copier-update.sh as exact read-only context in the same parent-owned activation update
   - do not edit, stage, or commit scripts/check-copier-template.py or tests/copier-update.sh in this plan
   - Plan 184 must not start until this plan is checked and its exact checked archive path replaces the active dependency
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
@@ -68,13 +68,13 @@ checked_summary_ja: checked Plan 182とruntime・checker後継を統合確認し
 - Plan 183 successor acceptance gate means the condition that checked Plan 182 and both checked replacement implementation artifacts satisfy the unchanged Plan 183 acceptance before Plan 184 performs its own verification and Plan 179 runs the complete transition.
 - Treat both product paths as exact read-only context and current dirty preservation coverage; neither role grants write authority, and any product edit in this plan requires another replan.
 - Verify each implementation commit and its fresh independent review before running the original Plan 183 focused commands.
-- Confirm that checked Plans 185 and 186 preserve and enforce the committed v1.4.4 pre-schema active plan, replanned source archive, replan contract, and its capture in the consumed provenance record.
+- Confirm that checked Plans 227 and 186 preserve and enforce the committed v1.4.4 pre-schema active plan, replanned source archive, replan contract, and its capture in the consumed provenance record.
 - This plan supplies checked replacement evidence to Plan 184 and does not replace Plan 184's responsibility to verify committed Plan 182 and the replacement Plan 183 result.
 
 ## Tasks
 
-- [ ] Replace Plans 185 and 186 active context paths with their exact checked archives and verify both implementation commits and review evidence.
-- [ ] Confirm the final checker retains Plan 182's parsed migration and one-inventory checks and enforces every Plan 185 synchronization, process, provenance, and guardian operation.
+- [ ] Replace Plans 227 and 186 active context paths with their exact checked archives and verify both implementation commits and review evidence.
+- [ ] Confirm the final checker retains Plan 182's parsed migration and one-inventory checks and enforces every Plan 227 synchronization, process, provenance, and guardian operation.
 - [ ] Confirm the final checker rejects omission or bypass of the committed v1.4.4 pre-schema plan and replan-contract fixture before accepting the replacement result.
 - [ ] Run the original Plan 183 focused validation and fresh independent read-only review with zero unresolved High or Medium findings.
 - [ ] Archive and commit only lifecycle files, then refresh Plan 184 to this checked archive.
