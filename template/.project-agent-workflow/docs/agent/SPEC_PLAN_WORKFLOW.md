@@ -243,6 +243,9 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - Rebind only a plan that has not started: the live successor must carry `status: deferred` or `status: backlog`, and it must resolve either in the active index or under `docs/plan/backlog/`.
 - Admit a replacement only when the replan contract that consumed the source already records a checked successor. A path replacement must name exactly one replanned source and resolve to one checked successor of that same contract; an identifier replacement must restate exactly one such source id as one of its checked successor ids.
 - Restrict manifest edits to `predecessor_plans`, `context_files`, and `integration_gates`. Preserve `status`, `completion_deferred_reason`, acceptance, inherited digests, write scope, preservation scope, contract identity, and every other byte.
+- A backlog successor's live bytes may already differ from its rebind chain by lifecycle fields alone. Keep the record chain on the projected content, apply the same exact replacements to the live file, and check the lifecycle relation on both sides of the rebinding.
+- Lifecycle evolution accepts a `backlog` baseline, so a rebound backlog successor can still be reactivated, stopped, or completed.
+- A legacy successor whose contract never enforced projection semantics may start its chain from its own committed live bytes, which must equal the committed bytes at `HEAD`. Every later record is then bound by the immutable chain, so the rebinding only adds enforcement.
 - Lineage rebinding never changes `successor_plans`, `replan_sources`, or `replan_contract`. Those fields are contract identity, not resolvable references.
 
 ### Pre-Boundary Lifecycle Reconciliation

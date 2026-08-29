@@ -6360,6 +6360,204 @@ class PlanRestructureTest(unittest.TestCase):
             )
         self.assertIn("requires an unstarted plan", str(started.exception))
 
+    def test_lifecycle_evolution_admits_a_rebound_backlog_baseline(self) -> None:
+        module = self.load_restructure_module("lifecycle_backlog_module")
+        baseline = (
+            "# Plan\n\nstatus: backlog\nwrite_scope:\n  - docs/agent/spec-index.yaml\n"
+        )
+        module.validate_lifecycle_evolution(baseline, baseline, "backlog")
+        module.validate_lifecycle_evolution(
+            baseline,
+            baseline.replace("status: backlog", "status: in_progress", 1),
+            "backlog",
+        )
+        with self.assertRaises(module.RestructureError) as drift:
+            module.validate_lifecycle_evolution(
+                baseline,
+                baseline.replace(
+                    "  - docs/agent/spec-index.yaml", "  - docs/agent/other.md", 1
+                ),
+                "backlog",
+            )
+        self.assertIn("changes protected manifest field", str(drift.exception))
+        with self.assertRaises(module.RestructureError) as terminal:
+            module.validate_lifecycle_evolution(
+                baseline.replace("status: backlog", "status: checked", 1),
+                baseline,
+                "backlog",
+            )
+        self.assertIn("invalid lifecycle transition", str(terminal.exception))
+
+    def legacy_lineage_state(
+        self, module, checked_path: str
+    ) -> tuple[dict[str, object], str, str]:
+        """Build one backlog referrer and the state a lineage rebinding needs."""
+        plan_path = "docs/plan/active/181-legacy-referrer.md"
+        live_path = "docs/plan/backlog/181-legacy-referrer.md"
+        content = (
+            (self.repo / checked_path)
+            .read_text(encoding="utf-8")
+            .replace("status: checked", "status: backlog", 1)
+        )
+        content = re.sub(r"^replan_source.*\n(  - .*\n)*", "", content, flags=re.M)
+        content = re.sub(r"^inherited_acceptance_digests:\n(  - .*\n)*", "", content, flags=re.M)
+        content = content.replace(
+            "context_files:",
+            f"predecessor_plans:\n  - {self.source_path}\ncontext_files:",
+            1,
+        )
+        target = self.repo / live_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        manifest = module.parse_manifest(content)
+        projection = module.validation_projection(
+            manifest,
+            "referrer",
+            require_witness=False,
+            enforce_witness_semantics=False,
+        )
+        state = {
+            "rebind_records": [],
+            "effective_projections": {plan_path: projection},
+            "live_successors": {
+                plan_path: {
+                    "lifecycle": "backlog",
+                    "live_path": live_path,
+                    "contract_path": "docs/plan/replanned/contracts/legacy.json",
+                    "contract_digest": digest(b"legacy"),
+                    "enforce_projection_semantics": False,
+                }
+            },
+        }
+        return state, plan_path, content
+
+    def test_legacy_lineage_baseline_must_be_committed(self) -> None:
+        module, _, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("legacy_lineage")
+        )
+        state, plan_path, content = self.legacy_lineage_state(module, checked_path)
+        replacements = [
+            {
+                "scope": "manifest",
+                "field": "predecessor_plans",
+                "old": f"  - {self.source_path}\n",
+                "new": f"  - {checked_path}\n",
+                "count": 1,
+            }
+        ]
+        updated = module.apply_exact_replacements(
+            content, replacements, kind="lineage_rebind", label="referrer"
+        )
+        spec = {
+            "kind": "lineage_rebind",
+            "plan_path": plan_path,
+            "owning_contract_path": "docs/plan/replanned/contracts/legacy.json",
+            "original_content_digest": digest(content),
+            "prior_effective_projection_digest": module.projection_digest(
+                state["effective_projections"][plan_path]  # type: ignore[index]
+            ),
+            "updated_content_digest": digest(updated),
+            "replacements": replacements,
+            "promoted_preservation_path": None,
+        }
+        arguments = {
+            "repository_state": state,
+            "transaction_id": digest(b"transaction"),
+            "authorized_old_references": set(),
+            "authorized_new_references": set(),
+            "allowed_kinds": {"lineage_rebind"},
+        }
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            with self.assertRaises(module.RestructureError) as uncommitted:
+                module.validate_rebinding_specs([spec], **arguments)
+            self.assertIn(
+                "legacy lineage baseline is not committed", str(uncommitted.exception)
+            )
+            git(self.repo, "add", "docs/plan/backlog")
+            git(self.repo, "commit", "-qm", "add the legacy backlog referrer")
+            records, updated_files, statuses = module.validate_rebinding_specs(
+                [spec], **arguments
+            )
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["kind"], "lineage_rebind")
+        self.assertEqual(statuses[plan_path], "backlog")
+        self.assertEqual(
+            updated_files, [("docs/plan/backlog/181-legacy-referrer.md", content, updated)]
+        )
+        self.assertIn(checked_path, updated)
+
+    def test_lineage_rebinding_keeps_the_record_chain_and_live_bytes_apart(
+        self,
+    ) -> None:
+        module, _, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("divergent_lineage")
+        )
+        state, plan_path, content = self.legacy_lineage_state(module, checked_path)
+        git(self.repo, "add", "docs/plan/backlog")
+        git(self.repo, "commit", "-qm", "add the divergent backlog referrer")
+        deferred = content.replace(
+            "status: backlog\n",
+            "status: deferred\ncompletion_deferred_reason: the source must be checked\n",
+            1,
+        )
+        state["rebind_records"] = [  # type: ignore[index]
+            {
+                "plan_path": plan_path,
+                "updated_content": deferred,
+            }
+        ]
+        replacements = [
+            {
+                "scope": "manifest",
+                "field": "predecessor_plans",
+                "old": f"  - {self.source_path}\n",
+                "new": f"  - {checked_path}\n",
+                "count": 1,
+            }
+        ]
+        updated_baseline = module.apply_exact_replacements(
+            deferred, replacements, kind="lineage_rebind", label="referrer"
+        )
+        updated_live = module.apply_exact_replacements(
+            content, replacements, kind="lineage_rebind", label="referrer"
+        )
+        spec = {
+            "kind": "lineage_rebind",
+            "plan_path": plan_path,
+            "owning_contract_path": "docs/plan/replanned/contracts/legacy.json",
+            "original_content_digest": digest(deferred),
+            "prior_effective_projection_digest": module.projection_digest(
+                state["effective_projections"][plan_path]  # type: ignore[index]
+            ),
+            "updated_content_digest": digest(updated_baseline),
+            "replacements": replacements,
+            "promoted_preservation_path": None,
+        }
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            records, updated_files, statuses = module.validate_rebinding_specs(
+                [spec],
+                repository_state=state,
+                transaction_id=digest(b"transaction"),
+                authorized_old_references=set(),
+                authorized_new_references=set(),
+                allowed_kinds={"lineage_rebind"},
+            )
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(records[0]["original_content"], deferred)
+        self.assertEqual(records[0]["updated_content"], updated_baseline)
+        self.assertEqual(statuses[plan_path], "backlog")
+        self.assertEqual(
+            updated_files,
+            [("docs/plan/backlog/181-legacy-referrer.md", content, updated_live)],
+        )
+
     def test_lineage_rebinding_cannot_edit_fields_outside_its_kind(self) -> None:
         module = self.load_restructure_module("lineage_fields_module")
         self.assertEqual(

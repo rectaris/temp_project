@@ -3138,7 +3138,33 @@ def validate_rebinding_specs(
             raise RestructureError(f"rebindings[{index}] has an invalid digest")
         live_path = live.get("live_path") or plan_path
         target = ROOT / live_path
-        original_content = read_regular_file(target, live_path).decode("utf-8")
+        live_content = read_regular_file(target, live_path).decode("utf-8")
+        if kind == "lineage_rebind":
+            chain = [
+                existing
+                for existing in existing_records
+                if existing["plan_path"] == plan_path
+            ]
+            original_content = (
+                chain[-1]["updated_content"] if chain else live_content
+            )
+            if not chain and not live["enforce_projection_semantics"]:
+                committed_live = committed_file_bytes(live_path)
+                if (
+                    committed_live is None
+                    or committed_live != live_content.encode("utf-8")
+                ):
+                    raise RestructureError(
+                        f"rebindings[{index}] legacy lineage baseline is not committed"
+                    )
+            if original_content != live_content:
+                validate_lifecycle_evolution(
+                    original_content,
+                    live_content,
+                    f"rebindings[{index}] live lineage state",
+                )
+        else:
+            original_content = live_content
         if sha256(original_content.encode("utf-8")) != spec["original_content_digest"]:
             raise RestructureError(
                 f"rebindings[{index}] original content is stale"
@@ -3164,6 +3190,20 @@ def validate_rebinding_specs(
             raise RestructureError(
                 f"rebindings[{index}] updated content digest mismatch"
             )
+        if kind == "lineage_rebind" and original_content != live_content:
+            updated_live_content = apply_exact_replacements(
+                live_content,
+                spec["replacements"],
+                kind=kind,
+                label=f"rebindings[{index}] live",
+            )
+            validate_lifecycle_evolution(
+                updated_content,
+                updated_live_content,
+                f"rebindings[{index}] updated live lineage state",
+            )
+        else:
+            updated_live_content = updated_content
         before = parse_manifest(original_content)
         after = parse_manifest(updated_content)
         if kind == "rebind":
@@ -3252,8 +3292,10 @@ def validate_rebinding_specs(
             {key: value for key, value in record.items() if key != "record_digest"}
         )
         records.append(record)
-        updated_files.append((live_path, original_content, updated_content))
-        updated_statuses[plan_path] = scalar(after, "status")
+        updated_files.append((live_path, live_content, updated_live_content))
+        updated_statuses[plan_path] = scalar(
+            parse_manifest(updated_live_content), "status"
+        )
         effective_projections[plan_path] = resulting_projection
     all_records = [*existing_records, *records]
     committed = committed_file_bytes(REBIND_BASELINE_PATH)
@@ -6337,7 +6379,7 @@ def validate_lifecycle_evolution(
                 f"{label} deferred projection changed without an activation record"
             )
         return
-    if baseline_status not in {"in_progress", "deferred"} or live_status not in {
+    if baseline_status not in {"in_progress", "deferred", "backlog"} or live_status not in {
         "in_progress",
         "ready_to_archive",
         "checked",
@@ -6544,7 +6586,10 @@ def verify_rebind_records(
                 raise RestructureError(f"{label} contains a chain gap or fork")
             before = parse_manifest(record["original_content"])
             after = parse_manifest(record["updated_content"])
-            if index == 0:
+            if index == 0 and not (
+                record["kind"] == "lineage_rebind"
+                and not state["enforce_projection_semantics"]
+            ):
                 compare_contract_identity(
                     before,
                     state["base_manifest"],
