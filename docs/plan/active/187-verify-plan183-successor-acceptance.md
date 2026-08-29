@@ -1,6 +1,6 @@
 # Verify Plan 183 successor acceptance
 
-status: backlog
+status: in_progress
 primary_invariant: checked Plan 182 and the checked runtime and checker replacements jointly satisfy the unchanged Plan 183 acceptance before Plan 184 performs its own verification
 task_types:
   - planning_docs
