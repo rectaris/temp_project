@@ -2659,11 +2659,11 @@ class AlternatePathDestinationTest(ContractSupportTest):
                 )
 
     def test_the_committed_runtime_keeps_passing_the_check(self) -> None:
-        """Plan 227 completes the transition this rule is reached through."""
+        """Plan 227 completed the transition this rule is reached through."""
 
         source = (ROOT / "tests" / "copier-update.sh").read_text(encoding="utf-8")
         self.assertEqual(check(source), ())
-        self.assertFalse(self.module._is_transition(self.fixture(source)))
+        self.assertTrue(self.module._is_transition(self.fixture(source)))
 
     def test_a_copy_naming_an_update_source_is_not_an_update(self) -> None:
         self.assert_accepted(
