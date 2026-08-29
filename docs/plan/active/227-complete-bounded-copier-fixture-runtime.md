@@ -1,6 +1,7 @@
 # Complete the bounded Copier fixture runtime
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Plan 237 must be checked so the alternate-path rule stops rejecting the Copier copy lanes the checked resolution model proves run no update
 primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup under the checked destination-aware checker
 task_types:
   - template_workflow
@@ -44,7 +45,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh"}
 predecessor_plans:
-  - docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md
+  - docs/plan/active/237-restore-the-resolution-model-as-the-single-update-authority.md
 successor_plans:
   - docs/plan/replanned/2026/08/16-31/226-scope-fixture-alternate-path-rule.md
   - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
@@ -56,6 +57,7 @@ replan_sources:
 replan_contract: docs/plan/replanned/contracts/185-complete-bounded-copier-fixture-runtime.json
 integration_gates:
   - Plan 231 is checked at docs/plan/checked/2026/08/16-31/231-scope-fixture-alternate-path-rule.md and supplies the destination-aware alternate-path rule this plan validates against
+  - Plan 237 must be checked and its exact checked archive path must replace this active predecessor before implementation resumes
   - do not edit scripts/project_workflow/copier_fixture_validator.py in this plan
   - Plan 228 must start only after this plan is checked and its exact checked archive path replaces the active dependency
   - do not run tests/copier-update.sh; Plan 179 retains the sole complete transition execution
@@ -78,4 +80,11 @@ checked_summary_ja: Copier fixtureの固有version、bounded同期、子process�
 
 ## Validation Notes
 
-- Pending. The stopped Plan 183 and Plan 185 ledgers and reviews cannot authorize this successor.
+- The stopped Plan 183 and Plan 185 ledgers and reviews cannot authorize this successor.
+- Task 1 reproduction, read-only and with no file modified: appending the accepted transition sample to the committed fixture returns 40 findings. Binding the sanctioned destination to a written anchored path (`project="$tmp/v145-project"`) reduces that to 24: 22 `alternate_path`, one `release_path`, and one `guardian`. The two cleanup findings are this plan's own work.
+- Seventeen of the 22 rejections are `run_copier copy` operations for which `_dispatches_update` is true and `_runs_an_update` is false. The blanket substring detector fires because the command word `run_copier` carries the substring `copier` and the operand path names carry the substring `update`, while the checked resolution model proves the copier subcommand is `copy`. The rule then reads the proved non-update as an unreadable update, because `_update_destinations` returns an empty set in both cases.
+- A read-only probe that used the modelled reader as the only alternate-path trigger, with no file modified, reduced the 22 rejections to four. The probe is kept at `.agent-artifacts/review/sim227b.py` with the reproduction at `.agent-artifacts/review/repro227b.py` and the classification at `.agent-artifacts/review/diag227d.py`.
+- Of the remaining four, the `prepare_lane` update at line 691 is this plan's own fixture work, because the dispatch sits under `if [ "$lane" = "earliest-supported" ]` and can write that literal destination. The `context-compress.sh` operation at line 897 is covered by Plan 237, which reads the final segment of a settled installed-workflow path. The two relative `run-copier-update.sh` self-update lanes at lines 569 and 574 are covered by neither and are classified separately.
+- The fixture-only alternative was measured and rejected. Removing the substring `update` from the fixture's own directory and variable names reduces the 22 rejections to eight, silences a substring detector without changing behavior, and is the bypass shape Plan 186 is chartered to reject.
+- Independent review co-signed the `repair_required` classification for the resolution-model defect and confirmed the diagnosis mechanically. It declined to co-sign bundling the two relative wrapper self-update lanes into the same repair, because their destination is genuinely unanchored, the checked Plan 231 decision that no working-directory model exists must stay unchanged, and their only remaining fix changes what `_check_unresolved_dispatch` admits, which is a second independently validatable invariant.
+- Execution stopped as `repair_required`. This plan keeps its unchanged write scope, acceptance digest, validation authority, invariant boundary, and safety conditions, and resumes through a fresh run after Plan 237 is checked.
