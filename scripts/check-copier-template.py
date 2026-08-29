@@ -16,6 +16,7 @@ from typing import Any
 from itertools import combinations, product
 from pathlib import Path
 
+from project_workflow import copier_fixture_validator
 from project_workflow.copier_inventory import (
     CONDITIONAL_GENERATED,
     EXPECTED_CHOICE_VALUES,
@@ -1199,6 +1200,446 @@ def require_validation_witness_copier_transition(copier_yml: str) -> None:
             fail(f"Copier update source inventory must contain exactly one {required}")
 
 
+COPIER_FIXTURE = "tests/copier-update.sh"
+
+COPIER_FIXTURE_SNAPSHOT_MARKER = "snapshot-validation-witness-provenance"
+
+# Exact source regions of the committed transition fixture. Every bounded
+# operation below is bound to the region that owns it, so moving an operation
+# out of its region reads as a removal rather than as a relocation.
+COPIER_FIXTURE_REGIONS = {
+    "the exit handler": ("\ncleanup() {\n", "\n}\ntrap cleanup EXIT HUP INT TERM\n"),
+    "the held before-stage migration": ("<<EOF_V145_HOLD\n", "\nEOF_V145_HOLD\n"),
+}
+
+COPIER_FIXTURE_TRANSITION_ANCHOR = '\nv145_project="$tmp/v145-project"\n'
+
+# Each entry binds one committed operation to the region that must contain it.
+# The operation must appear exactly once in that region and exactly once in the
+# whole fixture, so removal, duplication, and redefinition are all rejected.
+COPIER_FIXTURE_OPERATIONS: tuple[tuple[str, str, str], ...] = (
+    (
+        "the exit handler",
+        "the cleanup release path",
+        '  touch "$v145_release" 2>/dev/null || true\n',
+    ),
+    (
+        "the exit handler",
+        "the cleanup update-child waiter",
+        '    cleanup_waited=0\n'
+        '    while [ "$cleanup_waited" -lt 30 ]; do\n'
+        '      if ! kill -0 "$update_pid" 2>/dev/null; then\n'
+        "        break\n"
+        "      fi\n"
+        "      cleanup_waited=$((cleanup_waited + 1))\n"
+        "      sleep 1\n"
+        "    done\n",
+    ),
+    (
+        "the exit handler",
+        "the cleanup update-child reap and PID clear",
+        '    if kill -0 "$update_pid" 2>/dev/null; then\n'
+        '      kill -TERM "$update_pid" 2>/dev/null || true\n'
+        "      sleep 5\n"
+        '      kill -KILL "$update_pid" 2>/dev/null || true\n'
+        "    fi\n"
+        '    wait "$update_pid" 2>/dev/null || true\n'
+        "    update_pid=\n",
+    ),
+    (
+        "the exit handler",
+        "the cleanup guardian-PID entry sanitizer",
+        '  case "$guardian_pid" in\n'
+        "    ''|*[!0-9]*) guardian_pid=0 ;;\n"
+        "  esac\n",
+    ),
+    (
+        "the exit handler",
+        "the cleanup guardian-PID reader",
+        '    guardian_pid=$(sed -n \'s/^ *"guardian_pid": *\\([0-9][0-9]*\\),\\{0,1\\} *$/\\1/p\''
+        ' "$v145_attempt" 2>/dev/null || true)\n',
+    ),
+    (
+        "the exit handler",
+        "the cleanup guardian-PID recovery sanitizer",
+        '    case "$guardian_pid" in\n'
+        "      ''|*[!0-9]*) guardian_pid=0 ;;\n"
+        "    esac\n",
+    ),
+    (
+        "the exit handler",
+        "the cleanup guardian stop",
+        '  if [ "$guardian_pid" -gt 0 ]; then\n'
+        '    kill -TERM "$guardian_pid" 2>/dev/null || true\n'
+        "  fi\n",
+    ),
+    (
+        "the held before-stage migration",
+        "the ready emission",
+        ': >"$v145_ready"\n',
+    ),
+    (
+        "the held before-stage migration",
+        "the held release polling loop",
+        'while [ "\\$held" -lt 600 ]; do\n'
+        '  if [ -e "$v145_release" ]; then\n'
+        "    exit 0\n"
+        "  fi\n",
+    ),
+    (
+        "the transition",
+        "the asynchronous update dispatch",
+        '"$v145_project/.project-agent-workflow/scripts/update-from-copier.sh" \\\n'
+        '  --defaults --vcs-ref v1.4.5 >"$v145_log" 2>&1 &\n'
+        "update_pid=$!\n",
+    ),
+    (
+        "the transition",
+        "the parent ready polling loop",
+        "v145_ready_waited=0\n"
+        'while [ "$v145_ready_waited" -lt 300 ]; do\n'
+        '  if [ -e "$v145_ready" ]; then\n'
+        "    break\n"
+        "  fi\n"
+        "  v145_ready_waited=$((v145_ready_waited + 1))\n"
+        "  sleep 1\n"
+        "done\n",
+    ),
+    (
+        "the transition",
+        "the ready-failure release path",
+        'if [ ! -e "$v145_ready" ]; then\n  touch "$v145_release"\n',
+    ),
+    (
+        "the transition",
+        "the pending state assertion",
+        "grep -q '\"state\": \"pending\"' \"$v145_attempt\"\n",
+    ),
+    (
+        "the transition",
+        "the transition guardian-PID reader",
+        'guardian_pid=$(sed -n \'s/^ *"guardian_pid": *\\([0-9][0-9]*\\),\\{0,1\\} *$/\\1/p\''
+        ' "$v145_attempt")\n',
+    ),
+    (
+        "the transition",
+        "the positive guardian-PID assertion",
+        '\n[ "$guardian_pid" -gt 0 ]\n',
+    ),
+    (
+        "the transition",
+        "the normal release path",
+        '\ntouch "$v145_release"\n\nv145_exit_waited=0\n',
+    ),
+    (
+        "the transition",
+        "the update-child exit waiter",
+        "v145_exit_waited=0\n"
+        'while [ "$v145_exit_waited" -lt 30 ]; do\n'
+        '  if ! kill -0 "$update_pid" 2>/dev/null; then\n'
+        "    break\n"
+        "  fi\n"
+        "  v145_exit_waited=$((v145_exit_waited + 1))\n"
+        "  sleep 1\n"
+        "done\n",
+    ),
+    (
+        "the transition",
+        "the update-child reap and PID clear",
+        'if [ "$v145_reaped" -eq 0 ]; then\n'
+        '  kill -TERM "$update_pid" 2>/dev/null || true\n'
+        "  sleep 5\n"
+        '  kill -KILL "$update_pid" 2>/dev/null || true\n'
+        "fi\n"
+        'wait "$update_pid" 2>/dev/null || true\n'
+        "update_pid=\n",
+    ),
+    (
+        "the transition",
+        "the pre-schema project generation",
+        "run_copier copy -q -f --trust --defaults --vcs-ref v1.4.4 \\\n"
+        '  --data-file "$root/tests/fixtures/python.answers.yml" '
+        '"$update_source" "$v145_project" >/dev/null\n',
+    ),
+    (
+        "the transition",
+        "the pre-update answers-file assertion",
+        "grep -q '^_commit: v1.4.4$' \"$v145_project/.copier-answers.yml\"\n",
+    ),
+    (
+        "the transition",
+        "the pre-schema plan directories",
+        'mkdir -p "$v145_project/docs/plan/active" \\\n',
+    ),
+    (
+        "the transition",
+        "the pre-schema active plan body",
+        "cat >\"$v145_project/$v145_plan\" <<'EOF_V145_PLAN'\n",
+    ),
+    (
+        "the transition",
+        "the pre-schema replanned archive body",
+        "cat >\"$v145_project/$v145_archive\" <<'EOF_V145_ARCHIVE'\n",
+    ),
+    (
+        "the transition",
+        "the pre-schema replan contract writer",
+        "<<'PY_V145_CONTRACT'\n",
+    ),
+    (
+        "the transition",
+        "the attempt state path",
+        'v145_attempt="$v145_git_dir/project-agent-workflow'
+        '/validation-witness-provenance-v1.attempt.json"\n',
+    ),
+    (
+        "the transition",
+        "the consumed record path",
+        'v145_record="$v145_project/.project-agent-workflow-migration'
+        '/validation-witness-provenance-v1.json"\n',
+    ),
+    (
+        "the transition",
+        "the consumed state assertion",
+        "grep -q '\"state\": \"consumed\"' \"$v145_attempt\"\n",
+    ),
+    (
+        "the transition",
+        "the updated answers-file assertion",
+        "grep -q '^_commit: v1.4.5$' \"$v145_project/.copier-answers.yml\"\n",
+    ),
+    (
+        "the transition",
+        "the installed boundary marker assertion",
+        '\ngrep -qF "$v145_marker" "$v145_project/.project-agent-workflow'
+        '/docs/agent/SPEC_ORCHESTRATION.md"\n',
+    ),
+    (
+        "the transition",
+        "the consumed-record migration version assertion",
+        'grep -q \'"migration_version": "v1.4.5"\' "$v145_record"\n',
+    ),
+    (
+        "the transition",
+        "the consumed-record previous template ref assertion",
+        'grep -q \'"previous_template_ref": "v1.4.4"\' "$v145_record"\n',
+    ),
+    (
+        "the transition",
+        "the pre-schema active plan",
+        'v145_plan="docs/plan/active/902-pre-schema-integration.md"\n',
+    ),
+    (
+        "the transition",
+        "the pre-schema replan contract",
+        'v145_contract="docs/plan/replanned/contracts/901-source.json"\n',
+    ),
+    (
+        "the transition",
+        "the pre-schema replanned source archive",
+        'v145_archive="docs/plan/replanned/2026/08/16-31/901-source.md"\n',
+    ),
+    (
+        "the transition",
+        "the pre-schema project commit",
+        'fixture_git "$v145_project" add -A\n'
+        'fixture_git "$v145_project" commit -qm "Create the pre-schema v1.4.4 project"\n',
+    ),
+    (
+        "the transition",
+        "the consumed-record active-plan assertion",
+        'grep -q "\\"path\\": \\"$v145_plan\\"" "$v145_record"\n',
+    ),
+    (
+        "the transition",
+        "the preserved replan contract assertion",
+        'test -f "$v145_project/$v145_contract"\n',
+    ),
+    (
+        "the transition",
+        "the preserved replanned archive assertion",
+        'test -f "$v145_project/$v145_archive"\n',
+    ),
+    (
+        "the transition",
+        "the rejection-file absence assertion",
+        "if find \"$v145_project\" -name '*.rej' -print -quit | grep -q .; then\n",
+    ),
+    (
+        "the transition",
+        "the transition worktree cleanliness assertion",
+        'fixture_git "$v145_project" diff --check\n',
+    ),
+    (
+        "the transition",
+        "the fixture success emission",
+        '\necho "copier update test passed"\n',
+    ),
+    (
+        "the fixture",
+        "the single Copier update source inventory",
+        'copier_update_inventory="$root/tests/fixtures/orchestration/copier-update-source-inventory.txt"\n',
+    ),
+    (
+        "the fixture",
+        "the single inventory-driven copy and staging loop",
+        '  cp "$root/$candidate_path" "$update_source/$candidate_path"\n'
+        '  fixture_git "$update_source" add -- "$candidate_path"\n'
+        'done < "$copier_update_inventory"\n',
+    ),
+    (
+        "the fixture",
+        "the synthetic v1.4.4 boundary tag",
+        '\n  commit -qm "Create the pre-schema v1.4.4 boundary"\n'
+        "# The clone carries the released tags of this template, so both synthetic\n"
+        "# boundaries replace whatever the clone already names.\n"
+        'fixture_git "$update_source" tag -f v1.4.4\n',
+    ),
+    (
+        "the fixture",
+        "the synthetic v1.4.5 boundary tag",
+        '\n  commit -qm "Create the v1.4.5 validation-witness boundary"\n'
+        'fixture_git "$update_source" tag -f v1.4.5\n',
+    ),
+)
+
+# Ordered pairs of committed operations. Each earlier operation must be written
+# before the later one, so an accepted fixture cannot reorder the observation
+# sequence the transition depends on.
+COPIER_FIXTURE_ORDER: tuple[tuple[str, str], ...] = (
+    ("the cleanup release path", "the cleanup update-child waiter"),
+    ("the cleanup update-child waiter", "the cleanup update-child reap and PID clear"),
+    (
+        "the cleanup update-child reap and PID clear",
+        "the cleanup guardian-PID entry sanitizer",
+    ),
+    ("the cleanup guardian-PID entry sanitizer", "the cleanup guardian-PID reader"),
+    ("the cleanup guardian-PID reader", "the cleanup guardian-PID recovery sanitizer"),
+    ("the cleanup guardian-PID recovery sanitizer", "the cleanup guardian stop"),
+    ("the ready emission", "the held release polling loop"),
+    ("the synthetic v1.4.4 boundary tag", "the synthetic v1.4.5 boundary tag"),
+    ("the synthetic v1.4.5 boundary tag", "the pre-schema project generation"),
+    ("the pre-schema project generation", "the pre-update answers-file assertion"),
+    ("the pre-update answers-file assertion", "the pre-schema plan directories"),
+    ("the pre-schema plan directories", "the pre-schema active plan body"),
+    ("the pre-schema active plan", "the pre-schema active plan body"),
+    ("the pre-schema replanned source archive", "the pre-schema replanned archive body"),
+    ("the pre-schema active plan body", "the pre-schema replanned archive body"),
+    ("the pre-schema replanned archive body", "the pre-schema replan contract writer"),
+    ("the pre-schema replan contract", "the pre-schema replan contract writer"),
+    ("the pre-schema replan contract writer", "the pre-schema project commit"),
+    ("the pre-schema active plan", "the pre-schema project commit"),
+    ("the pre-schema replan contract", "the pre-schema project commit"),
+    ("the pre-schema replanned source archive", "the pre-schema project commit"),
+    ("the consumed record path", "the pre-schema project commit"),
+    ("the pre-schema project commit", "the asynchronous update dispatch"),
+    ("the attempt state path", "the asynchronous update dispatch"),
+    ("the asynchronous update dispatch", "the parent ready polling loop"),
+    ("the parent ready polling loop", "the ready-failure release path"),
+    ("the ready-failure release path", "the pending state assertion"),
+    ("the pending state assertion", "the transition guardian-PID reader"),
+    ("the transition guardian-PID reader", "the positive guardian-PID assertion"),
+    ("the positive guardian-PID assertion", "the normal release path"),
+    ("the normal release path", "the update-child exit waiter"),
+    ("the update-child exit waiter", "the update-child reap and PID clear"),
+    ("the update-child reap and PID clear", "the consumed state assertion"),
+    ("the consumed state assertion", "the updated answers-file assertion"),
+    ("the updated answers-file assertion", "the installed boundary marker assertion"),
+    (
+        "the installed boundary marker assertion",
+        "the consumed-record migration version assertion",
+    ),
+    (
+        "the consumed-record migration version assertion",
+        "the consumed-record previous template ref assertion",
+    ),
+    (
+        "the consumed-record previous template ref assertion",
+        "the consumed-record active-plan assertion",
+    ),
+    (
+        "the consumed-record active-plan assertion",
+        "the preserved replan contract assertion",
+    ),
+    (
+        "the preserved replan contract assertion",
+        "the preserved replanned archive assertion",
+    ),
+    ("the preserved replanned archive assertion", "the rejection-file absence assertion"),
+    (
+        "the rejection-file absence assertion",
+        "the transition worktree cleanliness assertion",
+    ),
+    ("the transition worktree cleanliness assertion", "the fixture success emission"),
+)
+
+
+def copier_fixture_region(text: str, region: str) -> tuple[int, int]:
+    """Return the exact bounds of one uniquely delimited fixture region."""
+
+    opening, closing = COPIER_FIXTURE_REGIONS[region]
+    start = text.find(opening)
+    if start < 0 or text.find(opening, start + 1) >= 0:
+        fail(f"{COPIER_FIXTURE} must open {region} exactly once")
+    stop = text.find(closing, start + len(opening))
+    if stop < 0 or text.find(closing, stop + 1) >= 0:
+        fail(f"{COPIER_FIXTURE} must close {region} exactly once")
+    return start, stop + len(closing)
+
+
+def require_bounded_copier_fixture() -> None:
+    """Reject removal, duplication, redefinition, or bypass of the fixture.
+
+    The checked bounded validator owns the structural rules, so it is imported
+    and invoked here instead of restating them. That validator only rejects a
+    fixture that writes a *bad* transition; a fixture that dropped the
+    transition would satisfy it silently. The committed operations below close
+    that gap by binding each observation the v1.4.5 transition depends on to
+    the exact region that must contain it, exactly once.
+    """
+
+    source = (ROOT / COPIER_FIXTURE).read_bytes()
+    findings = copier_fixture_validator.check(source)
+    if findings:
+        report = "\n".join(f"  {finding}" for finding in findings)
+        fail(
+            f"the checked bounded validator rejected {COPIER_FIXTURE}:\n{report}"
+        )
+
+    text = source.decode("utf-8")
+    if COPIER_FIXTURE_SNAPSHOT_MARKER in text:
+        fail(
+            f"{COPIER_FIXTURE} must reach the migration through the update "
+            f"wrapper, not by naming {COPIER_FIXTURE_SNAPSHOT_MARKER}"
+        )
+
+    bounds = {
+        region: copier_fixture_region(text, region)
+        for region in COPIER_FIXTURE_REGIONS
+    }
+    transition_start = text.find(COPIER_FIXTURE_TRANSITION_ANCHOR)
+    if transition_start < 0 or text.find(
+        COPIER_FIXTURE_TRANSITION_ANCHOR, transition_start + 1
+    ) >= 0:
+        fail(f"{COPIER_FIXTURE} must open the transition exactly once")
+    bounds["the transition"] = (transition_start, len(text))
+    bounds["the fixture"] = (0, len(text))
+
+    offsets: dict[str, int] = {}
+    for region, operation, needle in COPIER_FIXTURE_OPERATIONS:
+        if text.count(needle) != 1:
+            fail(f"{COPIER_FIXTURE} must write {operation} exactly once")
+        start, stop = bounds[region]
+        offset = text.find(needle)
+        if offset < start or offset + len(needle) > stop:
+            fail(f"{COPIER_FIXTURE} must write {operation} inside {region}")
+        offsets[operation] = offset
+
+    for earlier, later in COPIER_FIXTURE_ORDER:
+        if offsets[earlier] >= offsets[later]:
+            fail(f"{COPIER_FIXTURE} must write {earlier} before {later}")
+
+
 def require_context_compression_boundary() -> None:
     wrapper = read("template/.project-agent-workflow/scripts/context-compress.sh")
     required = (
@@ -1928,6 +2369,7 @@ def main() -> int:
     require_japanese_prompts(copier_yml)
     require_update_boundaries(copier_yml)
     require_validation_witness_copier_transition(copier_yml)
+    require_bounded_copier_fixture()
     require_context_compression_boundary()
     require_review_turn_zero_contract()
     require_agent_profile_task()
