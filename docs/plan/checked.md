@@ -184,3 +184,4 @@ id	path
 241	docs/plan/checked/2026/08/16-31/241-admit-lineage-rebinding-for-divergent-successors.md
 228	docs/plan/checked/2026/08/16-31/228-verify-plan185-runtime-acceptance.md
 186	docs/plan/checked/2026/08/16-31/186-bind-connected-copier-fixture-checker.md
+238	docs/plan/checked/2026/08/16-31/238-reject-unmodelled-copier-writes-to-the-sanctioned-destination.md

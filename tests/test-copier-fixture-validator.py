@@ -2673,6 +2673,205 @@ class AlternatePathDestinationTest(ContractSupportTest):
         )
 
 
+class CopierWriteTest(ContractSupportTest):
+    """Cover the Copier writes that replace the destination the child updates.
+
+    A copy and a recopy are not updates, so the alternate-path prohibition never
+    reads them. They still write a whole project, so a write proven to reach the
+    sanctioned destination is rejected everywhere except the one creation the
+    fixture must perform before it starts the update child.
+    """
+
+    OTHER = "$tmp/other-project"
+    MESSAGE = "unmodelled Copier copy path"
+    CHILD = '"$project/.project-agent-workflow/scripts/update-from-copier.sh"'
+
+    def assert_write_rejected(self, source: str) -> None:
+        self.assert_rejected(source, RULE_ALTERNATE_PATH, self.MESSAGE)
+
+    def before_the_child(self, inserted: str) -> str:
+        return self.mutate(self.CHILD, inserted + self.CHILD)
+
+    def test_a_copy_into_the_sanctioned_destination_is_rejected(self) -> None:
+        self.assert_write_rejected(
+            COMPLIANT
+            + 'run_copier copy -q -f --vcs-ref v1.4.5 "$update_source" "$project"\n'
+        )
+
+    def test_a_recopy_of_the_sanctioned_destination_is_rejected(self) -> None:
+        self.assert_write_rejected(
+            COMPLIANT + 'run_copier recopy -q -f --vcs-ref v1.4.5 "$project"\n'
+        )
+
+    def test_a_copy_written_differently_is_rejected(self) -> None:
+        for written in ("$tmp/project", "$project/", "$tmp/./project", "$project/."):
+            with self.subTest(written=written):
+                self.assert_write_rejected(
+                    COMPLIANT
+                    + f'run_copier copy -q -f "$update_source" "{written}"\n'
+                )
+
+    def test_a_copy_inside_the_sanctioned_destination_is_rejected(self) -> None:
+        self.assert_write_rejected(
+            COMPLIANT + 'run_copier copy -q -f "$update_source" "$project/nested"\n'
+        )
+
+    def test_a_copy_of_the_enclosing_directory_is_rejected(self) -> None:
+        self.assert_write_rejected(
+            COMPLIANT + 'run_copier copy -q -f "$update_source" "$tmp"\n'
+        )
+
+    def test_a_copy_behind_a_launcher_is_rejected(self) -> None:
+        self.assert_write_rejected(
+            COMPLIANT + 'env run_copier copy -q -f "$update_source" "$project"\n'
+        )
+
+    def test_a_copy_into_a_separate_project_is_accepted(self) -> None:
+        self.assert_accepted(
+            COMPLIANT
+            + f'run_copier copy -q -f "$update_source" "{self.OTHER}"\n'
+            + f'run_copier recopy -q -f "{self.OTHER}"\n'
+        )
+
+    def test_a_destination_that_does_not_settle_is_accepted(self) -> None:
+        """The committed fixture copies into a lane path no written text settles."""
+
+        self.assert_accepted(
+            COMPLIANT
+            + 'for out in "$tmp/a" "$project"; do\n'
+            '  run_copier copy -q -f "$update_source" "$out"\n'
+            "done\n"
+        )
+        self.assert_accepted(
+            COMPLIANT
+            + "write_lane() {\n"
+            '  run_copier copy -q -f "$update_source" "$1"\n'
+            "}\n"
+            'write_lane "$project"\n'
+        )
+
+    def test_an_expansion_where_the_paths_differ_is_rejected(self) -> None:
+        """An expansion written there may still name the sanctioned project."""
+
+        self.assert_write_rejected(
+            COMPLIANT + 'run_copier copy -q -f "$update_source" "$tmp/$lane"\n'
+        )
+
+    def test_an_unsettled_segment_under_the_destination_is_rejected(self) -> None:
+        """The written prefix already places the copy inside the sanctioned project."""
+
+        self.assert_write_rejected(
+            COMPLIANT + 'run_copier copy -q -f "$update_source" "$project/$lane"\n'
+        )
+
+    def test_a_destination_no_written_text_anchors_is_rejected(self) -> None:
+        """An unanchored path is placed by the working directory, not by the text."""
+
+        for written in ('"$elsewhere"', '"$lane/project"', "project"):
+            with self.subTest(written=written):
+                self.assert_write_rejected(
+                    COMPLIANT + f'run_copier copy -q -f "$update_source" {written}\n'
+                )
+
+    def test_a_child_destination_the_checker_cannot_read_reserves_every_copy(
+        self,
+    ) -> None:
+        """An unread child destination must not switch the whole rule off."""
+
+        unread = self.mutate(
+            "$project/.project-agent-workflow",
+            "$candidate_path/.project-agent-workflow",
+        )
+        self.assert_write_rejected(
+            unread + f'run_copier copy -q -f "$update_source" "{self.OTHER}"\n'
+        )
+
+    def test_an_unread_option_leaves_the_destination_unread(self) -> None:
+        self.assert_accepted(
+            COMPLIANT
+            + 'run_copier copy --unknown-option value "$update_source" "$project"\n'
+        )
+
+    def test_an_unread_operand_count_leaves_the_destination_unread(self) -> None:
+        self.assert_accepted(COMPLIANT + 'run_copier copy -q -f "$project"\n')
+        self.assert_accepted(
+            COMPLIANT + 'run_copier recopy -q -f "$update_source" "$project"\n'
+        )
+
+    def test_an_unread_subcommand_is_not_a_copy(self) -> None:
+        self.assert_accepted(
+            COMPLIANT + 'run_copier clone -q -f "$update_source" "$project"\n'
+        )
+
+    def test_the_modelled_creation_before_the_child_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.before_the_child(
+                'run_copier copy -q -f --vcs-ref v1.4.4 "$update_source" "$project"\n'
+            )
+        )
+
+    def test_a_second_creation_before_the_child_is_rejected(self) -> None:
+        self.assert_write_rejected(
+            self.before_the_child(
+                'run_copier copy -q -f --vcs-ref v1.4.4 "$update_source" "$project"\n'
+                'run_copier copy -q -f --vcs-ref v1.4.4 "$update_source" "$project"\n'
+            )
+        )
+
+    def test_a_creation_before_the_child_keeps_a_later_copy_rejected(self) -> None:
+        self.assert_write_rejected(
+            self.before_the_child(
+                'run_copier copy -q -f --vcs-ref v1.4.4 "$update_source" "$project"\n'
+            )
+            + 'run_copier recopy -q -f "$project"\n'
+        )
+
+    def test_a_fixture_without_a_transition_reads_no_copy(self) -> None:
+        self.assert_accepted(
+            WITHOUT_TRANSITION
+            + 'run_copier copy -q -f "$update_source" "$project"\n'
+        )
+
+    def test_a_copy_in_a_body_written_before_the_child_is_rejected(self) -> None:
+        self.assert_write_rejected(
+            self.before_the_child(
+                "recreate() {\n"
+                '  run_copier copy -q -f "$update_source" "$project"\n'
+                "}\n"
+            )
+            + "recreate\n"
+        )
+
+    def test_an_uncalled_body_written_before_the_child_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.before_the_child(
+                "recreate() {\n"
+                '  run_copier copy -q -f "$update_source" "$project"\n'
+                "}\n"
+            )
+        )
+
+    def test_a_copy_in_a_loop_that_reaches_the_child_is_rejected(self) -> None:
+        self.assert_write_rejected(
+            self.mutate(
+                self.CHILD,
+                "for attempt in one two; do\n"
+                '  run_copier copy -q -f "$update_source" "$project"\n'
+                "  " + self.CHILD,
+            )
+            + "done\n"
+        )
+
+    def test_a_copy_in_a_region_that_ends_before_the_child_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.before_the_child(
+                "if [ -d /tmp ]; then\n"
+                '  run_copier copy -q -f "$update_source" "$project"\n'
+                "fi\n"
+            )
+        )
+
+
 class ResolutionAuthorityTest(ContractSupportTest):
     """Cover the resolution model as the single authority on what runs an update."""
 

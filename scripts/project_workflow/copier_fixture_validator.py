@@ -1693,6 +1693,22 @@ WORKFLOW_DIRECTORY = ".project-agent-workflow"
 # subcommand writes a project this checker reads from its own operands, so
 # only this one names a destination the sanctioned child may share.
 UPDATE_SUBCOMMAND = "update"
+# The Copier subcommands that write a whole project from the template. They
+# are not updates, so they are never read as an alternate update path, but a
+# write they aim at the sanctioned destination replaces the project the
+# transition proves, so their destination is read as well.
+COPY_SUBCOMMAND = "copy"
+RECOPY_SUBCOMMAND = "recopy"
+COPY_SUBCOMMANDS = frozenset({COPY_SUBCOMMAND, RECOPY_SUBCOMMAND})
+# The operand count each read Copier subcommand writes. A copy writes the
+# template it reads and then the project it writes; an update and a recopy
+# write only the project. The destination is the last of them, so an operand
+# count this checker does not read settles no destination at all.
+COPIER_WRITE_OPERANDS = {
+    UPDATE_SUBCOMMAND: 1,
+    COPY_SUBCOMMAND: 2,
+    RECOPY_SUBCOMMAND: 1,
+}
 # The enclosure a subshell opens and the command that changes a directory
 # inside it. A relative command word runs against the directory its own
 # subshell settles, so only these two names are read to place such a word.
@@ -4043,6 +4059,86 @@ def _check_alternate_paths(fixture: _Fixture, child: _Operation) -> list[Finding
     return findings
 
 
+def _check_copier_writes(fixture: _Fixture, child: _Operation) -> list[Finding]:
+    """Reject every unmodelled Copier copy or recopy of the sanctioned destination.
+
+    A copy is not an update, so it is never read as an alternate update path.
+    It still writes a whole project, so a copy this checker proves to reach the
+    destination the update child updates removes the project the transition is
+    proving. The fixture must create that project once before it starts the
+    child, so the one write proven to run before the child is the modelled
+    creation and every other proven write is rejected.
+
+    Only a proven reach is rejected. A destination that settles nothing proves
+    nothing about which project it writes, so it stays accepted, which is what
+    keeps the fixture's unsettleable lane copy passing. A destination the
+    checker does read is kept apart only when the written text says so, exactly
+    as the alternate-path prohibition keeps two update destinations apart.
+    """
+
+    reserved = _update_destinations(fixture, child)
+    findings: list[Finding] = []
+    created = False
+    for operation in sorted(fixture.operations, key=lambda found: found.offset):
+        if not operation.reachable:
+            continue
+        if not _writes_a_reserved_path(
+            reserved, _copy_destinations(fixture, operation)
+        ):
+            continue
+        if not created and _precedes_the_child(fixture, operation, child):
+            created = True
+            continue
+        findings.append(
+            Finding(
+                RULE_ALTERNATE_PATH,
+                "an unmodelled Copier copy path writes the sanctioned destination",
+                operation.position,
+            )
+        )
+    return findings
+
+
+def _precedes_the_child(
+    fixture: _Fixture, operation: _Operation, child: _Operation
+) -> bool:
+    """Report whether one written write is proven to run before the update child.
+
+    Only a write whose written place is its running place is read as the
+    creation. A write inside a function body runs wherever the body is called,
+    and a write inside a region that reaches past the child runs again on a
+    later turn, so neither is proven to run first and neither takes the one
+    exemption this rule grants.
+    """
+
+    if operation.offset >= child.offset:
+        return False
+    if fixture.inside_declaration(operation.offset):
+        return False
+    regions = list(fixture.loop_extents().items()) + list(fixture.branch_extents())
+    return not any(
+        start <= operation.offset and end >= child.offset for start, end in regions
+    )
+
+
+def _writes_a_reserved_path(
+    reserved: frozenset[_Path], candidate: frozenset[_Path]
+) -> bool:
+    """Report whether one written destination is proven to reach a reserved one.
+
+    A destination this checker settles nothing for is not read at all and never
+    reaches anything, which is the one exemption the committed fixture's lane
+    copy needs. Every destination it does read is answered by the same written
+    separation the alternate-path prohibition reads, so an unread child
+    destination reserves everything and this rule is never weaker than the
+    prohibition it is modelled on.
+    """
+
+    if not candidate:
+        return False
+    return not _paths_are_lexically_separate(reserved, candidate)
+
+
 def _updates_a_separate_project(
     fixture: _Fixture,
     operation: _Operation,
@@ -4270,17 +4366,22 @@ def _subshell_directory(
 
 
 def _copier_destinations(
-    fixture: _Fixture, run: _CommandRun, literals: tuple[str | None, ...], place: int
+    fixture: _Fixture,
+    run: _CommandRun,
+    literals: tuple[str | None, ...],
+    place: int,
+    subcommand: str = UPDATE_SUBCOMMAND,
 ) -> frozenset[_Path]:
-    """Return every project one written Copier update may change.
+    """Return every project one written Copier subcommand may write.
 
     Only the enumerated options are read, so an option written in any other
     spelling may take the word this checker would otherwise read as the
-    destination and the dispatch names no destination at all. An update writes
-    exactly one destination, so any other operand count is unread as well.
+    destination and the dispatch names no destination at all. Each read
+    subcommand writes a fixed operand count and writes the project last, so
+    any other operand count is unread as well.
     """
 
-    if place + 1 >= len(literals) or literals[place + 1] != UPDATE_SUBCOMMAND:
+    if place + 1 >= len(literals) or literals[place + 1] != subcommand:
         return frozenset()
     operands: list[Token] = []
     index = place + 2
@@ -4308,9 +4409,9 @@ def _copier_destinations(
             return frozenset()
         operands.append(run.words[index])
         index += 1
-    if len(operands) != 1:
+    if len(operands) != COPIER_WRITE_OPERANDS[subcommand]:
         return frozenset()
-    return _settle_operand(fixture, run, operands[0])
+    return _settle_operand(fixture, run, operands[-1])
 
 
 def _update_reading(
@@ -4468,6 +4569,34 @@ def _update_destinations(
     return _update_reading(fixture, operation) or frozenset()
 
 
+def _copy_destinations(
+    fixture: _Fixture, operation: _Operation
+) -> frozenset[_Path]:
+    """Return every project one operation may write through a Copier copy or recopy.
+
+    Only a written Copier command word followed by a read copy subcommand is
+    read. Every other spelling of a copy hides which project it writes, and an
+    operation this checker cannot settle a destination for proves no reach, so
+    reading it further would reject a fixture on text rather than on proof.
+    """
+
+    run = _run_for(fixture, operation)
+    if run is None or not run.words:
+        return frozenset()
+    literals = _run_literals(run)
+    for place in _command_word_places(literals):
+        written = literals[place]
+        if written is None or not _mentions(written, COPIER_MARKER):
+            continue
+        if place + 1 >= len(literals):
+            continue
+        subcommand = literals[place + 1]
+        if subcommand not in COPY_SUBCOMMANDS:
+            continue
+        return _copier_destinations(fixture, run, literals, place, subcommand)
+    return frozenset()
+
+
 def _forwards_positional(fixture: _Fixture, name: str | None) -> bool:
     """Report whether a declared function runs one of its own arguments.
 
@@ -4537,6 +4666,7 @@ def _check_transition(fixture: _Fixture) -> list[Finding]:
     findings.extend(_check_state_order(fixture, release, final_wait))
     findings.extend(_check_guardian(fixture))
     findings.extend(_check_alternate_paths(fixture, child))
+    findings.extend(_check_copier_writes(fixture, child))
     return findings
 
 
