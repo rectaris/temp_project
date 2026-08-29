@@ -361,20 +361,6 @@
           "path": "docs/plan/active/186-bind-connected-copier-fixture-checker.md",
           "validation_witness_map_digest": "sha256:d47f3af3e4f670331ad19e8f3204b914695c0c034214bc80615125ed59fab061",
           "validation_witness_schema": 1
-        },
-        {
-          "acceptance_digests": [
-            "sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1"
-          ],
-          "authoritative_validation": [
-            "sh -n tests/copier-update.sh",
-            "python3 scripts/check-copier-template.py",
-            "git diff --check"
-          ],
-          "authoritative_validation_digest": "sha256:21ce3e0f12b5611be5882ec8520e88ba111dd1bc1737366599b0b6ea353e4399",
-          "path": "docs/plan/active/187-verify-plan183-successor-acceptance.md",
-          "validation_witness_map_digest": "sha256:d47f3af3e4f670331ad19e8f3204b914695c0c034214bc80615125ed59fab061",
-          "validation_witness_schema": 1
         }
       ]
     },

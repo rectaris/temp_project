@@ -23,7 +23,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/08/16-31/182-admit-v145-copier-wiring.md
-  - docs/plan/active/187-verify-plan183-successor-acceptance.md
+  - docs/plan/replanned/2026/08/16-31/187-verify-plan183-successor-acceptance.md
   - docs/plan/replanned/2026/08/16-31/178-wire-validation-witness-copier-transition.md
   - copier.yml
   - scripts/project_workflow/copier_inventory.py
