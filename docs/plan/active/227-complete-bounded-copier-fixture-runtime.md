@@ -1,7 +1,7 @@
 # Complete the bounded Copier fixture runtime
 
 status: deferred
-completion_deferred_reason: Plan 237 must be checked so the alternate-path rule stops rejecting the Copier copy lanes the checked resolution model proves run no update
+completion_deferred_reason: Plan 239 must be checked so the two relative wrapper self-update lanes resolve against their subshell directory; Plan 237 already restored the resolution model as the single update authority
 primary_invariant: the committed fixture runtime preserves the unique synthetic transition, bounded before-stage synchronization, update-child ownership release, ordered provenance states, and guardian cleanup under the checked destination-aware checker
 task_types:
   - template_workflow
@@ -45,7 +45,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh"}
 predecessor_plans:
-  - docs/plan/active/237-restore-the-resolution-model-as-the-single-update-authority.md
+  - docs/plan/active/239-resolve-relative-update-wrapper-subshell-directory.md
 successor_plans:
   - docs/plan/replanned/2026/08/16-31/226-scope-fixture-alternate-path-rule.md
   - docs/plan/active/227-complete-bounded-copier-fixture-runtime.md
