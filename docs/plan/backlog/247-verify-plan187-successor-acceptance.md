@@ -1,7 +1,6 @@
 # Verify Plan 187 successor acceptance
 
-status: deferred
-completion_deferred_reason: Plans 244, 245, and 246 must be checked before their combined result can be verified against the unchanged Plan 187 acceptance
+status: backlog
 primary_invariant: checked Plan 182, the checked runtime and checker replacements, and the three checked enforcement repairs jointly satisfy the unchanged Plan 187 acceptance before Plan 184 performs its own verification
 task_types:
   - planning_docs
@@ -50,9 +49,9 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 predecessor_plans:
-  - docs/plan/active/244-reject-fixture-command-redefinition.md
-  - docs/plan/active/245-bind-fixture-inputs-to-one-inventory.md
-  - docs/plan/active/246-bind-pre-schema-fixture-contents.md
+  - docs/plan/checked/2026/08/16-31/244-reject-fixture-command-redefinition.md
+  - docs/plan/checked/2026/08/16-31/245-bind-fixture-inputs-to-one-inventory.md
+  - docs/plan/checked/2026/08/16-31/246-bind-pre-schema-fixture-contents.md
 successor_plans:
   - docs/plan/active/244-reject-fixture-command-redefinition.md
   - docs/plan/active/245-bind-fixture-inputs-to-one-inventory.md
@@ -94,3 +93,10 @@ checked_summary_ja: checked Plan 182、runtime・checker後継、三つのenforc
 - Pending. This plan starts only after Plans 244, 245, and 246 are checked.
 - The stopped Plan 183 and Plan 187 ledgers and reviews are advisory history and cannot authorize this successor acceptance.
 - This plan does not execute the complete Copier transition and does not change product files.
+- The run reproduced all three Plan 187 High findings read-only and confirmed the exact reproductions are now rejected: `command_shadowing` for no-op `grep`, `test`, and `touch` declarations, `inventory_region` for a staging the inventory loop does not carry, and the pre-schema content refusal for emptied heredoc bodies. `tests/copier-update.sh` stayed byte-identical at sha256 174ea284.
+- The final checker retains every Plan 182 and Plan 186 binding: 45 bound operations with 45 unique names, two named regions plus the transition anchor, 43 ordering pairs, the inventory "exactly one" assertions, the snapshot-marker refusal, and the validator delegation. A 90-case removal and duplication sweep over the bound operations left no survivors.
+- All four declared focused validation commands exited zero: `sh -n tests/copier-update.sh`, `python3 scripts/check-copier-template.py`, `python3 scripts/restructure-plan.py --verify`, and `git diff --check`.
+- One read-only advisory `code-review` sub-agent was used for the fresh independent review. It held no write scope, and acceptance was retained in the main session.
+- That review returned two High and one Medium finding, and the main session reproduced all three against the committed gate with the fixture left byte-identical. First, a staging outside the inventory region is accepted whenever any reachable editing command names a path under the update-source roots, without the inventory being consulted, so `sed -i "1r $root/AGENTS.md" "$update_source/NOTICE"` buys acceptance for `fixture_git "$update_source" add -- NOTICE`. Second, the gate reads only the fixture bytes, so a redefinition in the sourced `tests/lib-copier.sh`, or a no-op `run_copier` in the fixture itself, still makes bound observations vacuous. Third, the bound pre-schema constructions are accepted inside a never-taken branch or an uncalled function.
+- Task 4 requires zero unresolved High or Medium findings and this plan may not edit the checker, the validator, or the fixture, so the run stopped before completion. The three findings are independently repairable with bounded write and validation scope and leave this plan's requirements, acceptance, and safety conditions unchanged, so they were recorded as bounded repair plans 248, 249, and 250 rather than as a restructuring of this plan.
+- The Plan 184 lineage rebinding was not performed, because this plan has no checked archive to rebind to. This plan returns to the backlog unchanged and resumes through a fresh run after Plans 248, 249, and 250 are checked.
