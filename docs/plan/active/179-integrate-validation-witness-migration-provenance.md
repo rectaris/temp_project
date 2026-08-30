@@ -87,4 +87,7 @@ checked_summary_ja: guardian protocol、方針、inventory、実際のCopier更�
 ## Validation Notes
 
 - This plan validates only the replacement for Plan 163. Plan 167 retains the unchanged complete Plan 130 authoritative suite.
+- 権威検証 `tests/copier-update.sh --require-copier` は exit status 1 で失敗した。失敗箇所は `tests/copier-update.sh:1145`、報告は `plan restructuring failed: successors[0] requires validation_witness_schema: 1`。
+  原因は `tests/copier-update.sh:1075-1116` の replan fixture が `status: in_progress` の後継planを `focused_validation`・`validation_witness_schema`・`validation_witness_map` なしで生成することにある。witness要求は 2026-08-24 の `0ad400f` で入り、fixture は追随していない。本plan、commit `1368f40`、commit `97de2d1`、および未commitの `CHANGELOG.md`・`tests/smoke.sh` はいずれも `validation_projection` にも当該fixtureにも触れていない。
+  影響するinvariantは本planのprimary invariantで、真正なCopier遷移自体が開始できない。独立reviewの確認済み判定は `repair_required` であり、修復対象は `tests/copier-update.sh` 一つに閉じる。本planの実行は停止し、再開は fixture 修復が checked になった後の新しい実行として行う。
 - Plan 184 は所有者判断で `docs/plan/shelved/184-verify-plan178-successor-acceptance.md` に見送られたため、`integration_gates` が求める「184 が checked であること」は waiver とする。この waiver が省く保証は、Plan 178 の後継計画が受入項目を過不足なく引き継いだことの独立検証である。Plan 184 が backlog または active に戻った時点でこの waiver は失効し、ゲートは再び拘束する。

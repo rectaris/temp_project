@@ -1403,6 +1403,9 @@ grep -q 'redaction_status' "$tmp/typescript/.project-agent-workflow/docs/agent/S
 grep -q 'agent_logging:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'Context compression helper: optional' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'external transcript logs as primary full-turn evidence' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'validation-witness-migration-provenance-schema: 1' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'must durably transition the attempt to `consumed` before acceptance' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'Never treat the snapshot or attempt state as product acceptance evidence' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q '.project-agent-workflow/scripts/context-compress.sh' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_CONTEXT_COMPRESSION.md"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/check-agent-log-manifest.py"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/check-agent-log-manifest.py --self-test >/dev/null)

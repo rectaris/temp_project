@@ -7,6 +7,9 @@
   公開コマンドは stage も commit もせず、上書きは明示 supersede だけを受け付けます。
   `verify-shared` は記録した source hash、決定的再生成、公開ゲート、merge conflict 標識を照合して、陳腐化や改変を fail-closed で停止します。
 
+- 旧形式 witness の移行境界を、1 回だけ使える migration 所有の provenance 記録へ結合しました。
+  clean commit から作った snapshot と Git-local の試行状態を、生存する元 guardian の capability 証明、repository 識別、source commit、socket 経路で束ね、更新後段は 同じ snapshot の再現と新しい challenge-response の成立を求めます。
+  失効、複製、再送、guardian 交代、confine されていない socket は fail-closed で拒否し、snapshot と試行状態は単独では製品の受入証拠にも検証 witness にもなりません。
 - plan境界で本文を含まないsession checkpointを発行し、異なる観測済みroot sessionから一度だけ後続planを開始するstaged経路を追加しました。
   agent log manifestにはprovider観測tokenと決定的proxy countを分離して保存し、独立reviewは継承turn 0の限定packetと1回の再review上限へ結合します。
 - 権威検証の失敗後は、失敗した操作と終了statusを実行台帳へ固定し、読み取り専用の再現証拠が一つの影響対象invariantを確認するまで修復planの作成を拒否するようにしました。
