@@ -188,3 +188,4 @@ id	path
 242	docs/plan/checked/2026/08/16-31/242-git-managed-shared-html.md
 243	docs/plan/checked/2026/08/16-31/243-admit-lineage-rebinding-for-checked-predecessors.md
 244	docs/plan/checked/2026/08/16-31/244-reject-fixture-command-redefinition.md
+245	docs/plan/checked/2026/08/16-31/245-bind-fixture-inputs-to-one-inventory.md

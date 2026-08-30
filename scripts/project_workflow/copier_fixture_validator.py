@@ -3224,6 +3224,426 @@ def _check_inventory_region(fixture: _Fixture) -> list[Finding]:
                     operation.position,
                 )
             )
+    findings.extend(_check_update_source_inputs(fixture, region, copy, variable))
+    return findings
+
+
+UPDATE_SOURCE_PLACING_COMMANDS = frozenset(
+    {"tar", "rsync", "unzip", "cpio", "patch", "scp", "curl", "wget", "bsdtar"}
+)
+UPDATE_SOURCE_PLACING_SUBCOMMANDS = frozenset(
+    {
+        "am",
+        "apply",
+        "checkout",
+        "cherry-pick",
+        "clean",
+        "clone",
+        "hash-object",
+        "merge",
+        "mv",
+        "pull",
+        "reset",
+        "restore",
+        "revert",
+        "rm",
+        "stash",
+        "worktree",
+    }
+)
+UPDATE_SOURCE_EDITING_COMMANDS = frozenset(
+    {
+        "awk",
+        "cp",
+        "install",
+        "ln",
+        "mv",
+        "perl",
+        "python",
+        "python3",
+        "sed",
+        "tar",
+        "tee",
+        "touch",
+        "rsync",
+    }
+)
+STAGING_SUBCOMMANDS = frozenset({"add", "stage", "update-index"})
+UPDATE_SOURCE_SHELLS = frozenset({"sh", "bash", "dash", "ksh", "zsh", "eval"})
+FOR_LIST_PATTERN = re.compile(r"(?m)^[ \t]*for[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+in[ \t]+([^\n;]*)")
+PARAMETER_POSITION_PATTERN = re.compile(r"(?<![A-Za-z0-9_])\$\{?([1-9][0-9]*)\}?")
+
+
+def _mentions_name(text: str, names: frozenset[str]) -> bool:
+    """Report whether one written word reads one of the named variables.
+
+    The read is taken from the written bytes rather than from the expansions
+    this checker resolves, because a name written inside a command
+    substitution or inside a quoted script still carries the value the
+    surrounding fixture gives it.
+    """
+
+    return any(
+        re.search(
+            r"(?<![A-Za-z0-9_])\$\{?" + re.escape(name) + r"(?![A-Za-z0-9_])", text
+        )
+        for name in names
+    )
+
+
+def _update_source_roots(
+    fixture: _Fixture, copy: _Operation, variable: str
+) -> frozenset[_Path]:
+    """Return every directory the inventory copy writes the declared files under.
+
+    The update source is read from the destination the inventory copy writes
+    rather than from a name this checker fixes, because the fixture decides
+    what it calls that directory. The loop variable is left out, because it
+    holds the path one inventory line declares rather than the directory that
+    holds them all.
+    """
+
+    destination = _operation_words(copy)[-1].text
+    roots: set[_Path] = set()
+    for name in sorted(_read_names(destination)):
+        if name == variable:
+            continue
+        roots |= _settle_written_word(fixture, copy, f'"${name}"')
+    return frozenset(roots)
+
+
+def _is_one_path(left: _Path, right: _Path) -> bool:
+    """Report whether two settled paths may name one file or directory."""
+
+    return len(left[1]) == len(right[1]) and _may_be_one_directory(left, right)
+
+
+def _lies_under(path: _Path, roots: frozenset[_Path]) -> bool:
+    """Report whether one settled path may lie under one of the roots."""
+
+    return any(
+        len(path[1]) > len(root[1])
+        and _may_be_one_directory((path[0], path[1][: len(root[1])]), root)
+        for root in roots
+    )
+
+
+def _names_one_root(path: _Path, roots: frozenset[_Path]) -> bool:
+    """Report whether one settled path names one of the roots itself.
+
+    A path no written text anchors at the root names a directory the shell
+    decides, so it is not read as naming the update source: an operand written
+    as a relative path is the path one repository holds rather than the
+    repository itself.
+    """
+
+    return path[0] and any(_is_one_path(path, root) for root in roots)
+
+
+def _operation_paths(fixture: _Fixture, operation: _Operation) -> frozenset[_Path]:
+    """Return every path the words of one operation settle to."""
+
+    settled: set[_Path] = set()
+    for token in _operation_words(operation):
+        settled |= _settle_written_word(fixture, operation, token.text)
+    return frozenset(settled)
+
+
+def _staged_operands(
+    fixture: _Fixture, operation: _Operation
+) -> tuple[tuple[Token, ...], bool]:
+    """Return the paths one staging names and whether it stages what it finds.
+
+    A staging written with no path of its own, or written to add everything a
+    tree holds, names no file this checker can compare against the inventory,
+    so it is reported instead of read.
+    """
+
+    operands: list[Token] = []
+    everything = False
+    started = False
+    for token in _operation_words(operation):
+        if not started:
+            started = token.text in STAGING_SUBCOMMANDS
+            continue
+        if token.text == "--":
+            continue
+        if token.text.startswith("-"):
+            if token.text in {"-A", "--all", "--no-ignore-removal", "-u", "--update"}:
+                everything = True
+            continue
+        if _strip(token.text) in {".", ":/", "*", ":/*"}:
+            everything = True
+            continue
+        operands.append(token)
+    return tuple(operands), everything or not operands
+
+
+def _update_source_names(
+    fixture: _Fixture, copy: _Operation, variable: str
+) -> frozenset[str]:
+    """Return every name a word may write the update source with.
+
+    A destination this checker cannot place still says which names it is
+    written from, so the names the inventory copy writes its destination with
+    are followed through every assignment that reads one of them. A name bound
+    from such a word may hold the update source whatever the value settles to,
+    so an operation written with it is read as naming the update source.
+    """
+
+    destination = _operation_words(copy)[-1].text
+    names = {name for name in _read_names(destination) if name != variable}
+    lists = FOR_LIST_PATTERN.findall(fixture.text)
+    while True:
+        grown = set(names)
+        held = frozenset(names)
+        for assignment in fixture.assignments:
+            if _mentions_name(assignment.value, held):
+                grown.add(assignment.name)
+            grown |= _passed_names(fixture, assignment, held)
+        for name, words in lists:
+            if _mentions_name(words, held):
+                grown.add(name)
+        if grown == names:
+            return frozenset(names)
+        names = grown
+
+
+def _inside_substitution(fixture: _Fixture, operation: _Operation) -> bool:
+    """Report whether one operation stands inside a substituted assignment value.
+
+    A directory change written inside a command substitution ends with the
+    substitution, so the operations written after it are read from the
+    directory the fixture already stood in.
+    """
+
+    return any(
+        assignment.token.start.offset
+        <= operation.offset
+        <= assignment.token.end.offset
+        for assignment in fixture.assignments
+    )
+
+
+def _passed_names(
+    fixture: _Fixture, assignment: _Assignment, names: frozenset[str]
+) -> set[str]:
+    """Return the assignment name when a call passes the update source to it.
+
+    A function that binds a positional parameter carries whatever its call
+    sites write there, so a name bound from `$1` holds the update source when
+    one call writes the update source in that position. The word position is
+    read exactly rather than tolerantly, so a helper called with the update
+    source in another position binds no name here.
+    """
+
+    positions = {
+        int(match.group(1))
+        for match in PARAMETER_POSITION_PATTERN.finditer(assignment.value)
+    }
+    if not positions:
+        return set()
+    declared = [
+        declaration
+        for declaration in fixture.table.declarations
+        if declaration.start.offset <= assignment.offset <= declaration.end.offset
+    ]
+    passed: set[str] = set()
+    for declaration in declared:
+        for operation in fixture.operations:
+            if operation.name != declaration.name:
+                continue
+            words = _operation_words(operation)
+            for position in positions:
+                if position < len(words) and _mentions_name(
+                    words[position].text, names
+                ):
+                    passed.add(assignment.name)
+    return passed
+
+
+def _may_name_update_source(
+    fixture: _Fixture,
+    operation: _Operation,
+    roots: frozenset[_Path],
+    names: frozenset[str],
+) -> bool:
+    """Report whether one operation may be written against the update source."""
+
+    texts = [token.text for token in _operation_words(operation)]
+    texts.extend(operation.redirect_targets)
+    for text in texts:
+        if _mentions_name(text, names):
+            return True
+        for path in _settle_written_word(fixture, operation, text):
+            if not path[0]:
+                continue
+            if _names_one_root(path, roots) or _lies_under(path, roots):
+                return True
+    return False
+
+
+def _check_update_source_inputs(
+    fixture: _Fixture, region: int, copy: _Operation, variable: str
+) -> list[Finding]:
+    """Reject every update source input the inventory loop does not perform.
+
+    A fixture takes an input the inventory does not declare either by writing a
+    file into the update source outside the inventory region or by staging a
+    path in the update source that nothing there writes. Both are read from the
+    destination the operation settles to rather than from the name it is
+    written with, because a hard-coded path and a further variable name one
+    directory as readily as the name the loop copies with. A destination this
+    checker cannot place is reported rather than read as writing nothing,
+    whenever the operation is written with a name the update source is written
+    with, and a command that puts a file in place without naming it, a Git
+    subcommand that writes a tree, and a directory change into the update
+    source are reported the same way, because each carries a file this checker
+    cannot follow to the destination it takes. A staging is read against every
+    path the rest of the fixture edits inside the update source, because the
+    fixture edits a file the loop copied before staging it, while a path no
+    editing operation names is one no inventory line declares. A staging this
+    checker cannot read as a direct Git run is reported rather than skipped.
+    """
+
+    findings: list[Finding] = []
+    roots = _update_source_roots(fixture, copy, variable)
+    if not roots:
+        return [
+            Finding(
+                RULE_INVENTORY_REGION,
+                "the inventory copy names no update source this checker can place",
+                copy.position,
+            )
+        ]
+    names = _update_source_names(fixture, copy, variable)
+    edited: dict[int, frozenset[_Path]] = {}
+    for operation in fixture.operations:
+        if not operation.reachable:
+            continue
+        if _resolved_command(_operation_words(operation)) in UPDATE_SOURCE_EDITING_COMMANDS:
+            edited[operation.offset] = _operation_paths(fixture, operation)
+    for operation in fixture.operations:
+        if not operation.reachable or region in operation.loop_regions:
+            continue
+        named = _may_name_update_source(fixture, operation, roots, names)
+        created, inside, _words, unknown = _helper_paths(fixture, operation)
+        written = set(created) | {
+            (directory[0], directory[1] + (name,)) for directory, name in inside
+        }
+        command = _resolved_command(_operation_words(operation))
+        subcommand = fixture.git_subcommand(operation)
+        if any(_lies_under(path, roots) for path in written):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "a write into the update source stands outside the "
+                    "inventory region",
+                    operation.position,
+                )
+            )
+        elif named and unknown:
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "a write this checker cannot place is written where the "
+                    "update source is named",
+                    operation.position,
+                )
+            )
+        if named and (
+            command in UPDATE_SOURCE_PLACING_COMMANDS
+            or subcommand in UPDATE_SOURCE_PLACING_SUBCOMMANDS
+        ):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "a command that puts files in place is written where the "
+                    "update source is named",
+                    operation.position,
+                )
+            )
+        if named and command == "cd" and not _inside_substitution(fixture, operation):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "a directory change into the update source stands outside "
+                    "the inventory region",
+                    operation.position,
+                )
+            )
+        if (
+            named
+            and subcommand is None
+            and not operation.node.call_path
+            and operation.name != "git"
+            and operation.name not in fixture.git_wrappers
+            and (
+                command in UPDATE_SOURCE_SHELLS
+                or any(
+                    _strip(token.text) == "git"
+                    or _strip(token.text) in fixture.git_wrappers
+                    for token in _operation_words(operation)
+                )
+            )
+        ):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "a Git run this checker cannot read is written where the "
+                    "update source is named",
+                    operation.position,
+                )
+            )
+        if subcommand not in STAGING_SUBCOMMANDS:
+            continue
+        if not named:
+            continue
+        operands, everything = _staged_operands(fixture, operation)
+        if everything:
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "staging outside the inventory region adds the update "
+                    "source without naming one path",
+                    operation.position,
+                )
+            )
+        for token in operands:
+            settled = _settle_written_word(fixture, operation, token.text)
+            staged: set[_Path] = set()
+            for anchored, segments in settled:
+                if anchored and _lies_under((anchored, segments), roots):
+                    staged.add((anchored, segments))
+                    continue
+                staged |= {(root[0], root[1] + segments) for root in roots}
+            if not staged:
+                findings.append(
+                    Finding(
+                        RULE_INVENTORY_REGION,
+                        "staging outside the inventory region adds a path this "
+                        "checker cannot place in the update source",
+                        operation.position,
+                    )
+                )
+                continue
+            if any(
+                offset != operation.offset
+                and path[0]
+                and _lies_under(path, roots)
+                and any(_is_one_path(path, entry) for entry in staged)
+                for offset, paths in edited.items()
+                for path in paths
+            ):
+                continue
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "staging outside the inventory region adds a path nothing "
+                    "writes into the update source",
+                    operation.position,
+                )
+            )
     return findings
 
 

@@ -378,6 +378,222 @@ class InventoryRegionTest(ContractSupportTest):
         )
 
 
+    def outside(self, addition: str) -> str:
+        return self.mutate(VERSION_COMMITS, "\n" + addition + VERSION_COMMITS)
+
+    def test_a_hard_coded_copy_into_the_update_source_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside('cp "$root/AGENTS.md" "$update_source/AGENTS.md"\n'),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside",
+        )
+
+    def test_a_copy_into_the_update_source_under_another_name_is_rejected(
+        self,
+    ) -> None:
+        self.assert_rejected(
+            self.outside(
+                'mirror="$update_source"\n'
+                'cp "$root/AGENTS.md" "$mirror/AGENTS.md"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside",
+        )
+
+    def test_a_redirection_into_the_update_source_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside('printf x >"$update_source/extra.txt"\n'),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside",
+        )
+
+    def test_a_helper_written_into_the_update_source_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside('touch "$update_source/extra.txt"\n'),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside",
+        )
+
+    def test_staging_a_path_nothing_writes_is_rejected(self) -> None:
+        for index, form in enumerate(
+            (
+                'fixture_git "$update_source" add -- undeclared/path.txt\n',
+                'git -C "$update_source" add -- undeclared/path.txt\n',
+                'fixture_git "$update_source" add undeclared/path.txt\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "adds a path nothing writes into the update source",
+                )
+
+    def test_staging_the_whole_update_source_is_rejected(self) -> None:
+        for index, form in enumerate(
+            (
+                'fixture_git "$update_source" add -A\n',
+                'fixture_git "$update_source" add .\n',
+                'fixture_git "$update_source" add -u\n',
+                'fixture_git "$update_source" add -- .\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "without naming one path",
+                )
+
+    def test_staging_a_path_the_fixture_edits_in_place_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                'sed -i "s/a/b/" "$update_source/copier.yml"\n'
+                'fixture_git "$update_source" add -- copier.yml\n'
+            )
+        )
+
+    def test_staging_another_repository_outside_the_region_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                'other="$tmp/other"\n'
+                'fixture_git "$other" add -A\n'
+                'fixture_git "$other" add -- undeclared/path.txt\n'
+            )
+        )
+
+    def test_a_copy_outside_the_update_source_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside('cp "$root/AGENTS.md" "$tmp/other/AGENTS.md"\n')
+        )
+
+    def test_a_write_this_checker_cannot_place_is_rejected(self) -> None:
+        for index, form in enumerate(
+            (
+                'for extra in AGENTS.md; do\n'
+                '  cp "$root/$extra" "$update_source/$extra"\n'
+                'done\n',
+                'extra_destination=$(printf %s "$update_source/AGENTS.md")\n'
+                'cp "$root/AGENTS.md" "$extra_destination"\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "a write this checker cannot place",
+                )
+
+    def test_a_command_that_puts_files_in_place_is_rejected(self) -> None:
+        for index, form in enumerate(
+            (
+                'tar -x -C "$update_source" -f "$root/extra.tar"\n',
+                'rsync -a "$root/AGENTS.md" "$update_source/AGENTS.md"\n',
+                'fixture_git "$update_source" apply --index "$root/extra.patch"\n',
+                'fixture_git "$update_source" checkout -- AGENTS.md\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "puts files in place",
+                )
+
+    def test_a_directory_change_into_the_update_source_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                'cd "$update_source"\n'
+                'cp "$root/AGENTS.md" AGENTS.md\n'
+                'cd "$root"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "a directory change into the update source",
+        )
+
+    def test_staging_written_as_a_synonym_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside('fixture_git "$update_source" stage -- undeclared.txt\n'),
+            RULE_INVENTORY_REGION,
+            "adds a path nothing writes into the update source",
+        )
+
+    def test_a_git_run_this_checker_cannot_read_is_rejected(self) -> None:
+        for index, form in enumerate(
+            (
+                'printf AGENTS.md | xargs fixture_git "$update_source" add --\n',
+                'sh -c \'git -C "$update_source" add -A\'\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "a Git run this checker cannot read",
+                )
+
+    def test_staging_a_path_only_a_read_names_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                'grep -qF marker "$update_source/copier.yml"\n'
+                'fixture_git "$update_source" add -- copier.yml\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "adds a path nothing writes into the update source",
+        )
+
+    def test_staging_an_edited_path_written_in_full_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                'sed -i "s/a/b/" "$update_source/copier.yml"\n'
+                'fixture_git "$update_source" add -- "$update_source/copier.yml"\n'
+            )
+        )
+
+    def test_a_directory_change_outside_the_update_source_is_accepted(self) -> None:
+        self.assert_accepted(self.outside('cd "$tmp/other"\ncd "$root"\n'))
+
+    def test_an_alias_bound_by_a_loop_or_a_call_is_rejected(self) -> None:
+        for index, form in enumerate(
+            (
+                'for mirror in "$update_source"; do\n'
+                '  cp "$root/AGENTS.md" "$mirror/AGENTS.md"\n'
+                'done\n',
+                'seed() {\n'
+                '  mirror=$1\n'
+                '  cp "$root/AGENTS.md" "$mirror/AGENTS.md"\n'
+                '}\n'
+                'seed "$update_source"\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "a write this checker cannot place",
+                )
+
+    def test_staging_written_as_an_index_update_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                'fixture_git "$update_source" update-index --add -- undeclared.txt\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "adds a path nothing writes into the update source",
+        )
+
+    def test_a_call_passing_another_directory_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                'seed() {\n'
+                '  mirror=$1\n'
+                '  cp "$root/AGENTS.md" "$mirror/AGENTS.md"\n'
+                '}\n'
+                'seed "$tmp/other"\n'
+            )
+        )
+
+
 class DirectInvocationTest(ContractSupportTest):
     def test_direct_snapshot_invocation_is_rejected(self) -> None:
         self.assert_rejected(
