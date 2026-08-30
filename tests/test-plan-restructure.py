@@ -6975,6 +6975,139 @@ class PlanRestructureTest(unittest.TestCase):
             )
         self.assertIn("requires an unstarted plan", str(failure.exception))
 
+    def test_lineage_rebinding_restates_a_shelved_reference(self) -> None:
+        module = self.load_restructure_module("shelved_reference_module")
+        shelved = self.repo / "docs/plan/shelved/099-absent.md"
+        shelved.parent.mkdir(parents=True, exist_ok=True)
+        shelved.write_text(
+            f"# Absent\n\nstatus: shelved{SHELVED_FIELDS}\n", encoding="utf-8"
+        )
+        active_path = "docs/plan/active/099-absent.md"
+        shelved_path = "docs/plan/shelved/099-absent.md"
+        before = {
+            "status": "backlog",
+            "predecessor_plans": [active_path],
+            "write_scope": ["docs/agent/spec-index.yaml"],
+        }
+        after = {**before, "predecessor_plans": [shelved_path]}
+        accepted = [
+            {
+                "scope": "manifest",
+                "field": "predecessor_plans",
+                "old": f"  - {active_path}\n",
+                "new": f"  - {shelved_path}\n",
+                "count": 1,
+            }
+        ]
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            module.validate_lineage_reference_transition(
+                before, after, accepted, "lineage"
+            )
+            wrong = copy.deepcopy(accepted)
+            wrong[0]["new"] = "  - docs/plan/backlog/099-absent.md\n"
+            with self.assertRaises(module.RestructureError) as target:
+                module.validate_lineage_reference_transition(
+                    before, after, wrong, "lineage"
+                )
+            self.assertIn("restate that reference as its shelved plan", str(target.exception))
+            resident = self.repo / active_path
+            resident.parent.mkdir(parents=True, exist_ok=True)
+            resident.write_text("# resident\n", encoding="utf-8")
+            try:
+                with self.assertRaises(module.RestructureError) as live:
+                    module.validate_lineage_reference_transition(
+                        before, after, accepted, "lineage"
+                    )
+            finally:
+                resident.unlink()
+            self.assertIn("still resolves", str(live.exception))
+            shelved.unlink()
+            with self.assertRaises(module.RestructureError) as gone:
+                module.validate_lineage_reference_transition(
+                    before, after, accepted, "lineage"
+                )
+            self.assertIn("names no checked archive, no shelved plan", str(gone.exception))
+            shelved.write_text(
+                f"# Absent\n\nstatus: backlog{SHELVED_FIELDS}\n", encoding="utf-8"
+            )
+            with self.assertRaises(module.RestructureError) as status:
+                module.validate_lineage_reference_transition(
+                    before, after, accepted, "lineage"
+                )
+            self.assertIn("shelved reference is not shelved", str(status.exception))
+            shelved.write_text(
+                f"# Absent\n\nstatus: shelved{SHELVED_FIELDS}\n", encoding="utf-8"
+            )
+            extended = copy.deepcopy(accepted)
+            extended[0]["old"] = f"  - {active_path}.bak\n"
+            extended[0]["new"] = f"  - {shelved_path}.bak\n"
+            with self.assertRaises(module.RestructureError) as token:
+                module.validate_lineage_reference_transition(
+                    before, after, extended, "lineage"
+                )
+            self.assertIn("longer path token", str(token.exception))
+            archive = self.repo / "docs/plan/checked/2026/01/01-15/099-absent.md"
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_text("# Absent\n\nstatus: checked\n", encoding="utf-8")
+            index = self.repo / "docs/plan/checked.md"
+            index.write_text(
+                "# Checked Plan Index\n\nid\tpath\n"
+                "099\tdocs/plan/checked/2026/01/01-15/099-absent.md\n",
+                encoding="utf-8",
+            )
+            try:
+                with self.assertRaises(module.RestructureError) as both:
+                    module.validate_lineage_reference_transition(
+                        before, after, accepted, "lineage"
+                    )
+            finally:
+                index.unlink()
+                archive.unlink()
+            self.assertIn("names both a shelved plan", str(both.exception))
+        finally:
+            os.chdir(old_cwd)
+
+    def test_active_predecessors_resolve_one_shelved_plan(self) -> None:
+        module = self.load_restructure_module("shelved_predecessor_module")
+        shelved = self.repo / "docs/plan/shelved/099-absent.md"
+        shelved.parent.mkdir(parents=True, exist_ok=True)
+        shelved.write_text(
+            f"# Absent\n\nstatus: shelved{SHELVED_FIELDS}\n", encoding="utf-8"
+        )
+        records = {
+            "docs/plan/active/098-consumer.md": (
+                "in_progress",
+                {"predecessor_plans": ["docs/plan/shelved/099-absent.md"]},
+            )
+        }
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            module.validate_active_predecessors(records)
+            shelved.write_text(
+                f"# Absent\n\nstatus: backlog{SHELVED_FIELDS}\n", encoding="utf-8"
+            )
+            with self.assertRaises(module.RestructureError) as status:
+                module.validate_active_predecessors(records)
+            self.assertIn("predecessor is not shelved", str(status.exception))
+            shelved.unlink()
+            with self.assertRaises(module.RestructureError) as gone:
+                module.validate_active_predecessors(records)
+            self.assertIn("shelved predecessor is missing", str(gone.exception))
+            stray = {
+                "docs/plan/active/098-consumer.md": (
+                    "in_progress",
+                    {"predecessor_plans": ["docs/plan/shelved/nested/099-absent.md"]},
+                )
+            }
+            with self.assertRaises(module.RestructureError) as invalid:
+                module.validate_active_predecessors(stray)
+            self.assertIn("invalid predecessor path", str(invalid.exception))
+        finally:
+            os.chdir(old_cwd)
+
     def test_lineage_rebinding_keeps_the_record_chain_and_live_bytes_apart(
         self,
     ) -> None:

@@ -87,6 +87,9 @@ CHECKED_PATH_RE = re.compile(
     r"docs/plan/checked/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/"
     r"([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
 )
+SHELVED_PATH_RE = re.compile(
+    r"docs/plan/shelved/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
+)
 JOURNAL_SCHEMA_VERSION = 2
 IDENTITY_KEYS = {"device", "inode", "mode", "link_count", "digest"}
 REPLACEMENT_IDENTITY_KEYS = {"temporary", "restored"}
@@ -951,6 +954,7 @@ def predecessor_paths(manifest: dict[str, str | list[str]], label: str) -> list[
             or not (
                 PLAN_PATH_RE.fullmatch(predecessor)
                 or CHECKED_PATH_RE.fullmatch(predecessor)
+                or SHELVED_PATH_RE.fullmatch(predecessor)
             )
         ):
             raise RestructureError(f"{label} has invalid predecessor path: {predecessor!r}")
@@ -995,6 +999,21 @@ def validate_active_predecessors(
                 if not exact_checked:
                     raise RestructureError(f"{path} predecessor is missing: {predecessor}")
                 unresolved.append(predecessor)
+                continue
+            shelved_match = SHELVED_PATH_RE.fullmatch(predecessor)
+            if shelved_match is not None:
+                shelved_file = ROOT / predecessor
+                if not shelved_file.is_file():
+                    raise RestructureError(
+                        f"{path} shelved predecessor is missing: {predecessor}"
+                    )
+                if scalar(
+                    parse_manifest(shelved_file.read_text(encoding="utf-8")),
+                    "status",
+                ) != "shelved":
+                    raise RestructureError(
+                        f"{path} predecessor is not shelved: {predecessor}"
+                    )
                 continue
             checked_match = CHECKED_PATH_RE.fullmatch(predecessor)
             assert checked_match is not None
@@ -2929,6 +2948,35 @@ def activation_checked_pairs() -> dict[str, str]:
     return pairs
 
 
+def shelved_reference_pairs() -> dict[str, str]:
+    """Map each shelved plan's former active path to where that plan now lives.
+
+    Shelving moves a plan the owner decided not to run, and a live plan that
+    still names its former active path can no longer resolve that reference,
+    because a shelved plan has no checked archive to activate against. Without
+    this map, shelving one plan would strand every plan referring to it, which
+    would make shelving a way to stop unrelated work rather than to record a
+    decision.
+    """
+
+    directory = ROOT / "docs/plan/shelved"
+    if not directory.is_dir():
+        return {}
+    pairs: dict[str, str] = {}
+    for entry in sorted(directory.iterdir()):
+        shelved_path = str(entry.relative_to(ROOT))
+        if SHELVED_PATH_RE.fullmatch(shelved_path) is None:
+            continue
+        reject_symlink_ancestors(shelved_path, include_target=True)
+        if scalar(
+            parse_manifest(read_regular_file(entry, shelved_path).decode("utf-8")),
+            "status",
+        ) != "shelved":
+            raise RestructureError(f"shelved reference is not shelved: {shelved_path}")
+        pairs[f"docs/plan/active/{entry.name}"] = shelved_path
+    return pairs
+
+
 def replan_lineage_pairs() -> dict[str, set[str]]:
     """Map each replanned source's former active path to its checked successors.
 
@@ -3014,18 +3062,21 @@ def validate_lineage_reference_transition(
 ) -> None:
     """Admit only a reference this repository can still resolve, restated exactly.
 
-    Two replacement classes are admitted. A reference naming a replanned source
+    Three replacement classes are admitted. A reference naming a replanned source
     moves to one checked successor the consuming contract records, because the
     source itself has no checked archive. A reference naming a plan that was
     archived as checked moves to that archive, which is the same resolution the
     activation route performs and which a backlog successor cannot reach through
     an activation record, because backlog deferral removes the stopped reason
-    that record requires. Everything else rejects, and neither class may change
-    plan identity or status.
+    that record requires. A reference naming a shelved plan moves to where that
+    plan now lives, because a shelved plan has no checked archive and stranding
+    every referring plan would turn shelving into a way to stop unrelated work.
+    Everything else rejects, and no class may change plan identity or status.
     """
 
     pairs = replan_lineage_pairs()
     checked_pairs = activation_checked_pairs()
+    shelved_pairs = shelved_reference_pairs()
     id_pairs = {
         (Path(source).name[:3], Path(target).name[:3])
         for source, targets in pairs.items()
@@ -3043,14 +3094,32 @@ def validate_lineage_reference_transition(
             reference = references[0]
             candidates = pairs.get(reference)
             archive = checked_pairs.get(reference)
-            if archive is not None and (ROOT / reference).exists():
+            shelved = shelved_pairs.get(reference)
+            if (
+                archive is not None or shelved is not None
+            ) and (ROOT / reference).exists():
                 raise RestructureError(
                     f"{label} replacement {index} names a path that still resolves"
+                )
+            if shelved is not None and (candidates or archive is not None):
+                raise RestructureError(
+                    f"{label} replacement {index} names both a shelved plan and another resolution"
                 )
             if candidates and archive is not None:
                 raise RestructureError(
                     f"{label} replacement {index} names both a replanned source and a checked archive"
                 )
+            if shelved is not None:
+                expected = restate_checked_reference(old, reference, shelved)
+                if expected is None:
+                    raise RestructureError(
+                        f"{label} replacement {index} extends that reference into a longer path token"
+                    )
+                if new != expected:
+                    raise RestructureError(
+                        f"{label} replacement {index} does not restate that reference as its shelved plan"
+                    )
+                continue
             if archive is not None:
                 expected = restate_checked_reference(old, reference, archive)
                 if expected is None:
@@ -3064,7 +3133,7 @@ def validate_lineage_reference_transition(
                 continue
             if not candidates:
                 raise RestructureError(
-                    f"{label} replacement {index} names no checked archive and no replanned source with a checked successor"
+                    f"{label} replacement {index} names no checked archive, no shelved plan, and no replanned source with a checked successor"
                 )
             expected = {
                 old.replace(reference, candidate) for candidate in candidates

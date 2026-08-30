@@ -26,7 +26,7 @@ context_files:
   - docs/plan/checked/2026/08/16-31/180-admit-live-validation-witness-guardian.md
   - docs/plan/checked/2026/08/16-31/181-verify-plan176-successor-acceptance.md
   - docs/plan/checked/2026/08/16-31/177-align-validation-witness-provenance-policy.md
-  - docs/plan/active/184-verify-plan178-successor-acceptance.md
+  - docs/plan/shelved/184-verify-plan178-successor-acceptance.md
   - docs/plan/replanned/2026/08/16-31/163-capture-validation-witness-migration-provenance.md
   - references/validation.md
 required_specs:
@@ -51,7 +51,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"authoritative","witness":"tests/copier-update.sh --require-copier","authoritative_only_reason":"the genuine pre-update boundary requires a complete versioned Copier transition from a clean committed downstream project"}
 predecessor_plans:
-  - docs/plan/active/184-verify-plan178-successor-acceptance.md
+  - docs/plan/shelved/184-verify-plan178-successor-acceptance.md
 replan_source: docs/plan/active/163-capture-validation-witness-migration-provenance.md
 replan_contract: docs/plan/replanned/contracts/163-capture-validation-witness-migration-provenance.json
 integration_gates:
