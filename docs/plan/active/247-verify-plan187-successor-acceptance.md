@@ -28,7 +28,7 @@ context_files:
   - docs/plan/replanned/2026/08/16-31/183-build-bounded-copier-transition-fixture.md
   - docs/plan/checked/2026/08/16-31/244-reject-fixture-command-redefinition.md
   - docs/plan/checked/2026/08/16-31/245-bind-fixture-inputs-to-one-inventory.md
-  - docs/plan/active/246-bind-pre-schema-fixture-contents.md
+  - docs/plan/checked/2026/08/16-31/246-bind-pre-schema-fixture-contents.md
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md

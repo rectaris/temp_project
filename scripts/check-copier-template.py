@@ -1424,7 +1424,8 @@ COPIER_FIXTURE_OPERATIONS: tuple[tuple[str, str, str], ...] = (
     (
         "the transition",
         "the pre-schema replan contract writer",
-        "<<'PY_V145_CONTRACT'\n",
+        'python3 - "$v145_project" "$v145_plan" "$v145_contract" "$v145_archive"'
+        " <<'PY_V145_CONTRACT'\n",
     ),
     (
         "the transition",
@@ -1614,6 +1615,120 @@ COPIER_FIXTURE_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
+# The constructed contents of the pre-schema project. Each entry binds the
+# whole body one heredoc writes, so emptying or neutralizing a body is rejected
+# instead of passing as an unchanged opening line.
+COPIER_FIXTURE_CONSTRUCTIONS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "the pre-schema active plan body",
+        "cat >\"$v145_project/$v145_plan\" <<'EOF_V145_PLAN'\n",
+        "EOF_V145_PLAN\n",
+        "# Pre-schema integration\n"
+        "\n"
+        "status: in_progress\n"
+        "primary_invariant: preserve the committed integration identity\n"
+        "replan_contract: docs/plan/replanned/contracts/901-source.json\n"
+        "acceptance:\n"
+        "  - Preserve the pre-schema acceptance.\n"
+        "validation:\n"
+        "  - python3 scripts/validate-changes.py --all\n"
+        "checked_summary_ja: 移行前の統合計画を保持する。\n"
+        "\n"
+        "## Tasks\n"
+        "\n"
+        "- [ ] Preserve the integration boundary.\n",
+    ),
+    (
+        "the pre-schema replanned archive body",
+        "cat >\"$v145_project/$v145_archive\" <<'EOF_V145_ARCHIVE'\n",
+        "EOF_V145_ARCHIVE\n",
+        "# Replanned source\n"
+        "\n"
+        "status: replanned\n",
+    ),
+    (
+        "the pre-schema replan contract writer",
+        'python3 - "$v145_project" "$v145_plan" "$v145_contract" "$v145_archive"'
+        " <<'PY_V145_CONTRACT'\n",
+        "PY_V145_CONTRACT\n",
+        "import hashlib\n"
+        "import json\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "\n"
+        "project = Path(sys.argv[1])\n"
+        "plan_path = sys.argv[2]\n"
+        "contract_path = sys.argv[3]\n"
+        "archive_path = sys.argv[4]\n"
+        "\n"
+        "\n"
+        "def digest(raw: bytes) -> str:\n"
+        "    return \"sha256:\" + hashlib.sha256(raw).hexdigest()\n"
+        "\n"
+        "\n"
+        "plan_raw = (project / plan_path).read_bytes()\n"
+        "acceptance = [\"Preserve the pre-schema acceptance.\"]\n"
+        "contract = {\n"
+        "    \"archive_path\": archive_path,\n"
+        "    \"contract_path\": contract_path,\n"
+        "    \"schema_version\": 1,\n"
+        "    \"successors\": [\n"
+        "        {\n"
+        "            \"acceptance_digests\": [digest(item.encode(\"utf-8\")) for item in acceptance],\n"
+        "            \"content\": plan_raw.decode(\"utf-8\"),\n"
+        "            \"content_digest\": digest(plan_raw),\n"
+        "            \"integration\": True,\n"
+        "            \"path\": plan_path,\n"
+        "        }\n"
+        "    ],\n"
+        "}\n"
+        "(project / contract_path).write_text(\n"
+        "    json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + \"\\n\",\n"
+        "    encoding=\"utf-8\",\n"
+        ")\n",
+    ),
+)
+
+
+# The exact number of times the fixture may name each constructed pre-schema
+# path. A construction that writes the bound contents proves nothing when a
+# later line overwrites the same path, so every reference is counted and a
+# further write, edit, or alias is rejected.
+COPIER_FIXTURE_CONSTRUCTED_PATHS: tuple[tuple[str, str, int], ...] = (
+    ("the pre-schema active plan path", "v145_plan", 4),
+    ("the pre-schema replanned archive path", "v145_archive", 4),
+    ("the pre-schema replan contract path", "v145_contract", 3),
+    (
+        "the pre-schema active plan location",
+        "docs/plan/active/902-pre-schema-integration.md",
+        1,
+    ),
+    (
+        "the pre-schema replan contract location",
+        "docs/plan/replanned/contracts/901-source.json",
+        2,
+    ),
+    (
+        "the pre-schema replanned archive location",
+        "docs/plan/replanned/2026/08/16-31/901-source.md",
+        1,
+    ),
+)
+
+def copier_fixture_construction(text: str, name: str, opening: str, closing: str) -> str:
+    """Return the exact body one uniquely delimited fixture heredoc writes."""
+
+    if text.count(opening) != 1:
+        fail(f"{COPIER_FIXTURE} must open {name} exactly once")
+    if text.count(closing) != 1:
+        fail(f"{COPIER_FIXTURE} must close {name} exactly once")
+    start = text.find(opening) + len(opening)
+    stop = text.find(closing, start)
+    if stop < 0:
+        fail(f"{COPIER_FIXTURE} must close {name} after opening it")
+    return text[start:stop]
+
+
 def copier_fixture_region(text: str, region: str) -> tuple[int, int]:
     """Return the exact bounds of one uniquely delimited fixture region."""
 
@@ -1678,6 +1793,19 @@ def require_bounded_copier_fixture() -> None:
     for earlier, later in COPIER_FIXTURE_ORDER:
         if offsets[earlier] >= offsets[later]:
             fail(f"{COPIER_FIXTURE} must write {earlier} before {later}")
+
+    start, stop = bounds["the transition"]
+    for name, opening, closing, body in COPIER_FIXTURE_CONSTRUCTIONS:
+        written = copier_fixture_construction(text, name, opening, closing)
+        if written != body:
+            fail(f"{COPIER_FIXTURE} must write the bound contents of {name}")
+        offset = text.find(opening)
+        if offset < start or text.find(closing, offset) + len(closing) > stop:
+            fail(f"{COPIER_FIXTURE} must write {name} inside the transition")
+
+    for name, needle, expected in COPIER_FIXTURE_CONSTRUCTED_PATHS:
+        if text.count(needle) != expected:
+            fail(f"{COPIER_FIXTURE} must name {name} exactly {expected} times")
 
 
 def require_context_compression_boundary() -> None:

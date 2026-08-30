@@ -1,7 +1,6 @@
 # Bind pre-schema fixture contents
 
-status: deferred
-completion_deferred_reason: Plan 245 must be checked and its exact checked archive path must replace the active predecessor before implementation
+status: checked
 primary_invariant: the focused checker binds the constructed contents of the committed v1.4.4 pre-schema active plan, replanned source archive, and replan contract, so emptying or neutralizing them is rejected rather than admitted as an unchanged heredoc opening
 task_types:
   - template_workflow
@@ -46,7 +45,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 predecessor_plans:
-  - docs/plan/active/245-bind-fixture-inputs-to-one-inventory.md
+  - docs/plan/checked/2026/08/16-31/245-bind-fixture-inputs-to-one-inventory.md
 successor_plans:
   - docs/plan/active/244-reject-fixture-command-redefinition.md
   - docs/plan/active/245-bind-fixture-inputs-to-one-inventory.md
@@ -73,12 +72,40 @@ checked_summary_ja: v1.4.4 pre-schema plan、replanned archive、replan contract
 
 ## Tasks
 
-- [ ] Reproduce the admission by emptying the pre-schema active plan body and the replanned source archive body in a scratch copy.
-- [ ] Bind the constructed contents of the pre-schema active plan, replanned source archive, and replan contract writer, and keep the committed fixture accepted unchanged.
-- [ ] Confirm the 45 previously bound operations still reject removal and duplication after the change.
-- [ ] Complete fresh independent review and focused validation with zero unresolved High or Medium findings.
-- [ ] Archive and commit only the declared write scope plus parent-owned lifecycle files.
+- [x] Reproduce the admission by emptying the pre-schema active plan body and the replanned source archive body in a scratch copy.
+- [x] Bind the constructed contents of the pre-schema active plan, replanned source archive, and replan contract writer, and keep the committed fixture accepted unchanged.
+- [x] Confirm the 45 previously bound operations still reject removal and duplication after the change.
+- [x] Complete fresh independent review and focused validation with zero unresolved High or Medium findings.
+- [x] Archive and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
 - Pending. The reproduction is recorded in the Plan 187 replanned archive as High finding 3.
+- The admission is reproduced and closed. Emptying the pre-schema active plan
+  body or the replanned source archive body left every bound needle in place
+  and passed, because only the heredoc opening lines were bound.
+- The checker now binds the whole constructed body of the pre-schema active
+  plan, the replanned source archive, and the replan contract writer, and binds
+  the writer to its full command word and argument list. Emptying a body,
+  removing `primary_invariant`, turning the archive status from `replanned`
+  into `checked`, changing the written contract schema version, disabling the
+  contract write, and replacing the interpreter with `cat >/dev/null` are all
+  rejected, while the committed fixture stays accepted unchanged.
+- An independent review showed that binding the written text alone still admits
+  a later line that overwrites the same path. The checker now also counts every
+  reference to each constructed path and to each constructed location, so a
+  further write, an in-place edit, an alias, and a literal-path rewrite after
+  the construction are rejected.
+- All 45 previously bound operations still reject both removal and duplication,
+  confirmed by rewriting the fixture once per mutation and restoring it
+  byte-exactly afterwards.
+- Focused validation: `python3 scripts/check-copier-template.py`,
+  `python3 tests/test-copier-fixture-validator.py` (441 tests),
+  `sh -n tests/copier-update.sh`, and `git diff --check` all pass, and
+  `scripts/lint-project-workflow.sh` and `tests/smoke.sh` pass.
+- Boundary: a construction wrapped in a branch the fixture never takes is not
+  rejected here, because this checker reads text rather than reachability. The
+  fixture's own runtime assertions require the contract and the archive to
+  exist, so an unreachable construction fails the transition instead.
+- One read-only advisory review agent was used. Its finding was reproduced and
+  fixed in this session, and acceptance stayed in the main session.
