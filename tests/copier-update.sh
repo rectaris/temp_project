@@ -1052,6 +1052,13 @@ checked_summary_ja: プロジェクト所有の再計画履歴を保持した。
     "991\tdocs/plan/active/991-project-owned-history.md\treplan_required\n",
     encoding="utf-8",
 )
+# The v0.4.6 template this fixture copies from predates docs/plan/replanned.md,
+# so seed the empty index the current restructuring authority requires.
+replanned_index = repository / "docs/plan/replanned.md"
+if not replanned_index.exists():
+    replanned_index.write_text(
+        "# Replanned Plan Index\n\nid\tpath\tcontract\n", encoding="utf-8"
+    )
 PY_REPLAN_SOURCE
 fixture_git "$replanned_history_out" add docs/plan
 fixture_git "$replanned_history_out" commit -m "Add stopped project-owned plan" >/dev/null
