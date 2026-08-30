@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from project_workflow import shell_functions  # noqa: E402
 from project_workflow import shell_lexical  # noqa: E402
 from project_workflow.copier_fixture_validator import (  # noqa: E402
     CopierFixtureError,
+    INVENTORY_PATH,
     RULE_ALTERNATE_PATH,
     RULE_BOUNDED_POLL,
     RULE_CHILD_PID,
@@ -42,12 +44,22 @@ from project_workflow.copier_fixture_validator import (  # noqa: E402
     RULE_VERSION_COMMIT,
     RULES,
     check,
+    declared_paths,
     main,
+    read_inventory,
     validate,
 )
 
 
 VALIDATOR = ROOT / "scripts/project_workflow/copier_fixture_validator.py"
+
+# The update source paths the inventory every fixture in this file reads
+# declares. The contract is proven against these supplied declarations rather
+# than against whatever inventory the repository happens to ship.
+DECLARED = (
+    "copier.yml",
+    "template/.project-agent-workflow/README.md",
+)
 
 PROLOGUE = """#!/bin/sh
 set -eu
@@ -142,18 +154,20 @@ WITHOUT_TRANSITION = PROLOGUE + INVENTORY_REGION + VERSION_COMMITS
 
 
 class ContractSupportTest(unittest.TestCase):
+    declared: tuple[str, ...] = DECLARED
+
     def rules(self, source: str) -> list[str]:
-        return [finding.rule for finding in check(source)]
+        return [finding.rule for finding in check(source, self.declared)]
 
     def messages(self, source: str) -> str:
-        return "\n".join(str(finding) for finding in check(source))
+        return "\n".join(str(finding) for finding in check(source, self.declared))
 
     def assert_accepted(self, source: str) -> None:
-        findings = check(source)
+        findings = check(source, self.declared)
         self.assertEqual(findings, (), self.messages(source))
 
     def assert_rejected(self, source: str, rule: str, expected: str) -> None:
-        findings = check(source)
+        findings = check(source, self.declared)
         self.assertTrue(findings, "the mutated fixture was accepted")
         self.assertIn(rule, [finding.rule for finding in findings], self.messages(source))
         matching = [
@@ -177,16 +191,18 @@ class AcceptedFixtureTest(ContractSupportTest):
         self.assert_accepted(WITHOUT_TRANSITION)
 
     def test_supplied_bytes_are_accepted(self) -> None:
-        self.assertEqual(check(COMPLIANT.encode("utf-8")), ())
+        self.assertEqual(check(COMPLIANT.encode("utf-8"), DECLARED), ())
 
     def test_contract_is_deterministic(self) -> None:
         mutated = self.remove('fixture_git "$update_source" tag v1.4.5\n')
-        self.assertEqual(check(mutated), check(mutated))
+        self.assertEqual(check(mutated, DECLARED), check(mutated, DECLARED))
 
     def test_validate_raises_only_for_a_broken_contract(self) -> None:
-        self.assertIsNone(validate(COMPLIANT))
+        self.assertIsNone(validate(COMPLIANT, DECLARED))
         with self.assertRaises(CopierFixtureError) as raised:
-            validate(self.remove('rm -f "$release_file"\n\nrelease_waited=0'))
+            validate(
+                self.remove('rm -f "$release_file"\n\nrelease_waited=0'), DECLARED
+            )
         self.assertIn("bounded operation rule", str(raised.exception))
 
     def test_rule_identifiers_are_unique_and_documented(self) -> None:
@@ -355,6 +371,19 @@ class InventoryRegionTest(ContractSupportTest):
             "not derived from `candidate_path`",
         )
 
+    def test_a_region_that_places_files_with_another_command_is_rejected(self) -> None:
+        for command in ("ln", "ln -s", "mv", "rsync"):
+            with self.subTest(command=command):
+                self.assert_rejected(
+                    self.mutate(
+                        'cp "$root/$candidate_path" "$update_source/$candidate_path"',
+                        f'{command} "$root/$candidate_path" '
+                        '"$update_source/$candidate_path"',
+                    ),
+                    RULE_INVENTORY_REGION,
+                    "no loop reads one inventory",
+                )
+
     def test_staging_before_copying_is_rejected(self) -> None:
         self.assert_rejected(
             self.mutate(
@@ -468,21 +497,32 @@ class InventoryRegionTest(ContractSupportTest):
         )
 
     def test_a_write_this_checker_cannot_place_is_rejected(self) -> None:
-        for index, form in enumerate(
-            (
+        self.assert_rejected(
+            self.outside(
+                'extra_destination=$(printf %s "$update_source/AGENTS.md")\n'
+                'cp "$root/AGENTS.md" "$extra_destination"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "a write this checker cannot place",
+        )
+
+    def test_a_write_a_loop_head_places_is_read_at_that_path(self) -> None:
+        """A loop head says which words the name it binds may hold.
+
+        The write is reported as reaching the update source itself rather than
+        as a write this checker cannot place, because the head words settle the
+        name every round binds.
+        """
+
+        self.assert_rejected(
+            self.outside(
                 'for extra in AGENTS.md; do\n'
                 '  cp "$root/$extra" "$update_source/$extra"\n'
-                'done\n',
-                'extra_destination=$(printf %s "$update_source/AGENTS.md")\n'
-                'cp "$root/AGENTS.md" "$extra_destination"\n',
-            )
-        ):
-            with self.subTest(rejected=index):
-                self.assert_rejected(
-                    self.outside(form),
-                    RULE_INVENTORY_REGION,
-                    "a write this checker cannot place",
-                )
+                'done\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside the inventory region",
+        )
 
     def test_a_command_that_puts_files_in_place_is_rejected(self) -> None:
         for index, form in enumerate(
@@ -553,25 +593,47 @@ class InventoryRegionTest(ContractSupportTest):
     def test_a_directory_change_outside_the_update_source_is_accepted(self) -> None:
         self.assert_accepted(self.outside('cd "$tmp/other"\ncd "$root"\n'))
 
-    def test_an_alias_bound_by_a_loop_or_a_call_is_rejected(self) -> None:
-        for index, form in enumerate(
-            (
+    def test_an_alias_bound_by_a_loop_is_placed(self) -> None:
+        self.assert_rejected(
+            self.outside(
                 'for mirror in "$update_source"; do\n'
                 '  cp "$root/AGENTS.md" "$mirror/AGENTS.md"\n'
-                'done\n',
-                'seed() {\n'
-                '  mirror=$1\n'
+                "done\n"
+            ),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside the inventory region",
+        )
+
+    def test_an_alias_bound_by_a_loop_head_it_cannot_read_is_reported(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                'for mirror in $(printf %s "$update_source"); do\n'
+                '  sed -i "s/a/b/" "$mirror/NOTICE"\n'
+                "done\n"
+            ),
+            RULE_INVENTORY_REGION,
+            "takes a destination this checker cannot place",
+        )
+
+    def test_an_alias_bound_from_a_parameter_is_placed(self) -> None:
+        """A call site says which directory the parameter it writes names.
+
+        The write is reported as reaching the update source itself rather than
+        as a write this checker cannot place, because the value the call site
+        writes settles the name the body binds from it.
+        """
+
+        self.assert_rejected(
+            self.outside(
+                "seed() {\n"
+                "  mirror=$1\n"
                 '  cp "$root/AGENTS.md" "$mirror/AGENTS.md"\n'
-                '}\n'
-                'seed "$update_source"\n',
-            )
-        ):
-            with self.subTest(rejected=index):
-                self.assert_rejected(
-                    self.outside(form),
-                    RULE_INVENTORY_REGION,
-                    "a write this checker cannot place",
-                )
+                "}\n"
+                'seed "$update_source"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside the inventory region",
+        )
 
     def test_staging_written_as_an_index_update_is_rejected(self) -> None:
         self.assert_rejected(
@@ -590,6 +652,676 @@ class InventoryRegionTest(ContractSupportTest):
                 '  cp "$root/AGENTS.md" "$mirror/AGENTS.md"\n'
                 '}\n'
                 'seed "$tmp/other"\n'
+            )
+        )
+
+
+class InventoryDeclarationTest(ContractSupportTest):
+    """Bind the editing carve-out to the paths the inventory declares."""
+
+    def outside(self, addition: str) -> str:
+        return self.mutate(VERSION_COMMITS, "\n" + addition + VERSION_COMMITS)
+
+    def test_an_edit_reading_an_undeclared_source_buys_no_staging(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                'sed -i "1r $root/AGENTS.md" "$update_source/NOTICE"\n'
+                'fixture_git "$update_source" add -- NOTICE\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "adds a path no inventory line declares",
+        )
+
+    def test_an_in_place_edit_of_an_undeclared_path_is_rejected(self) -> None:
+        for index, form in enumerate(
+            (
+                'sed -i "s/a/b/" "$update_source/NOTICE"\n'
+                'fixture_git "$update_source" add -- NOTICE\n',
+                'sed -i "s/a/b/" "$update_source/template/README.md.jinja"\n'
+                'fixture_git "$update_source" add -- template/README.md.jinja\n',
+                'python3 - "$update_source/NOTICE" <<\'PY\'\nPY\n'
+                'fixture_git "$update_source" add -- "$update_source/NOTICE"\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "adds a path no inventory line declares",
+                )
+
+    def test_editing_and_staging_a_declared_path_stays_accepted(self) -> None:
+        for index, form in enumerate(
+            (
+                'sed -i "s/a/b/" "$update_source/copier.yml"\n'
+                'fixture_git "$update_source" add -- copier.yml\n',
+                'sed -i "s/a/b/"'
+                ' "$update_source/template/.project-agent-workflow/README.md"\n'
+                'fixture_git "$update_source" add --'
+                ' template/.project-agent-workflow/README.md\n',
+                'policy="$update_source/copier.yml"\n'
+                'sed -i "s/a/b/" "$policy"\n'
+                'fixture_git "$update_source" add -- "$policy"\n',
+            )
+        ):
+            with self.subTest(accepted=index):
+                self.assert_accepted(self.outside(form))
+
+    def test_a_staged_path_written_with_an_expansion_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                'staged=$(printf %s copier.yml)\n'
+                'sed -i "s/a/b/" "$update_source/$staged"\n'
+                'fixture_git "$update_source" add -- "$staged"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "adds a path no inventory line declares",
+        )
+
+    def test_an_inventory_declaring_nothing_rejects_every_staging(self) -> None:
+        self.declared = ()
+        self.assert_rejected(
+            self.outside(
+                'sed -i "s/a/b/" "$update_source/copier.yml"\n'
+                'fixture_git "$update_source" add -- copier.yml\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "adds a path no inventory line declares",
+        )
+
+    def test_declared_paths_reads_one_written_path_per_line(self) -> None:
+        self.assertEqual(
+            declared_paths(["copier.yml", "", "  a/b.md  ", "c//d.md"]),
+            frozenset({("copier.yml",), ("a", "b.md"), ("c", "d.md")}),
+        )
+
+    def test_an_edit_of_an_undeclared_path_is_rejected_without_any_staging(self) -> None:
+        for index, form in enumerate(
+            (
+                'sed -i "s/a/b/" "$update_source/NOTICE"\n',
+                'sed -i "1r $root/AGENTS.md" "$update_source/README.md"\n'
+                'fixture_git "$update_source" commit -a -qm "sneak"\n',
+                'sed -i "s/a/b/" "$update_source/NOTICE"\n'
+                'fixture_git "$update_source" commit -qm "sneak" -- NOTICE\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "an edit outside the inventory region writes a path no "
+                    "inventory line declares",
+                )
+
+    def test_a_staging_written_inside_a_called_body_is_read(self) -> None:
+        for index, form in enumerate(
+            (
+                "sneak_stage() {\n"
+                '  fixture_git "$update_source" add -- "$1"\n'
+                "}\n"
+                "sneak_stage NOTICE\n",
+                "sneak_stage() {\n"
+                '  fixture_git "$update_source" add -- NOTICE\n'
+                "}\n"
+                "sneak_stage\n",
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "staging outside the inventory region adds a path",
+                )
+
+    def test_a_commit_that_stages_on_its_own_is_read_as_a_staging(self) -> None:
+        for index, form in enumerate(
+            (
+                'dd if="$root/AGENTS.md" of="$update_source/README.md"\n'
+                'fixture_git "$update_source" commit -a -qm x\n',
+                'weirdtool "$update_source/README.md"\n'
+                'fixture_git "$update_source" commit -a -qm x\n',
+                'weirdtool "$update_source/README.md"\n'
+                'fixture_git "$update_source" commit -m x README.md\n',
+                'weirdtool "$update_source/README.md"\n'
+                'fixture_git "$update_source" commit -qm x -- README.md\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "staging outside the inventory region adds",
+                )
+
+    def test_a_commit_that_stages_nothing_of_its_own_stays_accepted(self) -> None:
+        for index, form in enumerate(
+            (
+                'fixture_git "$update_source" commit --allow-empty -qm "plain"\n',
+                'sed -i "s/a/b/" "$update_source/copier.yml"\n'
+                'fixture_git "$update_source" add -- copier.yml\n'
+                'fixture_git "$update_source" commit -m "declared"\n',
+                'sed -i "s/a/b/" "$update_source/copier.yml"\n'
+                'fixture_git "$update_source" commit -qm x -- copier.yml\n',
+            )
+        ):
+            with self.subTest(accepted=index):
+                self.assert_accepted(self.outside(form))
+
+    def test_committed_operands_reads_the_forms_that_stage(self) -> None:
+        for text, expected in (
+            ("commit -m x", ((), False)),
+            ("commit --allow-empty -qm x", ((), False)),
+            ("commit -a -qm x", ((), True)),
+            ("commit -qm x -- a.md", (("a.md",), False)),
+            ("commit -m x a.md", (("a.md",), False)),
+            ("commit --message=x a.md", (("a.md",), False)),
+            ("commit --unknown-option -m x", ((), True)),
+        ):
+            with self.subTest(written=text):
+                words = tuple(SimpleNamespace(text=part) for part in text.split())
+                operands, everything = copier_fixture_validator._committed_operands(words)
+                self.assertEqual(
+                    (tuple(token.text for token in operands), everything), expected
+                )
+
+    def test_an_unreadable_inventory_declares_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(read_inventory(Path(directory) / "absent.txt"), frozenset())
+
+    def test_the_shipped_inventory_declares_the_committed_paths(self) -> None:
+        declared = read_inventory()
+        self.assertIn(("copier.yml",), declared)
+        self.assertEqual(declared, read_inventory(INVENTORY_PATH))
+
+
+class PositionalParameterTest(ContractSupportTest):
+    """A word reaches the update source through the parameters a call writes."""
+
+    def outside(self, addition: str) -> str:
+        return self.mutate(VERSION_COMMITS, "\n" + addition + VERSION_COMMITS)
+
+    def test_an_update_source_reached_through_a_parameter_is_read(self) -> None:
+        for index, form in enumerate(
+            (
+                "sneak() {\n"
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                '  fixture_git "$1" add -- NOTICE\n'
+                "}\n"
+                'sneak "$update_source"\n',
+                "sneak() {\n"
+                "  where=$1\n"
+                '  sed -i "s/a/b/" "$where/NOTICE"\n'
+                '  fixture_git "$where" add -- NOTICE\n'
+                "}\n"
+                'sneak "$update_source"\n',
+                "sneak() {\n"
+                "  shift\n"
+                "  where=$1\n"
+                '  sed -i "s/a/b/" "$where/NOTICE"\n'
+                '  fixture_git "$where" add -- NOTICE\n'
+                "}\n"
+                'sneak filler "$update_source"\n',
+                "sneak() {\n"
+                "  lane=$1\n"
+                '  dir="$tmp/$lane"\n'
+                '  sed -i "s/a/b/" "$dir/NOTICE"\n'
+                '  fixture_git "$dir" add -- NOTICE\n'
+                "}\n"
+                "sneak update-source\n",
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "no inventory line declares",
+                )
+
+    def test_a_parameter_naming_a_declared_path_stays_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                "edit_declared() {\n"
+                '  sed -i "s/a/b/" "$1/copier.yml"\n'
+                '  fixture_git "$1" add -- copier.yml\n'
+                "}\n"
+                'edit_declared "$update_source"\n'
+            )
+        )
+
+    def test_a_lane_no_call_site_points_at_the_update_source_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                "make_lane() {\n"
+                "  lane=$1\n"
+                '  out="$tmp/$lane"\n'
+                '  mkdir -p "$out"\n'
+                '  sed -i "s/a/b/" "$out/NOTICE"\n'
+                '  fixture_git "$out" add -- NOTICE\n'
+                "}\n"
+                "make_lane one\n"
+                "make_lane two\n"
+            )
+        )
+
+    def test_a_parameter_no_call_site_binds_names_no_path(self) -> None:
+        for word in ('"$1"', '"$1/x"', '"$0"', '"$9/y"'):
+            with self.subTest(word=word):
+                self.assertEqual(
+                    copier_fixture_validator._settle_word(word, {}, frozenset()),
+                    frozenset(),
+                )
+
+    def test_an_update_source_passed_down_a_call_chain_is_read(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                "sneak_inner() {\n"
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                '  fixture_git "$1" add -- NOTICE\n'
+                "}\n"
+                'sneak_outer() { sneak_inner "$1"; }\n'
+                'sneak_outer "$update_source"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "no inventory line declares",
+        )
+
+    def test_a_call_this_checker_cannot_read_hides_no_sibling(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                "sneak() {\n"
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                '  fixture_git "$1" add -- NOTICE\n'
+                "}\n"
+                'sneak "$update_source"\n'
+                'sneak "${9-x}"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "no inventory line declares",
+        )
+
+    def test_a_shift_the_shell_may_skip_reads_both_distances(self) -> None:
+        for index, form in enumerate(
+            (
+                "sneak() {\n"
+                '  if [ -n "${NOPE-}" ]; then\n'
+                "    shift\n"
+                "  fi\n"
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                '  fixture_git "$1" add -- NOTICE\n'
+                "}\n"
+                'sneak "$update_source"\n',
+                "sneak() {\n"
+                '  [ -z "${NOPE-}" ] || shift\n'
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                '  fixture_git "$1" add -- NOTICE\n'
+                "}\n"
+                'sneak "$update_source"\n',
+                "sneak() {\n"
+                '  [ -n "${NOPE-}" ] && shift\n'
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                '  fixture_git "$1" add -- NOTICE\n'
+                "}\n"
+                'sneak "$update_source"\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "no inventory line declares",
+                )
+
+    def test_a_shift_a_loop_repeats_reads_every_turn(self) -> None:
+        for index, form in enumerate(
+            (
+                "sneak() {\n"
+                "  for held in a b; do shift; done\n"
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                '  fixture_git "$1" add -- NOTICE\n'
+                "}\n"
+                'sneak one two "$update_source"\n',
+                "sneak() {\n"
+                '  while [ "$#" -gt 0 ]; do\n'
+                '    sed -i "s/a/b/" "$1/NOTICE"\n'
+                '    fixture_git "$1" add -- NOTICE\n'
+                "    shift\n"
+                "  done\n"
+                "}\n"
+                'sneak one two "$update_source"\n',
+                "sneak() {\n"
+                '  until [ "$#" -le 1 ]; do shift; done\n'
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                '  fixture_git "$1" add -- NOTICE\n'
+                "}\n"
+                'sneak one two "$update_source"\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "no inventory line declares",
+                )
+
+    def test_a_parameter_this_checker_cannot_place_is_reported(self) -> None:
+        for index, form in enumerate(
+            (
+                "sneak() {\n"
+                "  steps=0\n"
+                '  shift "$steps"\n'
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                "}\n"
+                'sneak "$update_source"\n',
+                "reader() { sed -i \"s/a/b/\" \"$1/NOTICE\"; }\n"
+                'relay() { reader "$@"; }\n'
+                'relay "$update_source"\n',
+                "sneak() {\n"
+                '  sed -i "s/a/b/" "${1-x}/NOTICE"\n'
+                "}\n"
+                'sneak "$update_source"\n',
+                "sneak() {\n"
+                '  sed -i "s/a/b/" "$@"\n'
+                "}\n"
+                'sneak "$update_source/NOTICE"\n',
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "takes a destination this checker cannot place",
+                )
+
+    def test_a_staging_from_a_parameter_it_cannot_place_is_reported(self) -> None:
+        for index, form in enumerate(
+            (
+                'sneak() { fixture_git "$1" add -- NOTICE; }\n'
+                'sneak "${9-x}"\n',
+                'sneak() { fixture_git "$update_source" add -- "$@"; }\n'
+                "sneak NOTICE\n",
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "names a repository or a path this checker cannot place",
+                )
+
+    def test_an_interpreter_handed_the_parameter_list_stays_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                "run_helper() {\n"
+                "  where=$1\n"
+                "  shift\n"
+                '  python3 "$root/scripts/adopt-to-namespaced-layout.py" \\\n'
+                '    --destination "$where" "$@"\n'
+                "}\n"
+                'run_helper "$tmp/lane" --dry-run\n'
+            )
+        )
+
+    def test_a_parameter_that_names_no_path_stays_accepted(self) -> None:
+        for index, form in enumerate(
+            (
+                "bump() {\n"
+                '  sed -i "s/^version: .*/version: $1/" "$update_source/copier.yml"\n'
+                '  fixture_git "$update_source" add -- copier.yml\n'
+                "}\n"
+                "label=x1.2.3\n"
+                'bump "${label#x}"\n',
+                "tag_it() {\n"
+                '  sed -i "s/a/b/" "$update_source/copier.yml"\n'
+                '  fixture_git "$update_source" commit -qm "$1" -- copier.yml\n'
+                "}\n"
+                "label=xrelease\n"
+                'tag_it "${label#x}"\n',
+            )
+        ):
+            with self.subTest(accepted=index):
+                self.assert_accepted(self.outside(form))
+
+    def test_a_guarded_shift_over_a_declared_path_stays_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                "edit_declared() {\n"
+                '  [ -n "${NOPE-}" ] && shift\n'
+                '  sed -i "s/a/b/" "$1/copier.yml"\n'
+                '  fixture_git "$1" add -- copier.yml\n'
+                "}\n"
+                'edit_declared "$update_source"\n'
+            )
+        )
+
+    def test_a_body_that_calls_itself_places_no_parameter(self) -> None:
+        for index, form in enumerate(
+            (
+                "sneak() {\n"
+                '  if [ -n "${NOPE-}" ]; then sneak "$1"; fi\n'
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                "}\n"
+                "sneak one\n",
+                "sneak() {\n"
+                '  if [ -n "${NOPE-}" ]; then relay "$1"; fi\n'
+                '  sed -i "s/a/b/" "$1/NOTICE"\n'
+                "}\n"
+                'relay() { sneak "$1"; }\n'
+                "sneak one\n",
+            )
+        ):
+            with self.subTest(rejected=index):
+                self.assert_rejected(
+                    self.outside(form),
+                    "structure",
+                    "has no bounded graph",
+                )
+
+
+class OperandReadingTest(ContractSupportTest):
+    """A rule reads the words a command writes at, not every word it takes."""
+
+    def outside(self, addition: str) -> str:
+        return self.mutate(VERSION_COMMITS, "\n" + addition + VERSION_COMMITS)
+
+    UNPLACEABLE = 'seed=xupdate-source\nlane="${seed#x}"\nwhere="$tmp/$lane"\n'
+
+    def test_a_flag_is_not_read_as_an_option_value_that_hides_the_destination(
+        self,
+    ) -> None:
+        for index, form in enumerate(
+            (
+                'sed -i -r "1r $root/AGENTS.md" "$where/NOTICE"\n',
+                'sed -i -s "1r $root/AGENTS.md" "$where/NOTICE"\n',
+                'ed -s "$where/NOTICE" </dev/null\n',
+            )
+        ):
+            with self.subTest(form=index):
+                self.assert_rejected(
+                    self.outside(self.UNPLACEABLE + form),
+                    RULE_INVENTORY_REGION,
+                    "takes a destination this checker cannot place",
+                )
+
+    def test_a_destination_written_as_an_option_value_is_read(self) -> None:
+        for command in ("cp", "install", "ln", "mv"):
+            for option in ("-t", "--target-directory"):
+                with self.subTest(command=command, option=option):
+                    self.assert_rejected(
+                        self.outside(
+                            self.UNPLACEABLE + f'{command} {option} "$where" copier.yml\n'
+                        ),
+                        RULE_INVENTORY_REGION,
+                        "takes a destination this checker cannot place",
+                    )
+
+    def test_a_repository_written_as_an_option_value_is_read(self) -> None:
+        for form in (
+            'git --git-dir="$where/.git" add -- NOTICE\n',
+            'git --work-tree="$where" add -- NOTICE\n',
+            'git -C "$where" add -- NOTICE\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(self.UNPLACEABLE + form),
+                    RULE_INVENTORY_REGION,
+                    "names a repository or a path this checker cannot place",
+                )
+
+    def test_an_expression_and_a_message_stay_unread_as_paths(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                "bump() {\n"
+                '  sed -i -r "s/^version: .*/version: $1/" "$update_source/copier.yml"\n'
+                '  fixture_git "$update_source" commit -qm "$1" -- copier.yml\n'
+                "}\n"
+                "bump 9.9.9\n"
+            )
+        )
+
+    def test_a_copy_source_stays_unread_as_a_destination(self) -> None:
+        self.assert_accepted(
+            self.outside(self.UNPLACEABLE + 'cp "$where/copier.yml" "$tmp/held.yml"\n')
+        )
+
+    def test_a_quoted_option_is_read_as_the_option_it_spells(self) -> None:
+        for form in (
+            'install "-t" "$where" AGENTS.md\n',
+            "install '-t' \"$where\" AGENTS.md\n",
+            'install -"t" "$where" AGENTS.md\n',
+            'install \\-t "$where" AGENTS.md\n',
+            'cp "--target-directory=$where" AGENTS.md\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(self.UNPLACEABLE + form),
+                    RULE_INVENTORY_REGION,
+                    "takes a destination this checker cannot place",
+                )
+
+    def test_a_quoted_git_repository_option_is_read(self) -> None:
+        self.assert_rejected(
+            self.outside(self.UNPLACEABLE + 'git "-C" "$where" add -- AGENTS.md\n'),
+            RULE_INVENTORY_REGION,
+            "names a repository or a path this checker cannot place",
+        )
+
+    def test_a_staging_that_names_no_repository_is_reported(self) -> None:
+        for form in (
+            'git add -- AGENTS.md\n',
+            '( cd "$where" && git add -- AGENTS.md )\n',
+            'git commit -qm x -- AGENTS.md\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(self.UNPLACEABLE + form),
+                    RULE_INVENTORY_REGION,
+                    "names no repository outside the directory it stands in",
+                )
+
+    def test_a_staging_that_names_a_relative_repository_is_reported(self) -> None:
+        for form in (
+            '( cd "$where" && git -C . add -- AGENTS.md )\n',
+            '( cd "$where" && git -C ./ add -- AGENTS.md )\n',
+            '( cd "$where" && git --git-dir=.git add -- AGENTS.md )\n',
+            '( cd "$where" && git -C held add -- AGENTS.md )\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(self.UNPLACEABLE + form),
+                    RULE_INVENTORY_REGION,
+                    "names no repository outside the directory it stands in",
+                )
+
+    def test_an_option_this_checker_cannot_name_keeps_every_operand_read(self) -> None:
+        for form in (
+            'install "-t$empty" "$where" AGENTS.md\n',
+            'install "-t${empty}" "$where" AGENTS.md\n',
+            'cp "-t$empty" "$where" AGENTS.md\n',
+            'mv "-t$empty" "$where" AGENTS.md\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside("empty=\n" + self.UNPLACEABLE + form),
+                    RULE_INVENTORY_REGION,
+                    "takes a destination this checker cannot place",
+                )
+
+    def test_an_option_an_expansion_opens_keeps_every_operand_read(self) -> None:
+        for form in (
+            'install "${empty}-t" "$where" AGENTS.md\n',
+            'install "$empty-t" "$where" AGENTS.md\n',
+            'install "$opt" "$where" AGENTS.md\n',
+            'install "$opt=$where" AGENTS.md\n',
+            'cp "${empty}-t" "$where" AGENTS.md\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside("empty=\nopt=-t\n" + self.UNPLACEABLE + form),
+                    RULE_INVENTORY_REGION,
+                    "takes a destination this checker cannot place",
+                )
+
+    def test_a_written_path_segment_keeps_a_copy_source_out_of_the_reading(
+        self,
+    ) -> None:
+        self.assert_accepted(
+            self.outside(
+                self.UNPLACEABLE + 'cp "$where/copier.yml" "$tmp/held.yml"\n'
+            )
+        )
+
+    def test_an_alias_of_the_update_source_is_rejected(self) -> None:
+        for form in (
+            'ln -s "$update_source" "$tmp/held"\n',
+            'ln "$update_source/copier.yml" "$tmp/held.yml"\n',
+            'mv "$update_source" "$tmp/held"\n',
+            'ln -s -t "$tmp" "$update_source"\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "an alias of the update source stands outside the "
+                    "inventory region",
+                )
+
+
+class IndirectDispatchTest(ContractSupportTest):
+    """A call this checker cannot read settles no name across it."""
+
+    def outside(self, addition: str) -> str:
+        return self.mutate(VERSION_COMMITS, "\n" + addition + VERSION_COMMITS)
+
+    RELAY = (
+        "mutate() { held=update-source; }\n"
+        "relay() { runner=mutate; $runner; }\n"
+        "run() {\n"
+        "  held=other\n"
+        "  relay\n"
+        '  sed -i "s/a/b/" "$tmp/$held/NOTICE"\n'
+        "}\n"
+        "run\n"
+    )
+
+    def test_a_call_dispatched_from_a_name_this_checker_cannot_read_unsettles_it(
+        self,
+    ) -> None:
+        self.assert_rejected(
+            self.outside(self.RELAY),
+            RULE_INVENTORY_REGION,
+            "takes a destination this checker cannot place",
+        )
+
+    def test_a_call_written_out_keeps_the_names_it_never_assigns_settled(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                "keep() { spare=held; }\n"
+                "run() {\n"
+                "  held=other\n"
+                "  keep\n"
+                '  sed -i "s/a/b/" "$tmp/$held/NOTICE"\n'
+                "}\n"
+                "run\n"
             )
         )
 
@@ -3632,7 +4364,14 @@ class WordGrammarTest(unittest.TestCase):
         self.assertIn("dest", fixture.unsettled_names())
         self.assertEqual(self.settled_word(source, '"$dest"'), frozenset())
 
-    def test_a_name_a_loop_head_binds_is_never_settled(self) -> None:
+    def test_a_name_a_loop_head_binds_holds_the_head_words(self) -> None:
+        """A loop head binds its name from the words written after `in`.
+
+        The name is unsettled everywhere else, because a word written outside
+        the loop reads whatever the assignments around it hold, but a word
+        written under the loop reads one of the head words.
+        """
+
         source = (
             "dest=/tmp/old\nfor dest in /tmp/new; do\n"
             '  printf %s "$dest"\ndone\n'
@@ -3645,7 +4384,17 @@ class WordGrammarTest(unittest.TestCase):
             with self.subTest(written=written):
                 fixture = self.fixture(written)
                 self.assertIn("dest", fixture.unsettled_names())
-                self.assertEqual(self.settled_word(written, '"$dest"'), frozenset())
+                self.assertEqual(
+                    self.settled_word(written, '"$dest"'),
+                    frozenset({(True, ("tmp", "new"))}),
+                )
+
+    def test_a_loop_head_this_checker_cannot_read_settles_no_name(self) -> None:
+        written = (
+            'for dest in $(printf %s /tmp/new); do\n'
+            '  printf %s "$dest"\ndone\n'
+        )
+        self.assertEqual(self.settled_word(written, '"$dest"'), frozenset())
 
     def test_a_prefix_assigned_name_is_never_settled(self) -> None:
         for prefix in (
@@ -4455,12 +5204,22 @@ class CopierWriteTest(ContractSupportTest):
             '  run_copier copy -q -f "$update_source" "$out"\n'
             "done\n"
         )
-        self.assert_accepted(
+
+    def test_a_destination_one_call_site_settles_is_read(self) -> None:
+        """A parameter carries the destination its call site writes.
+
+        The copy is reported because the call site names the sanctioned
+        destination, which the body reaches through its first parameter.
+        """
+
+        self.assert_rejected(
             COMPLIANT
             + "write_lane() {\n"
             '  run_copier copy -q -f "$update_source" "$1"\n'
             "}\n"
-            'write_lane "$project"\n'
+            'write_lane "$project"\n',
+            RULE_ALTERNATE_PATH,
+            "an unmodelled Copier copy path writes the sanctioned destination",
         )
 
     def test_an_expansion_where_the_paths_differ_is_rejected(self) -> None:

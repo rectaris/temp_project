@@ -18,6 +18,7 @@ template/.project-agent-workflow/scripts/validate-changes.py
 template/.agents/skills/browser-ops/SKILL.md
 template/.agents/skills/verify-copier-update/SKILL.md
 template/.project-agent-workflow/AGENTS.md.jinja
+template/.project-agent-workflow/README.md
 template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja
 template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
 template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja

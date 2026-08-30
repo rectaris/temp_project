@@ -21,7 +21,11 @@ The contract has two layers:
   direct invocation of the migration snapshot script or the `copier` binary,
   and no redefinition or shadowing of a command a bound observation runs.
   These rules describe operations the fixture already owns, so they
-  hold for a fixture that carries no migration transition region.
+  hold for a fixture that carries no migration transition region. The one
+  region rule that needs a fact the supplied bytes do not carry is the staging
+  rule: the update source may hold only the paths the Copier update inventory
+  declares, and the fixture names that inventory through a positional
+  parameter, so the declared paths are supplied to the checker instead.
 - Transition rules apply only when the supplied fixture writes a bounded
   migration transition, which is anchored on the transition event vocabulary
   (ready, release, pending, consumed, guardian) or on an asynchronous child.
@@ -123,6 +127,7 @@ else:  # pragma: no cover - exercised by the documented direct CLI contract
 __all__ = [
     "CopierFixtureError",
     "Finding",
+    "INVENTORY_PATH",
     "RULES",
     "RULE_ALTERNATE_PATH",
     "RULE_UNRESOLVED_DISPATCH",
@@ -139,9 +144,53 @@ __all__ = [
     "RULE_UPDATE_CHILD",
     "RULE_VERSION_COMMIT",
     "check",
+    "declared_paths",
     "main",
+    "read_inventory",
     "validate",
 ]
+
+
+# The Copier update source inventory this repository ships. A fixture builds
+# its own inventory path from a positional parameter, so no supplied byte
+# places that file and the declared paths cannot be recovered from the fixture
+# text. They are read from the inventory this checker is installed beside
+# instead, and a caller that knows the inventory supplies it directly.
+INVENTORY_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests/fixtures/orchestration/copier-update-source-inventory.txt"
+)
+
+
+def declared_paths(values: Iterable[str]) -> frozenset[tuple[str, ...]]:
+    """Return the update source paths written inventory lines declare.
+
+    Each line declares one path relative to the update source. A blank line
+    declares nothing, and a repeated separator is dropped so one written path
+    settles to one segment tuple.
+    """
+
+    declared: set[tuple[str, ...]] = set()
+    for value in values:
+        written = value.strip()
+        if not written:
+            continue
+        declared.add(tuple(segment for segment in written.split("/") if segment))
+    return frozenset(declared)
+
+
+def read_inventory(path: Path | None = None) -> frozenset[tuple[str, ...]]:
+    """Return the paths one inventory file declares.
+
+    An inventory this checker cannot read declares no path, so every staging
+    outside the inventory region is then rejected rather than accepted.
+    """
+
+    try:
+        text = (INVENTORY_PATH if path is None else path).read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    return declared_paths(text.splitlines())
 
 
 RULE_STRUCTURE = "structure"
@@ -211,6 +260,19 @@ BRACED_NAME_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 PLAIN_NAME_PATTERN = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
+# A positional parameter is a name too, and the value it holds is whatever the
+# call site writes in that position. It is spelled with digits, which no other
+# name may start with, so the two never collide in one binding table. Only the
+# braced form reads more than one digit, exactly as the shell does.
+SHIFT_DISTANCE_LIMIT = 16
+"""How many distances one body may shift its parameters before it is unread."""
+
+BRACED_POSITION_PATTERN = re.compile(r"\$\{([0-9]+)\}")
+
+
+PLAIN_POSITION_PATTERN = re.compile(r"\$([0-9])")
+
+
 SUBSTITUTION_START = "$("
 
 
@@ -277,6 +339,8 @@ LINE_CONTINUATION = "\\\n"
 HEREDOC_KIND = "heredoc_body"
 # The words a shell reads as syntax rather than as a command name.
 LOOP_KEYWORD = "for"
+LOOP_LIST_KEYWORD = "in"
+LOOP_BODY_KEYWORDS = frozenset({"do", ";", "\n"})
 RESERVED_WORDS = frozenset(
     {
         "if",
@@ -1457,6 +1521,10 @@ def _word_parts(
             match = BRACED_NAME_PATTERN.match(word, index) or PLAIN_NAME_PATTERN.match(
                 word, index
             )
+            if match is None:
+                match = BRACED_POSITION_PATTERN.match(
+                    word, index
+                ) or PLAIN_POSITION_PATTERN.match(word, index)
             if match is not None:
                 flush()
                 parts.append(("name", match.group(1)))
@@ -1632,6 +1700,11 @@ def _resolve_parts(
                 current[:index] + value + current[index + 1 :] for value in held
             )
         else:
+            if name.isdigit():
+                # A positional parameter holds what a call site writes. Where
+                # no call site binds it, the supplied bytes fix no value for
+                # it, so it names no path rather than naming one of its own.
+                return None
             grown = (current[:index] + (("opaque", "$" + name),) + current[index + 1 :],)
         for candidate in grown:
             if candidate not in seen:
@@ -1672,7 +1745,7 @@ def _settle_written_word(
     if operation.deferred:
         return _settle_deferred_word(fixture, word)
     return _settle_word(
-        word, fixture.bindings_for(operation), fixture.unsettled_names()
+        word, fixture.bindings_for(operation), fixture.unsettled_for(operation)
     )
 
 
@@ -2278,6 +2351,13 @@ class _Fixture:
         self._unknown_binding = False
         self._resolved: dict[int, _Bindings] = {}
         self._settled: dict[int, _Bindings] = {}
+        self._positional: dict[tuple[int, int | None], _Bindings] = {}
+        self._positional_names: _Bindings | None = None
+        self._resolving: set[int] = set()
+        self._declaration_assigned: dict[str, frozenset[str]] = {}
+        self._loop_heads: tuple[tuple[str, tuple[Token, ...], tuple[int, int]], ...] | None = None
+        self._loop_values: dict[int, _Bindings] = {}
+        self._assigning: set[str] = set()
         self._operations_by_offset: dict[int, _Operation] | None = None
 
     def command_runs(self) -> tuple["_CommandRun", ...]:
@@ -2523,6 +2603,251 @@ class _Fixture:
             declaration.start.offset <= offset <= declaration.end.offset
             for declaration in self.table.declarations
         )
+
+    def loop_heads(
+        self,
+    ) -> tuple[tuple[str, tuple[Token, ...], tuple[int, int]], ...]:
+        """Return the name each loop head binds and the words it binds it from."""
+
+        if self._loop_heads is not None:
+            return self._loop_heads
+        extents = sorted(self.loop_extents().items())
+        heads: list[tuple[str, tuple[Token, ...], tuple[int, int]]] = []
+        for run in self.command_runs():
+            for index, token in enumerate(run.tokens[:-1]):
+                if _token_text(token) != LOOP_KEYWORD:
+                    continue
+                written = _token_text(run.tokens[index + 1])
+                if written is None or not NAME_PATTERN.fullmatch(written):
+                    continue
+                rest = run.tokens[index + 2 :]
+                if not rest or _token_text(rest[0]) != LOOP_LIST_KEYWORD:
+                    continue
+                words: list[Token] = []
+                for item in rest[1:]:
+                    if _token_text(item) in LOOP_BODY_KEYWORDS:
+                        break
+                    words.append(item)
+                extent = next(
+                    (
+                        (start, end)
+                        for start, end in extents
+                        if start <= token.start.offset <= end
+                    ),
+                    None,
+                )
+                if extent is None or not words:
+                    continue
+                heads.append((written, tuple(words), extent))
+        self._loop_heads = tuple(heads)
+        return self._loop_heads
+
+    def loop_values(self, offset: int) -> "_Bindings":
+        """Return the values each loop head binds its name to at one offset.
+
+        A loop head binds its name once per round from the words written after
+        `in`, so a word written under the loop reads one of those words. Every
+        word is read together, which names more values than one round holds and
+        never fewer. A head word this checker cannot read, and one that runs a
+        substitution of its own once per round, both leave the name unproven
+        rather than settled, so a word written from it is reported instead of
+        accepted.
+        """
+
+        cached = self._loop_values.get(offset)
+        if cached is not None:
+            return dict(cached)
+        values: _Bindings = {}
+        unsettled = self.unsettled_names()
+        for name, words, extent in self.loop_heads():
+            if not extent[0] <= offset <= extent[1]:
+                continue
+            environment = self.bindings_before(extent[0])
+            held: tuple[_Parts, ...] | None = ()
+            for token in words:
+                parts = _word_parts(
+                    token.text,
+                    f"l{token.start.offset}",
+                    splits=False,
+                    anchored=self._anchors_a_substitution(),
+                )
+                settled = (
+                    None
+                    if parts is None
+                    else _resolve_parts(parts, environment, unsettled)
+                )
+                if parts is not None and _carries_substitution((parts,)):
+                    # A loop head runs its substitution once per round, so the
+                    # value it produces is not one two readers may compare.
+                    settled = None
+                if settled is None:
+                    held = None
+                    break
+                held = held + tuple(value for value in settled if value not in held)
+            values[name] = held or None
+        self._loop_values[offset] = dict(values)
+        return values
+
+    def declaration_assigned_names(self, name: str) -> frozenset[str]:
+        """Return every name that running one declared function may assign.
+
+        A call replaces a value a reader above it settled only when the body it
+        reaches assigns that name, whether the body writes the assignment
+        itself or reaches a further body that writes it. A call this walk
+        re-enters proves nothing, so every name the fixture assigns is returned
+        there and the reader settles nothing through it. A dispatch whose
+        command word is an expansion may reach any declared body, so it is read
+        the same way: leaving it out let one indirection replace a name the
+        reader believed it had settled.
+        """
+
+        cached = self._declaration_assigned.get(name)
+        if cached is not None:
+            return cached
+        if name not in self.table or name in self._assigning:
+            return frozenset(assignment.name for assignment in self.assignments)
+        declaration = self.table[name]
+        span = (declaration.start.offset, declaration.end.offset)
+        names = {
+            assignment.name
+            for assignment in self.assignments
+            if span[0] <= assignment.offset <= span[1]
+        }
+        self._assigning.add(name)
+        try:
+            for operation in self.operations:
+                if not span[0] <= operation.offset <= span[1]:
+                    continue
+                if operation.name == name:
+                    continue
+                if operation.name is None and operation.node.dynamic:
+                    names |= self.dispatch_assigned_names(operation)
+                    continue
+                if operation.name in self.table:
+                    names |= self.declaration_assigned_names(operation.name)
+        finally:
+            self._assigning.discard(name)
+        settled = frozenset(names)
+        if not self._assigning:
+            self._declaration_assigned[name] = settled
+        return settled
+
+    def dispatch_assigned_names(self, operation: _Operation) -> frozenset[str]:
+        """Return every name a dispatch this checker cannot read may assign.
+
+        A command word written as an expansion runs whatever that expansion
+        carries. When every value it may carry is written out and none of them
+        spells a declared function, the dispatch runs a separate program, which
+        assigns no name in this shell. Otherwise it may run any declared body,
+        so every name the fixture assigns is returned and the reader settles
+        nothing across it.
+        """
+
+        every = frozenset(assignment.name for assignment in self.assignments)
+        if not self.expansions_are_exact(operation):
+            return every
+        texts = self.expansions(operation)
+        if not texts:
+            return every
+        names: set[str] = set()
+        for text in texts:
+            for word in text.split():
+                candidate = _strip(word)
+                if candidate in self.table:
+                    names |= self.declaration_assigned_names(candidate)
+                elif "/" in candidate:
+                    # A word carrying a path separator names a file to run,
+                    # never a function this fixture declares.
+                    continue
+                elif "$" in candidate:
+                    return every
+        return frozenset(names)
+
+    def locally_settled_names(self, offset: int) -> frozenset[str]:
+        """Return every body name one reader inside that body may settle.
+
+        A name a function body assigns is unsettled everywhere, because the
+        body runs where it is called and a reader written below the call would
+        otherwise read a value written above it. A reader written inside the
+        declaring body, below the assignment, is not such a reader: every
+        assignment of the name is written in that body above it, so the value
+        it reads is the one written there. The assignment must also be written
+        on the body's own path, because one written under a condition, in a
+        loop, or in a detached span leaves the earlier value in place.
+        """
+
+        declarations = [
+            declaration
+            for declaration in self.table.declarations
+            if declaration.start.offset <= offset <= declaration.end.offset
+        ]
+        if not declarations:
+            return frozenset()
+        declaration = max(declarations, key=lambda item: item.start.offset)
+        detached = self.detached_spans()
+        span = (declaration.start.offset, declaration.end.offset)
+        conditional = [
+            extent
+            for extent in self._conditional_spans
+            if extent != span and span[0] <= extent[0] and extent[1] <= span[1]
+        ]
+        settled: set[str] = set()
+        latest: dict[str, int] = {}
+        outside: set[str] = set()
+        for assignment in self.assignments:
+            if not declaration.start.offset <= assignment.offset <= offset:
+                outside.add(assignment.name)
+                continue
+            if any(
+                start <= assignment.offset <= end for start, end in conditional
+            ) or any(start <= assignment.offset <= end for start, end in detached):
+                outside.add(assignment.name)
+                continue
+            latest[assignment.name] = max(
+                latest.get(assignment.name, assignment.offset), assignment.offset
+            )
+            settled.add(assignment.name)
+        declared = {item.name for item in self.table.declarations}
+        for name in sorted(settled):
+            if name not in outside:
+                continue
+            # Another body assigns this name, so a call that reaches such a
+            # body between the value read here and the assignment above it may
+            # replace it. A call that reaches no body assigning the name
+            # cannot, so the value written above stays the value read here.
+            if any(
+                latest[name] < operation.offset <= offset
+                and operation.name in declared
+                and name in self.declaration_assigned_names(operation.name)
+                for operation in self.operations
+            ):
+                settled.discard(name)
+        return frozenset(settled)
+
+    def unsettled_for(self, operation: _Operation) -> frozenset[str]:
+        """Return every name one operation cannot settle where it is written."""
+
+        unsettled = self.unsettled_names()
+        if self._unknown_binding or self.unaccepted_constructs():
+            return unsettled
+        looped = frozenset(
+            name
+            for name, held in self.loop_values(operation.offset).items()
+            if held is not None
+        )
+        unsettled = unsettled - looped
+        local = self.locally_settled_names(operation.offset)
+        if not local:
+            return unsettled
+        elsewhere = (
+            MUTABLE_SHELL_NAMES
+            | self.written_assigned_names()
+            | self.prefix_assigned_names()
+            | self.command_assigned_names()
+            | self.loop_assigned_names()
+            | self.expansion_assigned_names()
+        )
+        return frozenset(unsettled - (local - elsewhere))
 
     def unsettled_names(self) -> frozenset[str]:
         """Return every name whose value this checker cannot settle.
@@ -2790,7 +3115,7 @@ class _Fixture:
         if cached is not None:
             return cached
         unsettled = self.unsettled_names()
-        bindings: _Bindings = {}
+        bindings: _Bindings = dict(self.positional_names())
         for assignment in sorted(self.assignments, key=lambda item: item.offset):
             if assignment.offset >= offset:
                 break
@@ -2805,8 +3130,11 @@ class _Fixture:
         A command substitution is one evaluation, so the parts it produces are
         comparable across two readers only when the assignment that ran it runs
         exactly once. An assignment written under a condition or inside a
-        function body may run again with another value, so a value that carries
-        a substitution is bound to ``None`` there.
+        function body may run again with another value, so a value that writes
+        a substitution of its own is bound to ``None`` there. A substitution a
+        name carries into the value is not one of those: it was evaluated where
+        that name was bound, and this same rule already proved that binding
+        runs once, so every reader of it reads one value.
         """
 
         parts = _word_parts(
@@ -2819,12 +3147,14 @@ class _Fixture:
         single = self._certainly_runs(assignment) and not self._inside_declaration(
             assignment.offset
         )
-        if settled is not None and not single and _carries_substitution(settled):
+        written = parts is not None and _carries_substitution((parts,))
+        if settled is not None and not single and written:
             settled = None
         if self._certainly_runs(assignment):
             bindings[assignment.name] = settled
             return
         _merge_binding(bindings, assignment.name, settled)
+
     def _anchors_a_substitution(self) -> bool:
         """Report whether the modelled absolute command is the shell's own.
 
@@ -2845,6 +3175,177 @@ class _Fixture:
             declaration.start.offset <= offset <= declaration.end.offset
             for declaration in self.table.declarations
         )
+    def positional_names(self) -> "_Bindings":
+        """Return every positional parameter this fixture reads, held unproven.
+
+        The parameters a script is called with come from outside the supplied
+        bytes, so nothing here places them. Seeding them as unproven keeps a
+        word written with one from settling to a path of its own, which is what
+        the value a call site writes later replaces inside a function body.
+        """
+
+        if self._positional_names is None:
+            self._positional_names = {
+                match.group(1): None
+                for match in PARAMETER_POSITION_PATTERN.finditer(self.text)
+            }
+        return dict(self._positional_names)
+
+    def _shifted_by(
+        self, declaration, offset: int
+    ) -> tuple[tuple[int, ...], bool] | None:
+        """Return every distance one body may shift its parameters.
+
+        The answer is the set of distances the body may hold where one word is
+        read, together with whether a loop may carry the shift past every
+        distance the set names. A shift the shell always reaches moves every
+        held distance alike. A shift written under a condition, on the right of
+        a list operator, in a detached span, or on a path this checker cannot
+        prove is reached runs on some turns and not on others, so the distance
+        that skips it and the distance that takes it both stay possible and
+        both are kept: reading a body at every distance it may hold names more
+        values than one run holds and never fewer. A shift a loop wraps runs
+        once per turn and the loop carries control back above the word that
+        reads it, so it is admitted whether it stands above or below that word
+        and it fixes no bounded distance at all. A shift written with a word
+        this checker cannot read fixes no distance and leaves the whole body
+        holding no parameter this checker can place.
+        """
+
+        span = (declaration.start.offset, declaration.end.offset)
+        loops = tuple(
+            (start, end)
+            for start, end in self.loop_extents().items()
+            if span[0] <= start and end <= span[1]
+        )
+        uncertain = [
+            extent
+            for extent in self._conditional_spans
+            if extent != span and span[0] <= extent[0] and extent[1] <= span[1]
+        ]
+        uncertain.extend(self.detached_spans())
+        carrying = tuple(
+            extent for extent in loops if extent[0] <= offset <= extent[1]
+        )
+        distances = {0}
+        carried = False
+        for operation in self.operations:
+            if operation.name != "shift":
+                continue
+            if not (span[0] <= operation.offset <= span[1]):
+                continue
+            looped = any(
+                start <= operation.offset <= end for start, end in loops
+            )
+            if operation.offset > offset and not any(
+                start <= operation.offset <= end for start, end in carrying
+            ):
+                continue
+            words = _operation_words(operation)
+            if len(words) == 1:
+                moved = 1
+            else:
+                written = _strip(words[1].text)
+                if not written.isdigit():
+                    return None
+                moved = int(written)
+            if looped:
+                if moved:
+                    carried = True
+                continue
+            certain = operation.offset in self.unconditional_positions() and not any(
+                start <= operation.offset <= end for start, end in uncertain
+            )
+            moved_set = {held + moved for held in distances}
+            distances = moved_set if certain else distances | moved_set
+            if len(distances) > SHIFT_DISTANCE_LIMIT:
+                return None
+        return tuple(sorted(distances)), carried
+
+    def positional_bindings(self, offset: int) -> "_Bindings":
+        """Return the values each positional parameter holds inside one body.
+
+        A function body runs with the words its call sites write, so a
+        parameter holds whatever any reachable call writes in that position.
+        Every call site is read together rather than one at a time, which names
+        more values than one run holds and never fewer, and a call word this
+        checker cannot read drops only itself: keeping the words its siblings
+        write is what stops one unreadable call from hiding a readable one. A
+        call site is read in the environment it runs in, so a word it writes
+        from its own parameter carries the value the call above it writes, and
+        a call this walk re-enters proves nothing. A position no call site
+        writes and a body whose parameters are shifted by an unread amount both
+        stay unproven.
+        """
+
+        declarations = [
+            declaration
+            for declaration in self.table.declarations
+            if declaration.start.offset <= offset <= declaration.end.offset
+        ]
+        if not declarations:
+            return {}
+        declaration = max(declarations, key=lambda item: item.start.offset)
+        positions = sorted(self.positional_names())
+        reach = self._shifted_by(declaration, offset)
+        key = (declaration.start.offset, reach)
+        cached = self._positional.get(key)
+        if cached is not None:
+            return dict(cached)
+        bindings: _Bindings = {position: None for position in positions}
+        if declaration.start.offset in self._resolving:
+            return bindings
+        calls = [
+            operation
+            for operation in self.operations
+            if operation.name == declaration.name and operation.reachable
+        ]
+        if reach is not None and calls:
+            distances, carried = reach
+            self._resolving.add(declaration.start.offset)
+            try:
+                environments = [
+                    (call, self.bindings_for(call), self.unsettled_for(call))
+                    for call in calls
+                ]
+            finally:
+                self._resolving.discard(declaration.start.offset)
+            for position in positions:
+                place = int(position)
+                if place == 0:
+                    continue
+                held: tuple[_Parts, ...] = ()
+                for call, environment, unsettled in environments:
+                    words = _operation_words(call)
+                    indexes = (
+                        range(place + min(distances), len(words))
+                        if carried
+                        else tuple(place + shifted for shifted in distances)
+                    )
+                    for index in indexes:
+                        if not 0 <= index < len(words):
+                            continue
+                        parts = _word_parts(
+                            words[index].text,
+                            f"p{call.offset}:{index}",
+                            splits=False,
+                            anchored=self._anchors_a_substitution(),
+                        )
+                        settled = (
+                            None
+                            if parts is None
+                            else _resolve_parts(parts, environment, unsettled)
+                        )
+                        if settled is None:
+                            continue
+                        held = held + tuple(
+                            value for value in settled if value not in held
+                        )
+                bindings[position] = held or None
+        if not self._resolving:
+            self._positional[key] = dict(bindings)
+        return bindings
+
     def bindings_for(self, operation: _Operation) -> "_Bindings":
         """Return the settled parts each name may hold where one operation runs.
 
@@ -2855,6 +3356,11 @@ class _Fixture:
         caller runs, so the call sites are followed outward. Each call site is
         visited once and a fixture writes finitely many, so the walk always
         terminates.
+
+        A parameter the call site writes is installed last, and every
+        assignment the enclosing body makes above the operation is then read
+        again against it, because a name bound from a parameter settles only
+        once the value that parameter carries is known.
         """
 
         cached = self._settled.get(operation.offset)
@@ -2871,6 +3377,22 @@ class _Fixture:
                 if further not in visited:
                     visited.add(further)
                     pending.append(further)
+        positional = self.positional_bindings(operation.offset)
+        if positional:
+            bindings.update(positional)
+            unsettled = self.unsettled_for(operation)
+            for assignment in sorted(self.assignments, key=lambda item: item.offset):
+                if assignment.offset >= operation.offset:
+                    break
+                if not self._inside_declaration(assignment.offset):
+                    continue
+                bindings.pop(assignment.name, None)
+                self._bind_value(bindings, assignment, unsettled)
+        bindings.update(self.loop_values(operation.offset))
+        if self._resolving:
+            # A value read while one call walk is open may hold the unproven
+            # fallback that walk installs, so it is never kept for later.
+            return bindings
         self._settled[operation.offset] = bindings
         return bindings
     def _call_offsets(self, offset: int) -> tuple[int, ...]:
@@ -3093,7 +3615,9 @@ def _references(text: str, name: str) -> bool:
     return f"${name}" in text or f"${{{name}" in text
 
 
-def _check_inventory_region(fixture: _Fixture) -> list[Finding]:
+def _check_inventory_region(
+    fixture: _Fixture, declared: frozenset[tuple[str, ...]]
+) -> list[Finding]:
     """Require one inventory-driven copy and staging region."""
 
     findings: list[Finding] = []
@@ -3224,7 +3748,9 @@ def _check_inventory_region(fixture: _Fixture) -> list[Finding]:
                     operation.position,
                 )
             )
-    findings.extend(_check_update_source_inputs(fixture, region, copy, variable))
+    findings.extend(
+        _check_update_source_inputs(fixture, region, copy, variable, declared)
+    )
     return findings
 
 
@@ -3255,20 +3781,107 @@ UPDATE_SOURCE_EDITING_COMMANDS = frozenset(
     {
         "awk",
         "cp",
+        "dd",
+        "ed",
+        "gawk",
         "install",
         "ln",
+        "mawk",
         "mv",
+        "nawk",
+        "node",
         "perl",
         "python",
+        "python2",
         "python3",
+        "ruby",
         "sed",
+        "sponge",
         "tar",
         "tee",
         "touch",
+        "truncate",
         "rsync",
     }
 )
 STAGING_SUBCOMMANDS = frozenset({"add", "stage", "update-index"})
+# An editing command that reads a program takes its first operand as that
+# program rather than as a path, and a few options take a value that names no
+# path either. Reading those words as paths would report an expression or a
+# message as a destination the fixture writes at.
+EXPRESSION_COMMANDS = frozenset(
+    {"awk", "gawk", "mawk", "nawk", "node", "perl", "python", "python2", "python3", "ruby", "sed"}
+)
+EXPRESSION_SKIP_OPTIONS = frozenset({"-e", "--expression", "-f", "--file", "-c", "-m"})
+# An option takes a value only for the commands that read one. `-r` and `-s`
+# are flags for an expression command and values for a sizing command, so one
+# command-independent table would consume the operand written after them and
+# drop the destination this rule exists to read.
+EXPRESSION_VALUE_OPTIONS = frozenset({"-e", "--expression", "-f", "--file", "-c", "-m"})
+SIZE_COMMANDS = frozenset({"truncate"})
+SIZE_VALUE_OPTIONS = frozenset({"-s", "--size", "-r", "--reference"})
+# A copying command writes at its last operand and reads the operands before
+# it, so only the last one names a destination this rule reads.
+DESTINATION_LAST_COMMANDS = frozenset({"cp", "install", "rsync"})
+# These commands hand the identity of their source to their destination, so a
+# write through the destination is a write through the source. Both operands
+# name the tree that gets written and both are read.
+ALIAS_COMMANDS = frozenset({"ln", "mv"})
+# These commands take the destination directory as an option value instead,
+# which leaves a source written last. `rsync` spells `-t` as a timestamp flag,
+# so it keeps the last-operand reading.
+TARGET_OPTION_COMMANDS = frozenset({"cp", "install", "ln", "mv"})
+TARGET_VALUE_OPTIONS = frozenset({"-t", "--target-directory"})
+# Only these Git options name the tree a staging writes into.
+GIT_REPOSITORY_OPTIONS = frozenset({"-C", "--git-dir", "--work-tree"})
+# `git commit` writes the tree the update source is read from, so the forms
+# that stage on their own are read here exactly as a staging is.
+COMMIT_STAGING_OPTIONS = frozenset({"--all", "--include", "--only"})
+COMMIT_STAGING_LETTERS = "aio"
+COMMIT_VALUE_OPTIONS = frozenset(
+    {
+        "--author",
+        "--cleanup",
+        "--date",
+        "--file",
+        "--fixup",
+        "--gpg-sign",
+        "--message",
+        "--pathspec-from-file",
+        "--reedit-message",
+        "--reuse-message",
+        "--squash",
+        "--template",
+        "--trailer",
+        "--untracked-files",
+    }
+)
+COMMIT_VALUE_LETTERS = "CFcmt"
+COMMIT_PLAIN_OPTIONS = frozenset(
+    {
+        "--allow-empty",
+        "--allow-empty-message",
+        "--amend",
+        "--branch",
+        "--dry-run",
+        "--edit",
+        "--long",
+        "--no-edit",
+        "--no-gpg-sign",
+        "--no-post-rewrite",
+        "--no-signoff",
+        "--no-status",
+        "--no-verify",
+        "--porcelain",
+        "--quiet",
+        "--reset-author",
+        "--short",
+        "--signoff",
+        "--status",
+        "--verbose",
+    }
+)
+COMMIT_PLAIN_LETTERS = "envqs"
 UPDATE_SOURCE_SHELLS = frozenset({"sh", "bash", "dash", "ksh", "zsh", "eval"})
 FOR_LIST_PATTERN = re.compile(r"(?m)^[ \t]*for[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+in[ \t]+([^\n;]*)")
 PARAMETER_POSITION_PATTERN = re.compile(r"(?<![A-Za-z0-9_])\$\{?([1-9][0-9]*)\}?")
@@ -3349,6 +3962,244 @@ def _operation_paths(fixture: _Fixture, operation: _Operation) -> frozenset[_Pat
     return frozenset(settled)
 
 
+def _edited_operands(
+    command: str, words: Sequence[Token]
+) -> tuple[Token, ...]:
+    """Return the words one editing command takes as the paths it writes.
+
+    An editing command that reads a program takes that program as its first
+    operand, and several options take a value that names no path, so neither is
+    read as a destination. A copying command writes at its last operand alone,
+    and an interpreter hands every operand to the script it runs, whose options
+    this checker does not know, so neither is read here: an interpreter run is
+    read by the interpreter rules instead. Everything else the command is
+    written with is read as a path it may write at.
+
+    A word this reading cannot resolve to one option may spell the option that
+    carries the destination, so the last operand is no longer proven to be the
+    destination and every operand is returned instead.
+    """
+
+    if _is_interpreter(command):
+        return ()
+    expression = command in EXPRESSION_COMMANDS
+    values = set()
+    if expression:
+        values |= EXPRESSION_VALUE_OPTIONS
+    if command in SIZE_COMMANDS:
+        values |= SIZE_VALUE_OPTIONS
+    targeted = command in TARGET_OPTION_COMMANDS
+    operands: list[Token] = []
+    targets: list[Token] = []
+    skipped = expression
+    ended = False
+    unreadable = False
+    index = 1
+    while index < len(words):
+        text = _written_option(words[index].text)
+        if text is None and not ended and _spells_a_dash_word(words[index].text):
+            unreadable = True
+        if text is not None and not ended and text == "--":
+            ended = True
+            index += 1
+            continue
+        if text is not None and not ended and text != "-":
+            option, separator, _ = text.partition("=")
+            if targeted and option in TARGET_VALUE_OPTIONS:
+                if separator:
+                    targets.append(words[index])
+                    index += 1
+                elif index + 1 < len(words):
+                    targets.append(words[index + 1])
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if option in EXPRESSION_SKIP_OPTIONS:
+                skipped = False
+            if option in values and not separator:
+                index += 2
+                continue
+            index += 1
+            continue
+        if skipped:
+            skipped = False
+            index += 1
+            continue
+        operands.append(words[index])
+        index += 1
+    if targets and not unreadable:
+        return tuple(targets)
+    if command in DESTINATION_LAST_COMMANDS and not unreadable:
+        return tuple(operands[-1:])
+    return tuple(targets) + tuple(operands)
+
+
+def _written_option(word: str) -> str | None:
+    """Return the option one written word spells, or None when it spells none.
+
+    Quoting a character changes nothing about the option a command receives, so
+    the quote and escape characters are removed before the word is read: `-t`,
+    `"-t"`, `'-t'`, `-"t"`, and `\\-t` all hand the same option over. Reading the
+    written bytes instead let a quoted option fall through to the operand list,
+    which dropped the destination every operand rule exists to read. Only the
+    name half is read, because the value half may carry an expansion this
+    reading does not resolve; a word whose name half carries one spells
+    whatever it expands to, so it is left for the operand reading, where a word
+    this checker cannot place is reported.
+    """
+
+    name, separator, value = word.partition("=")
+    if "$" in name or "`" in name:
+        return None
+    bare = name.replace('"', "").replace("'", "").replace("\\", "")
+    if not bare.startswith("-"):
+        return None
+    return bare + separator + value
+
+
+def _spells_a_dash_word(word: str) -> bool:
+    """Report whether one written word may reach its command as an option.
+
+    A word this reading cannot name may still spell an option, because an
+    expansion anywhere in it carries whatever it holds: `"-t$e"`, `"${e}-t"`
+    and `"$opt"` all reach the command as the same option. Reading only a
+    literal leading dash missed the last two, so an expansion also leaves the
+    word unproven, and the reading that follows it must not treat the operands
+    around it as proven.
+
+    A word that carries a written path separator is read as a path even when it
+    carries an expansion, because `"$root/pyproject.toml"` is how this fixture
+    writes the sources of an ordinary copy. Without that reading every such
+    copy would be reported for a source this checker cannot place.
+    """
+
+    bare = word.replace('"', "").replace("'", "").replace("\\", "")
+    if bare.startswith("-"):
+        return True
+    return "$" in word and "/" not in bare
+
+
+def _repository_operands(words: Sequence[Token]) -> tuple[str, ...]:
+    """Return the words one Git run names its repository with.
+
+    A staging written against a repository this checker cannot place stages
+    into a tree it cannot follow, so the repository words are read as paths
+    exactly as the staged operands are. Only the words written before the
+    subcommand name a repository; the words after it are read elsewhere. An
+    option that carries the repository is read at its value, because dropping
+    every word written with a leading dash lets one option name the tree
+    without any word this rule reads.
+    """
+
+    operands: list[str] = []
+    index = 1
+    while index < len(words):
+        token = words[index]
+        option = _written_option(token.text)
+        if option is None:
+            if _strip(token.text) in STAGING_SUBCOMMANDS or _strip(token.text) == "commit":
+                break
+            operands.append(token.text)
+            index += 1
+            continue
+        name, separator, value = option.partition("=")
+        if name in GIT_REPOSITORY_OPTIONS:
+            if separator:
+                operands.append(value)
+                index += 1
+            elif index + 1 < len(words):
+                operands.append(words[index + 1].text)
+                index += 2
+            else:
+                index += 1
+            continue
+        if name in GIT_VALUE_OPTIONS and not separator:
+            index += 2
+            continue
+        index += 1
+    return tuple(operands)
+
+
+def _reads_an_unplaceable_path(
+    fixture: _Fixture, operation: _Operation, words: Sequence[Token]
+) -> bool:
+    """Report whether one operation takes a destination this checker cannot place.
+
+    A word written with an expansion names a path at run time whether or not
+    this checker can compute it. Reading such a word as naming nothing is what
+    every evasion of this rule was built from: a positional parameter, a loop
+    variable, a name a `read` writes, and a parameter expansion with an
+    operator all settle to nothing, and each would otherwise carry an edit or a
+    staging past every rule below. A word this checker cannot place is
+    therefore reported as an unproven destination rather than accepted as a
+    harmless one. Only the words the command takes as the paths it writes are
+    read here, so an expression, a message, a copy source, and an operand an
+    interpreter hands to its script are not reported as destinations. The
+    callers pick those words, so a word written with a leading dash is read
+    here exactly as any other: an option that carries a path names one.
+    """
+
+    return _reads_an_unplaceable_text(
+        fixture, operation, tuple(token.text for token in words)
+    )
+
+
+def _reads_an_unplaceable_text(
+    fixture: _Fixture, operation: _Operation, texts: Sequence[str]
+) -> bool:
+    """Report whether one operation is written with a path it cannot place."""
+
+    for text in texts:
+        if "$" not in text:
+            continue
+        if not _settle_written_word(fixture, operation, text):
+            return True
+    return False
+
+
+def _names_the_update_source(
+    fixture: _Fixture,
+    operation: _Operation,
+    words: Sequence[Token],
+    roots: frozenset[_Path],
+) -> bool:
+    """Report whether one operation names the update source at any operand.
+
+    A command that renames or links hands the identity of its source to its
+    destination, so a write through the destination writes the source tree.
+    Reading only the destination let one link give the update source a second
+    name that no later rule recognises, which took every rule below out of
+    play at once.
+    """
+
+    for token in words:
+        for path in _settle_written_word(fixture, operation, token.text):
+            if path in roots or _lies_under(path, roots):
+                return True
+    return False
+
+
+def _names_a_relative_repository(
+    fixture: _Fixture, operation: _Operation, texts: Sequence[str]
+) -> bool:
+    """Report whether a staging names its tree from the directory it stands in.
+
+    A relative repository is the directory the run happens to stand in, which
+    this checker does not follow, so it proves no more about the tree it writes
+    into than a staging that names no repository at all. Reading only the
+    absent form let the same relay be written as `-C .`. A word that settles to
+    nothing names the directory it stands in as well, because a current or a
+    parent segment is exactly what settles to no path.
+    """
+
+    for text in texts:
+        settled = _settle_written_word(fixture, operation, text)
+        if not settled or any(not absolute for absolute, _ in settled):
+            return True
+    return False
+
+
 def _staged_operands(
     fixture: _Fixture, operation: _Operation
 ) -> tuple[tuple[Token, ...], bool]:
@@ -3377,6 +4228,62 @@ def _staged_operands(
             continue
         operands.append(token)
     return tuple(operands), everything or not operands
+
+
+def _committed_operands(words: Sequence[Token]) -> tuple[tuple[Token, ...], bool]:
+    """Return the paths one commit stages and whether it stages what it finds.
+
+    A commit written with no path and no staging option stages nothing of its
+    own, so it names no operand here and the caller reads it as no staging at
+    all. An option this reader does not know may carry a path or consume the
+    word after it, so such a commit is read as staging what it finds rather
+    than as staging a path this reader can compare against the inventory.
+    """
+
+    operands: list[Token] = []
+    everything = False
+    started = False
+    separated = False
+    skip = False
+    for token in words:
+        if not started:
+            started = token.text == "commit"
+            continue
+        if skip:
+            skip = False
+            continue
+        if separated:
+            operands.append(token)
+            continue
+        text = token.text
+        if text == "--":
+            separated = True
+            continue
+        if not text.startswith("-") or text == "-":
+            operands.append(token)
+            continue
+        name, _, attached = text.partition("=")
+        if text.startswith("--"):
+            if name in COMMIT_STAGING_OPTIONS:
+                everything = True
+            elif name in COMMIT_VALUE_OPTIONS:
+                skip = not attached
+            elif name not in COMMIT_PLAIN_OPTIONS:
+                everything = True
+            continue
+        letters = text[1:]
+        if any(letter in COMMIT_STAGING_LETTERS for letter in letters):
+            everything = True
+        if any(
+            letter not in COMMIT_STAGING_LETTERS
+            and letter not in COMMIT_VALUE_LETTERS
+            and letter not in COMMIT_PLAIN_LETTERS
+            for letter in letters
+        ):
+            everything = True
+            continue
+        skip = letters[-1] in COMMIT_VALUE_LETTERS
+    return tuple(operands), everything
 
 
 def _update_source_names(
@@ -3483,8 +4390,74 @@ def _may_name_update_source(
     return False
 
 
+def _is_declared(
+    path: _Path, roots: frozenset[_Path], declared: frozenset[tuple[str, ...]]
+) -> bool:
+    """Report whether one inventory line declares one staged update source path.
+
+    The comparison is exact. A segment written with an expansion names a file
+    the written text does not fix, so no inventory line proves it, and a path
+    the checker cannot read against a root proves nothing either. Both are read
+    as undeclared, because the inventory is what says which paths the update
+    source may carry.
+    """
+
+    for root in roots:
+        if len(path[1]) <= len(root[1]):
+            continue
+        if not _may_be_one_directory((path[0], path[1][: len(root[1])]), root):
+            continue
+        relative = path[1][len(root[1]) :]
+        if any(_carries_expansion(segment) for segment in relative):
+            continue
+        if relative in declared:
+            return True
+    return False
+
+
+def _writes_undeclared(
+    paths: Iterable[_Path],
+    roots: frozenset[_Path],
+    declared: frozenset[tuple[str, ...]],
+) -> bool:
+    """Report whether one operation edits an update source path nothing declares.
+
+    Only a path this checker places inside the update source is read here. A
+    word that settles outside the roots names a file the inventory says nothing
+    about, and a word this checker cannot place is reported by the rule that
+    reads an unplaceable write instead.
+    """
+
+    return any(
+        path[0] and _lies_under(path, roots) and not _is_declared(path, roots, declared)
+        for path in paths
+    )
+
+
+def _reached_git_subcommand(fixture: _Fixture, operation: _Operation) -> str | None:
+    """Return the Git subcommand one operation runs, including inside a body.
+
+    The fixture reads a Git wrapper at its call site, because the inlined body
+    of such a wrapper carries `"$@"` rather than the words the run is made of.
+    A body that writes the subcommand itself does carry those words, so it is
+    read here as well: otherwise one helper function that names the staging
+    keeps every staging rule from ever seeing it.
+    """
+
+    subcommand = fixture.git_subcommand(operation)
+    if subcommand is not None or not operation.node.call_path:
+        return subcommand
+    if operation.name != "git" and operation.name not in fixture.git_wrappers:
+        return None
+    return _git_subcommand(operation)[0]
+
+
 def _check_update_source_inputs(
-    fixture: _Fixture, region: int, copy: _Operation, variable: str
+    fixture: _Fixture,
+    region: int,
+    copy: _Operation,
+    variable: str,
+    declared: frozenset[tuple[str, ...]],
 ) -> list[Finding]:
     """Reject every update source input the inventory loop does not perform.
 
@@ -3500,10 +4473,15 @@ def _check_update_source_inputs(
     subcommand that writes a tree, and a directory change into the update
     source are reported the same way, because each carries a file this checker
     cannot follow to the destination it takes. A staging is read against every
-    path the rest of the fixture edits inside the update source, because the
-    fixture edits a file the loop copied before staging it, while a path no
-    editing operation names is one no inventory line declares. A staging this
-    checker cannot read as a direct Git run is reported rather than skipped.
+    path the rest of the fixture edits inside the update source and against the
+    inventory, because the fixture edits a file the loop copied before staging
+    it. An editing command alone never licenses a staging: the inventory says
+    which paths the update source may carry, so a path no inventory line
+    declares is rejected however the fixture writes it, whether the fixture
+    writes the edit, the staging, or both. A staging this checker cannot read
+    as a direct Git run is reported rather than skipped, and a staging written
+    inside the body of a called function is read there, because a helper that
+    names the staging itself would otherwise carry it past every rule below.
     """
 
     findings: list[Finding] = []
@@ -3563,6 +4541,42 @@ def _check_update_source_inputs(
                     operation.position,
                 )
             )
+        if command in UPDATE_SOURCE_EDITING_COMMANDS and _writes_undeclared(
+            edited.get(operation.offset, frozenset()), roots, declared
+        ):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "an edit outside the inventory region writes a path no "
+                    "inventory line declares",
+                    operation.position,
+                )
+            )
+        if command in ALIAS_COMMANDS and _names_the_update_source(
+            fixture,
+            operation,
+            _edited_operands(command, _operation_words(operation)),
+            roots,
+        ):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "an alias of the update source stands outside the "
+                    "inventory region",
+                    operation.position,
+                )
+            )
+        if command in UPDATE_SOURCE_EDITING_COMMANDS and _reads_an_unplaceable_path(
+            fixture, operation, _edited_operands(command, _operation_words(operation))
+        ):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "an edit outside the inventory region takes a destination "
+                    "this checker cannot place",
+                    operation.position,
+                )
+            )
         if named and command == "cd" and not _inside_substitution(fixture, operation):
             findings.append(
                 Finding(
@@ -3595,11 +4609,42 @@ def _check_update_source_inputs(
                     operation.position,
                 )
             )
-        if subcommand not in STAGING_SUBCOMMANDS:
+        staging = _reached_git_subcommand(fixture, operation)
+        if staging == "commit":
+            operands, everything = _committed_operands(_operation_words(operation))
+            if not operands and not everything:
+                # A commit that stages nothing of its own records only what a
+                # staging this rule already read put in the index.
+                continue
+        elif staging in STAGING_SUBCOMMANDS:
+            operands, everything = _staged_operands(fixture, operation)
+        else:
             continue
+        repository = _repository_operands(_operation_words(operation))
+        if _reads_an_unplaceable_text(
+            fixture, operation, repository
+        ) or _reads_an_unplaceable_path(fixture, operation, operands):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "staging outside the inventory region names a repository or "
+                    "a path this checker cannot place",
+                    operation.position,
+                )
+            )
+        if not repository or _names_a_relative_repository(
+            fixture, operation, repository
+        ):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "staging outside the inventory region names no repository "
+                    "outside the directory it stands in",
+                    operation.position,
+                )
+            )
         if not named:
             continue
-        operands, everything = _staged_operands(fixture, operation)
         if everything:
             findings.append(
                 Finding(
@@ -3635,6 +4680,16 @@ def _check_update_source_inputs(
                 for offset, paths in edited.items()
                 for path in paths
             ):
+                if all(_is_declared(entry, roots, declared) for entry in staged):
+                    continue
+                findings.append(
+                    Finding(
+                        RULE_INVENTORY_REGION,
+                        "staging outside the inventory region adds a path no "
+                        "inventory line declares",
+                        operation.position,
+                    )
+                )
                 continue
             findings.append(
                 Finding(
@@ -7107,9 +8162,18 @@ def _check_transition(fixture: _Fixture) -> list[Finding]:
     return findings
 
 
-def check(source: str | bytes) -> tuple[Finding, ...]:
-    """Return every Copier fixture operation the supplied bytes fail to prove."""
+def check(
+    source: str | bytes, declared: Iterable[str] | None = None
+) -> tuple[Finding, ...]:
+    """Return every Copier fixture operation the supplied bytes fail to prove.
 
+    `declared` carries the update source paths the Copier update inventory
+    declares, written one path per entry. A caller that omits it gets the
+    inventory this checker ships beside, because the fixture builds its own
+    inventory path from a positional parameter that no supplied byte places.
+    """
+
+    inventory = read_inventory() if declared is None else declared_paths(declared)
     text = _decode(source)
     try:
         records = shell_lexical.project(text)
@@ -7143,7 +8207,7 @@ def check(source: str | bytes) -> tuple[Finding, ...]:
         )
     fixture = _Fixture(text, records, table, graph)
     findings = list(_check_version_commits(fixture))
-    findings.extend(_check_inventory_region(fixture))
+    findings.extend(_check_inventory_region(fixture, inventory))
     findings.extend(_check_direct_invocation(fixture))
     findings.extend(_check_command_shadowing(fixture))
     findings.extend(_check_unresolved_dispatch(fixture))
@@ -7152,10 +8216,10 @@ def check(source: str | bytes) -> tuple[Finding, ...]:
     return tuple(sorted(findings, key=lambda finding: finding.sort_key))
 
 
-def validate(source: str | bytes) -> None:
+def validate(source: str | bytes, declared: Iterable[str] | None = None) -> None:
     """Raise when supplied bytes break the bounded Copier fixture contract."""
 
-    findings = check(source)
+    findings = check(source, declared)
     if findings:
         report = "\n".join(str(finding) for finding in findings)
         raise CopierFixtureError(
@@ -7173,6 +8237,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="validate the bounded Copier fixture operations of one shell file",
     )
+    parser.add_argument(
+        "--inventory",
+        metavar="PATH",
+        default=INVENTORY_PATH,
+        type=Path,
+        help="read the declared Copier update source paths from this inventory",
+    )
     arguments = parser.parse_args(argv)
     try:
         supplied = arguments.check.read_bytes()
@@ -7180,7 +8251,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"copier fixture check failed: {error}", file=sys.stderr)
         return 1
     try:
-        findings = check(supplied)
+        declared = arguments.inventory.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        print(f"copier fixture check failed: {error}", file=sys.stderr)
+        return 1
+    try:
+        findings = check(supplied, declared)
     except CopierFixtureError as error:
         print(f"copier fixture check failed: {error}", file=sys.stderr)
         return 1
