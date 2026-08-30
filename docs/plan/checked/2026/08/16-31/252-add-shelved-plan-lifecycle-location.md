@@ -1,6 +1,6 @@
 # Add an explicit shelved lifecycle location for plans
 
-status: ready_to_archive
+status: checked
 primary_invariant: a plan the owner decides not to implement resolves in exactly one live location that records why and when it was shelved, so every replan contract stays satisfiable without a requirement ever being deleted and without a shelved plan being mistaken for parked or completed work
 task_types:
   - planning_docs

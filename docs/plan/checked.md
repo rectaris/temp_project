@@ -191,3 +191,4 @@ id	path
 245	docs/plan/checked/2026/08/16-31/245-bind-fixture-inputs-to-one-inventory.md
 246	docs/plan/checked/2026/08/16-31/246-bind-pre-schema-fixture-contents.md
 248	docs/plan/checked/2026/08/16-31/248-bind-fixture-editing-to-the-inventory.md
+252	docs/plan/checked/2026/08/16-31/252-add-shelved-plan-lifecycle-location.md

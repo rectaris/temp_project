@@ -1,6 +1,6 @@
 # Integrate validation-witness migration provenance
 
-status: backlog
+status: in_progress
 primary_invariant: the accepted guardian protocol, policy, source inventory, and genuine Copier transition jointly prove the Plan 163 migration boundary before downstream witness enforcement begins
 task_types:
   - planning_docs
@@ -87,3 +87,4 @@ checked_summary_ja: guardian protocol、方針、inventory、実際のCopier更�
 ## Validation Notes
 
 - This plan validates only the replacement for Plan 163. Plan 167 retains the unchanged complete Plan 130 authoritative suite.
+- Plan 184 は所有者判断で `docs/plan/shelved/184-verify-plan178-successor-acceptance.md` に見送られたため、`integration_gates` が求める「184 が checked であること」は waiver とする。この waiver が省く保証は、Plan 178 の後継計画が受入項目を過不足なく引き継いだことの独立検証である。Plan 184 が backlog または active に戻った時点でこの waiver は失効し、ゲートは再び拘束する。
