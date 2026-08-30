@@ -238,12 +238,13 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 
 ### Shelved Plans
 
-- Use `docs/plan/shelved/` with `status: shelved` for a plan the owner decided not to implement. `docs/plan/backlog/` means "not started yet"; `shelved` means "decided against for now". Keeping them apart is what makes an untouched plan readable as a decision rather than as neglect.
+- Use `docs/plan/shelved/` with `status: shelved` for a plan the owner decided not to implement. Shelving is an owner decision, not an agent one. `docs/plan/backlog/` means "not started yet"; `shelved` means "decided against for now". Keeping them apart is what makes an untouched plan readable as a decision rather than as neglect.
 - Require `shelved_reason` and `shelved_at` as `YYYY-MM-DD` on every shelved plan, and reject a missing or blank value. Without them the location becomes a place where work stops for reasons nobody can reconstruct.
 - Write `status: shelved` only under `docs/plan/shelved/`, and keep every shelved plan resolvable in exactly one lifecycle location, the same way a backlog successor is.
 - Shelve only an unstarted backlog plan. Work that has started is stopped through `deferred`, `replan_required`, or `descope_required`, which carry the evidence a stopped run requires.
 - Keep `acceptance`, `inherited_acceptance_digests`, `replan_sources`, `replan_contract`, `write_scope`, and `preservation_scope` byte-identical to the contract. A replan contract resolves a shelved successor exactly as it resolves a backlog one, so shelving never deletes a requirement and needs no new contract.
 - Treat shelving as reversible. Return a shelved plan to `docs/plan/backlog/` or promote it directly to the active index; `shelved` is not a terminal state and is neither `checked` completion nor `replanned` replacement.
+- Shelve a plan only on an explicit owner instruction to stop pursuing it. Propose a shelving candidate with its evidence and wait; never move a plan to `docs/plan/shelved/` on your own judgment that the work looks unnecessary, and never shelve a plan merely to shorten the backlog. Name the instruction in `shelved_reason` so a later reader can tell an owner decision from an agent assumption.
 - Move a plan with `.project-agent-workflow/scripts/shelve-plan.sh`, which writes the required fields and refuses a plan that has started. Reverse it with `--restore`, or promote it with the ordinary promotion command.
 
 ### Predecessor Lineage Rebinding
