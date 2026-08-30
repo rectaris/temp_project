@@ -233,14 +233,24 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - A replan successor may be deferred to `docs/plan/backlog/` with `status: backlog` instead of being restructured again. Deferral changes location and priority only; it never changes lineage.
 - Keep the successor path recorded in the replan contract exactly as created. That path is immutable identity, so backlog residence never rewrites it and no new contract is required.
 - Keep `acceptance`, `inherited_acceptance_digests`, `replan_sources`, `replan_contract`, `write_scope`, and `preservation_scope` byte-identical to the contract. Remove `completion_deferred_reason` and `replan_reason_codes`, which describe a stopped active lifecycle.
-- Resolve every successor to exactly one of the active index, `docs/plan/backlog/`, the checked archive, or the replanned archive. Presence in two locations, or in none, is rejected.
+- Resolve every successor to exactly one of the active index, `docs/plan/backlog/`, `docs/plan/shelved/`, the checked archive, or the replanned archive. Presence in two locations, or in none, is rejected.
 - Reactivate a deferred successor by moving it back under `docs/plan/active/`, restoring an active status, and re-adding its active index row.
+
+### Shelved Plans
+
+- Use `docs/plan/shelved/` with `status: shelved` for a plan the owner decided not to implement. `docs/plan/backlog/` means "not started yet"; `shelved` means "decided against for now". Keeping them apart is what makes an untouched plan readable as a decision rather than as neglect.
+- Require `shelved_reason` and `shelved_at` as `YYYY-MM-DD` on every shelved plan, and reject a missing or blank value. Without them the location becomes a place where work stops for reasons nobody can reconstruct.
+- Write `status: shelved` only under `docs/plan/shelved/`, and keep every shelved plan resolvable in exactly one lifecycle location, the same way a backlog successor is.
+- Shelve only an unstarted backlog plan. Work that has started is stopped through `deferred`, `replan_required`, or `descope_required`, which carry the evidence a stopped run requires.
+- Keep `acceptance`, `inherited_acceptance_digests`, `replan_sources`, `replan_contract`, `write_scope`, and `preservation_scope` byte-identical to the contract. A replan contract resolves a shelved successor exactly as it resolves a backlog one, so shelving never deletes a requirement and needs no new contract.
+- Treat shelving as reversible. Return a shelved plan to `docs/plan/backlog/` or promote it directly to the active index; `shelved` is not a terminal state and is neither `checked` completion nor `replanned` replacement.
+- Move a plan with `.project-agent-workflow/scripts/shelve-plan.sh`, which writes the required fields and refuses a plan that has started. Reverse it with `--restore`, or promote it with the ordinary promotion command.
 
 ### Predecessor Lineage Rebinding
 
 - A plan whose `predecessor_plans`, `context_files`, `integration_gates`, or body still names an active path it can no longer resolve is stopped, because activation resolves an active path only to the checked archive carrying the same plan id, and a backlog successor cannot record an activation at all. Move that reference with the `rebind_lineage` operation instead of restructuring the referring plan.
 - Run the operation with `python3 .project-agent-workflow/scripts/restructure-plan.py <lineage-spec.json>` using `operation: rebind_lineage` and only `kind: lineage_rebind` records. It appends to the same immutable rebind record chain and is verified with every other record.
-- Rebind only a plan that has not started: the live successor must carry `status: deferred` or `status: backlog`, and it must resolve either in the active index or under `docs/plan/backlog/`.
+- Rebind only a plan that has not started: the live successor must carry `status: deferred`, `status: backlog`, or `status: shelved`, and it must resolve in the active index, under `docs/plan/backlog/`, or under `docs/plan/shelved/`.
 - Admit exactly two replacement classes, and reject every other target.
 - Replanned source class: the reference names a plan that was replanned, so it has no checked archive of its own. Admit it only when the replan contract that consumed the source already records a checked successor. A path replacement must name exactly one replanned source and resolve to one checked successor of that same contract; an identifier replacement must restate exactly one such source id as one of its checked successor ids.
 - Checked archive class: the reference names a plan that was archived as checked. Admit a path replacement that names exactly one such reference and restates it as the same plan id's checked archive, resolved by the same rule the activation route uses: one unambiguous archive of that plan id and file name whose `status` is `checked`, with no file remaining at the former active path. This class is admitted for any unstarted referrer, `deferred` or `backlog`, because the resolution evidence is the same in both.

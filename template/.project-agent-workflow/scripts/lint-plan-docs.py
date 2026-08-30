@@ -20,7 +20,15 @@ REPLANNED = planlib.REPLANNED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 IMPLEMENTATION_TIER_VALUES = {"0", "1", "2"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
-OPEN_STATUS_VALUES = {"in_progress", "deferred", "replan_required", "ready_to_archive", "backlog"}
+OPEN_STATUS_VALUES = {
+    "in_progress",
+    "deferred",
+    "replan_required",
+    "ready_to_archive",
+    "backlog",
+    "shelved",
+}
+SHELVED_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 # Copier updates must continue to read archives produced before checked became
 # the terminal manifest value. New finalization is tested to emit checked.
 CLOSED_STATUS_VALUES = {"checked", "completed", "ready_to_archive"}
@@ -255,6 +263,17 @@ def lint_manifest(path: Path) -> None:
         )
     if path.parent == planlib.BACKLOG_DIR and status_value not in {"backlog", "deferred"}:
         fail(f"{path} backlog plan status must be backlog or deferred")
+    if path.parent == planlib.SHELVED_DIR and status_value != "shelved":
+        fail(f"{path} shelved plan status must be shelved")
+    if status_value == "shelved":
+        if path.parent != planlib.SHELVED_DIR:
+            fail(f"{path} status: shelved is written only under docs/plan/shelved")
+        if not planlib.manifest_scalar(values, "shelved_reason").strip():
+            fail(f"{path} status: shelved requires shelved_reason")
+        if not SHELVED_DATE_RE.fullmatch(
+            planlib.manifest_scalar(values, "shelved_at").strip()
+        ):
+            fail(f"{path} status: shelved requires shelved_at as YYYY-MM-DD")
     if not is_legacy_checked and review_value == "C" and approval_value not in {"pending", "approved"}:
         fail(f"{path} class C plan requires human_approval_status: pending or approved")
     if review_value == "C" and status_value in {"in_progress", "ready_to_archive"} and approval_value != "approved":

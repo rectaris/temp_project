@@ -25,6 +25,9 @@ SCENARIOS = ROOT / "tests/fixtures/orchestration/plan-restructuring-scenarios.js
 HOLDOUT = ROOT / "tests/fixtures/orchestration/plan-restructuring-holdout.json"
 
 
+SHELVED_FIELDS = "\nshelved_reason: deprioritized by the owner\nshelved_at: 2026-08-30"
+
+
 def digest(value: bytes | str) -> str:
     data = value.encode() if isinstance(value, str) else value
     return "sha256:" + hashlib.sha256(data).hexdigest()
@@ -2712,15 +2715,17 @@ class PlanRestructureTest(unittest.TestCase):
         *,
         status: str = "backlog",
         from_status: str = "in_progress",
+        location: str = "docs/plan/backlog",
+        extra_fields: str = "",
     ) -> Path:
         active = self.repo / active_relative
         name = Path(active_relative).name
-        backlog_relative = f"docs/plan/backlog/{name}"
+        backlog_relative = f"{location}/{name}"
         backlog = self.repo / backlog_relative
         backlog.parent.mkdir(parents=True, exist_ok=True)
         content = active.read_text(encoding="utf-8").replace(
             f"status: {from_status}",
-            f"status: {status}",
+            f"status: {status}{extra_fields}",
             1,
         )
         content = re.sub(
@@ -2792,6 +2797,22 @@ class PlanRestructureTest(unittest.TestCase):
         )
         self.assertEqual(contract["successors"][0]["path"], successor_path)
 
+    def test_schema_three_successor_can_be_shelved(self) -> None:
+        coupled, _, _, successor_path = self.prepare_coupled_spec()
+        result = self.run_spec_data(coupled, "coupled-shelved.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.run_verify().returncode, 0)
+        plan_id = Path(successor_path).name[:3]
+        shelved = self.move_successor_to_shelved(successor_path, plan_id)
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertTrue(shelved.is_file())
+        self.assertIn("status: shelved", shelved.read_text(encoding="utf-8"))
+        contract = json.loads(
+            (self.repo / str(coupled["contract_path"])).read_text(encoding="utf-8")
+        )
+        self.assertEqual(contract["successors"][0]["path"], successor_path)
+
     def test_backlog_successor_is_verified_as_fourth_lifecycle(self) -> None:
         self.assertEqual(self.run_command().returncode, 0)
         backlog = self.move_successor_to_backlog(
@@ -2808,6 +2829,199 @@ class PlanRestructureTest(unittest.TestCase):
             "docs/plan/active/002-data.md",
             [successor["path"] for successor in contract["successors"]],
         )
+
+    def move_successor_to_shelved(
+        self, active_relative: str, plan_id: str, **overrides: str
+    ) -> Path:
+        fields = overrides.pop("extra_fields", SHELVED_FIELDS)
+        return self.move_successor_to_backlog(
+            active_relative,
+            plan_id,
+            status=overrides.pop("status", "shelved"),
+            location="docs/plan/shelved",
+            extra_fields=fields,
+            **overrides,
+        )
+
+    def test_shelved_successor_is_verified_as_a_lifecycle_location(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        shelved = self.move_successor_to_shelved(
+            "docs/plan/active/002-data.md", "002"
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertTrue(shelved.is_file())
+        self.assertIn("status: shelved", shelved.read_text(encoding="utf-8"))
+        contract = json.loads(
+            (self.repo / str(self.spec["contract_path"])).read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "docs/plan/active/002-data.md",
+            [successor["path"] for successor in contract["successors"]],
+        )
+
+    def test_shelved_successor_requires_a_reason_and_a_date(self) -> None:
+        for fields, expected in (
+            ("\nshelved_at: 2026-08-30", "requires shelved_reason"),
+            ("\nshelved_reason: \nshelved_at: 2026-08-30", "requires shelved_reason"),
+            ("\nshelved_reason: deprioritized", "requires shelved_at"),
+            (
+                "\nshelved_reason: deprioritized\nshelved_at: 30-08-2026",
+                "requires shelved_at",
+            ),
+        ):
+            with self.subTest(fields=fields):
+                self.setUp()
+                self.assertEqual(self.run_command().returncode, 0)
+                self.move_successor_to_shelved(
+                    "docs/plan/active/002-data.md", "002", extra_fields=fields
+                )
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn(expected, verified.stderr)
+
+    def test_a_shelved_plan_reserves_its_plan_id(self) -> None:
+        shelved = self.repo / "docs/plan/shelved/046-reserver.md"
+        shelved.parent.mkdir(parents=True, exist_ok=True)
+        shelved.write_text(
+            "# Reserver\n\nstatus: shelved"
+            f"{SHELVED_FIELDS}\nreserved_plan_ids:\n  - 002\n"
+            "write_scope:\n  - docs/plan/\ncontext_files:\n  - none\n",
+            encoding="utf-8",
+        )
+        occupant = self.repo / "docs/plan/checked/2026/08/16-31/002-occupant.md"
+        occupant.parent.mkdir(parents=True, exist_ok=True)
+        occupant.write_text("# Occupant\n\nstatus: checked\n", encoding="utf-8")
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn(
+            "uses plan id 002 reserved by docs/plan/shelved/046-reserver.md",
+            verified.stderr,
+        )
+        shelved.unlink()
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_a_shelved_plan_is_seen_as_a_plan_id_occupant(self) -> None:
+        backlog = self.repo / "docs/plan/backlog/046-reserver.md"
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        backlog.write_text(
+            "# Reserver\n\nstatus: backlog\nreserved_plan_ids:\n  - 047\n"
+            "write_scope:\n  - docs/plan/\ncontext_files:\n  - none\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+        shelved = self.repo / "docs/plan/shelved/047-occupant.md"
+        shelved.parent.mkdir(parents=True, exist_ok=True)
+        shelved.write_text(
+            f"# Occupant\n\nstatus: shelved{SHELVED_FIELDS}\n", encoding="utf-8"
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn(
+            "plan docs/plan/shelved/047-occupant.md uses plan id 047 reserved by "
+            "docs/plan/backlog/046-reserver.md",
+            verified.stderr,
+        )
+
+    def test_a_live_plan_may_not_carry_stale_shelved_fields(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        self.move_successor_to_backlog(
+            "docs/plan/active/002-data.md",
+            "002",
+            extra_fields=SHELVED_FIELDS,
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn("carries stale shelved fields", verified.stderr)
+
+    def test_a_shelved_plan_must_carry_the_shelved_status(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        self.move_successor_to_shelved(
+            "docs/plan/active/002-data.md", "002", status="backlog"
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn("shelved plan status must be shelved", verified.stderr)
+
+    def test_shelved_successor_rejects_acceptance_drift(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        shelved = self.move_successor_to_shelved(
+            "docs/plan/active/002-data.md", "002"
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+        shelved.write_text(
+            shelved.read_text(encoding="utf-8").replace(
+                "  - Preserve user data.", "  - Discard user data.", 1
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotEqual(self.run_verify().returncode, 0)
+
+    def test_shelved_and_backlog_presence_is_ambiguous(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        active_text = (self.repo / "docs/plan/active/002-data.md").read_text(
+            encoding="utf-8"
+        )
+        self.move_successor_to_shelved("docs/plan/active/002-data.md", "002")
+        backlog = self.repo / "docs/plan/backlog/002-data.md"
+        backlog.parent.mkdir(parents=True, exist_ok=True)
+        backlog.write_text(
+            active_text.replace("status: in_progress", "status: backlog", 1),
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn("ambiguous durable records", verified.stderr)
+
+    def test_shelved_status_is_rejected_outside_the_shelved_location(self) -> None:
+        stray = self.repo / "docs/plan/backlog/046-stray.md"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text(
+            f"# Stray\n\nstatus: shelved{SHELVED_FIELDS}\n"
+            "write_scope:\n  - docs/plan/\ncontext_files:\n  - none\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn(
+            "shelved status is written only under docs/plan/shelved: "
+            "docs/plan/backlog/046-stray.md",
+            verified.stderr,
+        )
+        stray.unlink()
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_a_shelved_plan_may_not_be_a_symlink(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        shelved = self.move_successor_to_shelved(
+            "docs/plan/active/002-data.md", "002"
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+        real = self.repo / "docs/plan/shelved-source.md"
+        shelved.rename(real)
+        shelved.symlink_to(Path("..") / real.name)
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn(
+            "symlink path component is not allowed: docs/plan/shelved/002-data.md",
+            verified.stderr,
+        )
+
+    def test_a_shelved_successor_may_not_change_a_protected_field(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        shelved = self.move_successor_to_shelved(
+            "docs/plan/active/002-data.md", "002"
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+        text = shelved.read_text(encoding="utf-8")
+        self.assertIn("write_scope:\n", text)
+        shelved.write_text(
+            text.replace("write_scope:\n", "write_scope:\n  - docs/agent/\n", 1),
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0, verified.stdout)
+        self.assertIn("write_scope", verified.stderr)
 
     def test_backlog_successor_rejects_acceptance_drift(self) -> None:
         self.assertEqual(self.run_command().returncode, 0)
@@ -6587,15 +6801,16 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertIn("invalid lifecycle transition", str(terminal.exception))
 
     def legacy_lineage_state(
-        self, module, checked_path: str
+        self, module, checked_path: str, lifecycle: str = "backlog"
     ) -> tuple[dict[str, object], str, str]:
-        """Build one backlog referrer and the state a lineage rebinding needs."""
+        """Build one unstarted referrer and the state a lineage rebinding needs."""
         plan_path = "docs/plan/active/181-legacy-referrer.md"
-        live_path = "docs/plan/backlog/181-legacy-referrer.md"
+        live_path = f"docs/plan/{lifecycle}/181-legacy-referrer.md"
+        fields = SHELVED_FIELDS if lifecycle == "shelved" else ""
         content = (
             (self.repo / checked_path)
             .read_text(encoding="utf-8")
-            .replace("status: checked", "status: backlog", 1)
+            .replace("status: checked", f"status: {lifecycle}{fields}", 1)
         )
         content = re.sub(r"^replan_source.*\n(  - .*\n)*", "", content, flags=re.M)
         content = re.sub(r"^inherited_acceptance_digests:\n(  - .*\n)*", "", content, flags=re.M)
@@ -6619,7 +6834,7 @@ class PlanRestructureTest(unittest.TestCase):
             "effective_projections": {plan_path: projection},
             "live_successors": {
                 plan_path: {
-                    "lifecycle": "backlog",
+                    "lifecycle": lifecycle,
                     "live_path": live_path,
                     "contract_path": "docs/plan/replanned/contracts/legacy.json",
                     "contract_digest": digest(b"legacy"),
@@ -6687,6 +6902,78 @@ class PlanRestructureTest(unittest.TestCase):
             updated_files, [("docs/plan/backlog/181-legacy-referrer.md", content, updated)]
         )
         self.assertIn(checked_path, updated)
+
+    def test_lineage_rebinding_admits_a_shelved_referrer(self) -> None:
+        module, _, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("legacy_lineage")
+        )
+        state, plan_path, content = self.legacy_lineage_state(
+            module, checked_path, lifecycle="shelved"
+        )
+        replacements = [
+            {
+                "scope": "manifest",
+                "field": "predecessor_plans",
+                "old": f"  - {self.source_path}\n",
+                "new": f"  - {checked_path}\n",
+                "count": 1,
+            }
+        ]
+        updated = module.apply_exact_replacements(
+            content, replacements, kind="lineage_rebind", label="referrer"
+        )
+        spec = {
+            "kind": "lineage_rebind",
+            "plan_path": plan_path,
+            "owning_contract_path": "docs/plan/replanned/contracts/legacy.json",
+            "original_content_digest": digest(content),
+            "prior_effective_projection_digest": module.projection_digest(
+                state["effective_projections"][plan_path]  # type: ignore[index]
+            ),
+            "updated_content_digest": digest(updated),
+            "replacements": replacements,
+            "promoted_preservation_path": None,
+        }
+        arguments = {
+            "repository_state": state,
+            "transaction_id": digest(b"transaction"),
+            "authorized_old_references": set(),
+            "authorized_new_references": set(),
+            "allowed_kinds": {"lineage_rebind"},
+        }
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            git(self.repo, "add", "docs/plan/shelved")
+            git(self.repo, "commit", "-qm", "add the legacy shelved referrer")
+            records, updated_files, statuses = module.validate_rebinding_specs(
+                [spec], **arguments
+            )
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(statuses[plan_path], "shelved")
+        self.assertEqual(
+            updated_files,
+            [("docs/plan/shelved/181-legacy-referrer.md", content, updated)],
+        )
+
+    def test_lineage_rebinding_accepts_a_shelved_unstarted_plan(self) -> None:
+        module = self.load_restructure_module("shelved_lineage_module")
+        before = {
+            "status": "shelved",
+            "predecessor_plans": ["docs/plan/active/099-absent.md"],
+            "write_scope": ["docs/agent/spec-index.yaml"],
+        }
+        module.validate_lineage_reference_transition(
+            before, dict(before), [], "lineage"
+        )
+        started = {**before, "status": "in_progress"}
+        with self.assertRaises(module.RestructureError) as failure:
+            module.validate_lineage_reference_transition(
+                started, dict(started), [], "lineage"
+            )
+        self.assertIn("requires an unstarted plan", str(failure.exception))
 
     def test_lineage_rebinding_keeps_the_record_chain_and_live_bytes_apart(
         self,

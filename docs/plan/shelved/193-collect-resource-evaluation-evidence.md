@@ -1,6 +1,8 @@
 # Collect comparable resource-bounded orchestration evidence
 
-status: backlog
+status: shelved
+shelved_reason: 測定して既定を変えない結果もあり得る調査チェーンであり、現時点で投資対効果が見合わないとオーナーが判断した
+shelved_at: 2026-08-30
 primary_invariant: paired baseline and staged executions produce digest-linked comparable evidence without changing control flow, policy defaults, or missing measurements into estimates
 task_types:
   - planning_docs

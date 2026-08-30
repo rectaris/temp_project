@@ -21,9 +21,10 @@ CHECKED = ROOT / "docs/plan/checked.md"
 REPLANNED = ROOT / "docs/plan/replanned.md"
 ACTIVE_DIR = ROOT / "docs/plan/active"
 BACKLOG_DIR = ROOT / "docs/plan/backlog"
+SHELVED_DIR = ROOT / "docs/plan/shelved"
 CHECKED_DIR = ROOT / "docs/plan/checked"
 REPLANNED_DIR = ROOT / "docs/plan/replanned"
-OPEN_PLAN_DIRS = [ACTIVE_DIR, BACKLOG_DIR]
+OPEN_PLAN_DIRS = [ACTIVE_DIR, BACKLOG_DIR, SHELVED_DIR]
 PLAN_DIRS = [*OPEN_PLAN_DIRS, CHECKED_DIR, REPLANNED_DIR]
 
 REQUIRED_FIELDS = (
@@ -671,6 +672,10 @@ def status_text(text: str, status: str) -> str:
     updated, count = re.subn(r"^status: .*", f"status: {status}", text, count=1, flags=re.MULTILINE)
     if count != 1:
         raise PlanError("plan must contain exactly one leading status field to update")
+    if status != "shelved":
+        updated = re.sub(
+            r"^(shelved_reason|shelved_at): .*\n", "", updated, flags=re.MULTILINE
+        )
     return updated
 
 
@@ -687,7 +692,7 @@ def rewrite_status(path: str, status: str) -> None:
 def copy_with_status_exclusive(source: str, destination: str, status: str) -> None:
     source_path = ROOT / source
     destination_path = ROOT / destination
-    if source_path.parent not in {ACTIVE_DIR, BACKLOG_DIR} or not source_path.is_file():
+    if source_path.parent not in {ACTIVE_DIR, BACKLOG_DIR, SHELVED_DIR} or not source_path.is_file():
         raise PlanError(f"missing plan: {source}")
     if destination_path.parent != ACTIVE_DIR and CHECKED_DIR not in destination_path.parents:
         raise PlanError(f"destination is outside active or checked plan directories: {destination}")

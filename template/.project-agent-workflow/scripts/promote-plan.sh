@@ -3,13 +3,15 @@ set -eu
 
 if [ "$#" -ne 1 ]; then
   echo "Usage: $0 docs/plan/backlog/NNN-slug.md" >&2
+  echo "       $0 docs/plan/shelved/NNN-slug.md" >&2
   exit 2
 fi
 
 src=$1
 case "$src" in
   docs/plan/backlog/[0-9][0-9][0-9]-*.md) ;;
-  *) echo "expected backlog plan path" >&2; exit 2 ;;
+  docs/plan/shelved/[0-9][0-9][0-9]-*.md) ;;
+  *) echo "expected backlog or shelved plan path" >&2; exit 2 ;;
 esac
 
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }

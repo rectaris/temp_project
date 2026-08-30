@@ -1,6 +1,8 @@
 # Verify Plan 133 successor acceptance
 
-status: backlog
+status: shelved
+shelved_reason: 測定して既定を変えない結果もあり得る調査チェーンであり、現時点で投資対効果が見合わないとオーナーが判断した
+shelved_at: 2026-08-30
 primary_invariant: the checked evaluation contract, evidence, and outcome successors jointly satisfy every unchanged Plan 133 acceptance item and preserve rollback before the source authoritative suite runs once
 task_types:
   - planning_docs

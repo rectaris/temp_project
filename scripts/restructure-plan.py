@@ -188,6 +188,7 @@ PLAN_FILE_BASES = (
     "docs/plan/backlog",
     "docs/plan/checked",
     "docs/plan/replanned",
+    "docs/plan/shelved",
 )
 ACTIVE_REFERENCE_RE = re.compile(
     r"docs/plan/active/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md"
@@ -1108,8 +1109,18 @@ def replanned_records_for_id(plan_id: str, expected_path: str) -> list[tuple[str
     return records
 
 
-def backlog_paths_for_successor(plan_id: str, expected_path: str) -> list[str]:
-    directory = ROOT / "docs/plan/backlog"
+def deferred_paths_for_successor(
+    plan_id: str, expected_path: str, location: str
+) -> list[str]:
+    """Resolve one successor inside a location that holds unstarted plans.
+
+    ``docs/plan/backlog`` and ``docs/plan/shelved`` both hold a successor that
+    has not started. They differ in what the owner decided, not in how a
+    contract resolves them, so one reader serves both and a plan resolving in
+    two locations stays rejected.
+    """
+
+    directory = ROOT / location
     if not directory.is_dir():
         return []
     expected_name = Path(expected_path).name
@@ -1125,9 +1136,19 @@ def backlog_paths_for_successor(plan_id: str, expected_path: str) -> list[str]:
         if indexed_id != plan_id and not filename_matches:
             continue
         if indexed_id != plan_id or not filename_matches:
-            raise RestructureError(f"backlog successor identity mismatch for {plan_id}")
-        paths.append(f"docs/plan/backlog/{name}")
+            raise RestructureError(
+                f"{Path(location).name} successor identity mismatch for {plan_id}"
+            )
+        paths.append(f"{location}/{name}")
     return paths
+
+
+def backlog_paths_for_successor(plan_id: str, expected_path: str) -> list[str]:
+    return deferred_paths_for_successor(plan_id, expected_path, "docs/plan/backlog")
+
+
+def shelved_paths_for_successor(plan_id: str, expected_path: str) -> list[str]:
+    return deferred_paths_for_successor(plan_id, expected_path, "docs/plan/shelved")
 
 
 def validate_replanned_successor(
@@ -2593,7 +2614,7 @@ def validate_single_source_spec(spec: dict[str, Any]) -> dict[str, Any]:
         if (ROOT / destination).exists() or (ROOT / destination).is_symlink():
             raise RestructureError(f"destination already exists: {destination}")
     known_ids: set[str] = set()
-    for base in (ROOT / "docs/plan/active", ROOT / "docs/plan/backlog", ROOT / "docs/plan/checked", ROOT / "docs/plan/replanned"):
+    for base in (ROOT / base_path for base_path in PLAN_FILE_BASES):
         if base.exists():
             for path in base.glob("**/[0-9][0-9][0-9]-*.md"):
                 if path != source_file:
@@ -2741,6 +2762,7 @@ def validate_direct_active_source(
     if (
         checked_paths_for_successor(plan_id, path)
         or backlog_paths_for_successor(plan_id, path)
+        or shelved_paths_for_successor(plan_id, path)
         or replanned_records_for_id(plan_id, path)
     ):
         raise RestructureError(f"{label} resolves to more than one lifecycle location")
@@ -3068,7 +3090,7 @@ def validate_lineage_reference_transition(
         raise RestructureError(
             f"{label} lineage rebinding changes protected plan identity"
         )
-    if scalar(after, "status") not in {"deferred", "backlog"}:
+    if scalar(after, "status") not in {"deferred", "backlog", "shelved"}:
         raise RestructureError(
             f"{label} lineage rebinding requires an unstarted plan"
         )
@@ -3184,7 +3206,9 @@ def validate_rebinding_specs(
         seen_paths.add(plan_path)
         live = live_successors.get(plan_path)
         allowed_lifecycles = (
-            {"active", "backlog"} if kind == "lineage_rebind" else {"active"}
+            {"active", "backlog", "shelved"}
+            if kind == "lineage_rebind"
+            else {"active"}
         )
         if live is None or live["lifecycle"] not in allowed_lifecycles:
             raise RestructureError(
@@ -4141,12 +4165,7 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
         if (ROOT / destination).exists() or (ROOT / destination).is_symlink():
             raise RestructureError(f"destination already exists: {destination}")
     known_ids: set[str] = set()
-    for base in (
-        ROOT / "docs/plan/active",
-        ROOT / "docs/plan/backlog",
-        ROOT / "docs/plan/checked",
-        ROOT / "docs/plan/replanned",
-    ):
+    for base in (ROOT / base_path for base_path in PLAN_FILE_BASES):
         if base.exists():
             for path in base.glob("**/[0-9][0-9][0-9]-*.md"):
                 if str(path.relative_to(ROOT)) not in source_paths:
@@ -5648,9 +5667,11 @@ def live_plan_records() -> list[tuple[str, str, dict[str, str | list[str]]]]:
             records.append(
                 (plan_id, path, parse_manifest(target.read_text(encoding="utf-8")))
             )
-    backlog = ROOT / "docs/plan/backlog"
-    if backlog.is_dir():
-        for entry in sorted(backlog.glob("**/[0-9][0-9][0-9]-*.md")):
+    for location in ("docs/plan/backlog", "docs/plan/shelved"):
+        directory = ROOT / location
+        if not directory.is_dir():
+            continue
+        for entry in sorted(directory.glob("**/[0-9][0-9][0-9]-*.md")):
             records.append(
                 (
                     entry.name[:3],
@@ -6393,14 +6414,15 @@ def validate_lifecycle_body_transition(
     live_content: str,
     label: str,
 ) -> None:
-    baseline_projected = project_lifecycle_fields(
-        baseline_content,
-        {"status", "completion_deferred_reason", "replan_reason_codes"},
-    )
-    live_projected = project_lifecycle_fields(
-        live_content,
-        {"status", "completion_deferred_reason", "replan_reason_codes"},
-    )
+    lifecycle_fields = {
+        "status",
+        "completion_deferred_reason",
+        "replan_reason_codes",
+        "shelved_reason",
+        "shelved_at",
+    }
+    baseline_projected = project_lifecycle_fields(baseline_content, lifecycle_fields)
+    live_projected = project_lifecycle_fields(live_content, lifecycle_fields)
     baseline_prefix, baseline_notes, baseline_suffix = split_validation_notes(
         baseline_projected
     )
@@ -6448,15 +6470,25 @@ def validate_lifecycle_evolution(
                 f"{label} deferred projection changed without an activation record"
             )
         return
-    if baseline_status not in {"in_progress", "deferred", "backlog"} or live_status not in {
+    if baseline_status not in {
+        "in_progress",
+        "deferred",
+        "backlog",
+        "shelved",
+    } or live_status not in {
         "in_progress",
         "ready_to_archive",
         "checked",
         "replan_required",
         "backlog",
+        "shelved",
     }:
         raise RestructureError(f"{label} has an invalid lifecycle transition")
-    if baseline_status == "deferred" and live_status not in {"replan_required", "backlog"}:
+    if baseline_status == "deferred" and live_status not in {
+        "replan_required",
+        "backlog",
+        "shelved",
+    }:
         raise RestructureError(
             f"{label} deferred projection changed without an activation record"
         )
@@ -6467,7 +6499,17 @@ def validate_lifecycle_evolution(
         or items(live, "replan_reason_codes")
     ):
         raise RestructureError(f"{label} carries stale stopped-lifecycle fields")
-    lifecycle_fields = {"status", "completion_deferred_reason", "replan_reason_codes"}
+    if live_status != "shelved" and (
+        scalar(live, "shelved_reason") or scalar(live, "shelved_at")
+    ):
+        raise RestructureError(f"{label} carries stale shelved fields")
+    lifecycle_fields = {
+        "status",
+        "completion_deferred_reason",
+        "replan_reason_codes",
+        "shelved_reason",
+        "shelved_at",
+    }
     for field in sorted(set(baseline) | set(live)):
         if field not in lifecycle_fields and baseline.get(field) != live.get(field):
             raise RestructureError(
@@ -6605,7 +6647,7 @@ def verify_rebind_records(
                 )
             if (
                 state["enforce_projection_semantics"]
-                and state["lifecycle"] in {"active", "checked", "backlog"}
+                and state["lifecycle"] in {"active", "checked", "backlog", "shelved"}
             ):
                 if (
                     scalar(live_manifest, "status") == "replan_required"
@@ -7102,8 +7144,11 @@ def verify_schema_three_contract(
         active = active_records_for_successor(successor["id"], path)
         checked = checked_paths_for_successor(successor["id"], path)
         backlog = backlog_paths_for_successor(successor["id"], path)
+        shelved = shelved_paths_for_successor(successor["id"], path)
         replanned = replanned_records_for_id(successor["id"], path)
-        if sum((bool(active), bool(checked), bool(backlog), bool(replanned))) != 1:
+        if sum(
+            (bool(active), bool(checked), bool(backlog), bool(shelved), bool(replanned))
+        ) != 1:
             raise RestructureError(f"schema-3 successor lifecycle is ambiguous: {path}")
         if active:
             live_file = ROOT / path
@@ -7120,6 +7165,12 @@ def verify_schema_three_contract(
             live_file = ROOT / backlog[0]
             expected_status = "backlog"
             lifecycle = "backlog"
+            replan_original_content = None
+        elif shelved:
+            reject_symlink_ancestors(shelved[0], include_target=True)
+            live_file = ROOT / shelved[0]
+            expected_status = "shelved"
+            lifecycle = "shelved"
             replan_original_content = None
         else:
             replanned_state = validate_replanned_successor(
@@ -7299,6 +7350,48 @@ def verify_schema_three_contract(
     contract_digests[contract_path] = sha256(contract_bytes)
 
 
+SHELVED_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def validate_repository_shelved_plans() -> None:
+    """Require every shelved plan to record why and when it was shelved.
+
+    A shelved plan is one the owner decided not to implement. Without a written
+    reason and date the location becomes a place where work stops for reasons
+    nobody can reconstruct, which is the failure this location exists to
+    prevent, so a missing or blank field is rejected rather than defaulted.
+    """
+
+    for base in PLAN_FILE_BASES:
+        if base == "docs/plan/shelved":
+            continue
+        other = ROOT / base
+        if not other.is_dir():
+            continue
+        for entry in sorted(other.glob("**/[0-9][0-9][0-9]-*.md")):
+            manifest = parse_manifest(entry.read_text(encoding="utf-8"))
+            if scalar(manifest, "status") == "shelved":
+                raise RestructureError(
+                    "shelved status is written only under docs/plan/shelved: "
+                    f"{entry.relative_to(ROOT)}"
+                )
+    directory = ROOT / "docs/plan/shelved"
+    if not directory.is_dir():
+        return
+    for entry in sorted(directory.glob("**/[0-9][0-9][0-9]-*.md")):
+        path = str(entry.relative_to(ROOT))
+        manifest = parse_manifest(entry.read_text(encoding="utf-8"))
+        if scalar(manifest, "status") != "shelved":
+            raise RestructureError(f"shelved plan status must be shelved: {path}")
+        if not scalar(manifest, "shelved_reason").strip():
+            raise RestructureError(f"shelved plan requires shelved_reason: {path}")
+        shelved_at = scalar(manifest, "shelved_at").strip()
+        if not SHELVED_DATE_RE.fullmatch(shelved_at):
+            raise RestructureError(
+                f"shelved plan requires shelved_at as YYYY-MM-DD: {path}"
+            )
+
+
 def verify_repository_contracts(
     *,
     legacy_stopped_sources: set[str] | None = None,
@@ -7307,6 +7400,7 @@ def verify_repository_contracts(
     allowed_legacy_stopped_sources = legacy_stopped_sources or set()
     validate_repository_active_predecessors()
     validate_repository_plan_id_reservations()
+    validate_repository_shelved_plans()
     validate_active_plan_context_files()
     validate_live_plan_archived_context_references()
     if not REPLANNED_INDEX.is_file():
@@ -7508,8 +7602,17 @@ def verify_repository_contracts(
             active_records = active_records_for_successor(successor["id"], path)
             checked_paths = checked_paths_for_successor(successor["id"], path)
             backlog_paths = backlog_paths_for_successor(successor["id"], path)
+            shelved_paths = shelved_paths_for_successor(successor["id"], path)
             replanned_records = replanned_records_for_id(successor["id"], path)
-            if sum((bool(active_records), bool(checked_paths), bool(backlog_paths), bool(replanned_records))) > 1:
+            if sum(
+                (
+                    bool(active_records),
+                    bool(checked_paths),
+                    bool(backlog_paths),
+                    bool(shelved_paths),
+                    bool(replanned_records),
+                )
+            ) > 1:
                 raise RestructureError(f"successor has ambiguous durable records: {path}")
             if len(checked_paths) > 1:
                 raise RestructureError(f"successor has multiple checked index entries: {path}")
@@ -7539,6 +7642,16 @@ def verify_repository_contracts(
                     raise RestructureError(f"missing backlog successor plan for {plan_id}: {backlog_paths[0]}")
                 expected_live_status = "backlog"
                 lifecycle = "backlog"
+                replan_original_content = None
+            elif shelved_paths:
+                reject_symlink_ancestors(shelved_paths[0], include_target=True)
+                live_successor_file = ROOT / shelved_paths[0]
+                if not live_successor_file.is_file():
+                    raise RestructureError(
+                        f"missing shelved successor plan for {plan_id}: {shelved_paths[0]}"
+                    )
+                expected_live_status = "shelved"
+                lifecycle = "shelved"
                 replan_original_content = None
             elif replanned_records:
                 replanned_state = validate_replanned_successor(

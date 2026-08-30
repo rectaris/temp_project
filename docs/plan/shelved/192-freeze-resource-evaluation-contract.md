@@ -1,6 +1,8 @@
 # Freeze the resource-bounded orchestration evaluation contract
 
-status: backlog
+status: shelved
+shelved_reason: 測定して既定を変えない結果もあり得る調査チェーンであり、現時点で投資対効果が見合わないとオーナーが判断した
+shelved_at: 2026-08-30
 primary_invariant: fixed paired workloads, schemas, holdouts, measures, and tampering cases preserve comparable evaluation inputs without collecting or interpreting an outcome
 task_types:
   - planning_docs

@@ -1,6 +1,8 @@
 # Apply the resource-bounded orchestration evaluation outcome
 
-status: backlog
+status: shelved
+shelved_reason: 測定して既定を変えない結果もあり得る調査チェーンであり、現時点で投資対効果が見合わないとオーナーが判断した
+shelved_at: 2026-08-30
 primary_invariant: the documented default changes only for a checker-validated measured pass and otherwise remains unchanged with an explicit bounded outcome
 task_types:
   - planning_docs
