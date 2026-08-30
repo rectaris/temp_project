@@ -1,6 +1,8 @@
 # Verify Plan 178 successor acceptance
 
-status: backlog
+status: shelved
+shelved_reason: 製品ファイルを一切変えない検証専用プランであり、過去プランの受け入れを形式的に再確認するだけの費用に見合わないとオーナーが指示した
+shelved_at: 2026-08-30
 primary_invariant: the checked wiring and bounded fixture successors jointly satisfy the unchanged Plan 178 acceptance before Plan 179 consumes the genuine transition
 task_types:
   - planning_docs

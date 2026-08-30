@@ -1,6 +1,8 @@
 # Verify Plan 187 successor acceptance
 
-status: backlog
+status: shelved
+shelved_reason: 製品ファイルを一切変えない検証専用プランであり、過去プランの受け入れを形式的に再確認するだけの費用に見合わないとオーナーが指示した
+shelved_at: 2026-08-30
 primary_invariant: checked Plan 182, the checked runtime and checker replacements, and the three checked enforcement repairs jointly satisfy the unchanged Plan 187 acceptance before Plan 184 performs its own verification
 task_types:
   - planning_docs
