@@ -1093,6 +1093,8 @@ human_design_required: yes
 human_approval_status: approved
 write_scope:
   - docs/plan/
+preservation_scope:
+  - none
 context_files:
   - none
 required_specs:
@@ -1104,10 +1106,15 @@ required_specs:
   - docs/agent/SPEC_HUMAN_REPORTING.md
   - docs/agent/SPEC_DEVELOPMENT_FLOW.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
+focused_validation:
+  - git diff --check
 validation:
   - git diff --check
 acceptance:
   - {acceptance}
+validation_witness_schema: 1
+validation_witness_map:
+  - {{"acceptance_sha256":"{acceptance_digest}","stage":"focused","witness":"git diff --check"}}
 checked_summary_ja: プロジェクト所有の後続計画。
 
 ## Tasks

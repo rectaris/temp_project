@@ -1,6 +1,6 @@
 # Integrate validation-witness migration provenance
 
-status: in_progress
+status: backlog
 primary_invariant: the accepted guardian protocol, policy, source inventory, and genuine Copier transition jointly prove the Plan 163 migration boundary before downstream witness enforcement begins
 task_types:
   - planning_docs
