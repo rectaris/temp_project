@@ -13,9 +13,120 @@ from .support import PLANLIB, PLAN_COMMAND_MODULES, ROOT, load_module
 
 
 class PlanValidationCommandsTest(unittest.TestCase):
+    MIGRATION_POLICY = ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+    MIGRATION_RECORD = (
+        ".project-agent-workflow-migration/validation-witness-provenance-v1.json"
+    )
+
     @staticmethod
     def witness_digest(text: str) -> str:
         return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def compact_digest(value: object) -> str:
+        return "sha256:" + hashlib.sha256(
+            json.dumps(
+                value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+
+    @classmethod
+    def indented_json(cls, value: object) -> str:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+    @classmethod
+    def indented_digest(cls, value: object) -> str:
+        return cls.witness_digest(cls.indented_json(value))
+
+    def write_pre_schema_project(self, root: Path) -> str:
+        """Build a pre-schema integration plan with its captured migration evidence."""
+
+        plan_relative = "docs/plan/active/991-integration.md"
+        contract_relative = "docs/plan/replanned/contracts/990-source.json"
+        archive_relative = "docs/plan/replanned/2026/08/16-31/990-source.md"
+        acceptance = "Preserve the pre-schema integration plan."
+        archive_text = "status: replanned\n"
+        validation = ["git diff --check"]
+        plan_text = (
+            "status: in_progress\n"
+            f"replan_contract: {contract_relative}\n"
+            "integration_gates:\n  - preserved predecessor is checked\n"
+            "validation:\n  - git diff --check\n"
+            f"acceptance:\n  - {acceptance}\n\n## Tasks\n"
+        )
+
+        def write(relative: str, text: str) -> None:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+
+        write(plan_relative, plan_text)
+        write(archive_relative, archive_text)
+        write(
+            self.MIGRATION_POLICY,
+            "validation-witness-migration-provenance-schema: 1\n",
+        )
+        contract_text = self.indented_json(
+            {
+                "archive_path": archive_relative,
+                "contract_path": contract_relative,
+                "schema_version": 1,
+                "successors": [
+                    {
+                        "acceptance_digests": [self.witness_digest(acceptance)],
+                        "content": plan_text,
+                        "content_digest": self.witness_digest(plan_text),
+                        "integration": True,
+                        "path": plan_relative,
+                    }
+                ],
+            }
+        )
+        write(contract_relative, contract_text)
+        write(
+            self.MIGRATION_RECORD,
+            self.indented_json(
+                {
+                    "copier_answers": {
+                        "path": ".copier-answers.yml",
+                        "previous_template_ref": "v1.4.4",
+                        "sha256": self.witness_digest("_commit: v1.4.4\n"),
+                    },
+                    "migration_version": "v1.4.5",
+                    "operation": "validation_witness_migration_snapshot",
+                    "plans": [
+                        {
+                            "acceptance": [
+                                {
+                                    "sha256": self.witness_digest(acceptance),
+                                    "text": acceptance,
+                                }
+                            ],
+                            "path": plan_relative,
+                            "plan_sha256": self.witness_digest(plan_text),
+                            "replan_contract": {
+                                "path": contract_relative,
+                                "schema_version": 1,
+                                "sha256": self.witness_digest(contract_text),
+                            },
+                            "replanned_source": {
+                                "path": archive_relative,
+                                "sha256": self.witness_digest(archive_text),
+                            },
+                            "validation": validation,
+                            "validation_sha256": self.indented_digest(validation),
+                        }
+                    ],
+                    "pre_update_policy": {
+                        "path": self.MIGRATION_POLICY,
+                        "sha256": self.witness_digest("orchestration policy\n"),
+                    },
+                    "schema_version": 1,
+                    "source_head": "0" * 40,
+                }
+            ),
+        )
+        return plan_text
 
     def test_planlib_parses_optional_focused_validation_without_requiring_it(self) -> None:
         module = load_module(PLANLIB, "focused_validation_planlib")
@@ -177,38 +288,7 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     with self.assertRaises(command_module.ValidationCommandError):
                         command_module.check_plan(plan)
 
-            legacy_text = (
-                "status: in_progress\n"
-                "replan_contract: docs/plan/replanned/contracts/990-source.json\n"
-                "integration_gates:\n  - preserved predecessor is checked\n"
-                "validation:\n  - git diff --check\n"
-                "acceptance:\n  - Preserve the pre-schema integration plan.\n\n## Tasks\n"
-            )
-            plan.write_text(legacy_text, encoding="utf-8")
-            archive = root / "docs/plan/replanned/2026/08/16-31/990-source.md"
-            archive.parent.mkdir(parents=True)
-            archive.write_text("status: replanned\n", encoding="utf-8")
-            contract = root / "docs/plan/replanned/contracts/990-source.json"
-            contract.parent.mkdir(parents=True)
-            contract.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "contract_path": "docs/plan/replanned/contracts/990-source.json",
-                        "archive_path": "docs/plan/replanned/2026/08/16-31/990-source.md",
-                        "successors": [
-                            {
-                                "path": "docs/plan/active/991-integration.md",
-                                "content_digest": self.witness_digest(legacy_text),
-                                "acceptance_digests": [
-                                    self.witness_digest("Preserve the pre-schema integration plan.")
-                                ],
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
+            legacy_text = self.write_pre_schema_project(root)
             for index, module_path in enumerate(PLAN_COMMAND_MODULES):
                 with self.subTest(legacy_module=module_path):
                     command_module = load_module(module_path, f"legacy_witness_commands_{index}")
@@ -220,6 +300,470 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     command_module = load_module(module_path, f"mutated_legacy_commands_{index}")
                     with self.assertRaises(command_module.ValidationCommandError):
                         command_module.check_plan(plan)
+
+    def test_pre_schema_exception_requires_the_captured_migration_boundary(self) -> None:
+        module = load_module(PLANLIB, "migration_bound_witness_planlib")
+        record_relative = self.MIGRATION_RECORD
+        policy_relative = self.MIGRATION_POLICY
+
+        def mutate_captured_plan(root: Path, changes: dict[str, object]) -> None:
+            record_path = root / record_relative
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            record["plans"][0].update(changes)
+            record_path.write_text(
+                json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+        def remove_record(root: Path) -> None:
+            (root / record_relative).unlink()
+
+        def clear_boundary_marker(root: Path) -> None:
+            (root / policy_relative).write_text("orchestration policy\n", encoding="utf-8")
+
+        def drop_schema_version(root: Path) -> None:
+            record_path = root / record_relative
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            record["schema_version"] = 2
+            record_path.write_text(
+                json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+        def link_record(root: Path) -> None:
+            record_path = root / record_relative
+            moved = root / "captured-provenance.json"
+            record_path.rename(moved)
+            record_path.symlink_to(moved)
+
+        def link_record_parent(root: Path) -> None:
+            parent = (root / record_relative).parent
+            moved = root / "captured-migration"
+            parent.rename(moved)
+            parent.symlink_to(moved, target_is_directory=True)
+
+        breakers = (
+            ("missing record", remove_record),
+            ("uncrossed boundary", clear_boundary_marker),
+            ("unsupported schema", drop_schema_version),
+            ("symlinked record", link_record),
+            ("symlinked record parent", link_record_parent),
+            ("foreign plan digest", lambda root: mutate_captured_plan(
+                root, {"plan_sha256": "sha256:" + "0" * 64}
+            )),
+            ("weakened validation", lambda root: mutate_captured_plan(
+                root, {"validation": ["git diff --cached --check"]}
+            )),
+            ("foreign captured path", lambda root: mutate_captured_plan(
+                root, {"path": "docs/plan/active/992-integration.md"}
+            )),
+        )
+        for label, breaker in breakers:
+            with self.subTest(breaker=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    self.write_pre_schema_project(root)
+                    plan = root / "docs/plan/active/991-integration.md"
+                    values = module.parse_manifest(plan)
+                    module.validate_validation_witness_map(values, plan_path=plan)
+                    breaker(root)
+                    with self.assertRaises(module.PlanError):
+                        module.validate_validation_witness_map(values, plan_path=plan)
+
+        with self.subTest(breaker="unresolvable context path"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.write_pre_schema_project(root)
+                plan = root / "docs/plan/active/991-integration.md"
+                values = module.parse_manifest(plan)
+                module.validate_validation_witness_map(values, plan_path=plan)
+                with self.assertRaises(module.PlanError):
+                    module.validate_validation_witness_map(
+                        dict(values, context_files=["docs/agent/DOES_NOT_EXIST.md"]),
+                        plan_path=plan,
+                    )
+
+    def test_witness_map_requires_the_published_companion_validation_authority(self) -> None:
+        module = load_module(PLANLIB, "companion_baseline_witness_planlib")
+        acceptance = "Preserve the contracted validation authority."
+        contract_relative = "docs/plan/replanned/contracts/990-source.json"
+        baseline_relative = "docs/plan/replanned/baselines/live-validation-successors-v1.json"
+        plan_relative = "docs/plan/active/991-integration.md"
+        validation = ["python3 -m pytest tests/focused.py", "git diff --check"]
+        record = {
+            "acceptance_sha256": self.witness_digest(acceptance),
+            "stage": "focused",
+            "witness": "python3 -m pytest tests/focused.py",
+        }
+        values = {
+            "status": "in_progress",
+            "validation_witness_schema": "1",
+            "replan_contract": contract_relative,
+            "integration_gates": ["the integration predecessor is checked"],
+            "acceptance": [acceptance],
+            "focused_validation": ["python3 -m pytest tests/focused.py"],
+            "validation": validation,
+            "validation_witness_map": [json.dumps(record, separators=(",", ":"))],
+        }
+        successor = {
+            "acceptance_digests": [self.witness_digest(acceptance)],
+            "authoritative_validation": validation,
+            "authoritative_validation_digest": self.compact_digest(validation),
+            "path": plan_relative,
+            "validation_witness_map_digest": self.compact_digest([record]),
+            "validation_witness_schema": 1,
+        }
+
+        def self_projecting_successor(schema: int, **changes: object) -> dict[str, object]:
+            content = "status: in_progress\n"
+            projected = {
+                "authoritative_validation": validation,
+                "authoritative_validation_digest": self.compact_digest(validation),
+                "content": content,
+                "content_digest": self.witness_digest(content),
+                "id": "991",
+                "path": plan_relative,
+                "validation_witness_map_digest": self.compact_digest([record]),
+                "validation_witness_schema": 1,
+            }
+            if schema == 2:
+                projected["acceptance_digests"] = [self.witness_digest(acceptance)]
+                projected["integration"] = {}
+            else:
+                projected["acceptance_mappings"] = [
+                    {
+                        "acceptance_digests": [self.witness_digest(acceptance)],
+                        "source_id": "990",
+                    }
+                ]
+                projected["integration_source_ids"] = ["990"]
+            projected.update(changes)
+            return projected
+
+        def self_projecting_contract(schema: int, **changes: object) -> dict[str, object]:
+            shared = {
+                "contract_path": contract_relative,
+                "created_at": "2026-08-27T23:49:22.747941+00:00",
+                "dirty_product_paths": [],
+                "schema_version": schema,
+                "successors": [self_projecting_successor(schema)],
+            }
+            if schema == 2:
+                shared.update(
+                    {
+                        "archive_path": "docs/plan/replanned/2026/08/16-31/990-source.md",
+                        "reason_codes": ["scope_drift"],
+                        "source": {"id": "990"},
+                    }
+                )
+            else:
+                shared.update(
+                    {
+                        "prerequisite_plans": [],
+                        "rebind_record_digests": [],
+                        "source_head": "0" * 40,
+                        "sources": [{"id": "990"}],
+                    }
+                )
+            shared.update(changes)
+            return shared
+
+        def prepare(root: Path, contract_schema: int = 1) -> Path:
+            plan = root / plan_relative
+            plan.parent.mkdir(parents=True, exist_ok=True)
+            plan.write_text("status: in_progress\n", encoding="utf-8")
+            contract = root / contract_relative
+            contract.parent.mkdir(parents=True, exist_ok=True)
+            body = (
+                self_projecting_contract(contract_schema)
+                if contract_schema in (2, 3)
+                else {
+                    "contract_path": contract_relative,
+                    "schema_version": contract_schema,
+                    "successors": [{"path": plan_relative}],
+                }
+            )
+            contract.write_text(self.indented_json(body), encoding="utf-8")
+            return plan
+
+        def contract_digest(root: Path) -> str:
+            return self.witness_digest(
+                (root / contract_relative).read_text(encoding="utf-8")
+            )
+
+        def write_baseline(root: Path, records: list[dict[str, object]]) -> None:
+            target = root / baseline_relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                self.indented_json({"schema_version": 1, "records": records}),
+                encoding="utf-8",
+            )
+
+        def publish(root: Path, **changes: object) -> None:
+            write_baseline(
+                root,
+                [
+                    {
+                        "contract_digest": contract_digest(root),
+                        "contract_path": contract_relative,
+                        "successors": [successor],
+                        **changes,
+                    }
+                ],
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = prepare(root)
+            publish(root)
+            self.assertEqual(
+                module.validate_validation_witness_map(values, plan_path=plan)[0]["stage"],
+                "focused",
+            )
+
+        weakened = dict(values, validation=["git diff --check"], focused_validation=[])
+        weakened["validation_witness_map"] = [
+            json.dumps(
+                {
+                    "acceptance_sha256": self.witness_digest(acceptance),
+                    "stage": "authoritative",
+                    "witness": "git diff --check",
+                    "authoritative_only_reason": "requires the complete integrated candidate",
+                },
+                separators=(",", ":"),
+            )
+        ]
+        unbound = {key: item for key, item in values.items() if key != "replan_contract"}
+
+        def keep_baseline(root: Path) -> None:
+            publish(root)
+
+        def delete_baseline(root: Path) -> None:
+            publish(root)
+            (root / baseline_relative).unlink()
+
+        def dangle_baseline(root: Path) -> None:
+            target = root / baseline_relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(root / "never-published.json")
+
+        def rename_owning_contract(root: Path) -> None:
+            publish(root, contract_path="docs/plan/replanned/contracts/900-other.json")
+
+        def empty_records(root: Path) -> None:
+            write_baseline(root, [])
+
+        def duplicate_contract(root: Path) -> None:
+            write_baseline(
+                root,
+                [
+                    {
+                        "contract_digest": contract_digest(root),
+                        "contract_path": contract_relative,
+                        "successors": [successor],
+                    }
+                ]
+                * 2,
+            )
+
+        def drop_successor(root: Path) -> None:
+            publish(root, successors=[])
+
+        def remap_witness(root: Path) -> None:
+            write_baseline(
+                root,
+                [
+                    {
+                        "contract_digest": contract_digest(root),
+                        "contract_path": contract_relative,
+                        "successors": [
+                            dict(successor, validation_witness_map_digest="sha256:" + "0" * 64)
+                        ],
+                    }
+                ],
+            )
+
+        def drift_contract(root: Path) -> None:
+            publish(root)
+            (root / contract_relative).write_text("{}\n", encoding="utf-8")
+
+        def malform_record(root: Path) -> None:
+            write_baseline(root, ["not-a-record"])
+
+        def strip_successor_list(root: Path) -> None:
+            write_baseline(
+                root,
+                [
+                    {
+                        "contract_digest": contract_digest(root),
+                        "contract_path": contract_relative,
+                    }
+                ],
+            )
+
+        def duplicate_plan_ownership(root: Path) -> None:
+            write_baseline(
+                root,
+                [
+                    {
+                        "contract_digest": contract_digest(root),
+                        "contract_path": contract_relative,
+                        "successors": [successor],
+                    },
+                    {
+                        "contract_digest": "sha256:" + "0" * 64,
+                        "contract_path": "docs/plan/replanned/contracts/900-other.json",
+                        "successors": [successor],
+                    },
+                ],
+            )
+
+        def delete_baseline_keeping_schema_one_lineage(root: Path) -> None:
+            surviving = root / "docs/plan/replanned/contracts/900-published.json"
+            surviving.parent.mkdir(parents=True, exist_ok=True)
+            surviving.write_text(
+                self.indented_json({"contract_path": str(surviving), "schema_version": 1}),
+                encoding="utf-8",
+            )
+
+        rejected = (
+            ("weakened authority", weakened, keep_baseline),
+            ("deleted baseline", values, delete_baseline),
+            ("dangling baseline", values, dangle_baseline),
+            ("renamed owning contract", values, rename_owning_contract),
+            ("emptied records", values, empty_records),
+            ("duplicated contract", values, duplicate_contract),
+            ("dropped successor", values, drop_successor),
+            ("remapped witness", values, remap_witness),
+            ("drifted contract bytes", values, drift_contract),
+            ("dropped contract lineage", unbound, keep_baseline),
+            ("malformed baseline record", values, malform_record),
+            ("stripped successor list", values, strip_successor_list),
+            ("duplicate plan ownership", values, duplicate_plan_ownership),
+            (
+                "deleted baseline under surviving schema-1 lineage",
+                unbound,
+                delete_baseline_keeping_schema_one_lineage,
+            ),
+        )
+        for label, candidate, publisher in rejected:
+            with self.subTest(rejected=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    plan = prepare(root)
+                    publisher(root)
+                    with self.assertRaises(module.PlanError):
+                        module.validate_validation_witness_map(candidate, plan_path=plan)
+
+        for schema in (2, 3):
+            with self.subTest(rejected=f"self-projecting schema-{schema} contract"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    plan = prepare(root, contract_schema=schema)
+                    with self.assertRaises(module.PlanError):
+                        module.validate_validation_witness_map(values, plan_path=plan)
+
+        for residue_field, residue_value in (
+            ("inherited_acceptance_digests", [self.witness_digest(acceptance)]),
+            ("replan_sources", ["docs/plan/replanned/2026/08/16-31/990-source.md"]),
+            ("replan_source", "docs/plan/replanned/2026/08/16-31/990-source.md"),
+        ):
+            with self.subTest(rejected="lineage residue", field=residue_field):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    plan = prepare(root)
+                    residual = dict(unbound, **{residue_field: residue_value})
+                    with self.assertRaises(module.PlanError):
+                        module.validate_validation_witness_map(residual, plan_path=plan)
+
+    def test_context_path_identity_holds_without_a_static_witness(self) -> None:
+        module = load_module(PLANLIB, "focused_context_identity_planlib")
+        acceptance = "Prove context identity under a focused witness."
+        record = {
+            "acceptance_sha256": self.witness_digest(acceptance),
+            "stage": "focused",
+            "witness": "python3 -m pytest tests/focused.py",
+        }
+        values = {
+            "status": "in_progress",
+            "validation_witness_schema": "1",
+            "integration_gates": ["the context input is resolved"],
+            "context_files": ["docs/agent/SPEC_PLAN_WORKFLOW.md"],
+            "acceptance": [acceptance],
+            "focused_validation": ["python3 -m pytest tests/focused.py"],
+            "validation": ["python3 -m pytest tests/focused.py", "git diff --check"],
+            "validation_witness_map": [json.dumps(record, separators=(",", ":"))],
+        }
+
+        def prepare(root: Path) -> Path:
+            plan_path = root / "docs/plan/active/991-integration.md"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text("status: in_progress\n", encoding="utf-8")
+            context = root / "docs/agent/SPEC_PLAN_WORKFLOW.md"
+            context.parent.mkdir(parents=True)
+            context.write_text("policy\n", encoding="utf-8")
+            return plan_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plan_path = prepare(Path(tmp))
+            self.assertEqual(
+                module.validate_validation_witness_map(values, plan_path=plan_path)[0]["stage"],
+                "focused",
+            )
+
+        rejected = (
+            ("missing file", ["docs/agent/DOES_NOT_EXIST.md"]),
+            ("traversal", ["docs/agent/../agent/SPEC_PLAN_WORKFLOW.md"]),
+            ("absolute path", ["/etc/passwd"]),
+            (
+                "duplicate path",
+                ["docs/agent/SPEC_PLAN_WORKFLOW.md", "docs/agent/SPEC_PLAN_WORKFLOW.md"],
+            ),
+        )
+        for label, context_files in rejected:
+            with self.subTest(rejected=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    plan_path = prepare(Path(tmp))
+                    with self.assertRaises(module.PlanError):
+                        module.validate_validation_witness_map(
+                            dict(values, context_files=context_files), plan_path=plan_path
+                        )
+
+        with self.subTest(rejected="symlinked ancestor"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                plan_path = prepare(root)
+                (root / "docs/linked-agent").symlink_to(root / "docs/agent")
+                with self.assertRaises(module.PlanError):
+                    module.validate_validation_witness_map(
+                        dict(
+                            values,
+                            context_files=["docs/linked-agent/SPEC_PLAN_WORKFLOW.md"],
+                        ),
+                        plan_path=plan_path,
+                    )
+
+        with self.subTest(accepted="none sentinel"):
+            with tempfile.TemporaryDirectory() as tmp:
+                plan_path = prepare(Path(tmp))
+                self.assertEqual(
+                    module.validate_validation_witness_map(
+                        dict(values, context_files=["none"]), plan_path=plan_path
+                    )[0]["stage"],
+                    "focused",
+                )
+
+        with self.subTest(rejected="none mixed with a path"):
+            with tempfile.TemporaryDirectory() as tmp:
+                plan_path = prepare(Path(tmp))
+                with self.assertRaises(module.PlanError):
+                    module.validate_validation_witness_map(
+                        dict(
+                            values,
+                            context_files=["none", "docs/agent/SPEC_PLAN_WORKFLOW.md"],
+                        ),
+                        plan_path=plan_path,
+                    )
 
     def test_static_witness_requires_its_concrete_context_predicate(self) -> None:
         module = load_module(PLANLIB, "static_validation_witness_planlib")
@@ -277,14 +821,45 @@ class PlanValidationCommandsTest(unittest.TestCase):
             with self.assertRaises(module.PlanError):
                 module.validate_validation_witness_map(values, plan_path=plan_path)
 
+            outside = root.parent / "outside.md"
+            outside.write_text("policy\n", encoding="utf-8")
+            escape = root / "docs/agent/ESCAPE.md"
+            escape.symlink_to(outside)
+            values["context_files"] = ["docs/agent/ESCAPE.md"]
+            with self.assertRaises(module.PlanError):
+                module.validate_validation_witness_map(values, plan_path=plan_path)
+            outside.unlink()
+
+            linked_parent = root / "docs/linked-agent"
+            linked_parent.symlink_to(context.parent, target_is_directory=True)
+            values["context_files"] = ["docs/linked-agent/SPEC_PLAN_WORKFLOW.md"]
+            with self.assertRaises(module.PlanError):
+                module.validate_validation_witness_map(values, plan_path=plan_path)
+
             checked = root / "docs/plan/checked/2026/08/16-31/990-source.md"
             checked.parent.mkdir(parents=True)
-            checked.write_text("status: in_progress\n", encoding="utf-8")
             values["context_files"] = [
                 "docs/plan/checked/2026/08/16-31/990-source.md"
             ]
-            with self.assertRaises(module.PlanError):
-                module.validate_validation_witness_map(values, plan_path=plan_path)
+            stale_statuses = (
+                ("wrong status", "status: in_progress\n"),
+                ("body-only status", "id: 990\n\n## Notes\n\nstatus: checked\n"),
+                ("conflicting duplicates", "status: checked\nstatus: in_progress\n"),
+                ("no status", "id: 990\n"),
+            )
+            for label, text in stale_statuses:
+                with self.subTest(stale_status=label):
+                    checked.write_text(text, encoding="utf-8")
+                    with self.assertRaises(module.PlanError):
+                        module.validate_validation_witness_map(values, plan_path=plan_path)
+
+            checked.write_text("status: checked\n\n## Notes\n", encoding="utf-8")
+            self.assertEqual(
+                module.validate_validation_witness_map(values, plan_path=plan_path)[0][
+                    "witness"
+                ],
+                "resolved-context-files",
+            )
 
     def test_copier_update_uses_one_copy_and_stage_inventory(self) -> None:
         inventory_path = ROOT / "tests/fixtures/orchestration/copier-update-source-inventory.txt"

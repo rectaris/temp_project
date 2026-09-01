@@ -6,10 +6,12 @@ import json
 import hashlib
 import os
 import re
+import stat
 import tempfile
 import fcntl
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 
 ROOT = Path.cwd()
@@ -87,6 +89,7 @@ LIST_KEYS = {
     "integration_gates",
     "predecessor_plans",
     "successor_plans",
+    "replan_sources",
     "inherited_acceptance_digests",
     "replan_reason_codes",
 }
@@ -111,6 +114,28 @@ WITNESS_REQUIRED_STATUSES = {"in_progress"}
 VALIDATION_WITNESS_STAGES = {"static", "focused", "authoritative"}
 STATIC_VALIDATION_WITNESSES = {"resolved-context-files"}
 VALIDATION_WITNESS_REASON_MAX_BYTES = 240
+MIGRATION_PROVENANCE_PATH = (
+    ".project-agent-workflow-migration/validation-witness-provenance-v1.json"
+)
+MIGRATION_PROVENANCE_SCHEMA = 1
+MIGRATION_PROVENANCE_OPERATION = "validation_witness_migration_snapshot"
+MIGRATION_PROVENANCE_VERSION = "v1.4.5"
+MIGRATION_BOUNDARY_POLICY_PATH = ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+MIGRATION_BOUNDARY_MARKER = b"validation-witness-migration-provenance-schema: 1"
+COMPANION_BASELINE_PATH = (
+    "docs/plan/replanned/baselines/live-validation-successors-v1.json"
+)
+COMPANION_FLAT_ACCEPTANCE_SCHEMAS = {1}
+COMPANION_LINEAGE_RESIDUE_FIELDS = (
+    "replan_source",
+    "replan_sources",
+    "inherited_acceptance_digests",
+)
+COMPANION_CONTRACT_DIRECTORY = "docs/plan/replanned/contracts"
+COMPANION_BASELINE_CONTRACT_SCHEMA = 1
+COMPANION_PROJECTION_WITNESS_SCHEMA = 1
+CONTEXT_FILES_NONE = "none"
+MAX_WITNESS_EVIDENCE_BYTES = 4 * 1024 * 1024
 ACTIVE_PREDECESSOR_RE = re.compile(
     r"docs/plan/active/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
 )
@@ -442,6 +467,84 @@ def acceptance_digest(acceptance: str) -> str:
     return "sha256:" + hashlib.sha256(acceptance.encode("utf-8")).hexdigest()
 
 
+def byte_digest(raw: bytes) -> str:
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def compact_json_digest(value: Any) -> str:
+    """Reproduce the digest the plan restructuring transaction publishes."""
+
+    return byte_digest(
+        json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    )
+
+
+def indented_json_digest(value: Any) -> str:
+    """Reproduce the digest the migration provenance snapshot publishes."""
+
+    return byte_digest(
+        (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+
+
+def reject_symlink_components(root: Path, relative: str, label: str) -> None:
+    current = root
+    for part in PurePosixPath(relative).parts:
+        current = current / part
+        if current.is_symlink():
+            raise PlanError(f"{label} has a symlink path component: {relative}")
+
+
+def read_repository_bytes(root: Path, relative: str, label: str) -> bytes:
+    reject_symlink_components(root, relative, label)
+    try:
+        descriptor = os.open(root / relative, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise PlanError(f"{label} is unavailable: {relative}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise PlanError(f"{label} is not a regular file: {relative}")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            raw = handle.read(MAX_WITNESS_EVIDENCE_BYTES + 1)
+    except OSError as exc:
+        raise PlanError(f"{label} is unreadable: {relative}") from exc
+    finally:
+        os.close(descriptor)
+    if len(raw) > MAX_WITNESS_EVIDENCE_BYTES:
+        raise PlanError(f"{label} exceeds its size bound: {relative}")
+    return raw
+
+
+def read_repository_json(root: Path, relative: str, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(read_repository_bytes(root, relative, label).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PlanError(f"{label} is not valid JSON: {relative}") from exc
+    if not isinstance(value, dict):
+        raise PlanError(f"{label} is not a JSON object: {relative}")
+    return value
+
+
+def normalized_repository_path(raw: object, label: str) -> str:
+    if not isinstance(raw, str) or not raw:
+        raise PlanError(f"{label} is missing")
+    path = PurePosixPath(raw)
+    if raw != path.as_posix() or path.is_absolute() or {".", ".."} & set(path.parts):
+        raise PlanError(f"{label} is not a normalized repository path: {raw!r}")
+    return raw
+
+
+def manifest_list(values: dict[str, str | list[str]], key: str) -> list[str]:
+    value = values.get(key, [])
+    if not isinstance(value, list):
+        raise PlanError(f"plan {key} must be a list")
+    return value
+
+
 def plan_repository_root(plan_path: Path) -> tuple[Path, str]:
     if not re.fullmatch(r"[0-9]{3}-.+\.md", plan_path.name):
         raise PlanError(f"invalid active integration plan path: {plan_path}")
@@ -458,36 +561,47 @@ def validate_legacy_witness_provenance(
 ) -> None:
     root, plan_relative = plan_repository_root(plan_path)
     contract_raw = manifest_scalar(values, "replan_contract")
-    contract_path = Path(contract_raw)
-    if (
-        not contract_raw
-        or contract_raw != contract_path.as_posix()
-        or contract_path.is_absolute()
-        or ".." in contract_path.parts
-    ):
+    if not contract_raw:
         raise PlanError("pre-schema integration plan lacks normalized replan_contract provenance")
     try:
-        contract = json.loads((root / contract_path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        contract_relative = normalized_repository_path(
+            contract_raw, "pre-schema integration plan replan_contract"
+        )
+    except PlanError as exc:
+        raise PlanError(
+            "pre-schema integration plan lacks normalized replan_contract provenance"
+        ) from exc
+    contract_bytes = read_repository_bytes(
+        root, contract_relative, "pre-schema integration plan replan contract"
+    )
+    try:
+        contract = json.loads(contract_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PlanError("pre-schema integration plan has unreadable replan_contract provenance") from exc
     if not isinstance(contract, dict) or contract.get("schema_version") != 1:
         raise PlanError("pre-schema integration plan has unsupported replan_contract provenance")
-    if contract.get("contract_path") != contract_raw:
+    if contract.get("contract_path") != contract_relative:
         raise PlanError("pre-schema integration plan contract identity differs")
 
     archive_raw = contract.get("archive_path")
     if not isinstance(archive_raw, str):
         raise PlanError("pre-schema integration plan contract lacks a replanned archive")
-    archive_path = Path(archive_raw)
+    archive_path = PurePosixPath(archive_raw)
     if (
         archive_raw != archive_path.as_posix()
         or archive_path.parts[:3] != ("docs", "plan", "replanned")
         or archive_path.suffix != ".md"
     ):
         raise PlanError("pre-schema integration plan contract has invalid archive provenance")
+    archive_relative = normalized_repository_path(
+        archive_raw, "pre-schema integration plan replanned archive"
+    )
+    archive_bytes = read_repository_bytes(
+        root, archive_relative, "pre-schema integration plan replanned archive"
+    )
     try:
-        archive_text = (root / archive_path).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+        archive_text = archive_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
         raise PlanError("pre-schema integration plan replanned archive is unavailable") from exc
     if not re.search(r"^status:\s*replanned\s*$", archive_text, re.MULTILINE):
         raise PlanError("pre-schema integration plan archive is not terminal replanned history")
@@ -502,23 +616,151 @@ def validate_legacy_witness_provenance(
     if len(matches) != 1:
         raise PlanError("pre-schema integration plan is not one exact contracted successor")
     record = matches[0]
-    plan_digest = acceptance_digest(plan_path.read_text(encoding="utf-8"))
-    acceptance = values.get("acceptance", [])
-    if not isinstance(acceptance, list):
-        raise PlanError("plan acceptance must be a list")
+    plan_bytes = read_repository_bytes(root, plan_relative, "pre-schema integration plan")
+    plan_digest = byte_digest(plan_bytes)
+    acceptance = manifest_list(values, "acceptance")
     if (
         record.get("content_digest") != plan_digest
         or record.get("acceptance_digests") != [acceptance_digest(item) for item in acceptance]
     ):
         raise PlanError("pre-schema integration plan bytes differ from contracted provenance")
 
+    validate_migration_bound_provenance(
+        root,
+        plan_relative,
+        values,
+        plan_digest=plan_digest,
+        contract_relative=contract_relative,
+        contract_bytes=contract_bytes,
+        archive_relative=archive_relative,
+        archive_bytes=archive_bytes,
+    )
 
-def validate_resolved_context_files(context_files: list[str], *, root: Path = ROOT) -> None:
-    if not context_files:
-        raise PlanError("resolved-context-files requires context_files")
+
+def validate_migration_bound_provenance(
+    root: Path,
+    plan_relative: str,
+    values: dict[str, str | list[str]],
+    *,
+    plan_digest: str,
+    contract_relative: str,
+    contract_bytes: bytes,
+    archive_relative: str,
+    archive_bytes: bytes,
+) -> None:
+    """Bind a pre-schema integration plan to the guardian-backed migration snapshot.
+
+    The replan contract alone lives in the same repository the plan lives in, so
+    it proves only internal consistency. The migration snapshot is captured once
+    from a clean committed tree while the original guardian is live, so requiring
+    an exact match makes the pre-schema exception depend on evidence a later
+    in-repository edit cannot reproduce.
+    """
+
+    policy = read_repository_bytes(
+        root, MIGRATION_BOUNDARY_POLICY_PATH, "validation-witness migration boundary policy"
+    )
+    if MIGRATION_BOUNDARY_MARKER not in policy:
+        raise PlanError(
+            "pre-schema integration plan requires the crossed validation-witness migration boundary"
+        )
+
+    snapshot = read_repository_json(
+        root, MIGRATION_PROVENANCE_PATH, "validation-witness migration provenance"
+    )
+    if (
+        snapshot.get("schema_version") != MIGRATION_PROVENANCE_SCHEMA
+        or snapshot.get("operation") != MIGRATION_PROVENANCE_OPERATION
+        or snapshot.get("migration_version") != MIGRATION_PROVENANCE_VERSION
+    ):
+        raise PlanError("validation-witness migration provenance is not the supported snapshot")
+    captured_plans = snapshot.get("plans")
+    if not isinstance(captured_plans, list):
+        raise PlanError("validation-witness migration provenance has no captured plan list")
+    matches = [
+        item
+        for item in captured_plans
+        if isinstance(item, dict) and item.get("path") == plan_relative
+    ]
+    if len(matches) != 1:
+        raise PlanError(
+            "pre-schema integration plan is not one captured migration plan: " + plan_relative
+        )
+
+    validation = manifest_list(values, "validation")
+    expected = {
+        "acceptance": [
+            {"sha256": acceptance_digest(item), "text": item}
+            for item in manifest_list(values, "acceptance")
+        ],
+        "path": plan_relative,
+        "plan_sha256": plan_digest,
+        "replan_contract": {
+            "path": contract_relative,
+            "schema_version": 1,
+            "sha256": byte_digest(contract_bytes),
+        },
+        "replanned_source": {
+            "path": archive_relative,
+            "sha256": byte_digest(archive_bytes),
+        },
+        "validation": validation,
+        "validation_sha256": indented_json_digest(validation),
+    }
+    if matches[0] != expected:
+        raise PlanError(
+            "pre-schema integration plan differs from its captured migration provenance"
+        )
+
+
+def manifest_lifecycle_status(text: str) -> str | None:
+    """Read the one manifest status a plan file declares.
+
+    The lifecycle status is a manifest field, so it is only meaningful
+    before the first `## ` section. Scanning the whole file would accept a
+    status line written in prose, and taking one of several would accept a
+    file that declares two conflicting statuses, so exactly one top-level
+    field in the manifest region is required.
+    """
+
+    declared: list[str] = []
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("## "):
+            break
+        if ":" not in line or line.startswith(" "):
+            continue
+        key, rest = line.split(":", 1)
+        if key.strip() == "status":
+            declared.append(rest.strip())
+    if len(declared) != 1:
+        return None
+    return declared[0]
+
+
+def validate_context_file_identity(context_files: list[str], *, root: Path = ROOT) -> None:
+    """Prove every declared context path resolves to the file it names.
+
+    A plan's context inputs are read as evidence, so a path that escapes
+    the repository, traverses through a symlink, or points at a plan whose
+    lifecycle status has since moved is not the input the plan declared.
+    The proof does not depend on which witness an acceptance item maps to,
+    because the paths are read the same way either way.
+
+    The `none` sentinel declares that no additional path is needed, so it
+    is not a path to prove. A plan that resolves it as one would reject
+    every project that legitimately needs no context input.
+    """
+
     seen: set[str] = set()
     root = root.resolve()
     for raw in context_files:
+        if raw == CONTEXT_FILES_NONE:
+            if len(context_files) != 1:
+                raise PlanError(
+                    "resolved-context-files cannot mix the none sentinel with a path"
+                )
+            return
         path = Path(raw)
         if (
             not raw
@@ -531,12 +773,13 @@ def validate_resolved_context_files(context_files: list[str], *, root: Path = RO
             raise PlanError(f"resolved-context-files has invalid path: {raw!r}")
         seen.add(raw)
         target = root / path
+        reject_symlink_components(root, raw, "resolved-context-files")
         try:
             resolved = target.resolve(strict=True)
             resolved.relative_to(root)
         except (OSError, ValueError) as exc:
             raise PlanError(f"resolved-context-files cannot resolve: {raw}") from exc
-        if target.is_symlink() or not resolved.is_file():
+        if not resolved.is_file():
             raise PlanError(f"resolved-context-files requires a regular file: {raw}")
         expected_status = None
         if path.parts[:3] == ("docs", "plan", "checked"):
@@ -544,15 +787,279 @@ def validate_resolved_context_files(context_files: list[str], *, root: Path = RO
         elif path.parts[:3] == ("docs", "plan", "replanned") and path.suffix == ".md":
             expected_status = "replanned"
         if expected_status is not None:
-            match = re.search(
-                r"^status:\s*(\S+)\s*$",
-                resolved.read_text(encoding="utf-8"),
-                re.MULTILINE,
-            )
-            if match is None or match.group(1) != expected_status:
+            declared = manifest_lifecycle_status(resolved.read_text(encoding="utf-8"))
+            if declared != expected_status:
                 raise PlanError(
                     f"resolved-context-files expected {expected_status} status: {raw}"
                 )
+
+
+def validate_resolved_context_files(context_files: list[str], *, root: Path = ROOT) -> None:
+    if not context_files or context_files == [CONTEXT_FILES_NONE]:
+        raise PlanError("resolved-context-files requires context_files")
+    validate_context_file_identity(context_files, root=root)
+
+
+def companion_baseline_records(root: Path) -> list[dict[str, Any]]:
+    """Read the companion baseline and reject every malformed record.
+
+    A lenient reader is itself a bypass: an edit that corrupts one record
+    into a shape the reader skips would hide the plan that record owns and
+    let the plan pass with a weakened authoritative sequence. Every record
+    and successor is therefore structurally required, so corruption fails
+    the check instead of silently narrowing it.
+    """
+
+    baseline = read_repository_json(
+        root, COMPANION_BASELINE_PATH, "live validation successor companion baseline"
+    )
+    records = baseline.get("records") if isinstance(baseline, dict) else None
+    if (
+        not isinstance(baseline, dict)
+        or baseline.get("schema_version") != 1
+        or not isinstance(records, list)
+    ):
+        raise PlanError("live validation successor companion baseline is unsupported")
+    for record in records:
+        successors = record.get("successors") if isinstance(record, dict) else None
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("contract_path"), str)
+            or not isinstance(record.get("contract_digest"), str)
+            or not isinstance(successors, list)
+        ):
+            raise PlanError(
+                "live validation successor companion baseline has a malformed record"
+            )
+        for successor in successors:
+            if not isinstance(successor, dict) or not isinstance(
+                successor.get("path"), str
+            ):
+                raise PlanError(
+                    "live validation successor companion baseline has a malformed successor"
+                )
+    return records
+
+
+def companion_successors_for(
+    records: list[dict[str, Any]], plan_relative: str
+) -> list[dict[str, Any]]:
+    return [
+        successor
+        for record in records
+        for successor in record["successors"]
+        if successor["path"] == plan_relative
+    ]
+
+
+def companion_baseline_required(root: Path) -> bool:
+    """Report whether published schema-1 lineage still demands a baseline.
+
+    The baseline only exists once a schema-1 restructuring transaction has
+    published successors, so a project that never restructured a plan has
+    none. Any surviving schema-1 contract, however, proves the publication
+    happened, which makes a missing baseline evidence of deletion rather
+    than evidence of absence.
+    """
+
+    directory = root / COMPANION_CONTRACT_DIRECTORY
+    try:
+        entries = sorted(directory.iterdir())
+    except OSError:
+        return False
+    for entry in entries:
+        if entry.suffix != ".json":
+            continue
+        relative = f"{COMPANION_CONTRACT_DIRECTORY}/{entry.name}"
+        try:
+            contract = read_repository_json(root, relative, "replan contract")
+        except PlanError:
+            return True
+        if (
+            isinstance(contract, dict)
+            and contract.get("schema_version") == COMPANION_BASELINE_CONTRACT_SCHEMA
+        ):
+            return True
+    return False
+
+
+def companion_projected_acceptance(
+    successor: dict[str, Any], schema: int
+) -> list[str] | None:
+    """Read the successor acceptance projection its own schema may use.
+
+    Only the schema-1 companion baseline is accepted as published
+    authority, and its successors carry a flat digest list. Reading exactly
+    that field keeps a successor from presenting another schema's
+    projection form as if the transaction had published it.
+    """
+
+    if schema not in COMPANION_FLAT_ACCEPTANCE_SCHEMAS:
+        return None
+    digests = successor.get("acceptance_digests")
+    if isinstance(digests, list) and all(isinstance(item, str) for item in digests):
+        return list(digests)
+    return None
+
+
+def verify_companion_projection(
+    successor: dict[str, Any],
+    values: dict[str, str | list[str]],
+    records: list[dict[str, str]],
+    plan_relative: str,
+    source: str,
+    schema: int,
+) -> None:
+    validation = manifest_list(values, "validation")
+    expected_acceptance = [
+        acceptance_digest(item) for item in manifest_list(values, "acceptance")
+    ]
+    if (
+        successor.get("validation_witness_schema") != COMPANION_PROJECTION_WITNESS_SCHEMA
+        or companion_projected_acceptance(successor, schema) != expected_acceptance
+        or successor.get("authoritative_validation") != validation
+        or successor.get("authoritative_validation_digest")
+        != compact_json_digest(validation)
+        or successor.get("validation_witness_map_digest") != compact_json_digest(records)
+    ):
+        raise PlanError(
+            "in-progress integration plan validation authority differs from the "
+            f"{source}: " + plan_relative
+        )
+
+
+def validate_companion_validation_authority(
+    plan_path: Path,
+    values: dict[str, str | list[str]],
+    records: list[dict[str, str]],
+) -> None:
+    """Compare live validation authority with its published projection.
+
+    A restructuring transaction writes the authoritative command sequence a
+    successor was accepted with exactly once and never rewrites it, so that
+    projection is the only surviving record of the sequence. Comparing
+    before a witness map is accepted stops a later edit from removing or
+    weakening the sequence and then remapping the acceptance onto whatever
+    remains.
+
+    Only the companion baseline is accepted as that record. A schema-2 or
+    schema-3 contract carries its own projection, but the contract is an
+    ordinary working-tree file, so a hand-written one with the right shape
+    would authorize whatever it claims. Proving such a contract needs the
+    canonical transaction verifier or committed history, neither of which
+    is available here, so a plan whose contract has no published baseline
+    record is refused rather than trusted. Schema-2 and schema-3 lineage is
+    therefore not yet supported and fails closed.
+
+    Every skip is itself a proof obligation: a plan without contract
+    lineage must be unknown to a present baseline and must carry no
+    inherited restructuring lineage, and a missing baseline must be matched
+    by an absence of schema-1 lineage that could have published one.
+
+    Whether the obligation applies at all still follows the witness-map
+    schema's own `status` and `integration_gates` gate, which this function
+    does not widen. A plan that clears those fields to escape the gate is
+    refused by `scripts/restructure-plan.py --verify` instead, which treats
+    both as protected lifecycle state.
+    """
+
+    root, plan_relative = plan_repository_root(plan_path)
+    baseline_present = True
+    try:
+        os.lstat(root / COMPANION_BASELINE_PATH)
+    except OSError:
+        baseline_present = False
+
+    baseline_records: list[dict[str, Any]] = []
+    if baseline_present:
+        baseline_records = companion_baseline_records(root)
+    elif companion_baseline_required(root):
+        raise PlanError(
+            "published schema-1 lineage has no live validation successor companion "
+            "baseline: " + COMPANION_BASELINE_PATH
+        )
+
+    published = companion_successors_for(baseline_records, plan_relative)
+    if len(published) > 1:
+        raise PlanError(
+            "live validation successor companion baseline names one plan more than "
+            "once: " + plan_relative
+        )
+
+    contract_relative = manifest_scalar(values, "replan_contract")
+    if not contract_relative:
+        if published:
+            raise PlanError(
+                "in-progress integration plan drops the contract lineage the companion "
+                "baseline still records: " + plan_relative
+            )
+        residue = [
+            field
+            for field in COMPANION_LINEAGE_RESIDUE_FIELDS
+            if values.get(field) or manifest_scalar(values, field)
+        ]
+        if residue:
+            raise PlanError(
+                "in-progress integration plan keeps restructuring lineage without a "
+                f"replan contract ({', '.join(residue)}): " + plan_relative
+            )
+        return
+
+    contract_relative = normalized_repository_path(
+        contract_relative, "in-progress integration plan replan_contract"
+    )
+    contract_bytes = read_repository_bytes(
+        root, contract_relative, "in-progress integration plan replan contract"
+    )
+    try:
+        contract = json.loads(contract_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PlanError(
+            "in-progress integration plan has an unreadable replan contract: " + contract_relative
+        ) from exc
+    if not isinstance(contract, dict):
+        raise PlanError(
+            "in-progress integration plan has an unreadable replan contract: " + contract_relative
+        )
+
+    owned = [
+        record for record in baseline_records if record["contract_path"] == contract_relative
+    ]
+    if len(owned) > 1:
+        raise PlanError(
+            "live validation successor companion baseline names one contract more than once"
+        )
+
+    if owned:
+        if owned[0]["contract_digest"] != byte_digest(contract_bytes):
+            raise PlanError(
+                "in-progress integration plan replan contract differs from the companion "
+                "baseline: " + contract_relative
+            )
+        matches = [
+            successor
+            for successor in owned[0]["successors"]
+            if successor["path"] == plan_relative
+        ]
+        if len(matches) != 1 or len(published) != 1:
+            raise PlanError(
+                "in-progress integration plan is not one companion baseline successor: "
+                + plan_relative
+            )
+        verify_companion_projection(
+            matches[0],
+            values,
+            records,
+            plan_relative,
+            "companion baseline",
+            COMPANION_BASELINE_CONTRACT_SCHEMA,
+        )
+        return
+
+    raise PlanError(
+        "in-progress integration plan has no published companion validation authority: "
+        + plan_relative
+    )
 
 
 def validate_validation_witness_map(
@@ -578,6 +1085,13 @@ def validate_validation_witness_map(
             raise PlanError(f"plan {key} must be a list")
 
     required = status in WITNESS_REQUIRED_STATUSES and bool(integration_gates)
+    if required and plan_path is not None:
+        declared_context = values.get("context_files", [])
+        if not isinstance(declared_context, list):
+            raise PlanError("plan context_files must be a list")
+        validate_context_file_identity(
+            declared_context, root=plan_repository_root(plan_path)[0]
+        )
     if not schema:
         if raw_map:
             raise PlanError("validation_witness_map requires validation_witness_schema: 1")
@@ -665,6 +1179,8 @@ def validate_validation_witness_map(
         raise PlanError(
             "validation_witness_map must cover acceptance items exactly once and in source order"
         )
+    if required and plan_path is not None:
+        validate_companion_validation_authority(plan_path, values, records)
     return records
 
 

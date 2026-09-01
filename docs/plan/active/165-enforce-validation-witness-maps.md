@@ -75,10 +75,10 @@ checked_summary_ja: 受入条件、移行証拠、最終検証command、静的pa
 
 ## Tasks
 
-- [ ] Replace the current forgeable legacy exception with migration-bound validation.
-- [ ] Enforce exact authoritative command preservation and witness-stage rules.
-- [ ] Reject symlinked ancestors, traversal, duplicates, stale status, and out-of-root static paths.
-- [ ] Add deterministic positive and negative tests, complete focused validation and independent review, archive, and commit.
+- [x] Replace the current forgeable legacy exception with migration-bound validation.
+- [x] Enforce exact authoritative command preservation and witness-stage rules.
+- [x] Reject symlinked ancestors, traversal, duplicates, stale status, and out-of-root static paths.
+- [x] Add deterministic positive and negative tests, complete focused validation and independent review, archive, and commit.
 
 ## Validation Notes
 
@@ -90,3 +90,10 @@ checked_summary_ja: 受入条件、移行証拠、最終検証command、静的pa
   本planの `preservation_scope` はその path を持たず、backlog planは activation record 自体に到達できない。
   この waiver が省く保証は、companion baseline を宣言済みの read-only context として plan manifest 上で静的に固定することである。
   baseline は write_scope 外の不変fileであり、本planの実装と test が同じ bytes を code 上で束縛する。
+- 独立reviewを4回実施した。第4回が指摘した High は、shape が正準な schema-2/3 の replan contract を偽造すれば権威になりうる、というものである。
+  contract は working tree の通常fileであり、shape の一致は publication の証拠にならない。
+  これを証明として閉じるには正準 contract 検証器の再実装か Git 履歴への束縛が必要で、いずれも本planの write_scope と手法の外にある。
+  そこで本planでは schema-2/3 lineage を admit せず、companion baseline に record を持たない contract を一律に拒否する fail closed に倒した。
+  admit 側の実装は後継 plan `docs/plan/backlog/256-prove-self-projecting-contract-authority.md` が持つ。要求の削除ではなく実行時期の繰延である。
+- `required` gate が plan 側の `status` と `integration_gates` に依存する点は本planの範囲外とした。
+  この gate は witness map schema 自身の意味論であり、widen すると要求が変わる。両fieldの改竄は `python3 scripts/restructure-plan.py --verify` が protected lifecycle state として拒否することを実測で確認した。
