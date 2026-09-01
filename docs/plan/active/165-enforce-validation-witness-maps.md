@@ -1,6 +1,6 @@
 # Enforce validation witness maps before execution
 
-status: backlog
+status: in_progress
 primary_invariant: plan command validation fails closed unless acceptance coverage, lifecycle provenance, authoritative command identity, and every static context path identity are proven
 task_types:
   - planning_docs
@@ -84,3 +84,9 @@ checked_summary_ja: 受入条件、移行証拠、最終検証command、静的pa
 
 - Preserve the current unaccepted parser and test changes as candidate input; review each hunk against the accepted Plan 179 evidence and Plan 190 companion baseline before reuse.
 - `successor_plans` preserves the immutable Plan 130 lineage; operational dependency paths use Plan 179.
+- `integration_gates` の二つ目が求める `docs/plan/replanned/baselines/live-validation-successors-v1.json` の `context_files` への追加は waiver とする。
+  この path を追加すると `python3 scripts/restructure-plan.py --verify` が `changes protected manifest field: context_files` で失敗する。
+  lifecycle evolution が `context_files` を保護し、activation record の promotion は `preservation_scope` にある path しか `context_files` へ移せないためである。
+  本planの `preservation_scope` はその path を持たず、backlog planは activation record 自体に到達できない。
+  この waiver が省く保証は、companion baseline を宣言済みの read-only context として plan manifest 上で静的に固定することである。
+  baseline は write_scope 外の不変fileであり、本planの実装と test が同じ bytes を code 上で束縛する。
