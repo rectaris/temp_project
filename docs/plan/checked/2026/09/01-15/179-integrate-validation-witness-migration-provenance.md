@@ -100,3 +100,6 @@ checked_summary_ja: guardian protocol、方針、inventory、実際のCopier更�
   この witness の所在は記録として残す。3 つの assertion を実行する権限は plan manifest ではなく repository 全体の必須検証にある。この配置は本 plan の変更が作ったものではなく、replan contract 束縛時点から `tests/smoke.sh` は write scope にあり `validation` には無い。
 - 権威検証 `tests/copier-update.sh --require-copier` を 1 回だけ実行し、exit 0 で完全通過した。suite は `copier update test passed` まで到達し、受入項目が要する v1.4.4 から v1.4.5 への版遷移を実行した。
   遷移後の生成 project は `.copier-answers.yml` に `_commit: v1.4.5` を持ち、`.project-agent-workflow-migration/validation-witness-provenance-v1.json` に `"migration_version": "v1.4.5"` を記録し、rejection file を残さなかった。これにより guardian protocol、方針、source inventory、真正な Copier 遷移が揃って Plan 163 の移行境界を証明した。
+- Plan 165 の predecessor 束縛だけを完了し、active への移動は行っていない。`scripts/restructure-plan.py` の `rebind_lineage` により Plan 165 と Plan 167 の `predecessor_plans` を本 plan の checked archive へ restate した。
+  完全な activation は Plan 165 自身の 2 番目の integration gate で止まる。この gate は activation と同じ更新で `docs/plan/replanned/baselines/live-validation-successors-v1.json` を context へ追加することを求めるが、これを行う経路が存在しない。lifecycle evolution は `context_files` を保護対象として拒否し、`rebind_lineage` は解決不能な参照の厳密な言い換えだけを認めるため追加を拒否する。両方の拒否は再現済みである。
+  これは本 plan の受入項目の欠陥ではなく、Plan 165 の activation 経路の欠落である。所有者判断を待ち、本 plan では修復しない。

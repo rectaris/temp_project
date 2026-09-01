@@ -59,7 +59,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 predecessor_plans:
-  - docs/plan/active/179-integrate-validation-witness-migration-provenance.md
+  - docs/plan/checked/2026/09/01-15/179-integrate-validation-witness-migration-provenance.md
   - docs/plan/active/164-bind-replan-contract-validation-baseline.md
   - docs/plan/active/165-enforce-validation-witness-maps.md
   - docs/plan/active/166-unify-copier-update-source-inventory.md
