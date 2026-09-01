@@ -19,7 +19,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/plan/checked/2026/09/01-15/179-integrate-validation-witness-migration-provenance.md
-  - docs/plan/active/165-enforce-validation-witness-maps.md
+  - docs/plan/checked/2026/09/01-15/165-enforce-validation-witness-maps.md
   - docs/plan/checked/2026/08/16-31/164-bind-replan-contract-validation-baseline.md
   - docs/plan/checked/2026/08/16-31/202-freeze-bounded-shell-lexical-projection.md
   - docs/plan/checked/2026/08/16-31/203-derive-bounded-shell-function-table.md

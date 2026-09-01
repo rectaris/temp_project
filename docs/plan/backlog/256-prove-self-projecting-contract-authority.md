@@ -20,7 +20,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/165-enforce-validation-witness-maps.md
+  - docs/plan/checked/2026/09/01-15/165-enforce-validation-witness-maps.md
   - docs/plan/replanned/baselines/live-validation-successors-v1.json
 required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md

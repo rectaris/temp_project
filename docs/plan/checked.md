@@ -195,3 +195,4 @@ id	path
 255	docs/plan/checked/2026/09/01-15/255-locate-the-restructuring-authority-from-its-own-file.md
 253	docs/plan/checked/2026/09/01-15/253-restore-the-copier-update-replan-fixture.md
 179	docs/plan/checked/2026/09/01-15/179-integrate-validation-witness-migration-provenance.md
+165	docs/plan/checked/2026/09/01-15/165-enforce-validation-witness-maps.md
