@@ -7176,6 +7176,38 @@ class PlanRestructureTest(unittest.TestCase):
             [("docs/plan/backlog/181-legacy-referrer.md", content, updated_live)],
         )
 
+    def test_prospective_verification_runs_from_a_generated_project_layout(self) -> None:
+        authority = self.repo / ".project-agent-workflow/scripts"
+        authority.mkdir(parents=True)
+        shutil.copy2(SCRIPT, authority / "restructure-plan.py")
+        shutil.copy2(
+            ROOT / "scripts/plan_validation_commands.py",
+            authority / "plan_validation_commands.py",
+        )
+        (self.repo / "scripts/restructure-plan.py").unlink()
+        (self.repo / "scripts/plan_validation_commands.py").unlink()
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "generated project authority layout")
+        self.spec["source"]["head"] = git(  # type: ignore[index]
+            self.repo, "rev-parse", "HEAD"
+        )
+        self.write_spec()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                ".project-agent-workflow/scripts/restructure-plan.py",
+                str(self.spec_path),
+            ],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertFalse((self.repo / "scripts/restructure-plan.py").exists())
+        self.assertTrue((self.repo / str(self.spec["contract_path"])).is_file())
+
     def test_lineage_rebinding_cannot_edit_fields_outside_its_kind(self) -> None:
         module = self.load_restructure_module("lineage_fields_module")
         self.assertEqual(

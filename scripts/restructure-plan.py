@@ -4698,7 +4698,7 @@ def verify_prospective_repository(operations: list[dict[str, Any]]) -> None:
             target.write_text(operation["target_content"], encoding="utf-8")
             os.chmod(target, operation["target_mode"], follow_symlinks=False)
         verified = subprocess.run(
-            [sys.executable, "scripts/restructure-plan.py", "--verify"],
+            [sys.executable, str(Path(__file__).resolve()), "--verify"],
             cwd=snapshot,
             check=False,
             text=True,

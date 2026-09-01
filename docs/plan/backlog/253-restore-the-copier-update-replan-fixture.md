@@ -1,6 +1,6 @@
 # Restore the Copier update replan fixture
 
-status: in_progress
+status: backlog
 primary_invariant: the replan fixture the authoritative Copier update suite builds satisfies the same plan rules the current restructuring authority enforces, so that suite fails only on a real product defect and never on its own stale input
 task_types:
   - template_workflow
@@ -63,7 +63,5 @@ checked_summary_ja: 権威Copier更新suiteが自前で作るreplan fixtureを�
   `scripts/restructure-plan.py:4700-4701` の `verify_prospective_repository` は、clone したsnapshot に対して `scripts/restructure-plan.py` という**根直下の相対 path を直書き**している。しかし生成 project が受け取るのは `.project-agent-workflow/scripts/restructure-plan.py` だけで（`scripts/project_workflow/copier_inventory.py:387`）、根直下の複製は存在しない。自分自身の位置は行 742 のように `__file__` から導出できるにもかかわらず、ここでは導出していない。
   生成 project による plan 再構築 transaction を通す test は存在しない（`tests/copier-update.sh:1158` は `--verify` のみ）。よってこの経路は一度も実行されていない可能性が高い。
   本 plan の write scope 外であり、gate の定めどおり修復せず報告して停止する。
-- fixture 修復後、権威 suite は同じ地点で 2 度前進し、`preservation_scope` 欠落も同 fixture 由来として同時に直した。
-- 3 度目の実行で fixture 由来ではない失敗に到達した。`plan restructuring failed: [Errno 2] No such file or directory: .../docs/plan/replanned.md`。
-  原因は `scripts/restructure-plan.py:4484-4491` にある。行 4486 は `docs/plan/replanned.md` の不在を許容して `rows` を空にするが、直後の `historical_contract_snapshot(rows)` は行 380 で同じ file を無条件に読むため、index を持たない project の最初の plan 再構築は必ず crash する。
-  これは生成 project に出荷済みの製品欠陥であり、fixture の問題ではない。本 plan の write scope は `tests/copier-update.sh` に閉じており、gate は「露見した以降の失敗は本 plan で直さず報告する」と定めている。よって本 plan の実行はここで停止し、所有者の判断を待つ。
+- (3) の訂正に伴い残る所見を記録する。index が必須であるという結論は変わらないが、再構築 transaction 経路の扱いは `--verify` 経路と一致していない。`scripts/restructure-plan.py:4484-4487` は `REPLANNED_INDEX.is_file()` が偽なら `rows` を空にするが、直後の `historical_contract_snapshot` は行 379 で同じ file を無条件に読む。よってこの分岐は到達しない死んだ許容であり、index を持たない project では行 7476 が返すような明示的な拒否ではなく、文脈のない `FileNotFoundError` が表面化する。利用者に見える影響は誤解を招く error 文言に限られ、本 plan は fixture 側で index を用意したため再発しない。修復は本 plan の write scope 外である。
+- 診断は独立に再現済みである。生成 project 配置（権限を `.project-agent-workflow/scripts/` に置き、根直下に複製を持たない）で plan 再構築 transaction を実行すると、0.2 秒で同一の失敗が再現する。所有者判断により、この製品欠陥は別の bounded 修復 plan で直す。本 plan の実行はここで停止し、再開はその修復が checked になった後の新しい実行として行う。
