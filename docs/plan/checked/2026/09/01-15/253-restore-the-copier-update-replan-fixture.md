@@ -1,6 +1,6 @@
 # Restore the Copier update replan fixture
 
-status: backlog
+status: checked
 primary_invariant: the replan fixture the authoritative Copier update suite builds satisfies the same plan rules the current restructuring authority enforces, so that suite fails only on a real product defect and never on its own stale input
 task_types:
   - template_workflow
@@ -50,9 +50,9 @@ checked_summary_ja: 権威Copier更新suiteが自前で作るreplan fixtureを�
 
 ## Tasks
 
-- [ ] Add `focused_validation`, `validation_witness_schema`, and one mapped `validation_witness_map` entry to the fixture plan template in `tests/copier-update.sh`.
-- [ ] Run the authoritative suite and record whether it reaches the versioned v1.4.4-to-v1.4.5 transition.
-- [ ] Report any newly exposed failure without repairing it here.
+- [x] Add `focused_validation`, `validation_witness_schema`, and one mapped `validation_witness_map` entry to the fixture plan template in `tests/copier-update.sh`.
+- [x] Run the authoritative suite and record whether it reaches the versioned v1.4.4-to-v1.4.5 transition.
+- [x] Report any newly exposed failure without repairing it here.
 
 ## Validation Notes
 
@@ -65,3 +65,7 @@ checked_summary_ja: 権威Copier更新suiteが自前で作るreplan fixtureを�
   本 plan の write scope 外であり、gate の定めどおり修復せず報告して停止する。
 - (3) の訂正に伴い残る所見を記録する。index が必須であるという結論は変わらないが、再構築 transaction 経路の扱いは `--verify` 経路と一致していない。`scripts/restructure-plan.py:4484-4487` は `REPLANNED_INDEX.is_file()` が偽なら `rows` を空にするが、直後の `historical_contract_snapshot` は行 379 で同じ file を無条件に読む。よってこの分岐は到達しない死んだ許容であり、index を持たない project では行 7476 が返すような明示的な拒否ではなく、文脈のない `FileNotFoundError` が表面化する。利用者に見える影響は誤解を招く error 文言に限られ、本 plan は fixture 側で index を用意したため再発しない。修復は本 plan の write scope 外である。
 - 診断は独立に再現済みである。生成 project 配置（権限を `.project-agent-workflow/scripts/` に置き、根直下に複製を持たない）で plan 再構築 transaction を実行すると、0.2 秒で同一の失敗が再現する。所有者判断により、この製品欠陥は別の bounded 修復 plan で直す。本 plan の実行はここで停止し、再開はその修復が checked になった後の新しい実行として行う。
+- 修復 Plan 255 が checked になったため、所有者指示により新しい実行として再開する。停止時に分類した独立修復は完了しており、本 plan は権威 suite の続きから確認する。
+- 再開後の権威実行で `tests/copier-update.sh --require-copier` は完全通過した（exit 0）。suite は行 1947 の `copier update test passed` まで到達し、acceptance が求める v1.4.4 から v1.4.5 への版遷移（行 1687-1947）を実行した。2026-08-24 の `0ad400f` 以降初めて、この suite は自分の入力で落ちなくなった。
+- 独立 review を 1 巡実施し、指摘はなかった。review は fixture transaction を独立に再演し、差分が純粋に追加のみであること、seed した index が欠陥を隠さないこと、witness の stage が拒否対象の形ではないこと、source plan 側の template を変更していないことを確認した。
+- 露見した 2 件は gate のとおり修復せず報告した。うち 1 件は所有者判断により Plan 255 で修復済みである。残る 1 件（行 4484-4487 の死んだ許容分岐）は error 文言のみの影響であり、記録に留める。

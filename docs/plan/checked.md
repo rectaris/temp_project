@@ -193,3 +193,4 @@ id	path
 248	docs/plan/checked/2026/08/16-31/248-bind-fixture-editing-to-the-inventory.md
 252	docs/plan/checked/2026/08/16-31/252-add-shelved-plan-lifecycle-location.md
 255	docs/plan/checked/2026/09/01-15/255-locate-the-restructuring-authority-from-its-own-file.md
+253	docs/plan/checked/2026/09/01-15/253-restore-the-copier-update-replan-fixture.md
