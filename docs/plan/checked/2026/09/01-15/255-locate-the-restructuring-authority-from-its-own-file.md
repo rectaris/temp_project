@@ -1,6 +1,6 @@
 # Locate the restructuring authority from its own file
 
-status: in_progress
+status: checked
 primary_invariant: a prospective repository verification re-invokes the same authority file that is already running, so plan restructuring succeeds in every layout that ships the authority, not only in a repository that happens to keep a copy at scripts/restructure-plan.py
 task_types:
   - template_workflow
@@ -55,12 +55,15 @@ checked_summary_ja: 見込みリポジトリ検証が自分自身のファイル
 ## Tasks
 
 - [x] Reproduce the failure in a generated-project layout.
-- [ ] Add the regression test to `tests/test-plan-restructure.py`.
-- [ ] Derive the re-invoked authority path from `__file__` in both authority copies.
-- [ ] Run focused validation, then one independent review, then the authoritative suite.
+- [x] Add the regression test to `tests/test-plan-restructure.py`.
+- [x] Derive the re-invoked authority path from `__file__` in both authority copies.
+- [x] Run focused validation, then one independent review, then the authoritative suite.
 
 ## Validation Notes
 
 - 診断の受領元は Plan 253 の停止記録である。Plan 253 は fixture 由来の失敗を 3 件修復した後、本欠陥に到達して停止した。
 - 再現は独立に取得済みである。`tests/test-plan-restructure.py` の fixture を、権限が `.project-agent-workflow/scripts/` にのみ存在する配置へ組み替えて再構築 transaction を実行すると、0.2 秒で `prospective repository verification failed: ... /repository/scripts/restructure-plan.py: No such file or directory` が再現する。候補修正の適用後は同じ実行が成功する。
 - 本 plan は Plan 253 から acceptance を引き継がない。Plan 253 が停止時に分類した独立修復そのものであり、それ以上ではない。
+- 権威 validation は 4 件すべて通過した。`tests/test-plan-restructure.py` 175 件 OK（100 秒）、`scripts/check-copier-template.py` 通過、`--verify` 通過、`git diff --check` 清浄。
+- 独立 review を 1 巡実施した。code 変更と回帰 test に指摘はなく、Medium 1 件は Plan 253 の記録欠落だった。訂正した所見を Plan 253 に復元して解消した。
+- 権威 Copier 更新 suite は本 plan の validation に含めない。Plan 253 が停止中であり、その suite の完全通過は Plan 253 再開時の acceptance である。
