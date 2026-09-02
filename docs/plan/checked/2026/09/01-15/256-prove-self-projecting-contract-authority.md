@@ -1,6 +1,6 @@
 # Prove self-projecting replan contract authority
 
-status: in_progress
+status: checked
 primary_invariant: an in-progress integration plan whose lineage is a schema-2 or schema-3 replan contract proves its authoritative command identity from evidence the plan cannot author, and stays refused until it can
 task_types:
   - template_workflow
