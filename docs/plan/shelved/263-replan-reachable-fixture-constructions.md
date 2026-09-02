@@ -1,7 +1,8 @@
 # Replan reachable pre-schema fixture constructions
 
-status: deferred
-completion_deferred_reason: parent-direct remediation budget is exhausted while the candidate changes remain preserved outside this plan's write scope
+status: shelved
+shelved_reason: 追加の後続プランを生む手続きコストが実装価値に見合わず、本対応を見送るとオーナーが指示した
+shelved_at: 2026-09-02
 primary_invariant: preserve the exact accepted reachability requirement while stopping further implementation until a clean, independently reviewable execution boundary is available
 replan_sources:
   - docs/plan/active/250-require-reachable-fixture-constructions.md
