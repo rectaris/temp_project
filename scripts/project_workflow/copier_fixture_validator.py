@@ -319,6 +319,7 @@ MAX_EXPANSIONS = 64
 # spelling this checker does not enumerate is unproven by construction
 # rather than read as the literal text it happens to be written with.
 WORD_LITERAL_PATTERN = re.compile(r"[A-Za-z0-9._+,:@%/-]")
+WORD_LITERAL_WITH_EQUALS_PATTERN = re.compile(r"[A-Za-z0-9._+,:@%/=-]")
 
 
 BRACED_NAME_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -1544,7 +1545,11 @@ def _unquoted(word: str) -> str:
 
 
 def _word_parts(
-    word: str, origin: str, splits: bool = True, anchored: bool = True
+    word: str,
+    origin: str,
+    splits: bool = True,
+    anchored: bool = True,
+    allow_equals: bool = False,
 ) -> _Parts | None:
     """Return the modelled parts of one written word, or ``None`` for any other.
 
@@ -1611,7 +1616,12 @@ def _word_parts(
             parts.append(("opaque", f"{mark}{origin}:{index}"))
             index = end
             continue
-        if WORD_LITERAL_PATTERN.fullmatch(character) is None:
+        pattern = (
+            WORD_LITERAL_WITH_EQUALS_PATTERN
+            if allow_equals
+            else WORD_LITERAL_PATTERN
+        )
+        if pattern.fullmatch(character) is None:
             return None
         literal.append(character)
         index += 1
@@ -1814,6 +1824,44 @@ def _settle_written_word(
     return _settle_word(
         word, fixture.bindings_for(operation), fixture.unsettled_for(operation)
     )
+
+
+def _resolved_word_parts(
+    fixture: _Fixture, operation: _Operation, word: str
+) -> tuple[_Parts, ...] | None:
+    """Return bounded parts one written word may carry."""
+
+    parts = _word_parts(
+        word, f"t{operation.offset}", splits=False, allow_equals=True
+    )
+    if parts is None:
+        return None
+    return _resolve_parts(
+        parts, fixture.bindings_for(operation), fixture.unsettled_for(operation)
+    )
+
+
+def _resolved_word_texts(
+    fixture: _Fixture, operation: _Operation, word: str
+) -> tuple[str, ...] | None:
+    """Return bounded literal texts one written word may carry.
+
+    Option classification needs the settled text before path classification:
+    ``"$topt$tmp/$lane"`` can be a target-directory option even though its
+    written spelling starts with a parameter. Only names the binding model
+    resolves to literal parts are accepted here; opaque substitutions and
+    non-singleton results stay unresolved.
+    """
+
+    resolved = _resolved_word_parts(fixture, operation, word)
+    if resolved is None:
+        return None
+    texts: set[str] = set()
+    for candidate in resolved:
+        if any(kind != LITERAL_SEGMENT for kind, _ in candidate):
+            return None
+        texts.add("".join(text for _, text in candidate))
+    return tuple(sorted(texts))
 
 
 def _settle_deferred_word(
@@ -2741,6 +2789,7 @@ class _Fixture:
                     token.text,
                     f"l{token.start.offset}",
                     splits=False,
+                    allow_equals=True,
                     anchored=self._anchors_a_substitution(),
                 )
                 settled = (
@@ -3213,6 +3262,7 @@ class _Fixture:
             assignment.value,
             f"a{assignment.offset}",
             splits=False,
+            allow_equals=True,
             anchored=self._anchors_a_substitution(),
         )
         settled = None if parts is None else _resolve_parts(parts, bindings, unsettled)
@@ -3401,6 +3451,7 @@ class _Fixture:
                             words[index].text,
                             f"p{call.offset}:{index}",
                             splits=False,
+                            allow_equals=True,
                             anchored=self._anchors_a_substitution(),
                         )
                         settled = (
@@ -4252,6 +4303,44 @@ def _names_the_update_source(
     return False
 
 
+def _inline_interpreter_program_names_update_source(
+    fixture: _Fixture, operation: _Operation, names: frozenset[str]
+) -> bool:
+    """Report an inline shell/Python program carrying an update-source name.
+
+    The program is intentionally opaque. A bounded ``-c`` invocation is
+    rejected when its program text carries a name known to denote the update
+    source; file and standard-input forms have no inline program to inspect.
+    """
+
+    words = _operation_words(operation)
+    command = _resolved_command(words)
+    if command is None or not _is_interpreter(command):
+        return False
+    literals = _word_literals(words)
+    index = _command_index(literals, frozenset({command}))
+    if index < 0:
+        return False
+    ended = False
+    for place in range(index + 1, len(words)):
+        written = words[place].text
+        option = _written_option(written)
+        if not ended and option == OPTION_END:
+            ended = True
+            continue
+        if ended or option is None:
+            continue
+        name, separator, value = option.partition("=")
+        if name != "-c":
+            continue
+        if separator:
+            return _mentions_name(value, names)
+        if place + 1 >= len(words):
+            return False
+        return _mentions_name(words[place + 1].text, names)
+    return False
+
+
 def _names_a_relative_repository(
     fixture: _Fixture, operation: _Operation, texts: Sequence[str]
 ) -> bool:
@@ -4583,6 +4672,15 @@ def _check_update_source_inputs(
         }
         command = _resolved_command(_operation_words(operation))
         subcommand = fixture.git_subcommand(operation)
+        if _inline_interpreter_program_names_update_source(fixture, operation, names):
+            findings.append(
+                Finding(
+                    RULE_INVENTORY_REGION,
+                    "an inline interpreter program carries a name that may "
+                    "denote the update source",
+                    operation.position,
+                )
+            )
         if any(_lies_under(path, roots) for path in written):
             findings.append(
                 Finding(
@@ -7779,6 +7877,44 @@ def _target_directory_value(written: str) -> object | None:
     return letters[place + 1 :] or TAKES_THE_NEXT_WORD
 
 
+def _target_directory_option(
+    fixture: _Fixture, operation: _Operation, token: Token
+) -> tuple[bool, _Parts | None] | None:
+    """Return one uniquely resolved target-directory option, if any.
+
+    A word carrying multiple bounded texts is not assigned an option meaning:
+    one of those texts may be an ordinary operand or may carry a different
+    option value. The caller therefore keeps it on the unplaceable path.
+    """
+
+    resolved = _resolved_word_parts(fixture, operation, token.text)
+    if resolved is None or len(resolved) != 1:
+        return None
+    candidate = resolved[0]
+    if not candidate or candidate[0][0] != LITERAL_SEGMENT:
+        return (False, None)
+    written = candidate[0][1]
+    if written.startswith(OPTION_END):
+        name, separator, attached = written[2:].partition("=")
+        if not _abbreviates_target_directory(f"{OPTION_END}{name}"):
+            return (False, None)
+        if not separator and len(candidate) == 1:
+            return (True, None)
+        value = (("literal", attached),) if separator and attached else ()
+        value += candidate[1:]
+        return (True, value or None)
+    if not written.startswith(OPTION_MARK):
+        return (False, None)
+    letters = written[1:]
+    place = letters.find(TARGET_DIRECTORY_MARK)
+    if place < 0:
+        return (False, None)
+    attached = letters[place + 1 :]
+    value = (("literal", attached),) if attached else ()
+    value += candidate[1:]
+    return (True, value or None)
+
+
 def _target_directories(
     fixture: _Fixture, operation: _Operation, words: Sequence[Token], index: int
 ) -> tuple[bool, frozenset[_Path], bool, list[Token]]:
@@ -7811,18 +7947,54 @@ def _target_directories(
             unknown = unknown or not settled
             named = False
             continue
-        if not ended and written.startswith(OPTION_MARK) and written != OPTION_MARK:
-            value = _target_directory_value(written)
-            if value is None:
+        if not ended:
+            option = _target_directory_option(fixture, operation, token)
+            if option is not None and option[0]:
+                present = True
+                value_parts = option[1]
+                if value_parts is None:
+                    named = True
+                    continue
+                path = _settled_path(value_parts)
+                settled = frozenset() if path is None else frozenset({path})
+                directories |= settled
+                unknown = unknown or not settled
                 continue
-            present = True
-            if value is TAKES_THE_NEXT_WORD:
-                named = True
+            resolved = _resolved_word_texts(fixture, operation, written)
+            if resolved is not None and len(resolved) != 1:
+                if any(
+                    candidate.startswith(OPTION_MARK)
+                    and candidate != OPTION_MARK
+                    and _target_directory_value(candidate) is not None
+                    for candidate in resolved
+                ):
+                    present = True
+                    unknown = True
+                sources.append(token)
                 continue
-            settled = _settle_written_word(fixture, operation, str(value))
-            directories |= settled
-            unknown = unknown or not settled
-            continue
+            if (
+                option is None
+                and (resolved is None or len(resolved) != 1)
+                and written.startswith(OPTION_MARK)
+                and written != OPTION_MARK
+            ):
+                value = _target_directory_value(written)
+                if value is not None:
+                    present = True
+                    if value is TAKES_THE_NEXT_WORD:
+                        named = True
+                        continue
+                    settled = _settle_written_word(fixture, operation, str(value))
+                    directories |= settled
+                    unknown = True
+                    continue
+            if (
+                resolved is not None
+                and len(resolved) == 1
+                and resolved[0].startswith(OPTION_MARK)
+                and resolved[0] != OPTION_MARK
+            ):
+                continue
         if (
             not ended
             and _word_literals((token,))[0] is None

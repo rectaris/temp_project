@@ -1161,6 +1161,43 @@ class OperandReadingTest(ContractSupportTest):
                         "takes a destination this checker cannot place",
                     )
 
+    def test_a_target_directory_option_is_resolved_before_operand_reading(self) -> None:
+        for form in (
+            'topt=--target-directory=\nlane=update-source\n'
+            'install "$topt$tmp/$lane" AGENTS.md\n',
+            'topt=-t\nlane=update-source\n'
+            'install "$topt$tmp/$lane" AGENTS.md\n',
+            'topt=--target-directory\n'
+            'install "$topt" "$tmp/update-source" AGENTS.md\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "a write into the update source stands outside the "
+                    "inventory region",
+                )
+
+    def test_an_ambiguous_target_directory_option_stays_unplaceable(self) -> None:
+        for form, expected in (
+            (
+                'topt=-t\n'
+                'if [ -n "${NOPE-}" ]; then topt=--target-directory; fi\n'
+                'install "$topt" "$tmp/update-source" AGENTS.md\n',
+                "a write this checker cannot place",
+            ),
+            (
+                'install_helper() { install "$1" "$tmp/update-source" AGENTS.md; }\n'
+                'install_helper -t\n'
+                'install_helper --target-directory\n',
+                "a write this checker cannot place",
+            ),
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(form), RULE_INVENTORY_REGION, expected
+                )
+
     def test_a_repository_written_as_an_option_value_is_read(self) -> None:
         for form in (
             'git --git-dir="$where/.git" add -- NOTICE\n',
@@ -1291,6 +1328,28 @@ class OperandReadingTest(ContractSupportTest):
                     "an alias of the update source stands outside the "
                     "inventory region",
                 )
+
+    def test_an_inline_interpreter_program_carrying_update_source_is_rejected(
+        self,
+    ) -> None:
+        for form in (
+            "python3 -c \"import os; os.symlink('$update_source', '$tmp/held')\"\n",
+            "sh -c \"ln -s '$update_source' '$tmp/held'\"\n",
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "inline interpreter program carries a name",
+                )
+
+    def test_interpreter_file_and_standard_input_forms_remain_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                'python3 "$root/scripts/tool.py" "$update_source"\n'
+                'python3 - "$update_source/copier.yml"\n'
+            )
+        )
 
 
 class IndirectDispatchTest(ContractSupportTest):
