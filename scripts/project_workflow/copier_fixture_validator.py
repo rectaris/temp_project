@@ -19,7 +19,8 @@ The contract has two layers:
 - Copier operation rules apply to every supplied fixture. They require unique
   version commits, exactly one inventory-driven copy and staging region, no
   direct invocation of the migration snapshot script or the `copier` binary,
-  and no redefinition or shadowing of a command a bound observation runs.
+  and no redefinition or shadowing of a command a bound observation runs,
+  written in the fixture or in a library the fixture sources.
   These rules describe operations the fixture already owns, so they
   hold for a fixture that carries no migration transition region. The one
   region rule that needs a fact the supplied bytes do not carry is the staging
@@ -45,10 +46,12 @@ operation that a shell can never run never satisfies a requirement.
 Two boundaries are explicit. A command whose command word the checked graph
 cannot resolve proves nothing about what it runs, so a Copier update reached
 through such a dispatch is rejected instead of being read as absent. A file
-the fixture sources is outside the supplied bytes, so an operation moved into
-a sourced file is reported as missing by the rule that requires it: the
-contract states what the supplied bytes prove, and it never treats an unread
-region as evidence that a required operation exists.
+the fixture sources runs with the fixture's own authority, so every library a
+caller binds is read through the shadowing rule, and a source that names any
+other path is rejected rather than read as declaring nothing. An operation
+moved into a sourced file is still reported as missing by the rule that
+requires it: the contract states what the supplied bytes prove, and it never
+treats a sourced region as evidence that a required operation exists.
 """
 
 from __future__ import annotations
@@ -59,7 +62,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 
 if __package__:
@@ -143,10 +146,13 @@ __all__ = [
     "RULE_STRUCTURE",
     "RULE_UPDATE_CHILD",
     "RULE_VERSION_COMMIT",
+    "SOURCED_LIBRARY_PATHS",
     "check",
     "declared_paths",
+    "library_sources",
     "main",
     "read_inventory",
+    "read_libraries",
     "validate",
 ]
 
@@ -191,6 +197,67 @@ def read_inventory(path: Path | None = None) -> frozenset[tuple[str, ...]]:
     except OSError:
         return frozenset()
     return declared_paths(text.splitlines())
+
+
+# The library files a transition fixture sources into its own shell, written
+# as the repository-relative paths a sourcing file names them by. A sourced
+# file is run by the shell that sources it, so a declaration written there
+# rebinds a name for every bound observation of the sourcing file while that
+# file keeps exactly the text it was committed with. The bound set is decided
+# here rather than followed from whatever a source operand expands to, so this
+# checker keeps its text-only boundary and its refusal stays decidable: a
+# source that names a path outside the bound set is rejected as unread instead
+# of being read as a line that declares nothing.
+SOURCED_LIBRARY_PATHS = ("tests/lib-copier.sh",)
+# The directory the bound libraries are read from when a caller supplies none.
+LIBRARY_ROOT = Path(__file__).resolve().parents[2]
+# The one name a bound library may be sourced under, and the spelling that
+# writes it. Reading any anchor would let a fixture write a library of its own
+# under a directory it controls, source it under a bound-looking path, and be
+# checked against the committed bytes rather than the bytes the shell runs, so
+# the anchor is bound here exactly as the path behind it is. The value written
+# for the anchor is bound the same way, because a value that merely mentions
+# the invocation can still expand to a directory the fixture fills itself, and
+# no text-only reading settles where an arbitrary expansion lands. A fixture
+# that writes the anchor another way is therefore rejected rather than read,
+# so changing that line means binding the new spelling here.
+LIBRARY_ANCHOR_NAME = "root"
+LIBRARY_ANCHOR_PATTERN = re.compile(
+    r"\A\$(?:\{" + LIBRARY_ANCHOR_NAME + r"\}|" + LIBRARY_ANCHOR_NAME + r")/(.+)\Z"
+)
+LIBRARY_ANCHOR_VALUES = (
+    "$1",
+    '$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)',
+)
+
+
+def library_sources(values: Mapping[str, str | bytes]) -> dict[str, str]:
+    """Return the text of every sourced library one caller binds.
+
+    Each key is the repository-relative path a sourcing file writes the
+    library as, and each value carries the bytes this checker reads it from.
+    Only a library bound here is read, so a source that names any other path
+    is rejected rather than passed over.
+    """
+
+    return {str(path): _decode(text) for path, text in values.items()}
+
+
+def read_libraries(root: Path | None = None) -> dict[str, str]:
+    """Return the bound sourced libraries this checker is installed beside.
+
+    A library this checker cannot read stays unbound, so the source that names
+    it is rejected rather than accepted on bytes nothing supplied.
+    """
+
+    base = LIBRARY_ROOT if root is None else root
+    libraries: dict[str, str] = {}
+    for relative in SOURCED_LIBRARY_PATHS:
+        try:
+            libraries[relative] = (base / relative).read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return libraries
 
 
 RULE_STRUCTURE = "structure"
@@ -1898,6 +1965,11 @@ UPDATE_SUBCOMMAND = "update"
 COPY_SUBCOMMAND = "copy"
 RECOPY_SUBCOMMAND = "recopy"
 COPY_SUBCOMMANDS = frozenset({COPY_SUBCOMMAND, RECOPY_SUBCOMMAND})
+# The launcher option letters that ask where a command is found instead of
+# running it. A body reduced to such a query names Copier while performing no
+# Copier operation, so the wrapper the fixture runs as an operation is read
+# through this distinction rather than through the name alone.
+COPIER_QUERY_OPTIONS = frozenset({"v", "V"})
 # The operand count each read Copier subcommand writes. A copy writes the
 # template it reads and then the project it writes; an update and a recopy
 # write only the project. The destination is the last of them, so an operand
@@ -6268,6 +6340,414 @@ def _check_command_shadowing(fixture: _Fixture) -> list[Finding]:
     return findings
 
 
+def _sourced_operands(fixture: _Fixture) -> tuple[tuple[Position | None, Token | None], ...]:
+    """Return the position and the operand of every source one file writes.
+
+    The sources are read from the checked graph rather than from the written
+    runs, because a word a `case` arm writes as a pattern is not a command
+    word at all, and reading one as a source would call a pattern a file the
+    shell includes. A body the graph resolves no call for is read as well,
+    because the file such a body includes is included into the whole shell.
+    A source that writes no operand is reported with none, because the file it
+    includes is then decided by text this checker never sees.
+    """
+
+    nodes: list[tuple[Node, Position | None]] = [
+        (node, node.position) for node in fixture.graph.included_sources
+    ]
+    for declaration in _deferred_bodies(fixture):
+        nodes.extend(
+            (operation.node, operation.position)
+            for operation in _deferred_operations(fixture, declaration) or ()
+            if operation.effect == EFFECT_SOURCE
+        )
+    written: list[tuple[Position | None, Token | None]] = []
+    reported: set[int | None] = set()
+    for node, position in nodes:
+        offset = None if position is None else position.offset
+        if offset in reported:
+            # The same statement is read once as a modelled command and once
+            # as a deferred one, and it includes the one file either way.
+            continue
+        reported.add(offset)
+        literals = _word_literals(node.words)
+        place = next(
+            (
+                index
+                for index in _command_word_places(literals)
+                if literals[index] is not None
+                and _basename(literals[index]) in PATH_OPERAND_COMMANDS
+            ),
+            0,
+        )
+        operand = node.words[place + 1] if place + 1 < len(node.words) else None
+        written.append((position, operand))
+    return tuple(written)
+
+
+def _anchored_on_the_invocation(fixture: _Fixture, name: str) -> bool:
+    """Report whether one name holds the root the sourcing script was invoked from.
+
+    A library is read only when the directory it is written under is decided
+    outside the sourcing bytes. The name must therefore carry exactly one
+    written value, that value must be one of the bound anchor spellings, and
+    no binding this checker cannot read may reach the name.
+
+    The value is bound rather than described. A value that only mentions a
+    positional parameter still expands wherever the rest of its text says, so
+    a fixture could write `$(cd -- "$tmp" ... || printf '%s' "$0")`, fill that
+    directory itself, and be checked against the committed bytes instead of
+    the bytes the shell runs. Reading the value as written closes that, at the
+    cost that a new anchor spelling has to be bound above before it is read.
+    """
+
+    if name in fixture.unsettled_names():
+        return False
+    values = [
+        assignment.value
+        for assignment in fixture.assignments
+        if assignment.name == name
+    ]
+    if len(values) != 1:
+        return False
+    return _strip(values[0]) in LIBRARY_ANCHOR_VALUES
+
+
+def _bound_library(
+    fixture: _Fixture, operand: Token | None, libraries: Mapping[str, str]
+) -> str | None:
+    """Return the bound library one source operand names, or nothing for any other.
+
+    The operand is read as written rather than as it expands, because the
+    value an expansion carries is decided outside these bytes. Only one
+    spelling names a bound library: the bound anchor, then the bound path.
+    Every other operand names a file nothing supplied, including a path
+    written relative to a working directory this checker does not settle and a
+    path written under an anchor the fixture could fill itself.
+    """
+
+    if operand is None:
+        return None
+    matched = LIBRARY_ANCHOR_PATTERN.fullmatch(_strip(operand.text))
+    if matched is None:
+        return None
+    path = matched.group(1)
+    if path not in libraries:
+        return None
+    if not _anchored_on_the_invocation(fixture, LIBRARY_ANCHOR_NAME):
+        return None
+    return path
+
+
+def _project_library(text: str) -> tuple[_Fixture | None, Finding | None]:
+    """Return one sourced library read through the checked projections.
+
+    A library those projections reject says nothing about which of its words
+    are written, so it is reported as a structure finding instead of being
+    read partially, exactly as a rejected fixture is.
+    """
+
+    try:
+        records = shell_lexical.project(text)
+        table = shell_functions.derive(records)
+        graph = shell_execution.derive(records, table)
+    except (ShellLexicalError, ShellFunctionError, ShellExecutionError) as error:
+        return None, Finding(
+            RULE_STRUCTURE,
+            f"the checked projections rejected the sourced bytes: {error}",
+            error.position,
+        )
+    return _Fixture(text, records, table, graph), None
+
+
+def _library_finding(path: str, finding: Finding) -> Finding:
+    """Return one finding of a sourced library, placed in that library.
+
+    The position of such a finding counts in the library rather than in the
+    file that sources it, so it is written into the message instead of being
+    reported as a position of the supplied bytes. The subject of the message
+    is rewritten for the same reason: the rule that produced it reads one file
+    at a time, and the file it read here is the library.
+    """
+
+    place = (
+        ""
+        if finding.position is None
+        else f" line {finding.position.line} column {finding.position.column}"
+    )
+    subject = "the fixture "
+    message = finding.message
+    if message.startswith(subject):
+        message = "it " + message[len(subject) :]
+    return Finding(
+        finding.rule,
+        f"the sourced library `{path}`{place}: {message}",
+        None,
+    )
+
+
+def _queries_rather_than_runs(literals: tuple[str | None, ...], place: int) -> bool:
+    """Report whether one command word is only asked about rather than run.
+
+    A launcher asked for a name reports where that name would be found and
+    runs nothing, so `command -v copier` names Copier without performing any
+    Copier operation. The option letters written before the command word are
+    the text that says so, and a word this checker cannot read is passed over.
+    """
+
+    for written in literals[:place]:
+        if written is None or written == OPTION_END:
+            continue
+        if not written.startswith(OPTION_MARK):
+            continue
+        if set(written[1:]) & COPIER_QUERY_OPTIONS:
+            return True
+    return False
+
+
+def _declaration_named(
+    library: _Fixture, name: str
+) -> shell_functions.FunctionDeclaration | None:
+    """Return the declaration one library makes under a written name."""
+
+    for declaration in library.table.declarations:
+        if declaration.name == name:
+            return declaration
+    return None
+
+
+def _copier_words(
+    library: _Fixture,
+    declaration: shell_functions.FunctionDeclaration,
+    seen: frozenset[str] = frozenset(),
+) -> tuple[bool, bool] | None:
+    """Return whether one declared body names Copier, and whether it runs it.
+
+    Every command word the body writes is read, including the word a launcher
+    reaches, because a wrapper written as `command -v copier` names Copier at
+    the word its launcher runs. The written text is read rather than the text
+    this checker settles, so a Copier binary held in a name still counts. A
+    body the checked projections do not accept on its own says nothing about
+    the words it writes, so nothing is returned for it and it proves neither
+    reading.
+
+    A word that names another declaration the same library makes is read
+    through that declaration instead of counted for itself, because the shell
+    runs its body rather than any Copier command. A wrapper written as a call
+    to the availability predicate would otherwise pass on the name alone while
+    asking where Copier is and running nothing. Each name is entered once, so
+    a body that reaches itself again runs no further Copier command.
+    """
+
+    if declaration.name in seen:
+        return False, False
+    entered = seen | {declaration.name}
+    operations = _deferred_operations(library, declaration)
+    if operations is None:
+        return None
+    named = False
+    dispatched = False
+    for operation in operations:
+        words = _operation_words(operation)
+        if not words:
+            continue
+        literals = _word_literals(words)
+        for place in _command_word_places(literals):
+            if place >= len(words):
+                continue
+            written = words[place].text
+            if not _mentions(written, COPIER_MARKER):
+                continue
+            queried = _queries_rather_than_runs(literals, place)
+            inner = _declaration_named(library, _strip(written))
+            if inner is not None:
+                reached = _copier_words(library, inner, entered)
+                if reached is None:
+                    continue
+                named = named or reached[0]
+                dispatched = dispatched or (reached[1] and not queried)
+                continue
+            named = True
+            if not queried:
+                dispatched = True
+    return named, dispatched
+
+
+def _carries_a_copier_operation(fixture: _Fixture, name: str) -> bool:
+    """Report whether the sourcing file runs one name as a Copier operation.
+
+    This checker reads a command word that mentions Copier, followed by a
+    Copier subcommand, as the Copier operation it performs. A name the fixture
+    writes that way carries a bound observation, so the body behind it has to
+    run Copier rather than only ask where Copier is. A name written any other
+    way, such as the predicate the fixture tests before it starts, carries no
+    such observation.
+    """
+
+    for run in fixture.command_runs():
+        literals = _word_literals(run.words)
+        for place in _command_word_places(literals):
+            if place >= len(run.words):
+                continue
+            if _strip(run.words[place].text) != name:
+                continue
+            for written in literals[place + 1 :]:
+                if written == UPDATE_SUBCOMMAND or written in COPY_SUBCOMMANDS:
+                    return True
+    return False
+
+
+def _check_library_wrapper(
+    fixture: _Fixture, path: str, library: _Fixture
+) -> list[Finding]:
+    """Reject a Copier wrapper a sourced library declares without running Copier.
+
+    This checker reads a command word that mentions Copier as the Copier
+    operation it performs, so a wrapper of such a name carries every bound
+    Copier observation the file that sources it writes. A body that runs no
+    Copier command leaves each of those observations written exactly as
+    committed while no Copier run happens at all, which is the same vacuity a
+    redefinition creates and is rejected the same way.
+
+    A wrapper the fixture runs as a Copier operation must dispatch Copier, not
+    merely name it: a body reduced to `command -v copier` reports where Copier
+    is and performs nothing, so every operation written through it is vacuous.
+    A Copier name the fixture never runs as an operation is the predicate it
+    tests before starting, for which asking is the whole point, so naming
+    Copier is enough there.
+    """
+
+    findings: list[Finding] = []
+    for declaration in library.table.declarations:
+        if not _mentions(declaration.name, COPIER_MARKER):
+            continue
+        reached = _copier_words(library, declaration)
+        named, dispatched = reached if reached is not None else (False, False)
+        if _carries_a_copier_operation(fixture, declaration.name):
+            if dispatched:
+                continue
+            lack = "a body that runs no Copier command"
+        else:
+            if named:
+                continue
+            lack = "a body that names no Copier command"
+        findings.append(
+            _library_finding(
+                path,
+                Finding(
+                    RULE_COMMAND_SHADOWING,
+                    f"it declares the Copier wrapper `{declaration.name}` with "
+                    f"{lack}, which makes every bound Copier observation "
+                    "vacuous",
+                    declaration.start,
+                ),
+            )
+        )
+    return findings
+
+
+def _check_sourced_libraries(
+    fixture: _Fixture, libraries: Mapping[str, str]
+) -> list[Finding]:
+    """Reject a rebinding written in, or hidden behind, a sourced file.
+
+    A sourced file is run by the shell that sources it, so every rule that
+    reads the sourcing text alone stays satisfied while a declaration written
+    in the sourced file decides what each bound observation runs. The bound
+    libraries are therefore read through the same shadowing rule as the file
+    that sources them.
+
+    Two further rebindings cross the source boundary. A declaration the
+    sourcing file repeats is a redefinition: the later declaration is the one
+    the shell holds, so the observation the sourced one carried is vacuous.
+    And the Copier wrapper is an observed name, because this checker reads a
+    command word that mentions Copier as the Copier operation it performs, so
+    a fixture that declares such a name gives every bound Copier observation
+    another meaning while keeping its own text. The wrapper belongs in a bound
+    library, and the one declared there must run a Copier command rather than
+    carry the observations on its name alone.
+
+    One boundary is explicit. Only a bound library is read, and a source that
+    names any other path is rejected, because bytes nothing supplied prove
+    nothing about the names the shell holds after that line.
+    """
+
+    findings: list[Finding] = []
+    read: dict[str, _Fixture] = {}
+    pending: list[tuple[str | None, _Fixture]] = [(None, fixture)]
+    while pending:
+        origin, current = pending.pop(0)
+        for position, operand in _sourced_operands(current):
+            path = _bound_library(current, operand, libraries)
+            if path is None:
+                unread = Finding(
+                    RULE_COMMAND_SHADOWING,
+                    "the fixture sources a path this checker was not given, "
+                    "so a redefinition written there is never read",
+                    position,
+                )
+                findings.append(
+                    unread if origin is None else _library_finding(origin, unread)
+                )
+                continue
+            if path in read:
+                continue
+            library, rejected = _project_library(libraries[path])
+            if library is None:
+                findings.append(_library_finding(path, rejected))
+                continue
+            read[path] = library
+            findings.extend(
+                _library_finding(path, finding)
+                for finding in _check_command_shadowing(library)
+            )
+            findings.extend(_check_library_wrapper(fixture, path, library))
+            pending.append((path, library))
+    declared: dict[str, str] = {}
+    for path, library in read.items():
+        for declaration in library.table.declarations:
+            earlier = declared.setdefault(declaration.name, path)
+            if earlier == path:
+                continue
+            findings.append(
+                _library_finding(
+                    path,
+                    Finding(
+                        RULE_COMMAND_SHADOWING,
+                        f"it declares `{declaration.name}`, which the sourced "
+                        f"library `{earlier}` declares as well, so the "
+                        "declaration every bound observation runs is replaced",
+                        declaration.start,
+                    ),
+                )
+            )
+    for declaration in fixture.table.declarations:
+        name = declaration.name
+        if _mentions(name, COPIER_MARKER):
+            findings.append(
+                Finding(
+                    RULE_COMMAND_SHADOWING,
+                    f"the fixture declares the Copier wrapper `{name}`, "
+                    "which makes every bound Copier observation vacuous",
+                    declaration.start,
+                )
+            )
+            continue
+        earlier = declared.get(name)
+        if earlier is None:
+            continue
+        findings.append(
+            Finding(
+                RULE_COMMAND_SHADOWING,
+                f"the fixture declares `{name}`, which the sourced library "
+                f"`{earlier}` declares as well, so the declaration every "
+                "bound observation runs is replaced",
+                declaration.start,
+            )
+        )
+    return findings
+
+
 def _operation_words(operation: _Operation) -> tuple[Token, ...]:
     """Return the words the checked graph records for one operation.
 
@@ -8163,7 +8643,9 @@ def _check_transition(fixture: _Fixture) -> list[Finding]:
 
 
 def check(
-    source: str | bytes, declared: Iterable[str] | None = None
+    source: str | bytes,
+    declared: Iterable[str] | None = None,
+    sourced: Mapping[str, str | bytes] | None = None,
 ) -> tuple[Finding, ...]:
     """Return every Copier fixture operation the supplied bytes fail to prove.
 
@@ -8171,9 +8653,17 @@ def check(
     declares, written one path per entry. A caller that omits it gets the
     inventory this checker ships beside, because the fixture builds its own
     inventory path from a positional parameter that no supplied byte places.
+
+    `sourced` binds the libraries the fixture may source, each written as the
+    repository-relative path the fixture names it by. A caller that omits it
+    gets the libraries this checker ships beside. A source that names any
+    other path is rejected, because a file nothing bound could rebind a
+    command name for every bound observation while the fixture kept exactly
+    the text it was committed with.
     """
 
     inventory = read_inventory() if declared is None else declared_paths(declared)
+    libraries = read_libraries() if sourced is None else library_sources(sourced)
     text = _decode(source)
     try:
         records = shell_lexical.project(text)
@@ -8210,16 +8700,21 @@ def check(
     findings.extend(_check_inventory_region(fixture, inventory))
     findings.extend(_check_direct_invocation(fixture))
     findings.extend(_check_command_shadowing(fixture))
+    findings.extend(_check_sourced_libraries(fixture, libraries))
     findings.extend(_check_unresolved_dispatch(fixture))
     if _is_transition(fixture):
         findings.extend(_check_transition(fixture))
     return tuple(sorted(findings, key=lambda finding: finding.sort_key))
 
 
-def validate(source: str | bytes, declared: Iterable[str] | None = None) -> None:
+def validate(
+    source: str | bytes,
+    declared: Iterable[str] | None = None,
+    sourced: Mapping[str, str | bytes] | None = None,
+) -> None:
     """Raise when supplied bytes break the bounded Copier fixture contract."""
 
-    findings = check(source, declared)
+    findings = check(source, declared, sourced)
     if findings:
         report = "\n".join(str(finding) for finding in findings)
         raise CopierFixtureError(
@@ -8244,6 +8739,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="read the declared Copier update source paths from this inventory",
     )
+    parser.add_argument(
+        "--library-root",
+        metavar="PATH",
+        default=LIBRARY_ROOT,
+        type=Path,
+        help="read the bound sourced libraries from this directory",
+    )
     arguments = parser.parse_args(argv)
     try:
         supplied = arguments.check.read_bytes()
@@ -8256,7 +8758,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"copier fixture check failed: {error}", file=sys.stderr)
         return 1
     try:
-        findings = check(supplied, declared)
+        findings = check(
+            supplied, declared, read_libraries(arguments.library_root)
+        )
     except CopierFixtureError as error:
         print(f"copier fixture check failed: {error}", file=sys.stderr)
         return 1

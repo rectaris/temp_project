@@ -1264,6 +1264,11 @@ def require_validation_witness_copier_transition(copier_yml: str) -> None:
 
 COPIER_FIXTURE = "tests/copier-update.sh"
 
+# The libraries the fixture sources into its own shell. They run with the
+# fixture's own authority, so the checked bounded validator is given their
+# bytes and reads them under the same shadowing rule as the fixture itself.
+COPIER_FIXTURE_LIBRARIES = ("tests/lib-copier.sh",)
+
 COPIER_FIXTURE_SNAPSHOT_MARKER = "snapshot-validation-witness-provenance"
 
 # Exact source regions of the committed transition fixture. Every bounded
@@ -1773,10 +1778,30 @@ def require_bounded_copier_fixture() -> None:
     transition would satisfy it silently. The committed operations below close
     that gap by binding each observation the v1.4.5 transition depends on to
     the exact region that must contain it, exactly once.
+
+    The libraries the fixture sources are supplied with it, because a
+    declaration written in a sourced file rebinds a command name for every
+    bound observation while the fixture keeps exactly its committed text. The
+    bound set is compared with the one the validator ships, so the gate and
+    the checker can never disagree about which files are read.
     """
 
+    if COPIER_FIXTURE_LIBRARIES != tuple(
+        copier_fixture_validator.SOURCED_LIBRARY_PATHS
+    ):
+        fail(
+            "the sourced libraries this gate supplies must be the ones the "
+            "checked bounded validator binds"
+        )
+    libraries = {}
+    for relative in COPIER_FIXTURE_LIBRARIES:
+        path = ROOT / relative
+        if not path.is_file():
+            fail(f"{COPIER_FIXTURE} sources {relative}, which is missing")
+        libraries[relative] = path.read_bytes()
+
     source = (ROOT / COPIER_FIXTURE).read_bytes()
-    findings = copier_fixture_validator.check(source)
+    findings = copier_fixture_validator.check(source, sourced=libraries)
     if findings:
         report = "\n".join(f"  {finding}" for finding in findings)
         fail(

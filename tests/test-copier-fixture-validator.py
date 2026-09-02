@@ -155,19 +155,26 @@ WITHOUT_TRANSITION = PROLOGUE + INVENTORY_REGION + VERSION_COMMITS
 
 class ContractSupportTest(unittest.TestCase):
     declared: tuple[str, ...] = DECLARED
+    # No library is bound by default, so every fixture written here is proven
+    # against its own supplied bytes. The sourced-library cases bind theirs.
+    sourced: dict[str, str] = {}
 
     def rules(self, source: str) -> list[str]:
-        return [finding.rule for finding in check(source, self.declared)]
+        return [
+            finding.rule for finding in check(source, self.declared, self.sourced)
+        ]
 
     def messages(self, source: str) -> str:
-        return "\n".join(str(finding) for finding in check(source, self.declared))
+        return "\n".join(
+            str(finding) for finding in check(source, self.declared, self.sourced)
+        )
 
     def assert_accepted(self, source: str) -> None:
-        findings = check(source, self.declared)
+        findings = check(source, self.declared, self.sourced)
         self.assertEqual(findings, (), self.messages(source))
 
     def assert_rejected(self, source: str, rule: str, expected: str) -> None:
-        findings = check(source, self.declared)
+        findings = check(source, self.declared, self.sourced)
         self.assertTrue(findings, "the mutated fixture was accepted")
         self.assertIn(rule, [finding.rule for finding in findings], self.messages(source))
         matching = [
@@ -2844,6 +2851,404 @@ class CommandShadowingTest(ContractSupportTest):
 
     def test_a_written_path_that_only_reads_an_observed_name_is_accepted(self) -> None:
         self.assert_accepted(self.searched('cat "$tmp/bin/grep" >/dev/null\n'))
+
+
+class SourcedLibraryTest(ContractSupportTest):
+    """A file the fixture sources is read under the same shadowing rule.
+
+    A sourced file runs with the authority of the shell that sources it, so a
+    declaration written there rebinds a command name for every bound
+    observation while the fixture keeps exactly its committed text. The bound
+    libraries are supplied here, so nothing in this class reads a file the
+    repository ships.
+    """
+
+    LIBRARY = "tests/lib-fixture.sh"
+
+    LIBRARY_TEXT = (
+        "fixture_available() {\n"
+        "  command -v fixture >/dev/null 2>&1\n"
+        "}\n"
+        "\n"
+        "run_fixture() {\n"
+        '  fixture "$@"\n'
+        "}\n"
+    )
+
+    SOURCING = '\n. "$root/tests/lib-fixture.sh"\n'
+
+    # A Copier operation written through the wrapper. Only a name the fixture
+    # runs this way carries a bound Copier observation, so this is what makes
+    # the wrapper rule ask for a dispatch rather than for a name.
+    OPERATION = (
+        'run_copier copy -q --trust --defaults --vcs-ref v1.4.5 '
+        '"$update_source" "$tmp/wrapper-out" >/dev/null\n'
+    )
+
+    sourced: dict[str, str] = {LIBRARY: LIBRARY_TEXT}
+
+    def library(self, addition: str = "") -> dict[str, str]:
+        return {self.LIBRARY: self.LIBRARY_TEXT + addition}
+
+    def with_library(self, addition: str = "") -> str:
+        return COMPLIANT + self.SOURCING + addition
+
+    def shadowing(self, source: str) -> list[str]:
+        """Return the shadowing findings alone.
+
+        A fixture that writes a Copier operation of its own draws findings
+        from the rules that read where Copier writes, and those say nothing
+        about which names the shell holds.
+        """
+
+        return [
+            str(finding)
+            for finding in check(source, self.declared, self.sourced)
+            if finding.rule == RULE_COMMAND_SHADOWING
+        ]
+
+    def assert_wrapper_rejected(self, text: str, expected: str) -> None:
+        self.sourced = {self.LIBRARY: text}
+        try:
+            reported = "\n".join(self.shadowing(self.with_library(self.OPERATION)))
+            self.assertIn(expected, reported)
+            self.assertIn(f"the sourced library `{self.LIBRARY}`", reported)
+        finally:
+            self.sourced = self.library()
+
+    def assert_wrapper_accepted(self, text: str) -> None:
+        self.sourced = {self.LIBRARY: text}
+        try:
+            self.assertEqual(
+                self.shadowing(self.with_library(self.OPERATION)), []
+            )
+        finally:
+            self.sourced = self.library()
+
+    def assert_library_rejected(self, addition: str, expected: str) -> None:
+        self.sourced = self.library(addition)
+        try:
+            self.assert_rejected(
+                self.with_library(), RULE_COMMAND_SHADOWING, expected
+            )
+            self.assertIn(f"the sourced library `{self.LIBRARY}`", self.messages(
+                self.with_library()
+            ))
+        finally:
+            self.sourced = self.library()
+
+    def test_a_bound_library_the_fixture_sources_is_accepted(self) -> None:
+        self.assert_accepted(self.with_library())
+
+    def test_a_fixture_that_sources_nothing_is_accepted(self) -> None:
+        self.assert_accepted(COMPLIANT)
+
+    def test_an_observed_command_declared_in_the_library_is_rejected(self) -> None:
+        for name in sorted(copier_fixture_validator.OBSERVED_COMMANDS):
+            if not name.isidentifier():
+                continue
+            with self.subTest(command=name):
+                self.assert_library_rejected(
+                    f"\n{name}() {{\n  :\n}}\n", f"declares `{name}` as a function"
+                )
+
+    def test_the_reproduced_library_admission_is_rejected(self) -> None:
+        self.assert_library_rejected(
+            "\ngrep() { :; }\n", "declares `grep` as a function"
+        )
+
+    def test_a_helper_the_library_writes_on_the_search_path_is_rejected(self) -> None:
+        self.assert_library_rejected(
+            '\nmkdir -p "$tmp/bin"\nPATH="$tmp/bin:$PATH"\nexport PATH\n'
+            'cp "$tmp/fake-grep" "$tmp/bin/grep"\n',
+            "search path",
+        )
+
+    def test_a_hash_entry_written_in_the_library_is_rejected(self) -> None:
+        self.assert_library_rejected(
+            '\nhash -p "$tmp/fake-grep" grep\n', "binds a command name through `hash`"
+        )
+
+    def test_a_search_path_the_library_writes_for_one_command_is_rejected(self) -> None:
+        self.assert_library_rejected(
+            '\nPATH="$tmp/bin" grep -q x "$attempt_state"\n',
+            "writes a search path in front of",
+        )
+
+    def test_the_copier_wrapper_declared_in_the_fixture_is_rejected(self) -> None:
+        """The reproduced admission: a no-op wrapper keeps every needle intact."""
+
+        self.assert_rejected(
+            self.with_library("run_copier() { return 0; }\n"),
+            RULE_COMMAND_SHADOWING,
+            "declares the Copier wrapper `run_copier`",
+        )
+
+    def test_every_copier_named_declaration_in_the_fixture_is_rejected(self) -> None:
+        for name in ("run_copier", "copier_available", "COPIER_run"):
+            with self.subTest(name=name):
+                self.assert_rejected(
+                    self.with_library(f"{name}() {{\n  :\n}}\n"),
+                    RULE_COMMAND_SHADOWING,
+                    f"declares the Copier wrapper `{name}`",
+                )
+
+    def test_a_declaration_the_library_already_makes_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.with_library("run_fixture() {\n  :\n}\n"),
+            RULE_COMMAND_SHADOWING,
+            "declares `run_fixture`, which the sourced library "
+            f"`{self.LIBRARY}` declares as well",
+        )
+
+    def test_a_declaration_the_library_does_not_make_is_accepted(self) -> None:
+        self.assert_accepted(self.with_library("report_state() {\n  :\n}\n"))
+
+    def test_an_unbound_sourced_path_is_rejected(self) -> None:
+        self.assert_rejected(
+            COMPLIANT + '\n. "$root/tests/lib-other.sh"\n',
+            RULE_COMMAND_SHADOWING,
+            "sources a path this checker was not given",
+        )
+
+    def test_a_library_written_behind_another_directory_is_unbound(self) -> None:
+        """Only the one anchor the sourcing file is given places the library."""
+
+        self.assert_rejected(
+            COMPLIANT + '\n. "$tmp/vendor/tests/lib-fixture.sh"\n',
+            RULE_COMMAND_SHADOWING,
+            "sources a path this checker was not given",
+        )
+
+    def test_a_library_the_fixture_could_write_itself_is_unbound(self) -> None:
+        """Only the anchor the invocation decides places a bound library.
+
+        A scratch directory the fixture fills is decided inside these bytes, so
+        a file written there is not the file this checker was given, however
+        the tail of the path is spelled.
+        """
+
+        self.assert_rejected(
+            COMPLIANT
+            + '\nmkdir -p "$tmp/tests"\n'
+            + 'printf \'grep() { :; }\\n\' > "$tmp/tests/lib-fixture.sh"\n'
+            + '. "$tmp/tests/lib-fixture.sh"\n',
+            RULE_COMMAND_SHADOWING,
+            "sources a path this checker was not given",
+        )
+
+    def test_a_source_written_relative_to_no_anchor_is_rejected(self) -> None:
+        for operand in ("tests/lib-fixture.sh", "./tests/lib-fixture.sh"):
+            with self.subTest(operand=operand):
+                self.assert_rejected(
+                    COMPLIANT + f"\n. {operand}\n",
+                    RULE_COMMAND_SHADOWING,
+                    "sources a path this checker was not given",
+                )
+
+    def test_a_second_value_written_for_the_anchor_unbinds_it(self) -> None:
+        self.assert_rejected(
+            COMPLIANT + '\nroot="$tmp"\n' + self.SOURCING,
+            RULE_COMMAND_SHADOWING,
+            "sources a path this checker was not given",
+        )
+
+    def test_an_anchor_the_fixture_decides_is_unbound(self) -> None:
+        self.assert_rejected(
+            self.with_library().replace('root=$1\n', 'root="$tmp/vendor"\n', 1),
+            RULE_COMMAND_SHADOWING,
+            "sources a path this checker was not given",
+        )
+
+    def test_a_copier_wrapper_the_library_empties_is_rejected(self) -> None:
+        """The library holds the same authority the fixture does."""
+
+        self.assert_wrapper_rejected(
+            "run_copier() {\n  return 0\n}\n", "runs no Copier command"
+        )
+
+    def test_a_copier_wrapper_that_only_reports_is_rejected(self) -> None:
+        self.assert_wrapper_rejected(
+            'run_copier() {\n  echo copier "$@"\n}\n', "runs no Copier command"
+        )
+
+    def test_a_copier_wrapper_reduced_to_a_query_is_rejected(self) -> None:
+        """Asking where Copier is performs no Copier operation."""
+
+        self.assert_wrapper_rejected(
+            "run_copier() {\n  command -v copier >/dev/null 2>&1\n}\n",
+            "runs no Copier command",
+        )
+
+    def test_a_copier_wrapper_that_delegates_to_a_query_is_rejected(self) -> None:
+        self.assert_wrapper_rejected(
+            "copier_available() {\n  command -v copier >/dev/null 2>&1\n}\n"
+            '\nrun_copier() {\n  copier_available "$@"\n}\n',
+            "declares the Copier wrapper `run_copier` with a body that runs "
+            "no Copier command",
+        )
+
+    def test_a_copier_wrapper_that_runs_copier_is_accepted(self) -> None:
+        self.assert_wrapper_accepted(
+            "copier_available() {\n"
+            "  command -v copier >/dev/null 2>&1\n"
+            "}\n"
+            '\nrun_copier() {\n  copier "$@"\n}\n'
+        )
+
+    def test_a_copier_wrapper_that_runs_a_copier_path_is_accepted(self) -> None:
+        self.assert_wrapper_accepted(
+            "copier_bin=$(command -v copier)\n"
+            '\nrun_copier() {\n  "$copier_bin" "$@"\n}\n'
+        )
+
+    def test_a_copier_wrapper_that_delegates_to_a_dispatcher_is_accepted(self) -> None:
+        self.assert_wrapper_accepted(
+            'copier_dispatch() {\n  copier "$@"\n}\n'
+            '\nrun_copier() {\n  copier_dispatch "$@"\n}\n'
+        )
+
+    def test_a_copier_predicate_that_asks_where_copier_is_is_accepted(self) -> None:
+        """A predicate the fixture never runs as an operation may ask."""
+
+        self.sourced = {
+            self.LIBRARY: "copier_available() {\n"
+            "  command -v copier >/dev/null 2>&1\n"
+            "}\n"
+        }
+        try:
+            self.assert_accepted(self.with_library())
+        finally:
+            self.sourced = self.library()
+
+    def test_a_copier_predicate_that_names_no_copier_is_rejected(self) -> None:
+        self.sourced = {self.LIBRARY: "copier_available() {\n  return 0\n}\n"}
+        try:
+            self.assert_rejected(
+                self.with_library(),
+                RULE_COMMAND_SHADOWING,
+                "declares the Copier wrapper `copier_available` with a body "
+                "that names no Copier command",
+            )
+        finally:
+            self.sourced = self.library()
+
+    def test_an_anchor_value_this_checker_was_not_given_is_unbound(self) -> None:
+        """A value that mentions the invocation may still expand elsewhere.
+
+        The anchor is read as written, so a value that names a positional
+        parameter in a branch it never takes binds no library.
+        """
+
+        self.assert_rejected(
+            self.with_library().replace(
+                "root=$1\n",
+                "root=$(CDPATH= cd -- \"$tmp\" && pwd -P || printf '%s' \"$0\")\n",
+                1,
+            ),
+            RULE_COMMAND_SHADOWING,
+            "sources a path this checker was not given",
+        )
+
+    def test_a_source_whose_operand_is_not_written_is_rejected(self) -> None:
+        self.assert_rejected(
+            COMPLIANT + '\n. "$library"\n',
+            RULE_COMMAND_SHADOWING,
+            "sources a path this checker was not given",
+        )
+
+    def test_the_source_keyword_is_read_as_a_source(self) -> None:
+        self.assert_rejected(
+            COMPLIANT + '\nsource "$root/tests/lib-other.sh"\n',
+            RULE_COMMAND_SHADOWING,
+            "sources a path this checker was not given",
+        )
+
+    def test_a_source_written_inside_a_body_is_read(self) -> None:
+        """A body the shell runs includes its file into the whole shell."""
+
+        self.sourced = self.library("\ngrep() { :; }\n")
+        try:
+            self.assert_rejected(
+                COMPLIANT
+                + '\nload_helpers() {\n  . "$root/tests/lib-fixture.sh"\n}\n'
+                + "load_helpers\n",
+                RULE_COMMAND_SHADOWING,
+                "declares `grep` as a function",
+            )
+        finally:
+            self.sourced = self.library()
+
+    def test_a_body_the_graph_resolves_no_call_for_is_read(self) -> None:
+        """A body a trap action reaches includes its file just as a call does."""
+
+        self.sourced = self.library("\ngrep() { :; }\n")
+        try:
+            self.assert_rejected(
+                COMPLIANT
+                + '\nload_helpers() {\n  . "$root/tests/lib-fixture.sh"\n}\n'
+                + "trap load_helpers USR1\n",
+                RULE_COMMAND_SHADOWING,
+                "declares `grep` as a function",
+            )
+        finally:
+            self.sourced = self.library()
+
+    def test_a_case_pattern_is_not_read_as_a_source(self) -> None:
+        """A `.` written as a `case` pattern is no command word at all."""
+
+        self.assert_accepted(
+            COMPLIANT
+            + '\ncase "$candidate" in\n  .|..|./*) exit 1 ;;\n  *) : ;;\nesac\n'
+        )
+
+    def test_a_library_the_checked_projections_reject_is_reported(self) -> None:
+        self.sourced = {self.LIBRARY: "cat <<<here\n"}
+        try:
+            self.assert_rejected(
+                self.with_library(),
+                RULE_STRUCTURE,
+                "the checked projections rejected the sourced bytes",
+            )
+        finally:
+            self.sourced = self.library()
+
+    def test_a_library_is_read_once_however_often_it_is_sourced(self) -> None:
+        self.sourced = self.library("\ngrep() { :; }\n")
+        try:
+            reported = [
+                finding
+                for finding in check(
+                    COMPLIANT + self.SOURCING + self.SOURCING,
+                    self.declared,
+                    self.sourced,
+                )
+                if finding.rule == RULE_COMMAND_SHADOWING
+            ]
+            self.assertEqual(len(reported), 1, self.messages(COMPLIANT))
+        finally:
+            self.sourced = self.library()
+
+    def test_the_bound_set_is_the_one_this_checker_ships_beside(self) -> None:
+        libraries = copier_fixture_validator.read_libraries()
+        self.assertEqual(
+            tuple(libraries), copier_fixture_validator.SOURCED_LIBRARY_PATHS
+        )
+        for text in libraries.values():
+            self.assertTrue(text.strip())
+
+    def test_a_root_without_the_bound_library_binds_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                copier_fixture_validator.read_libraries(Path(directory)), {}
+            )
+
+    def test_supplied_library_bytes_are_decoded(self) -> None:
+        self.sourced = {self.LIBRARY: self.LIBRARY_TEXT.encode("utf-8")}
+        try:
+            self.assert_accepted(self.with_library())
+        finally:
+            self.sourced = self.library()
 
 
 class UpdateChildTest(ContractSupportTest):

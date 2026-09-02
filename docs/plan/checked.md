@@ -199,3 +199,4 @@ id	path
 256	docs/plan/checked/2026/09/01-15/256-prove-self-projecting-contract-authority.md
 166	docs/plan/checked/2026/09/01-15/166-unify-copier-update-source-inventory.md
 167	docs/plan/checked/2026/09/01-15/167-integrate-validation-witness-enforcement.md
+249	docs/plan/checked/2026/09/01-15/249-reject-sourced-library-command-shadowing.md
