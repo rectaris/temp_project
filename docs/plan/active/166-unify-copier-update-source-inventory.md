@@ -1,7 +1,6 @@
 # Unify Copier update copy and staging inventory
 
-status: deferred
-completion_deferred_reason: Plan 165 must be checked and its exact checked archive path must replace the active predecessor before implementation.
+status: in_progress
 primary_invariant: the Copier update fixture copies and stages exactly one normalized repository-relative inventory with no parallel hand-maintained path list
 task_types:
   - template_workflow
@@ -47,7 +46,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 predecessor_plans:
-  - docs/plan/active/165-enforce-validation-witness-maps.md
+  - docs/plan/checked/2026/09/01-15/165-enforce-validation-witness-maps.md
 replan_source: docs/plan/active/130-map-acceptance-validation-witnesses.md
 replan_contract: docs/plan/replanned/contracts/130-map-acceptance-validation-witnesses.json
 integration_gates:
