@@ -1,18 +1,6 @@
 # Source-aware Copier dispatch
 
-status: in_progress
-primary_invariant: the shared execution graph binds every sourced-library, helper-call, PATH/hash lookup, and dynamic dispatch occurrence so each potentially successful Copier wrapper return proves an unshadowed real Copier command at that exact occurrence
-replan_sources:
-  - docs/plan/active/260-integrate-ordered-sourced-copier-dispatch.md
-replan_contract: docs/plan/replanned/contracts/260-integrate-ordered-sourced-copier-dispatch.json
-integration_gates:
-  - combined successors must satisfy every source acceptance item
-successor_plans:
-  - docs/plan/active/261-source-aware-copier-dispatch.md
-inherited_acceptance_digests:
-  - sha256:4eb4303761f318ee3b775f758771b9cbc4cccbb5cbdca2a509cb315f93bd01f4
-integration_source_ids:
-  - 260
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -61,6 +49,16 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:4eb4303761f318ee3b775f758771b9cbc4cccbb5cbdca2a509cb315f93bd01f4","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
   - docs/plan/checked/2026/09/01-15/249-reject-sourced-library-command-shadowing.md
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/261-source-aware-copier-dispatch.md
+replan_contract: docs/plan/replanned/contracts/261-defer-unbounded-copier-dispatch-proof.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/262-defer-unbounded-copier-dispatch-proof.md
+inherited_acceptance_digests:
+  - sha256:4eb4303761f318ee3b775f758771b9cbc4cccbb5cbdca2a509cb315f93bd01f4
 checked_summary_ja: shared execution graphにsource、call、lookup provenanceを持たせ、各wrapper実行ごとに実際のCopier dispatchへの到達を検証する。
 
 ## Decisions

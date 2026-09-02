@@ -47,3 +47,4 @@ id	path	contract
 258	docs/plan/replanned/2026/09/01-15/258-project-reachable-wrapper-shadowing.md	docs/plan/replanned/contracts/258-project-reachable-wrapper-shadowing.json
 259	docs/plan/replanned/2026/09/01-15/259-integrate-reached-copier-dispatch.md	docs/plan/replanned/contracts/258-project-reachable-wrapper-shadowing.json
 260	docs/plan/replanned/2026/09/01-15/260-integrate-ordered-sourced-copier-dispatch.md	docs/plan/replanned/contracts/260-integrate-ordered-sourced-copier-dispatch.json
+261	docs/plan/replanned/2026/09/01-15/261-source-aware-copier-dispatch.md	docs/plan/replanned/contracts/261-defer-unbounded-copier-dispatch-proof.json

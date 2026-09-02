@@ -8,6 +8,7 @@ task_types:
 review_class: C
 human_design_required: yes
 human_approval_status: approved
+implementation_tier: 2
 implementation_risk: high
 implementation_ambiguity: low
 write_scope:
@@ -58,6 +59,7 @@ checked_summary_ja: 事前スキーマ構築が到達不能な分岐や未呼出
 - Close the residual boundary checked Plan 246 recorded rather than restate it. Binding the construction text proves the bytes are present; it proves nothing about the files being created.
 - Place the reachability refusal in the validator, which already reports an unreachable inventory copy and staging region, so the checker keeps one reachability model rather than two.
 - Reject both spellings the review reproduced: a never-taken branch around the construction span, and a function that carries the span with no call site.
+- Limit the implementation to the existing shared graph's reachability facts for the three bound construction spans. Do not add sourced-command, command-lookup, environment, or dynamic-dispatch proof.
 - Use bounded parent implementation because this is a validation-authority path and writable delegation is prohibited for it.
 
 ## Tasks
@@ -71,3 +73,4 @@ checked_summary_ja: 事前スキーマ構築が到達不能な分岐や未呼出
 ## Validation Notes
 
 - Pending. The reproduction is recorded as Medium finding 3 of the Plan 247 independent review, matches the residual boundary checked Plan 246 recorded, and was confirmed in the main session against the committed gate with `tests/copier-update.sh` left byte-identical.
+- Plan 261's shelved full dispatch proof does not affect this plan. The required reachability fact is already represented in the shared graph and does not require external command resolution.
