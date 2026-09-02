@@ -1,6 +1,6 @@
 # Unify Copier update copy and staging inventory
 
-status: in_progress
+status: checked
 primary_invariant: the Copier update fixture copies and stages exactly one normalized repository-relative inventory with no parallel hand-maintained path list
 task_types:
   - template_workflow
