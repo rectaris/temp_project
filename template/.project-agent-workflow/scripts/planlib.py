@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import stat
+import subprocess
 import tempfile
 import fcntl
 from contextlib import contextmanager
@@ -125,7 +126,7 @@ MIGRATION_BOUNDARY_MARKER = b"validation-witness-migration-provenance-schema: 1"
 COMPANION_BASELINE_PATH = (
     "docs/plan/replanned/baselines/live-validation-successors-v1.json"
 )
-COMPANION_FLAT_ACCEPTANCE_SCHEMAS = {1}
+COMPANION_FLAT_ACCEPTANCE_SCHEMAS = {1, 2}
 COMPANION_LINEAGE_RESIDUE_FIELDS = (
     "replan_source",
     "replan_sources",
@@ -134,6 +135,20 @@ COMPANION_LINEAGE_RESIDUE_FIELDS = (
 COMPANION_CONTRACT_DIRECTORY = "docs/plan/replanned/contracts"
 COMPANION_BASELINE_CONTRACT_SCHEMA = 1
 COMPANION_PROJECTION_WITNESS_SCHEMA = 1
+SELF_PROJECTING_CONTRACT_SCHEMAS = {2, 3}
+SELF_PROJECTING_MAPPED_ACCEPTANCE_SCHEMAS = {3}
+REPLANNED_INDEX_PATH = "docs/plan/replanned.md"
+REPLANNED_INDEX_ROW_RE = re.compile(r"^[0-9]{3}\t")
+PUBLISHED_CONTRACT_RE = re.compile(
+    r"docs/plan/replanned/contracts/[0-9]{3}-[a-z0-9][a-z0-9-]*\.json"
+)
+PUBLISHED_ARCHIVE_RE = re.compile(
+    r"docs/plan/replanned/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/"
+    r"([0-9]{3})-[a-z0-9][a-z0-9-]*\.md"
+)
+GIT_EVIDENCE_TIMEOUT_SECONDS = 60
+GIT_REGULAR_BLOB_MODES = {b"100644", b"100755"}
+GIT_OBJECT_ID_RE = re.compile(rb"[0-9a-f]{40,64}")
 CONTEXT_FILES_NONE = "none"
 MAX_WITNESS_EVIDENCE_BYTES = 4 * 1024 * 1024
 ACTIVE_PREDECESSOR_RE = re.compile(
@@ -253,10 +268,14 @@ def parse_manifest(path: Path) -> dict[str, str | list[str]]:
     if not path.is_file():
         raise PlanError(f"missing plan: {path}")
 
+    return parse_manifest_text(path.read_text(encoding="utf-8"))
+
+
+def parse_manifest_text(text: str) -> dict[str, str | list[str]]:
     values: dict[str, str | list[str]] = {key: [] for key in LIST_KEYS}
     current: str | None = None
 
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw in text.splitlines():
         line = raw.rstrip()
         if line.startswith("## "):
             break
@@ -536,6 +555,107 @@ def normalized_repository_path(raw: object, label: str) -> str:
     if raw != path.as_posix() or path.is_absolute() or {".", ".."} & set(path.parts):
         raise PlanError(f"{label} is not a normalized repository path: {raw!r}")
     return raw
+
+
+def git_evidence(root: Path, *args: str) -> bytes:
+    """Read one bounded Git fact from the plan repository's own history.
+
+    Publication evidence is only meaningful when it comes from history the
+    working tree cannot rewrite, so every failure to obtain it - a missing
+    Git binary, an unborn HEAD, a broken object store, or output beyond the
+    evidence bound - is refused instead of downgraded to a missing record.
+
+    Every inherited `GIT_*` variable is dropped first. `GIT_DIR` alone
+    would keep the working tree at this repository while reading objects
+    from another one, which would let an ambient environment answer for
+    history this repository never published.
+    """
+
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            env=environment,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=GIT_EVIDENCE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PlanError(
+            "published replan contract evidence requires a readable Git history"
+        ) from exc
+    if completed.returncode != 0:
+        raise PlanError(
+            "published replan contract evidence requires a readable Git history"
+        )
+    if len(completed.stdout) > MAX_WITNESS_EVIDENCE_BYTES:
+        raise PlanError("published replan contract evidence exceeds its size bound")
+    return completed.stdout
+
+
+def require_repository_history(root: Path) -> None:
+    """Refuse history that belongs to another repository than the plan's own.
+
+    A plan repository nested inside an unrelated checkout would otherwise
+    answer with the outer repository's commits, which say nothing about
+    what this repository published.
+    """
+
+    toplevel = git_evidence(root, "rev-parse", "--show-toplevel")
+    try:
+        resolved = Path(toplevel.decode("utf-8").strip()).resolve()
+    except (UnicodeDecodeError, OSError) as exc:
+        raise PlanError(
+            "published replan contract evidence requires a readable Git history"
+        ) from exc
+    if resolved != root.resolve():
+        raise PlanError(
+            "published replan contract evidence must come from the plan repository itself"
+        )
+
+
+def committed_blob_bytes(root: Path, relative: str, label: str) -> bytes:
+    """Read the exact committed bytes one repository path holds at HEAD."""
+
+    listing = git_evidence(root, "ls-tree", "--full-tree", "-z", "HEAD", "--", relative)
+    entries = [entry for entry in listing.split(b"\0") if entry]
+    if len(entries) != 1:
+        raise PlanError(f"{label} is not committed history: {relative}")
+    header, separator, name = entries[0].partition(b"\t")
+    fields = header.split(b" ")
+    if (
+        not separator
+        or name != relative.encode("utf-8")
+        or len(fields) != 3
+        or fields[0] not in GIT_REGULAR_BLOB_MODES
+        or fields[1] != b"blob"
+        or not GIT_OBJECT_ID_RE.fullmatch(fields[2])
+    ):
+        raise PlanError(f"{label} is not a committed regular file: {relative}")
+    return git_evidence(root, "cat-file", "blob", fields[2].decode("ascii"))
+
+
+def committed_replanned_rows(root: Path) -> list[tuple[str, str, str]]:
+    """Read the committed replanned index rows the publisher appended."""
+
+    raw = committed_blob_bytes(root, REPLANNED_INDEX_PATH, "published replanned index")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PlanError("published replanned index is not UTF-8") from exc
+    rows: list[tuple[str, str, str]] = []
+    for line in text.splitlines():
+        if not REPLANNED_INDEX_ROW_RE.match(line):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 3:
+            raise PlanError(f"published replanned index has a malformed row: {line}")
+        rows.append((fields[0], fields[1], fields[2]))
+    return rows
 
 
 def manifest_list(values: dict[str, str | list[str]], key: str) -> list[str]:
@@ -886,12 +1006,12 @@ def companion_baseline_required(root: Path) -> bool:
 def companion_projected_acceptance(
     successor: dict[str, Any], schema: int
 ) -> list[str] | None:
-    """Read the successor acceptance projection its own schema may use.
+    """Read the flat successor acceptance projection a schema may use.
 
-    Only the schema-1 companion baseline is accepted as published
-    authority, and its successors carry a flat digest list. Reading exactly
-    that field keeps a successor from presenting another schema's
-    projection form as if the transaction had published it.
+    The schema-1 companion baseline and a schema-2 contract both publish a
+    successor's acceptance as one flat digest list. Reading exactly that
+    field keeps a successor from presenting another schema's projection
+    form as if the transaction had published it.
     """
 
     if schema not in COMPANION_FLAT_ACCEPTANCE_SCHEMAS:
@@ -902,13 +1022,80 @@ def companion_projected_acceptance(
     return None
 
 
+def contract_source_ids(contract: dict[str, Any]) -> list[str] | None:
+    sources = contract.get("sources")
+    if not isinstance(sources, list) or not sources:
+        return None
+    ids = [
+        source.get("id") for source in sources if isinstance(source, dict)
+    ]
+    if (
+        len(ids) != len(sources)
+        or not all(isinstance(value, str) and value for value in ids)
+        or len(set(ids)) != len(ids)
+    ):
+        return None
+    return [str(value) for value in ids]
+
+
+def contract_projected_acceptance(
+    contract: dict[str, Any], successor: dict[str, Any], schema: int
+) -> list[str] | None:
+    """Read the successor acceptance projection the contract's schema publishes.
+
+    A schema-3 transaction couples several stopped sources, so it publishes
+    each successor's acceptance as per-source mappings instead of one flat
+    list. The projected acceptance is the mapped digests taken in contract
+    source order, each kept once, which is the order the transaction wrote
+    into the successor plan. Any mapping this reader cannot resolve exactly
+    projects nothing, so an unreadable projection fails the comparison
+    instead of narrowing it.
+    """
+
+    if schema not in SELF_PROJECTING_MAPPED_ACCEPTANCE_SCHEMAS:
+        return companion_projected_acceptance(successor, schema)
+    source_ids = contract_source_ids(contract)
+    mappings = successor.get("acceptance_mappings")
+    if source_ids is None or not isinstance(mappings, list) or not mappings:
+        return None
+    mapped: dict[str, list[str]] = {}
+    for mapping in mappings:
+        if not isinstance(mapping, dict) or set(mapping) != {
+            "source_id",
+            "acceptance_digests",
+        }:
+            return None
+        source_id = mapping["source_id"]
+        digests = mapping["acceptance_digests"]
+        if (
+            source_id not in source_ids
+            or source_id in mapped
+            or not isinstance(digests, list)
+            or not digests
+            or not all(isinstance(item, str) for item in digests)
+            or len(set(digests)) != len(digests)
+        ):
+            return None
+        mapped[source_id] = list(digests)
+    if [mapping["source_id"] for mapping in mappings] != [
+        source_id for source_id in source_ids if source_id in mapped
+    ]:
+        return None
+    projected: list[str] = []
+    for source_id in source_ids:
+        for digest in mapped.get(source_id, []):
+            if digest not in projected:
+                projected.append(digest)
+    return projected
+
+
 def verify_companion_projection(
     successor: dict[str, Any],
     values: dict[str, str | list[str]],
     records: list[dict[str, str]],
     plan_relative: str,
     source: str,
-    schema: int,
+    projected_acceptance: list[str] | None,
 ) -> None:
     validation = manifest_list(values, "validation")
     expected_acceptance = [
@@ -916,7 +1103,7 @@ def verify_companion_projection(
     ]
     if (
         successor.get("validation_witness_schema") != COMPANION_PROJECTION_WITNESS_SCHEMA
-        or companion_projected_acceptance(successor, schema) != expected_acceptance
+        or projected_acceptance != expected_acceptance
         or successor.get("authoritative_validation") != validation
         or successor.get("authoritative_validation_digest")
         != compact_json_digest(validation)
@@ -926,6 +1113,137 @@ def verify_companion_projection(
             "in-progress integration plan validation authority differs from the "
             f"{source}: " + plan_relative
         )
+
+
+def verify_published_contract_publication(
+    root: Path,
+    plan_relative: str,
+    contract_relative: str,
+    contract_bytes: bytes,
+) -> None:
+    """Prove a self-projecting contract is published history, not a written file.
+
+    A schema-2 or schema-3 contract carries its own successor projection,
+    so nothing inside the file distinguishes a published contract from a
+    hand-written one that claims whatever authority its author wants.
+    Shape conformity proves nothing here, because the same actor that
+    edits the plan can write a fully shaped contract beside it.
+
+    Committed history is the evidence that actor does not hold. The
+    restructuring transaction is the publisher, its contracts and archives
+    are committed and never rewritten afterwards, and plan execution has
+    no commit authority of its own. This reader therefore takes the
+    contract, the replanned index, and every archive that index binds to
+    the contract from `HEAD` rather than from the working tree, and
+    requires the live contract file to still hold those committed bytes.
+
+    The published lineage must agree with itself across three committed
+    files before the projection is read: the index registers the contract,
+    each registered archive is terminal `replanned` history naming that
+    same contract, and each archive lists this plan as one of the
+    successors the contract created.
+
+    The guarantee is bounded by commit authority. An actor that can commit
+    a forged contract, its archives, and the index row can still publish
+    it; this proof separates plan authorship from publication, not a
+    repository owner from their own history.
+    """
+
+    if not PUBLISHED_CONTRACT_RE.fullmatch(contract_relative):
+        raise PlanError(
+            "in-progress integration plan replan contract is outside the published "
+            "contract directory: " + contract_relative
+        )
+    require_repository_history(root)
+    committed_contract = committed_blob_bytes(
+        root, contract_relative, "published replan contract"
+    )
+    if committed_contract != contract_bytes:
+        raise PlanError(
+            "in-progress integration plan replan contract differs from its published "
+            "bytes: " + contract_relative
+        )
+    rows = [row for row in committed_replanned_rows(root) if row[2] == contract_relative]
+    if not rows:
+        raise PlanError(
+            "in-progress integration plan replan contract is not published in the "
+            "replanned index: " + contract_relative
+        )
+    for plan_id, archive_relative, _ in rows:
+        archive_match = PUBLISHED_ARCHIVE_RE.fullmatch(archive_relative)
+        if archive_match is None or archive_match.group(1) != plan_id:
+            raise PlanError(
+                "published replanned index row has an invalid archive path: "
+                + archive_relative
+            )
+        try:
+            archive_text = committed_blob_bytes(
+                root, archive_relative, "published replanned archive"
+            ).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PlanError(
+                "published replanned archive is not UTF-8: " + archive_relative
+            ) from exc
+        archive_values = parse_manifest_text(archive_text)
+        if (
+            manifest_lifecycle_status(archive_text) != "replanned"
+            or manifest_scalar(archive_values, "replan_contract") != contract_relative
+        ):
+            raise PlanError(
+                "published replanned archive is not terminal history for this "
+                "contract: " + archive_relative
+            )
+        if plan_relative not in manifest_list(archive_values, "successor_plans"):
+            raise PlanError(
+                "published replanned archive does not create this integration plan: "
+                + archive_relative
+            )
+
+
+def validate_self_projecting_contract_authority(
+    root: Path,
+    plan_relative: str,
+    values: dict[str, str | list[str]],
+    records: list[dict[str, str]],
+    contract_relative: str,
+    contract_bytes: bytes,
+    contract: dict[str, Any],
+    schema: int,
+) -> None:
+    """Compare live validation authority with a proven contract's projection."""
+
+    if contract.get("contract_path") != contract_relative:
+        raise PlanError(
+            "in-progress integration plan replan contract identity differs: "
+            + contract_relative
+        )
+    verify_published_contract_publication(
+        root, plan_relative, contract_relative, contract_bytes
+    )
+    successors = contract.get("successors")
+    if not isinstance(successors, list):
+        raise PlanError(
+            "published replan contract has invalid successor provenance: "
+            + contract_relative
+        )
+    matches = [
+        successor
+        for successor in successors
+        if isinstance(successor, dict) and successor.get("path") == plan_relative
+    ]
+    if len(matches) != 1:
+        raise PlanError(
+            "in-progress integration plan is not one published contract successor: "
+            + plan_relative
+        )
+    verify_companion_projection(
+        matches[0],
+        values,
+        records,
+        plan_relative,
+        "published replan contract",
+        contract_projected_acceptance(contract, matches[0], schema),
+    )
 
 
 def validate_companion_validation_authority(
@@ -942,14 +1260,14 @@ def validate_companion_validation_authority(
     weakening the sequence and then remapping the acceptance onto whatever
     remains.
 
-    Only the companion baseline is accepted as that record. A schema-2 or
-    schema-3 contract carries its own projection, but the contract is an
-    ordinary working-tree file, so a hand-written one with the right shape
-    would authorize whatever it claims. Proving such a contract needs the
-    canonical transaction verifier or committed history, neither of which
-    is available here, so a plan whose contract has no published baseline
-    record is refused rather than trusted. Schema-2 and schema-3 lineage is
-    therefore not yet supported and fails closed.
+    Schema-1 lineage is proven by the companion baseline the transaction
+    publishes beside the contract. Schema-2 and schema-3 transactions
+    publish the projection inside the contract instead, so there is no
+    second live record to compare against; that lineage is proven from
+    committed history by `verify_published_contract_publication` and stays
+    refused whenever the publication cannot be shown. A contract that is
+    neither a baseline record nor proven history is refused rather than
+    trusted, whatever shape it has.
 
     Every skip is itself a proof obligation: a plan without contract
     lineage must be unknown to a present baseline and must carry no
@@ -1052,7 +1370,23 @@ def validate_companion_validation_authority(
             records,
             plan_relative,
             "companion baseline",
-            COMPANION_BASELINE_CONTRACT_SCHEMA,
+            companion_projected_acceptance(
+                matches[0], COMPANION_BASELINE_CONTRACT_SCHEMA
+            ),
+        )
+        return
+
+    schema = contract.get("schema_version")
+    if schema in SELF_PROJECTING_CONTRACT_SCHEMAS:
+        validate_self_projecting_contract_authority(
+            root,
+            plan_relative,
+            values,
+            records,
+            contract_relative,
+            contract_bytes,
+            contract,
+            schema,
         )
         return
 

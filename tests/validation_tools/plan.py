@@ -656,7 +656,7 @@ class PlanValidationCommandsTest(unittest.TestCase):
                         module.validate_validation_witness_map(candidate, plan_path=plan)
 
         for schema in (2, 3):
-            with self.subTest(rejected=f"self-projecting schema-{schema} contract"):
+            with self.subTest(rejected=f"unpublished schema-{schema} contract"):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     plan = prepare(root, contract_schema=schema)
@@ -675,6 +675,559 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     residual = dict(unbound, **{residue_field: residue_value})
                     with self.assertRaises(module.PlanError):
                         module.validate_validation_witness_map(residual, plan_path=plan)
+
+    def test_self_projecting_contract_authority_requires_published_history(self) -> None:
+        """A schema-2 or schema-3 contract authorizes only as committed publication."""
+
+        module = load_module(PLANLIB, "self_projecting_authority_planlib")
+        plan_relative = "docs/plan/active/991-integration.md"
+        contract_relative = "docs/plan/replanned/contracts/990-source.json"
+        archive_relative = "docs/plan/replanned/2026/08/16-31/990-source.md"
+        plan_text = "status: in_progress\n"
+        first = "Preserve the contracted validation authority."
+        second = "Preserve the coupled source acceptance baseline."
+        focused_witness = "python3 -m pytest tests/focused.py"
+        validation = [focused_witness, "git diff --check"]
+
+        def witness_record(acceptance: str) -> dict[str, str]:
+            return {
+                "acceptance_sha256": self.witness_digest(acceptance),
+                "stage": "focused",
+                "witness": focused_witness,
+            }
+
+        def plan_values(acceptance: list[str], **changes: object) -> dict[str, object]:
+            records = [witness_record(item) for item in acceptance]
+            values = {
+                "status": "in_progress",
+                "validation_witness_schema": "1",
+                "replan_contract": contract_relative,
+                "integration_gates": ["the integration predecessor is checked"],
+                "acceptance": acceptance,
+                "focused_validation": [focused_witness],
+                "validation": validation,
+                "validation_witness_map": [
+                    json.dumps(record, separators=(",", ":")) for record in records
+                ],
+            }
+            values.update(changes)
+            return values
+
+        def successor(
+            schema: int, mappings: list[dict[str, object]], acceptance: list[str], **changes: object
+        ) -> dict[str, object]:
+            records = [witness_record(item) for item in acceptance]
+            projected = {
+                "authoritative_validation": validation,
+                "authoritative_validation_digest": self.compact_digest(validation),
+                "content": plan_text,
+                "content_digest": self.witness_digest(plan_text),
+                "id": "991",
+                "path": plan_relative,
+                "validation_witness_map_digest": self.compact_digest(records),
+                "validation_witness_schema": 1,
+            }
+            if schema == 2:
+                projected["acceptance_digests"] = [
+                    self.witness_digest(item) for item in acceptance
+                ]
+                projected["integration"] = True
+            else:
+                projected["acceptance_mappings"] = mappings
+                projected["integration_source_ids"] = [
+                    mapping["source_id"] for mapping in mappings
+                ]
+            projected.update(changes)
+            return projected
+
+        def contract(
+            schema: int,
+            *,
+            acceptance: list[str] | None = None,
+            mappings: list[dict[str, object]] | None = None,
+            source_ids: list[str] | None = None,
+            successors: list[dict[str, object]] | None = None,
+            **changes: object,
+        ) -> dict[str, object]:
+            acceptance = acceptance or [first]
+            mappings = mappings or [
+                {
+                    "acceptance_digests": [self.witness_digest(item) for item in acceptance],
+                    "source_id": "990",
+                }
+            ]
+            body = {
+                "contract_path": contract_relative,
+                "created_at": "2026-08-27T23:49:22.747941+00:00",
+                "dirty_product_paths": [],
+                "schema_version": schema,
+                "successors": (
+                    successors
+                    if successors is not None
+                    else [successor(schema, mappings, acceptance)]
+                ),
+            }
+            if schema == 2:
+                body.update(
+                    {
+                        "archive_path": archive_relative,
+                        "reason_codes": ["scope_drift"],
+                        "source": {"id": "990"},
+                    }
+                )
+            else:
+                body.update(
+                    {
+                        "prerequisite_plans": [],
+                        "rebind_record_digests": [],
+                        "source_head": "0" * 40,
+                        "sources": [{"id": value} for value in (source_ids or ["990"])],
+                    }
+                )
+            body.update(changes)
+            return body
+
+        archive_text = (
+            "# Stopped source\n\n"
+            "status: replanned\n"
+            f"replan_contract: {contract_relative}\n"
+            "successor_plans:\n"
+            f"  - {plan_relative}\n"
+            "\n## Tasks\n"
+        )
+        index_text = (
+            "# Replanned Plan Index\n\nid\tpath\tcontract\n"
+            f"990\t{archive_relative}\t{contract_relative}\n"
+        )
+
+        def write(root: Path, relative: str, text: str) -> None:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+
+        def commit_repository(root: Path) -> None:
+            for args in (
+                ("init", "-q"),
+                ("config", "user.email", "test@example.invalid"),
+                ("config", "user.name", "Test"),
+                ("add", "-A"),
+                ("-c", "commit.gpgsign=false", "commit", "-qm", "publish restructuring"),
+            ):
+                subprocess.run(["git", *args], cwd=root, check=True)
+
+        def publish(
+            root: Path,
+            schema: int,
+            *,
+            files: dict[str, str | None] | None = None,
+            commit: bool = True,
+            after: dict[str, str] | None = None,
+        ) -> Path:
+            published: dict[str, str | None] = {
+                plan_relative: plan_text,
+                contract_relative: self.indented_json(contract(schema)),
+                archive_relative: archive_text,
+                "docs/plan/replanned.md": index_text,
+            }
+            published.update(files or {})
+            for relative, text in published.items():
+                if text is None:
+                    continue
+                write(root, relative, text)
+            if commit:
+                commit_repository(root)
+            for relative, text in (after or {}).items():
+                write(root, relative, text)
+            return root / plan_relative
+
+        for schema in (2, 3):
+            with self.subTest(admitted=f"published schema-{schema} contract"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    plan = publish(Path(tmp), schema)
+                    self.assertEqual(
+                        module.validate_validation_witness_map(
+                            plan_values([first]), plan_path=plan
+                        )[0]["stage"],
+                        "focused",
+                    )
+
+        with self.subTest(admitted="schema-3 acceptance mapped across coupled sources"):
+            with tempfile.TemporaryDirectory() as tmp:
+                mappings = [
+                    {"acceptance_digests": [self.witness_digest(first)], "source_id": "990"},
+                    {"acceptance_digests": [self.witness_digest(second)], "source_id": "989"},
+                ]
+                plan = publish(
+                    Path(tmp),
+                    3,
+                    files={
+                        contract_relative: self.indented_json(
+                            contract(
+                                3,
+                                acceptance=[first, second],
+                                mappings=mappings,
+                                source_ids=["990", "989"],
+                            )
+                        )
+                    },
+                )
+                self.assertEqual(
+                    len(
+                        module.validate_validation_witness_map(
+                            plan_values([first, second]), plan_path=plan
+                        )
+                    ),
+                    2,
+                )
+
+        forged = self.indented_json(
+            contract(
+                3,
+                created_at="not-a-timestamp",
+                source_head="not-a-commit",
+                successors=[
+                    successor(
+                        3,
+                        [
+                            {
+                                "acceptance_digests": [self.witness_digest(first)],
+                                "source_id": "990",
+                            }
+                        ],
+                        [first],
+                        authoritative_validation=["git diff --check"],
+                        authoritative_validation_digest=self.compact_digest(
+                            ["git diff --check"]
+                        ),
+                    )
+                ],
+            )
+        )
+        weakened = plan_values(
+            [first],
+            validation=["git diff --check"],
+            focused_validation=[],
+            validation_witness_map=[
+                json.dumps(
+                    {
+                        "acceptance_sha256": self.witness_digest(first),
+                        "stage": "authoritative",
+                        "witness": "git diff --check",
+                        "authoritative_only_reason": "requires the complete integrated candidate",
+                    },
+                    separators=(",", ":"),
+                )
+            ],
+        )
+        with self.subTest(admitted="published lineage under a redirected Git environment"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "repository"
+                root.mkdir()
+                plan = publish(root, 3)
+                foreign = Path(tmp) / "foreign"
+                foreign.mkdir()
+                for relative, text in (
+                    (contract_relative, forged),
+                    (archive_relative, archive_text),
+                    ("docs/plan/replanned.md", index_text),
+                ):
+                    write(foreign, relative, text)
+                commit_repository(foreign)
+                previous = os.environ.get("GIT_DIR")
+                os.environ["GIT_DIR"] = str(foreign / ".git")
+                try:
+                    self.assertEqual(
+                        module.validate_validation_witness_map(
+                            plan_values([first]), plan_path=plan
+                        )[0]["stage"],
+                        "focused",
+                    )
+                finally:
+                    if previous is None:
+                        os.environ.pop("GIT_DIR", None)
+                    else:
+                        os.environ["GIT_DIR"] = previous
+
+        rejected: tuple[tuple[str, int, dict[str, object], dict[str, object]], ...] = (
+            ("no repository history", 3, {"commit": False}, {}),
+            (
+                "full-shaped forged contract substituted after publication",
+                3,
+                {"after": {contract_relative: forged}},
+                {"values": weakened},
+            ),
+            (
+                "full-shaped forged contract present only in the working tree",
+                3,
+                {
+                    "files": {contract_relative: None},
+                    "after": {contract_relative: forged},
+                },
+                {"values": weakened},
+            ),
+            (
+                "full-shaped forged contract committed without lineage",
+                3,
+                {
+                    "files": {
+                        contract_relative: forged,
+                        "docs/plan/replanned.md": "# Replanned Plan Index\n\nid\tpath\tcontract\n",
+                    }
+                },
+                {"values": weakened},
+            ),
+            (
+                "contract left uncommitted",
+                3,
+                {"files": {contract_relative: None}, "after": {
+                    contract_relative: self.indented_json(contract(3))
+                }},
+                {},
+            ),
+            (
+                "contract drifted after publication",
+                3,
+                {
+                    "after": {
+                        contract_relative: self.indented_json(
+                            contract(3, created_at="2026-08-28T00:00:00+00:00")
+                        )
+                    }
+                },
+                {},
+            ),
+            (
+                "contract unregistered in the published index",
+                3,
+                {"files": {"docs/plan/replanned.md": "# Replanned Plan Index\n\nid\tpath\tcontract\n"}},
+                {},
+            ),
+            (
+                "index row added only in the working tree",
+                3,
+                {
+                    "files": {
+                        "docs/plan/replanned.md": "# Replanned Plan Index\n\nid\tpath\tcontract\n"
+                    },
+                    "after": {"docs/plan/replanned.md": index_text},
+                },
+                {},
+            ),
+            (
+                "archive is not terminal replanned history",
+                3,
+                {"files": {archive_relative: archive_text.replace("status: replanned", "status: deferred")}},
+                {},
+            ),
+            (
+                "archive names another contract",
+                3,
+                {
+                    "files": {
+                        archive_relative: archive_text.replace(
+                            contract_relative,
+                            "docs/plan/replanned/contracts/900-other.json",
+                        )
+                    }
+                },
+                {},
+            ),
+            (
+                "archive does not create this plan",
+                3,
+                {
+                    "files": {
+                        archive_relative: archive_text.replace(
+                            plan_relative, "docs/plan/active/992-other.md"
+                        )
+                    }
+                },
+                {},
+            ),
+            (
+                "contract identity differs from its published path",
+                3,
+                {
+                    "files": {
+                        contract_relative: self.indented_json(
+                            contract(
+                                3,
+                                contract_path="docs/plan/replanned/contracts/900-other.json",
+                            )
+                        )
+                    }
+                },
+                {},
+            ),
+            ("weakened authoritative sequence", 3, {}, {"values": weakened}),
+            (
+                "remapped witness digest",
+                3,
+                {
+                    "files": {
+                        contract_relative: self.indented_json(
+                            contract(
+                                3,
+                                successors=[
+                                    successor(
+                                        3,
+                                        [
+                                            {
+                                                "acceptance_digests": [
+                                                    self.witness_digest(first)
+                                                ],
+                                                "source_id": "990",
+                                            }
+                                        ],
+                                        [first],
+                                        validation_witness_map_digest="sha256:" + "0" * 64,
+                                    )
+                                ],
+                            )
+                        )
+                    }
+                },
+                {},
+            ),
+            (
+                "duplicate successor entries",
+                3,
+                {
+                    "files": {
+                        contract_relative: self.indented_json(
+                            contract(
+                                3,
+                                successors=[
+                                    successor(
+                                        3,
+                                        [
+                                            {
+                                                "acceptance_digests": [
+                                                    self.witness_digest(first)
+                                                ],
+                                                "source_id": "990",
+                                            }
+                                        ],
+                                        [first],
+                                    )
+                                ]
+                                * 2,
+                            )
+                        )
+                    }
+                },
+                {},
+            ),
+            (
+                "acceptance mapped from an unknown source",
+                3,
+                {
+                    "files": {
+                        contract_relative: self.indented_json(
+                            contract(
+                                3,
+                                mappings=[
+                                    {
+                                        "acceptance_digests": [self.witness_digest(first)],
+                                        "source_id": "999",
+                                    }
+                                ],
+                            )
+                        )
+                    }
+                },
+                {},
+            ),
+            (
+                "acceptance mappings out of published source order",
+                3,
+                {
+                    "files": {
+                        contract_relative: self.indented_json(
+                            contract(
+                                3,
+                                acceptance=[first, second],
+                                mappings=[
+                                    {
+                                        "acceptance_digests": [self.witness_digest(second)],
+                                        "source_id": "989",
+                                    },
+                                    {
+                                        "acceptance_digests": [self.witness_digest(first)],
+                                        "source_id": "990",
+                                    },
+                                ],
+                                source_ids=["990", "989"],
+                            )
+                        )
+                    }
+                },
+                {"values": plan_values([first, second])},
+            ),
+            (
+                "schema-2 acceptance projection drift",
+                2,
+                {
+                    "files": {
+                        contract_relative: self.indented_json(
+                            contract(
+                                2,
+                                successors=[
+                                    successor(
+                                        2,
+                                        [],
+                                        [first],
+                                        acceptance_digests=[self.witness_digest(second)],
+                                    )
+                                ],
+                            )
+                        )
+                    }
+                },
+                {},
+            ),
+        )
+        for label, schema, published, expectation in rejected:
+            with self.subTest(rejected=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    plan = publish(Path(tmp), schema, **published)  # type: ignore[arg-type]
+                    candidate = expectation.get("values") or plan_values([first])
+                    with self.assertRaises(module.PlanError):
+                        module.validate_validation_witness_map(candidate, plan_path=plan)
+
+        with self.subTest(rejected="contract outside the published contract directory"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                stray = "docs/plan/replanned/990-source.json"
+                publish(
+                    root,
+                    3,
+                    files={
+                        stray: self.indented_json(contract(3, contract_path=stray)),
+                        "docs/plan/replanned.md": (
+                            "# Replanned Plan Index\n\nid\tpath\tcontract\n"
+                            f"990\t{archive_relative}\t{stray}\n"
+                        ),
+                        archive_relative: archive_text.replace(contract_relative, stray),
+                    },
+                )
+                with self.assertRaises(module.PlanError):
+                    module.validate_validation_witness_map(
+                        plan_values([first], replan_contract=stray),
+                        plan_path=root / plan_relative,
+                    )
+
+        with self.subTest(rejected="history from an enclosing repository"):
+            with tempfile.TemporaryDirectory() as tmp:
+                outer = Path(tmp)
+                nested = outer / "project"
+                nested.mkdir()
+                publish(nested, 3, commit=False)
+                commit_repository(outer)
+                with self.assertRaises(module.PlanError):
+                    module.validate_validation_witness_map(
+                        plan_values([first]), plan_path=nested / plan_relative
+                    )
 
     def test_context_path_identity_holds_without_a_static_witness(self) -> None:
         module = load_module(PLANLIB, "focused_context_identity_planlib")
