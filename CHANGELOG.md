@@ -2,6 +2,10 @@
 
 ## 未リリース
 
+- 受入条件と最も早い検証witnessの対応付けを、root と生成 project の双方で同じ規定として固定しました。
+  witness map の方針文を AGENTS と orchestration の各文書で一意に特定し、段階名、静的witnessの述語、`authoritative_only_reason`、最終検証suiteを弱めない条件を marker として検査したうえで、root と生成側の一致を求めます。
+  witness enforcement を運ぶ生成 source を Copier 更新の単一 inventory へ結び付け、生成 project が map なしの統合lane と、限定検証で証明できるのに最終検証だけを最初のwitnessとする定義を拒否することを smoke で確認します。
+
 - チーム共有用の HTML 報告を、project 所有の Git 追跡先 `docs/human-report/<report-id>/` へ明示コマンドで公開できるようにしました。
   公開は `human_report_shared_mode` で選択し、構造化 source を review 対象、HTML をそこから決定的に導出する公開物として扱います。
   公開コマンドは stage も commit もせず、上書きは明示 supersede だけを受け付けます。

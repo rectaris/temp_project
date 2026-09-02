@@ -29,7 +29,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/plan/active/167-integrate-validation-witness-enforcement.md
+  - docs/plan/checked/2026/09/01-15/167-integrate-validation-witness-enforcement.md
   - docs/plan/replanned/2026/08/16-31/133-evaluate-resource-bounded-orchestration.md
   - tests/fixtures/orchestration/evaluation-protocol.md
 required_specs:

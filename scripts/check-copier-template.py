@@ -1199,7 +1199,25 @@ def require_update_boundaries(copier_yml: str) -> None:
             fail(f"copier.yml missing namespaced-layout migration marker: {marker}")
 
 
+VALIDATION_WITNESS_UPDATE_SOURCES = (
+    "template/.project-agent-workflow/AGENTS.md.jinja",
+    "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+    "template/.project-agent-workflow/scripts/planlib.py",
+    "template/.project-agent-workflow/scripts/plan_validation_commands.py",
+    "template/.project-agent-workflow/scripts/restructure-plan.py",
+)
+
+
 def require_validation_witness_copier_transition(copier_yml: str) -> None:
+    """Bind the witness boundary and its enforcement to one update inventory.
+
+    The fixture copies and stages the update source from a single inventory,
+    so a source that leaves the inventory is silently no longer part of the
+    update the fixture proves. Requiring the policy statements and the plan
+    commands that enforce the witness map to stay in that inventory keeps the
+    fixture an update of the enforcement, not only of the migration boundary.
+    """
+
     migration_script = "scripts/snapshot-validation-witness-provenance.py"
     expected_migrations = [
         {
@@ -1235,7 +1253,11 @@ def require_validation_witness_copier_transition(copier_yml: str) -> None:
 
     inventory_path = "tests/fixtures/orchestration/copier-update-source-inventory.txt"
     inventory = read(inventory_path).splitlines()
-    for required in ("copier.yml", migration_script):
+    for required in (
+        "copier.yml",
+        migration_script,
+        *VALIDATION_WITNESS_UPDATE_SOURCES,
+    ):
         if inventory.count(required) != 1:
             fail(f"Copier update source inventory must contain exactly one {required}")
 

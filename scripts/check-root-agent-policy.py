@@ -169,6 +169,43 @@ VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS = (
     "unrestricted same-user actor",
 )
 
+VALIDATION_WITNESS_MAP_MARKER = "validation_witness_map"
+
+# Markers every witness-map policy statement must carry, whatever depth the
+# owning document states the policy at.
+VALIDATION_WITNESS_MAP_SHARED_MARKERS = (
+    "validation_witness_schema: 1",
+    "a new or materially updated",
+    "earliest parent-owned",
+    "pre-schema project-owned integration plan",
+    "replan contract",
+    "`replanned`",
+    "narrower safe preflight",
+)
+
+# The AGENTS statement is the short rule an agent reads first, so it must keep
+# the three witness stages and the refusals that make the map fail closed.
+VALIDATION_WITNESS_MAP_AGENTS_MARKERS = (
+    "static, focused, or authoritative witness",
+    "static witness only for its named enforced predicate",
+    "reject missing coverage",
+    "a focused command labeled authoritative",
+    "authoritative-only witness without one bounded reason",
+    "never remove or weaken the authoritative `validation` suite",
+)
+
+# The orchestration statement is the detailed contract, so it must keep the
+# exact witness names and fields the plan command enforces.
+VALIDATION_WITNESS_MAP_ORCHESTRATION_MARKERS = (
+    "field absence alone never proves legacy provenance",
+    "`resolved-context-files`",
+    "`focused_validation`",
+    "`authoritative_only_reason`",
+    "reject missing, duplicate, reordered, stale, unknown, unrelated-static, "
+    "or late mappings before candidate execution",
+    "never removes, reorders, or weakens the authoritative suite",
+)
+
 
 def fail(message: str) -> None:
     print(f"root agent policy check failed: {message}", file=sys.stderr)
@@ -259,6 +296,57 @@ def check_validation_witness_migration_policy() -> None:
     )
     if root_orchestration != template_orchestration:
         fail("root/generated orchestration validation-witness migration policy differs")
+
+
+def validation_witness_map_policy_statement(
+    relative: str, markers: tuple[str, ...]
+) -> str:
+    matches = [
+        line.strip().lower()
+        for line in read(relative).splitlines()
+        if VALIDATION_WITNESS_MAP_MARKER in line
+    ]
+    if len(matches) != 1:
+        fail(
+            f"{relative} must contain exactly one validation-witness map policy statement"
+        )
+    statement = matches[0]
+    for marker in (*VALIDATION_WITNESS_MAP_SHARED_MARKERS, *markers):
+        if marker not in statement:
+            fail(f"{relative} missing validation-witness map marker: {marker}")
+    return statement
+
+
+def check_validation_witness_map_policy() -> None:
+    """Keep the root and generated witness-map policy one statement.
+
+    The generated policy is already bound by `check-copier-template.py`, and
+    the root policy is only searched for a few loose markers. Nothing compared
+    the two, so either side could drop the refusals that make the map fail
+    closed while every check still passed. Isolating the single statement in
+    each document and comparing it makes that drift a validation failure.
+    """
+
+    root_agents = validation_witness_map_policy_statement(
+        "AGENTS.md", VALIDATION_WITNESS_MAP_AGENTS_MARKERS
+    )
+    template_agents = validation_witness_map_policy_statement(
+        "template/.project-agent-workflow/AGENTS.md.jinja",
+        VALIDATION_WITNESS_MAP_AGENTS_MARKERS,
+    )
+    if root_agents != template_agents:
+        fail("root/generated AGENTS validation-witness map policy differs")
+
+    root_orchestration = validation_witness_map_policy_statement(
+        "references/orchestration.md",
+        VALIDATION_WITNESS_MAP_ORCHESTRATION_MARKERS,
+    )
+    template_orchestration = validation_witness_map_policy_statement(
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+        VALIDATION_WITNESS_MAP_ORCHESTRATION_MARKERS,
+    )
+    if root_orchestration != template_orchestration:
+        fail("root/generated orchestration validation-witness map policy differs")
 
 
 def check_agent_model_profiles() -> None:
@@ -2855,6 +2943,7 @@ def main() -> int:
     check_gitignore()
     check_agents_rules()
     check_validation_witness_migration_policy()
+    check_validation_witness_map_policy()
     check_agent_model_profiles()
     check_sandboxed_worker_fallback()
     check_reusable_skill_parity()

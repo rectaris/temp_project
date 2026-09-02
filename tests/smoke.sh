@@ -395,6 +395,88 @@ run_plan_archive_compatibility_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
 }
 
+assert_witness_plan_rejected() {
+  out=$1
+  plan=$2
+  description=$3
+  if (cd "$out" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-plan "$plan" >/dev/null 2>&1); then
+    echo "generated plan validation accepted $description" >&2
+    exit 1
+  fi
+}
+
+# The witness map is what makes an integration lane name its earliest evidence,
+# so the generated project must reject a lane that has no map and a lane whose
+# first executable witness is the authoritative suite while a declared focused
+# command would already prove the same acceptance item.
+run_validation_witness_map_smoke() {
+  out=$1
+  plan=docs/plan/active/900-witness-lane.md
+  accepted="Prove the generated witness map names the earliest parent-owned witness."
+  digest=$(printf '%s' "$accepted" | python3 -c 'import hashlib,sys; print("sha256:" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+
+  cat >"$out/$plan" <<EOF_WITNESS_PLAN
+# Witness lane
+
+status: in_progress
+task_types:
+  - environment_data_flow
+review_class: B
+human_design_required: no
+human_approval_status: not_required
+write_scope:
+  - src/witness.ts
+context_files:
+  - none
+required_specs:
+  - .project-agent-workflow/docs/agent/SPEC_VALIDATION.md
+focused_validation:
+  - git diff --check
+validation:
+  - git diff --check
+  - python3 .project-agent-workflow/scripts/lint-plan-docs.py
+acceptance:
+  - $accepted
+validation_witness_schema: 1
+validation_witness_map:
+  - {"acceptance_sha256":"$digest","stage":"focused","witness":"git diff --check"}
+integration_gates:
+  - The witness lane must name its earliest parent-owned witness before execution.
+checked_summary_ja: 受入条件を最も早いwitnessへ対応付ける。
+
+## Tasks
+
+- [ ] Prove the witness map.
+EOF_WITNESS_PLAN
+
+  (cd "$out" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-plan "$plan" >/dev/null)
+
+  original="$out/.witness-lane-original.md"
+  cp "$out/$plan" "$original"
+
+  sed -i '/^validation_witness_map:$/,+1d' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "an integration lane with no witness map"
+  cp "$original" "$out/$plan"
+
+  sed -i 's|  - {"acceptance_sha256":"'"$digest"'","stage":"focused","witness":"git diff --check"}|  - {"acceptance_sha256":"'"$digest"'","stage":"authoritative","witness":"git diff --check","authoritative_only_reason":"claims no narrower preflight exists"}|' "$out/$plan"
+  grep -q '"stage":"authoritative"' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "an authoritative witness that skips a declared focused command"
+  cp "$original" "$out/$plan"
+
+  sed -i 's|"stage":"focused","witness":"git diff --check"|"stage":"authoritative","witness":"python3 .project-agent-workflow/scripts/lint-plan-docs.py"|' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "an authoritative-only witness with no bounded reason"
+  cp "$original" "$out/$plan"
+
+  sed -i 's|"stage":"focused"|"stage":"static"|' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "a static witness that names no enforced predicate"
+  cp "$original" "$out/$plan"
+
+  sed -i 's|"acceptance_sha256":"'"$digest"'"|"acceptance_sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000"|' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "a witness map that covers no declared acceptance item"
+
+  rm "$original" "$out/$plan"
+}
+
 write_legacy_lint_bridge() {
   destination=$1
   mkdir -p "$destination/scripts"
@@ -1122,6 +1204,7 @@ Second line'
 assert_rejected_input multiline-purpose project_purpose "$multiline_purpose"
 
 run_plan_lifecycle_smoke "$tmp/typescript"
+run_validation_witness_map_smoke "$tmp/typescript"
 run_plan_archive_compatibility_smoke "$tmp/typescript"
 run_pre_v1_plan_compatibility_smoke "$tmp/typescript"
 run_plan_fail_closed_smoke "$tmp/typescript"
@@ -1404,6 +1487,11 @@ grep -q 'agent_logging:' "$tmp/typescript/.project-agent-workflow/docs/agent/spe
 grep -q 'Context compression helper: optional' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'external transcript logs as primary full-turn evidence' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'validation-witness-migration-provenance-schema: 1' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'earliest parent-owned static, focused, or authoritative witness' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'the map must never remove or weaken the authoritative `validation` suite' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'binds every acceptance item, in source order' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'never removes, reorders, or weakens the authoritative suite' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'authoritative_only_reason' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'must durably transition the attempt to `consumed` before acceptance' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Never treat the snapshot or attempt state as product acceptance evidence' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q '.project-agent-workflow/scripts/context-compress.sh' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_CONTEXT_COMPRESSION.md"

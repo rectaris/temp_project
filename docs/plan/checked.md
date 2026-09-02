@@ -198,3 +198,4 @@ id	path
 165	docs/plan/checked/2026/09/01-15/165-enforce-validation-witness-maps.md
 256	docs/plan/checked/2026/09/01-15/256-prove-self-projecting-contract-authority.md
 166	docs/plan/checked/2026/09/01-15/166-unify-copier-update-source-inventory.md
+167	docs/plan/checked/2026/09/01-15/167-integrate-validation-witness-enforcement.md
