@@ -141,6 +141,14 @@ fixture_git "$update_source" fetch -q "$root" "$target_commit"
 fixture_git "$update_source" switch -q -c migration-target FETCH_HEAD
 fixture_git "$update_source" merge-base --is-ancestor v1.2.1 HEAD
 copier_update_inventory="$root/tests/fixtures/orchestration/copier-update-source-inventory.txt"
+# The inventory is the only source of the copied and staged paths, so every
+# entry is checked against the repository it names before it is copied. A
+# blank, duplicate, absolute, traversing, dot-segment, backslash, symlinked,
+# missing, non-regular, or out-of-root entry stops the fixture instead of
+# reaching the update source.
+inventory_root=$(CDPATH= cd -- "$root" && pwd -P)
+inventory_seen="$tmp/copier-update-inventory-seen"
+: >"$inventory_seen"
 while IFS= read -r candidate_path || [ -n "$candidate_path" ]; do
   case "$candidate_path" in
     ""|/*|.|..|./*|../*|*/./*|*/../*|*/.|*/..|*//*|*\\*)
@@ -148,6 +156,28 @@ while IFS= read -r candidate_path || [ -n "$candidate_path" ]; do
       exit 1
       ;;
   esac
+  if grep -F -q -x -e "$candidate_path" "$inventory_seen"; then
+    echo "duplicate Copier update inventory path: $candidate_path" >&2
+    exit 1
+  fi
+  printf '%s\n' "$candidate_path" >>"$inventory_seen"
+  if [ -L "$root/$candidate_path" ]; then
+    echo "symlinked Copier update inventory path: $candidate_path" >&2
+    exit 1
+  fi
+  if [ ! -f "$root/$candidate_path" ]; then
+    echo "missing Copier update inventory file: $candidate_path" >&2
+    exit 1
+  fi
+  case "$candidate_path" in
+    */*) candidate_expected="$inventory_root/${candidate_path%/*}" ;;
+    *) candidate_expected="$inventory_root" ;;
+  esac
+  candidate_parent=$(CDPATH= cd -- "$(dirname -- "$root/$candidate_path")" && pwd -P)
+  if [ "$candidate_parent" != "$candidate_expected" ]; then
+    echo "out-of-root Copier update inventory path: $candidate_path" >&2
+    exit 1
+  fi
   mkdir -p "$(dirname "$update_source/$candidate_path")"
   cp "$root/$candidate_path" "$update_source/$candidate_path"
   fixture_git "$update_source" add -- "$candidate_path"

@@ -71,12 +71,20 @@ checked_summary_ja: Copier更新fixtureのcopyとGit stagingを同一inventory�
 
 ## Tasks
 
-- [ ] Review and retain only the valid parts of the existing inventory candidate.
-- [ ] Add deterministic inventory drift and invalid-path checks without duplicating the path set in test code, and prove the copy and staging connection through the checked broad checker.
-- [ ] Run focused validation and the authoritative Copier fixture once, archive, and commit.
+- [x] Review and retain only the valid parts of the existing inventory candidate.
+- [x] Add deterministic inventory drift and invalid-path checks without duplicating the path set in test code, and prove the copy and staging connection through the checked broad checker.
+- [x] Run focused validation and the authoritative Copier fixture once, archive, and commit.
 
 ## Validation Notes
 
 - This plan owns the preserved tests/copier-update.sh and inventory candidate; it does not change witness lifecycle policy or parsing.
 - Its complete Copier update is its own inventory acceptance boundary and does not replace the earlier Plan 179 or later Plan 167 authoritative run.
 - `successor_plans` preserves the immutable Plan 130 lineage; Plan 179 replaces Plan 163 only in operational dependencies.
+- 44 inventory entries were reviewed: each names one existing, non-symlinked, repository-relative regular file, and no entry is duplicated.
+- The second integration gate is met by adding `template/.project-agent-workflow/scripts/restructure-plan.py`, the generated command Plan 164 introduced and the fixture runs as `.project-agent-workflow/scripts/restructure-plan.py --verify`. Every other Plan 179, 164, and 165 source path was already declared.
+- Plans 186 and 191 introduced only root checker sources (`scripts/check-copier-template.py`, `scripts/project_workflow/*.py`). The fixture runs them from the repository, never from the update source, so they are not update source paths and stay out of the inventory.
+- The fixture now rejects duplicate, symlinked, missing, non-regular, and out-of-root entries before copying, next to the existing blank, absolute, traversal, dot-segment, and backslash checks. The path set is read only from the inventory file; no rejection duplicates it.
+- Each rejection was exercised once against the real fixture with one temporarily appended entry: duplicate, missing, directory, symlinked file, and a path under a root symlink that resolves outside the repository. Every case stopped before any copy or staging.
+- Focused validation: `python3 tests/test-validation-tools.py`, `python3 scripts/check-copier-template.py`, `git diff --check`. The checker still binds the single inventory declaration and the single inventory-driven copy and staging loop.
+- Authoritative validation ran once after the candidate was complete: `python3 tests/test-validation-tools.py`, `tests/copier-update.sh --require-copier`, `git diff --check`, plus `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- Activation required one recorded activation rebind record, because the rebind baseline projection for this plan was still `deferred`. The plan was restored to that recorded deferred state before the activation transaction cleared the deferred reason and rebound the checked Plan 165 predecessor.

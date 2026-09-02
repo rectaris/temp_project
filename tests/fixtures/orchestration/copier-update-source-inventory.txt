@@ -23,6 +23,7 @@ template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja
 template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
 template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja
 template/.project-agent-workflow/scripts/planlib.py
+template/.project-agent-workflow/scripts/restructure-plan.py
 template/.project-agent-workflow/scripts/retire-merged-worktrees.py
 template/.project-agent-workflow/ownership.yaml
 template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py
