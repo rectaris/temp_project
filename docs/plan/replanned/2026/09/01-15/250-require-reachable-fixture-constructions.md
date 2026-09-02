@@ -1,7 +1,6 @@
 # Require reachable pre-schema fixture constructions
 
-status: backlog
-primary_invariant: the focused checker rejects a bound pre-schema construction whose enclosing command list can be skipped, so the constructed plan, archive, and contract cannot be made absent while their bound bodies stay byte-identical
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -47,11 +46,16 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
   - docs/plan/checked/2026/08/16-31/246-bind-pre-schema-fixture-contents.md
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/250-require-reachable-fixture-constructions.md
+replan_contract: docs/plan/replanned/contracts/250-require-reachable-fixture-constructions.json
 integration_gates:
-  - do not edit, stage, or commit tests/copier-update.sh in this plan; the committed fixture is the read-only subject under test
-  - do not edit scripts/check-copier-template.py in this plan; checked Plan 246 owns the bound construction text
-  - keep the committed fixture passing --check and keep every existing rejection test passing
-  - Plan 247 must not resume until this plan is checked
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/263-replan-reachable-fixture-constructions.md
+inherited_acceptance_digests:
+  - sha256:251de7e9d22d4d2657f9b3890114005a890bceab1a44b54dda2f63cf690d96d1
 checked_summary_ja: 事前スキーマ構築が到達不能な分岐や未呼出関数に置かれた場合を拒否し、bodyの一致だけで通らないようにする。
 
 ## Decisions
