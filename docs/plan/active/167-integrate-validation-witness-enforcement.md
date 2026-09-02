@@ -1,6 +1,6 @@
 # Integrate validation witness enforcement
 
-status: backlog
+status: in_progress
 primary_invariant: the combined successor state proves every Plan 130 acceptance clause through its earliest parent-owned witness while preserving the complete authoritative suite
 task_types:
   - planning_docs
@@ -99,3 +99,9 @@ checked_summary_ja: 旧形式移行、再計画契約、witness検証、Copier i
 - The source authoritative suite was never run under Plan 130 and remains available for this final integration plan.
 - This plan's complete Copier update is the Plan 130 integration boundary and remains distinct from the Plan 179 and Plan 166 authoritative runs.
 - `successor_plans` preserves the immutable Plan 130 lineage; Plan 179 replaces the replanned Plan 163 member in operational dependencies, and Plan 192 is the next operational plan after this gate.
+- `integration_gates` の二つ目が求める Plan 192 への checked predecessor 引き渡しは waiver とする。
+  Plan 192 は `docs/plan/shelved/192-freeze-resource-evaluation-contract.md` にあり、`status: shelved` である。
+  shelved plan は実行しないとオーナーが決めた plan であり、それを待つ gate は満たされることがない。
+  この waiver が省く保証は、本planの checked archive path を Plan 192 の `predecessor_plans` と `integration_gates` へ実際に反映することである。
+  Plan 192 が `docs/plan/backlog/` または active 索引へ戻った場合、この義務は再び有効になる。
+- checked Plans 131 と 171 は read-only のまま扱い、本planの `write_scope` にも含めない。
