@@ -1,6 +1,7 @@
 # Unify Copier update copy and staging inventory
 
-status: backlog
+status: deferred
+completion_deferred_reason: Plan 165 must be checked and its exact checked archive path must replace the active predecessor before implementation.
 primary_invariant: the Copier update fixture copies and stages exactly one normalized repository-relative inventory with no parallel hand-maintained path list
 task_types:
   - template_workflow
