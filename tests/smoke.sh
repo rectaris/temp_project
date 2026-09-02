@@ -9,6 +9,22 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 source_ref=${COPIER_SMOKE_REF:-}
 render_source=$root
 
+create_admitted_plan() {
+  .project-agent-workflow/scripts/create-plan.sh "$@" \
+    --purpose implementation \
+    --write-scope src/smoke-target.ts \
+    --feasibility 'existing_mechanism:The generated project already ships this workflow command.' \
+    --completion 'Keep the generated smoke target behaviour unchanged.' \
+    --witness 'npm run lint'
+}
+
+strip_admission_record() {
+  sed -i '/^plan_purpose:/d' "$1"
+  sed -i '/^feasibility_evidence:/,/^completion_conditions:/{/^completion_conditions:/!d;}' "$1"
+  sed -i '/^completion_conditions:/,/^completion_witness_map:/{/^completion_witness_map:/!d;}' "$1"
+  sed -i '/^completion_witness_map:/,/^context_files:/{/^context_files:/!d;}' "$1"
+}
+
 run_root_python() {
   if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
     (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" uv run python "$@")
@@ -65,7 +81,9 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/human-report.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
+    template/.project-agent-workflow/scripts/create-plan.sh \
     template/.project-agent-workflow/scripts/planlib.py \
+    template/.project-agent-workflow/scripts/promote-plan.sh \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
     template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
@@ -120,7 +138,9 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/human-report.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
+    template/.project-agent-workflow/scripts/create-plan.sh \
     template/.project-agent-workflow/scripts/planlib.py \
+    template/.project-agent-workflow/scripts/promote-plan.sh \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
     template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
@@ -208,7 +228,8 @@ assert_managed_orchestration_reports() {
   grep -qi 'state path outside the repository' "$managed_orchestration"
   grep -qi 'skipped known-unavailable starts' "$managed_orchestration"
   grep -qi 'aggregate patch' "$managed_orchestration"
-  grep -qi 'at most two correction rounds' "$managed_orchestration"
+  grep -qi 'at most one correction round' "$managed_orchestration"
+  grep -qi 'independent_review_limit' "$managed_orchestration"
   grep -qi 'candidate generation and correction do not run plan validation' "$managed_orchestration"
   grep -q 'focused_validation' "$managed_orchestration"
   grep -qi 'bounded parent implementation' "$managed_orchestration"
@@ -336,11 +357,11 @@ assert_generated_whitespace_range() {
 
 run_plan_lifecycle_smoke() {
   out=$1
-  (cd "$out" && .project-agent-workflow/scripts/create-plan.sh active sample --summary "Sample work." --summary-ja "サンプル作業を行う。" >/dev/null)
+  (cd "$out" && create_admitted_plan active sample --summary "Sample work." --summary-ja "サンプル作業を行う。" >/dev/null)
   (cd "$out" && test -f docs/plan/active/001-sample.md)
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
   (cd "$out" && .project-agent-workflow/scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPES=environment_data_flow$')
-  (cd "$out" && .project-agent-workflow/scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^WRITE_SCOPE=TBD$')
+  (cd "$out" && .project-agent-workflow/scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^WRITE_SCOPE=src/smoke-target.ts$')
   (cd "$out" && .project-agent-workflow/scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^CONTEXT_FILES=$')
   if grep -q '^expected_output:' "$out/docs/plan/active/001-sample.md"; then
     echo "create-plan emitted removed expected_output field" >&2
@@ -576,7 +597,7 @@ EOF_ADOPTION_MANIFEST
   fi
   sed -i 's|python3 scripts/lint-plan-docs.py; rm -rf .|python3 scripts/lint-plan-docs.py|' "$out/$legacy_plan"
 
-  managed_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active managed-root-alias --summary "Managed root alias." --summary-ja "managed 計画の root alias を拒否する。")
+  managed_plan=$(cd "$out" && create_admitted_plan active managed-root-alias --summary "Managed root alias." --summary-ja "managed 計画の root alias を拒否する。")
   sed -i 's|  - git diff --check|  - python3 scripts/lint-plan-docs.py|' "$out/$managed_plan"
   if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
     echo "lint-plan-docs accepted a root command alias in a managed plan" >&2
@@ -603,7 +624,7 @@ EOF_ADOPTION_MANIFEST
 run_plan_fail_closed_smoke() {
   out=$1
 
-  evidence_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active evidence-gate --summary "Evidence gate." --summary-ja "完了根拠を確認する。")
+  evidence_plan=$(cd "$out" && create_admitted_plan active evidence-gate --summary "Evidence gate." --summary-ja "完了根拠を確認する。")
   sed -i 's/^- \[ \] TBD$/-  [ ] TBD/' "$out/$evidence_plan"
   evidence_base=$(basename "$evidence_plan")
   evidence_id=${evidence_base%%-*}
@@ -629,7 +650,7 @@ run_plan_fail_closed_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
   sed -i 's/^status: ready_to_archive$/status: checked/' "$out/$evidence_archive"
 
-  archive_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active archive-preflight --summary "Archive preflight." --summary-ja "アーカイブ前提条件を確認する。")
+  archive_plan=$(cd "$out" && create_admitted_plan active archive-preflight --summary "Archive preflight." --summary-ja "アーカイブ前提条件を確認する。")
   archive_base=$(basename "$archive_plan")
   archive_id=${archive_base%%-*}
   sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$out/$archive_plan"
@@ -658,7 +679,7 @@ run_plan_fail_closed_smoke() {
   archive_result=$(cd "$out" && .project-agent-workflow/scripts/finalize-active-plan.sh "$archive_plan")
   grep -q '^status: checked$' "$out/$archive_result"
 
-  destination_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh backlog promotion-destination --summary "Promotion destination." --summary-ja "昇格先の競合を確認する。")
+  destination_plan=$(cd "$out" && create_admitted_plan backlog promotion-destination --summary "Promotion destination." --summary-ja "昇格先の競合を確認する。")
   destination_base=$(basename "$destination_plan")
   cp "$out/$destination_plan" "$out/docs/plan/active/$destination_base"
   if (cd "$out" && .project-agent-workflow/scripts/promote-plan.sh "$destination_plan" >/dev/null 2>&1); then
@@ -668,7 +689,7 @@ run_plan_fail_closed_smoke() {
   test -f "$out/$destination_plan"
   rm "$out/docs/plan/active/$destination_base"
 
-  id_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh backlog promotion-id --summary "Promotion id." --summary-ja "計画 ID の競合を確認する。")
+  id_plan=$(cd "$out" && create_admitted_plan backlog promotion-id --summary "Promotion id." --summary-ja "計画 ID の競合を確認する。")
   id_base=$(basename "$id_plan")
   id_value=${id_base%%-*}
   mkdir -p "$out/docs/plan/checked/2000/01/01-15"
@@ -681,7 +702,7 @@ run_plan_fail_closed_smoke() {
   test -f "$out/$id_plan"
   rm "$out/$legacy_path"
 
-  index_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh backlog promotion-index --summary "Promotion index." --summary-ja "索引の競合を確認する。")
+  index_plan=$(cd "$out" && create_admitted_plan backlog promotion-index --summary "Promotion index." --summary-ja "索引の競合を確認する。")
   index_base=$(basename "$index_plan")
   index_id=${index_base%%-*}
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --add-active "$index_id" "docs/plan/active/$index_base")
@@ -692,7 +713,38 @@ run_plan_fail_closed_smoke() {
   test -f "$out/$index_plan"
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$index_id")
 
-  mapping_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active index-id-mapping --summary "Index ID mapping." --summary-ja "索引 ID を確認する。")
+  legacy_admission=$(cd "$out" && create_admitted_plan backlog legacy-admission --summary "Legacy admission." --summary-ja "受け入れ条件のない旧計画を確認する。")
+  legacy_admission_base=$(basename "$legacy_admission")
+  legacy_admission_id=${legacy_admission_base%%-*}
+  strip_admission_record "$out/$legacy_admission"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-manifest "$legacy_admission" >/dev/null)
+  legacy_plan_count=$(find "$out/docs/plan" -name '[0-9][0-9][0-9]-*.md' | wc -l)
+  if (cd "$out" && .project-agent-workflow/scripts/promote-plan.sh "$legacy_admission" \
+      >/dev/null 2>"$out/legacy-admission.err"); then
+    echo "promote-plan accepted a backlog plan without an admission record" >&2
+    exit 1
+  fi
+  grep -q 'revise the plan in place' "$out/legacy-admission.err"
+  grep -q 'do not create another plan' "$out/legacy-admission.err"
+  test -f "$out/$legacy_admission"
+  test ! -f "$out/docs/plan/active/$legacy_admission_base"
+  test "$(find "$out/docs/plan" -name '[0-9][0-9][0-9]-*.md' | wc -l)" -eq "$legacy_plan_count"
+  grep -q '^status: backlog$' "$out/$legacy_admission"
+  rm "$out/legacy-admission.err" "$out/$legacy_admission"
+
+  legacy_active=$(cd "$out" && create_admitted_plan active legacy-active-admission --summary "Legacy active admission." --summary-ja "更新前から続く進行中計画を確認する。")
+  legacy_active_base=$(basename "$legacy_active")
+  legacy_active_id=${legacy_active_base%%-*}
+  strip_admission_record "$out/$legacy_active"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-admission "$legacy_active" >/dev/null 2>&1); then
+    echo "lint-plan-docs admitted an active plan without an admission record" >&2
+    exit 1
+  fi
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$legacy_active_id")
+  rm "$out/$legacy_active"
+
+  mapping_plan=$(cd "$out" && create_admitted_plan active index-id-mapping --summary "Index ID mapping." --summary-ja "索引 ID を確認する。")
   mapping_base=$(basename "$mapping_plan")
   mapping_id=${mapping_base%%-*}
   sed -i "s/^$mapping_id\t/999\t/" "$out/docs/plan/plan.md"
@@ -717,7 +769,7 @@ run_plan_fail_closed_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$mapping_id")
   rm "$out/$mapping_plan"
 
-  unsafe_validation=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active unsafe-validation --summary "Unsafe validation." --summary-ja "危険な検証コマンドを拒否する。")
+  unsafe_validation=$(cd "$out" && create_admitted_plan active unsafe-validation --summary "Unsafe validation." --summary-ja "危険な検証コマンドを拒否する。")
   unsafe_base=$(basename "$unsafe_validation")
   unsafe_id=${unsafe_base%%-*}
   sed -i 's|  - git diff --check|  - rm -rf .|' "$out/$unsafe_validation"
@@ -728,7 +780,7 @@ run_plan_fail_closed_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$unsafe_id")
   rm "$out/$unsafe_validation"
 
-  deferred_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active deferred-work --summary "Deferred work." --summary-ja "延期状態を確認する。")
+  deferred_plan=$(cd "$out" && create_admitted_plan active deferred-work --summary "Deferred work." --summary-ja "延期状態を確認する。")
   deferred_base=$(basename "$deferred_plan")
   deferred_id=${deferred_base%%-*}
   sed -i 's/^status: in_progress$/status: deferred/; /^checked_summary_ja:/a completion_deferred_reason: Waiting for an external prerequisite.' "$out/$deferred_plan"
@@ -743,7 +795,7 @@ run_plan_fail_closed_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$deferred_id")
   rm "$out/$deferred_plan"
 
-  replan_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active replan-required --summary "Replan required." --summary-ja "再構成停止状態を確認する。")
+  replan_plan=$(cd "$out" && create_admitted_plan active replan-required --summary "Replan required." --summary-ja "再構成停止状態を確認する。")
   replan_base=$(basename "$replan_plan")
   replan_id=${replan_base%%-*}
   sed -i 's/^status: in_progress$/status: replan_required/; /^checked_summary_ja:/a replan_reason_codes:\n  - multiple_independent_invariants' "$out/$replan_plan"
@@ -1213,7 +1265,7 @@ run_human_report_smoke "$tmp/typescript"
 run_shared_human_report_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"
 
-bad_design=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh backlog bad-human-design --summary "Bad human design." --summary-ja "設計承認の不整合を確認する。")
+bad_design=$(cd "$tmp/typescript" && create_admitted_plan backlog bad-human-design --summary "Bad human design." --summary-ja "設計承認の不整合を確認する。")
 sed -i 's/^human_design_required: .*/human_design_required: yes/' "$tmp/typescript/$bad_design"
 if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
   echo "lint-plan-docs accepted human design outside Class C" >&2
@@ -1226,7 +1278,7 @@ if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-do
 fi
 rm "$tmp/typescript/$bad_design"
 
-class_c=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh backlog class-c-approval --summary "Class C approval." --summary-ja "承認待ち計画を確認する。")
+class_c=$(cd "$tmp/typescript" && create_admitted_plan backlog class-c-approval --summary "Class C approval." --summary-ja "承認待ち計画を確認する。")
 sed -i 's/^review_class: .*/review_class: C/; s/^human_design_required: .*/human_design_required: yes/; s/^human_approval_status: .*/human_approval_status: pending/' "$tmp/typescript/$class_c"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
 if (cd "$tmp/typescript" && .project-agent-workflow/scripts/promote-plan.sh "$class_c" >/dev/null 2>&1); then
@@ -1241,7 +1293,7 @@ printf 'class C lifecycle validation passed\n' >>"$tmp/typescript/$class_c_activ
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/complete-plan.sh "$class_c_active" >/dev/null)
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/finalize-active-plan.sh "$class_c_active" >/dev/null)
 
-route_union=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh active route-union --summary "Route union." --summary-ja "複数ルートを確認する。")
+route_union=$(cd "$tmp/typescript" && create_admitted_plan active route-union --summary "Route union." --summary-ja "複数ルートを確認する。")
 sed -i '/^review_class:/i\  - security' "$tmp/typescript/$route_union"
 if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
   echo "lint-plan-docs accepted a route union with missing required specs" >&2
@@ -1260,14 +1312,14 @@ route_id=${route_base%%-*}
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$route_id")
 rm "$tmp/typescript/$route_union"
 
-good_plan=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
+good_plan=$(cd "$tmp/typescript" && create_admitted_plan active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
 sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$tmp/typescript/$good_plan"
 printf 'smoke validation passed\n' >>"$tmp/typescript/$good_plan"
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/complete-plan.sh "$good_plan" >/dev/null)
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/finalize-active-plan.sh "$good_plan" >/dev/null)
 
-bad_plan=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh active recommendation-matrix --summary "Recommendation matrix." --summary-ja "推奨案を比較する。" )
+bad_plan=$(cd "$tmp/typescript" && create_admitted_plan active recommendation-matrix --summary "Recommendation matrix." --summary-ja "推奨案を比較する。" )
 cat >>"$tmp/typescript/$bad_plan" <<'EOF_BAD_PLAN'
 ## Decision Audit
 
@@ -1595,7 +1647,7 @@ test -f "$tmp/typescript/.project-agent-workflow/scripts/sync-plan-to-linear.sh"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-commands "python3 .project-agent-workflow/scripts/validate-changes.py --print-only --json")
 sample_archive_path=$(cat "$tmp/typescript/.sample-archive-path")
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/sync-plan-to-linear.sh "$sample_archive_path" --dry-run | grep -q 'Desired status: Done')
-(cd "$tmp/broad" && .project-agent-workflow/scripts/create-plan.sh active broad-linear --summary "Exercise the Linear version 2 gate." --summary-ja "Linear version 2 ゲートを検証する。" >/dev/null)
+(cd "$tmp/broad" && create_admitted_plan active broad-linear --summary "Exercise the Linear version 2 gate." --summary-ja "Linear version 2 ゲートを検証する。" >/dev/null)
 if (cd "$tmp/broad" && .project-agent-workflow/scripts/sync-plan-to-linear.sh docs/plan/active/001-broad-linear.md --ensure-issue 2>"$tmp/broad-linear.err"); then
   echo "generic Linear adapter treated the version 2 profile as operation authorization" >&2
   exit 1

@@ -71,6 +71,45 @@ SCHEMA_THREE_CONTRACT_SOURCE_FIELDS = {
     "source_contract_path",
     "source_contract_digest",
 }
+RECONSTRUCTION_SCHEMA_VERSIONS = {1, 3, 4}
+OWNER_CONTINUATION_SCHEMA_VERSIONS = {4}
+OWNER_CONTINUATION_AUTHORIZATION_MAX_BYTES = 400
+ADMISSION_FIELDS = (
+    "plan_purpose",
+    "feasibility_evidence",
+    "completion_conditions",
+    "completion_witness_map",
+)
+PLAN_PURPOSE_VALUES = {"implementation"}
+FEASIBILITY_EVIDENCE_KINDS = {
+    "reproduced_defect",
+    "existing_mechanism",
+    "bounded_prototype",
+    "mechanical_transformation",
+}
+MAX_FEASIBILITY_EVIDENCE = 8
+MAX_COMPLETION_CONDITIONS = 8
+FEASIBILITY_EVIDENCE_MAX_BYTES = 400
+COMPLETION_CONDITION_MAX_BYTES = 400
+ADMISSION_PLACEHOLDER_VALUES = {
+    "-",
+    "?",
+    "n/a",
+    "na",
+    "none",
+    "pending",
+    "placeholder",
+    "t.b.d.",
+    "tbd",
+    "todo",
+    "unknown",
+    "xxx",
+}
+ADMISSION_LIFECYCLE_PREFIXES = (
+    "docs/plan/",
+    ".agent-logs/",
+    ".agent-artifacts/",
+)
 PLAN_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md")
 ARCHIVE_PATH_RE = re.compile(
     r"docs/plan/replanned/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/([0-9]{3}-[a-z0-9][a-z0-9-]*\.md)"
@@ -516,6 +555,120 @@ def scalar(values: dict[str, str | list[str]], key: str) -> str:
 def items(values: dict[str, str | list[str]], key: str) -> list[str]:
     value = values.get(key, [])
     return value if isinstance(value, list) else []
+
+
+def admission_placeholder(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    return stripped.lower().strip(" .") in ADMISSION_PLACEHOLDER_VALUES
+
+
+def bounded_admission_text(value: Any, maximum_bytes: int) -> bool:
+    return (
+        isinstance(value, str)
+        and value == value.strip()
+        and not admission_placeholder(value)
+        and len(value.encode("utf-8")) <= maximum_bytes
+        and all(ord(char) >= 0x20 for char in value)
+    )
+
+
+def validate_owner_continuation_authorization(value: Any) -> str:
+    """Require a bounded quotation of the owner instruction to continue implementation."""
+
+    if not bounded_admission_text(value, OWNER_CONTINUATION_AUTHORIZATION_MAX_BYTES):
+        raise RestructureError(
+            "owner_continuation_authorization must quote a bounded non-placeholder "
+            "owner instruction to continue implementation"
+        )
+    return value
+
+
+def validate_created_plan_admission(
+    manifest: dict[str, str | list[str]], label: str
+) -> None:
+    """Reject a created plan that is not an executable implementation authorization."""
+
+    if scalar(manifest, "plan_purpose") not in PLAN_PURPOSE_VALUES:
+        raise RestructureError(f"{label} must declare plan_purpose: implementation")
+    evidence_items = items(manifest, "feasibility_evidence")
+    conditions = items(manifest, "completion_conditions")
+    raw_map = items(manifest, "completion_witness_map")
+    focused = items(manifest, "focused_validation")
+    write_scope = items(manifest, "write_scope")
+    if (
+        not evidence_items
+        or len(evidence_items) > MAX_FEASIBILITY_EVIDENCE
+        or len(evidence_items) != len(set(evidence_items))
+    ):
+        raise RestructureError(
+            f"{label} feasibility_evidence must be a bounded unique non-empty list"
+        )
+    for index, raw in enumerate(evidence_items, start=1):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RestructureError(
+                f"{label} feasibility_evidence entry {index} is not valid JSON"
+            ) from exc
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"kind", "evidence"}
+            or record["kind"] not in FEASIBILITY_EVIDENCE_KINDS
+            or not bounded_admission_text(record["evidence"], FEASIBILITY_EVIDENCE_MAX_BYTES)
+        ):
+            raise RestructureError(
+                f"{label} feasibility_evidence entry {index} is not bounded admission evidence"
+            )
+    if (
+        not conditions
+        or len(conditions) > MAX_COMPLETION_CONDITIONS
+        or len(conditions) != len(set(conditions))
+        or any(
+            not bounded_admission_text(condition, COMPLETION_CONDITION_MAX_BYTES)
+            for condition in conditions
+        )
+    ):
+        raise RestructureError(
+            f"{label} completion_conditions must be bounded unique non-placeholder predicates"
+        )
+    mapped: list[str] = []
+    for index, raw in enumerate(raw_map, start=1):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RestructureError(
+                f"{label} completion_witness_map entry {index} is not valid JSON"
+            ) from exc
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"condition_sha256", "witness"}
+            or not all(isinstance(value, str) for value in record.values())
+            or not record["witness"]
+            or record["witness"] != record["witness"].strip()
+            or record["witness"] not in focused
+        ):
+            raise RestructureError(
+                f"{label} completion_witness_map entry {index} must bind a declared "
+                "focused_validation witness"
+            )
+        mapped.append(record["condition_sha256"])
+    if mapped != [sha256(condition.encode("utf-8")) for condition in conditions]:
+        raise RestructureError(
+            f"{label} completion_witness_map must cover completion_conditions "
+            "exactly once and in source order"
+        )
+    if not [
+        path
+        for path in write_scope
+        if not admission_placeholder(path)
+        and not path.startswith(ADMISSION_LIFECYCLE_PREFIXES)
+    ]:
+        raise RestructureError(
+            f"{label} is a plan-lifecycle-only successor; a numbered plan must own at "
+            "least one write path outside plan-lifecycle records"
+        )
 
 
 def acceptance_records(text: str) -> list[dict[str, str]]:
@@ -1198,21 +1351,27 @@ def validate_replanned_successor(
         raise RestructureError(
             f"invalid replanned successor contract: {expected_path}"
         ) from exc
-    if isinstance(contract, dict) and contract.get("schema_version") == 3:
+    nested_schema_version = (
+        contract.get("schema_version") if isinstance(contract, dict) else None
+    )
+    if nested_schema_version in {3, 4}:
+        nested_fields = {
+            "schema_version",
+            "created_at",
+            "contract_path",
+            "source_head",
+            "sources",
+            "dirty_product_paths",
+            "successors",
+            "prerequisite_plans",
+            "rebind_record_digests",
+        }
+        if nested_schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS:
+            nested_fields = nested_fields | {"owner_continuation_authorization"}
         exact_object(
             contract,
-            {
-                "schema_version",
-                "created_at",
-                "contract_path",
-                "source_head",
-                "sources",
-                "dirty_product_paths",
-                "successors",
-                "prerequisite_plans",
-                "rebind_record_digests",
-            },
-            f"replanned schema-3 successor contract {plan_id}",
+            nested_fields,
+            f"replanned schema-{nested_schema_version} successor contract {plan_id}",
         )
         if contract["contract_path"] != contract_path:
             raise RestructureError(
@@ -3705,8 +3864,14 @@ def validate_reservation_specs(
     return records
 
 
-def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
+def validate_schema_three_spec(
+    spec: dict[str, Any], *, schema_version: int = 3
+) -> dict[str, Any]:
     operation = spec.get("operation")
+    if schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS and operation != "reconstruct":
+        raise RestructureError(
+            "schema-4 specifications support only the reconstruct operation"
+        )
     if operation == "reserve":
         exact_object(
             spec,
@@ -3937,25 +4102,35 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 record["record_digest"] for record in rebind_records
             ],
         }
+    reconstruct_fields = {
+        "schema_version",
+        "operation",
+        "source_head",
+        "sources",
+        "dirty_product_paths",
+        "contract_path",
+        "successors",
+        "prerequisite_plans",
+        "rebindings",
+    }
+    if schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS:
+        reconstruct_fields = reconstruct_fields | {"owner_continuation_authorization"}
     exact_object(
         spec,
-        {
-            "schema_version",
-            "operation",
-            "source_head",
-            "sources",
-            "dirty_product_paths",
-            "contract_path",
-            "successors",
-            "prerequisite_plans",
-            "rebindings",
-        },
-        "schema-3 reconstruction specification",
+        reconstruct_fields,
+        f"schema-{schema_version} reconstruction specification",
     )
     if operation != "reconstruct":
         raise RestructureError(
             "schema-3 operation must be reconstruct, rebind, rebind_lineage, or reserve"
         )
+    owner_continuation_authorization = (
+        validate_owner_continuation_authorization(
+            spec["owner_continuation_authorization"]
+        )
+        if schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS
+        else None
+    )
     source_head = spec["source_head"]
     if (
         not isinstance(source_head, str)
@@ -4154,6 +4329,9 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
         for index, entry in enumerate(raw_prerequisites)
     ]
     created_entries = [*successors, *prerequisites]
+    if schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS:
+        for entry in created_entries:
+            validate_created_plan_admission(entry["manifest"], entry["path"])
     created_paths = [entry["path"] for entry in created_entries]
     created_ids = [entry["id"] for entry in created_entries]
     if (
@@ -4322,7 +4500,7 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
     ):
         raise RestructureError("replanned index conflicts with coupled sources")
     contract = {
-        "schema_version": 3,
+        "schema_version": schema_version,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "contract_path": contract_path,
         "source_head": source_head,
@@ -4355,6 +4533,8 @@ def validate_schema_three_spec(spec: dict[str, Any]) -> dict[str, Any]:
             record["record_digest"] for record in rebind_records
         ],
     }
+    if owner_continuation_authorization is not None:
+        contract["owner_continuation_authorization"] = owner_continuation_authorization
     archives = [
         (
             source["archive_path"],
@@ -4477,10 +4657,10 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 "result_path": state["contract_path"],
             }
         )
-    elif schema_version == 3 and not isinstance(schema_version, bool):
-        state = validate_schema_three_spec(spec)
+    elif schema_version in {3, 4} and not isinstance(schema_version, bool):
+        state = validate_schema_three_spec(spec, schema_version=schema_version)
     else:
-        raise RestructureError("schema_version must be 1 or 3")
+        raise RestructureError("schema_version must be 1, 3, or 4")
     rows = (
         replanned_rows(REPLANNED_INDEX.read_text(encoding="utf-8"))
         if REPLANNED_INDEX.is_file()
@@ -6996,22 +7176,39 @@ def verify_schema_three_contract(
     live_successors: dict[str, dict[str, Any]],
     contract_digests: dict[str, str],
     direct_active_sources: dict[str, str],
+    schema_version: int = 3,
 ) -> None:
+    contract_fields = {
+        "schema_version",
+        "created_at",
+        "contract_path",
+        "source_head",
+        "sources",
+        "dirty_product_paths",
+        "successors",
+        "prerequisite_plans",
+        "rebind_record_digests",
+    }
+    if schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS:
+        contract_fields = contract_fields | {"owner_continuation_authorization"}
     exact_object(
         contract,
-        {
-            "schema_version",
-            "created_at",
-            "contract_path",
-            "source_head",
-            "sources",
-            "dirty_product_paths",
-            "successors",
-            "prerequisite_plans",
-            "rebind_record_digests",
-        },
-        f"schema-3 contract {contract_path}",
+        contract_fields,
+        f"schema-{schema_version} contract {contract_path}",
     )
+    if schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS:
+        validate_owner_continuation_authorization(
+            contract["owner_continuation_authorization"]
+        )
+        for entry in [*contract["successors"], *contract["prerequisite_plans"]]:
+            if not isinstance(entry, dict) or not isinstance(entry.get("content"), str):
+                raise RestructureError(
+                    f"schema-{schema_version} contract {contract_path} has an invalid created plan"
+                )
+            validate_created_plan_admission(
+                parse_manifest(entry["content"]),
+                f"schema-{schema_version} contract {contract_path} plan {entry.get('path')}",
+            )
     if contract["contract_path"] != contract_path:
         raise RestructureError("schema-3 contract identity mismatch")
     try:
@@ -7508,7 +7705,7 @@ def verify_repository_contracts(
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RestructureError(f"invalid durable contract for {plan_id}: {exc}") from exc
         schema_version = contract.get("schema_version") if isinstance(contract, dict) else None
-        if schema_version == 3:
+        if schema_version in {3, 4}:
             if contract_path in verified_schema_three:
                 continue
             verify_schema_three_contract(
@@ -7520,6 +7717,7 @@ def verify_repository_contracts(
                 live_successors,
                 contract_digests,
                 direct_active_sources,
+                schema_version=schema_version,
             )
             verified_schema_three.add(contract_path)
             continue

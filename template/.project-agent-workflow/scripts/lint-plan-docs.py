@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import subprocess
 import sys
@@ -310,6 +312,38 @@ def lint_manifest(path: Path) -> None:
             fail(f"{path} write_scope and context_files overlap: {', '.join(overlap)}")
     if not planlib.manifest_scalar(values, "checked_summary_ja").strip():
         fail(f"{path} checked_summary_ja must be non-empty")
+    if not is_checked and not is_replanned and planlib.has_admission_record(values):
+        try:
+            planlib.validate_admission_record(values)
+        except planlib.PlanError as exc:
+            fail(f"{path} admission record is invalid: {exc}")
+
+
+ADMISSION_REVISION_HINT = (
+    "revise the plan in place to declare plan_purpose: implementation, bounded "
+    "feasibility_evidence, completion_conditions, and a completion_witness_map "
+    "bound to declared focused_validation commands; do not create another plan "
+    "to carry that metadata"
+)
+
+
+def check_admission(path: Path) -> None:
+    """Refuse to admit a numbered plan that cannot start bounded implementation."""
+
+    if not path.is_absolute():
+        path = planlib.ROOT / path
+    try:
+        values = planlib.parse_manifest(path)
+    except planlib.PlanError as exc:
+        fail(str(exc))
+    if not planlib.has_admission_record(values):
+        fail(
+            f"{path} has no executable admission record: {ADMISSION_REVISION_HINT}"
+        )
+    try:
+        planlib.validate_admission_record(values)
+    except planlib.PlanError as exc:
+        fail(f"{path} admission record is invalid: {exc}; {ADMISSION_REVISION_HINT}")
 
 
 def lint_replan_fields(
@@ -417,10 +451,86 @@ def lint_manifests() -> None:
             lint_manifest(path)
 
 
+def render_admission_block() -> str:
+    """Render the admission manifest block from bounded environment inputs."""
+
+    def entries(name: str) -> list[str]:
+        raw = os.environ.get(name, "")
+        return [line for line in raw.split("\n") if line.strip()]
+
+    purpose = os.environ.get("PLAN_ADMISSION_PURPOSE", "").strip()
+    if purpose not in planlib.PLAN_PURPOSE_VALUES:
+        fail("plan creation requires --purpose implementation")
+    write_scope = entries("PLAN_ADMISSION_WRITE_SCOPE")
+    completions = entries("PLAN_ADMISSION_COMPLETIONS")
+    witnesses = entries("PLAN_ADMISSION_WITNESSES")
+    feasibility = entries("PLAN_ADMISSION_FEASIBILITY")
+    if len(completions) != len(witnesses):
+        fail("each --completion condition needs exactly one --witness command")
+
+    evidence_records: list[dict[str, str]] = []
+    for item in feasibility:
+        kind, separator, evidence = item.partition(":")
+        if not separator:
+            fail(f"--feasibility must use <kind>:<evidence>: {item}")
+        evidence_records.append({"kind": kind.strip(), "evidence": evidence.strip()})
+
+    values: dict[str, str | list[str]] = {
+        "plan_purpose": purpose,
+        "write_scope": write_scope,
+        "focused_validation": list(dict.fromkeys(witnesses)),
+        "feasibility_evidence": [
+            json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            for record in evidence_records
+        ],
+        "completion_conditions": completions,
+        "completion_witness_map": [
+            json.dumps(
+                {
+                    "condition_sha256": planlib.acceptance_digest(condition),
+                    "witness": witness,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for condition, witness in zip(completions, witnesses)
+        ],
+    }
+    try:
+        planlib.validate_admission_record(values)
+    except planlib.PlanError as exc:
+        fail(f"plan creation admission inputs are invalid: {exc}")
+
+    lines = [f"plan_purpose: {purpose}"]
+    for field in (
+        "write_scope",
+        "focused_validation",
+        "feasibility_evidence",
+        "completion_conditions",
+        "completion_witness_map",
+    ):
+        lines.append(f"{field}:")
+        items = values[field]
+        assert isinstance(items, list)
+        lines.extend(f"  - {item}" for item in items)
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--next-id", action="store_true", help="print the next available plan id")
     parser.add_argument("--check-manifest", metavar="PLAN", help="validate one plan manifest")
+    parser.add_argument(
+        "--render-admission",
+        action="store_true",
+        help="render the admission manifest block from bounded environment inputs",
+    )
+    parser.add_argument(
+        "--check-admission",
+        metavar="PLAN",
+        help="require the executable admission record of one plan",
+    )
     parser.add_argument("--print-context", metavar="PLAN", help="print shell context for a plan manifest")
     parser.add_argument("--add-active", nargs=2, metavar=("ID", "PATH"), help="add or replace an active index row")
     parser.add_argument("--remove-active", metavar="ID", help="remove an active index row")
@@ -438,6 +548,12 @@ def main() -> int:
         return 0
     if args.check_manifest:
         lint_manifest(Path(args.check_manifest))
+        return 0
+    if args.render_admission:
+        print(render_admission_block())
+        return 0
+    if args.check_admission:
+        check_admission(Path(args.check_admission))
         return 0
     if args.print_context:
         try:

@@ -167,7 +167,9 @@ def require_orchestration_policy_markers() -> None:
         "receipt claims are advisory only",
         "run-sandboxed-plan-worker.py correct",
         "aggregate patch",
-        "at most two correction rounds",
+        "at most one correction round",
+        "independent_review_limit` is two",
+        "third review request is refused",
         "rejected patch never touches the source",
         "candidate generation and correction do not run plan validation",
         "parent diff review",
@@ -244,6 +246,16 @@ def require_orchestration_policy_markers() -> None:
         "fresh run",
         "never reopen a stopped ledger run",
         "never relabel requirement, authority, or security-boundary drift",
+        "implementation-start authorization",
+        "plan_purpose: implementation",
+        "feasibility_evidence",
+        "completion_conditions",
+        "completion_witness_map",
+        "outside plan-lifecycle records",
+        "run-wide independent review budget is exhausted",
+        "owner_continuation_authorization",
+        "schema 4",
+        "a third review is refused",
     ):
         if marker not in template_agents:
             fail(f"template managed AGENTS missing marker: {marker}")
@@ -266,6 +278,17 @@ def require_orchestration_policy_markers() -> None:
         "never reopen a `repair_required` execution run",
         "fresh plan digest",
         "security-boundary",
+        "plan admission contract",
+        "plan_purpose",
+        "feasibility_evidence",
+        "completion_conditions",
+        "completion_witness_map",
+        "reproduced_defect",
+        "existing_mechanism",
+        "bounded_prototype",
+        "mechanical_transformation",
+        "independent_review_limit` is two",
+        "owner_continuation_authorization",
     ):
         if marker not in template_plan_workflow:
             fail(f"template SPEC_PLAN_WORKFLOW missing independent-repair marker: {marker}")
@@ -293,6 +316,9 @@ def require_orchestration_policy_markers() -> None:
         "acceptance",
         "run-sandboxed-plan-worker.py run",
         "read-only",
+        "at most one correction round",
+        "independent_review_limit` is two",
+        "third review request is refused",
     ):
         if marker not in root_orchestration:
             fail(f"root orchestration policy missing marker for template parity: {marker}")
@@ -777,10 +803,17 @@ def require_shared_human_report_boundary() -> None:
 
 
 PLAN_WORKFLOW_ALIGNED_SECTIONS = (
+    "Plan Admission Contract",
     "Implementation Tiers",
     "Bounded Descope",
     "Review-Finding Budgets",
     "Successor Backlog Deferral",
+)
+
+PLAN_ADMISSION_CONSTANT_SOURCES = (
+    "template/.project-agent-workflow/scripts/planlib.py",
+    "scripts/check-root-agent-policy.py",
+    "scripts/restructure-plan.py",
 )
 
 
@@ -808,6 +841,96 @@ def require_plan_workflow_alignment() -> None:
         ).replace("`docs/agent/", "`.project-agent-workflow/docs/agent/")
         if template_section != expected:
             fail(f"root and generated {heading} policy differ beyond command paths")
+
+
+def plan_admission_constants(text: str, source: str) -> str:
+    matches = re.findall(
+        r"^PLAN_PURPOSE_VALUES = \{.*?^ADMISSION_LIFECYCLE_PREFIXES = \(.*?^\)\n",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if len(matches) != 1:
+        fail(f"{source} must define exactly one plan admission constant block")
+    return matches[0]
+
+
+def require_plan_admission_alignment() -> None:
+    blocks = {
+        source: plan_admission_constants(read(source), source)
+        for source in PLAN_ADMISSION_CONSTANT_SOURCES
+    }
+    if len(set(blocks.values())) != 1:
+        fail("plan admission constants differ across the enforcing commands")
+    reference = read(PLAN_ADMISSION_CONSTANT_SOURCES[0])
+    for marker in (
+        '"plan_purpose"',
+        '"feasibility_evidence"',
+        '"completion_conditions"',
+        '"completion_witness_map"',
+        "def validate_admission_record",
+        "def product_changing_write_scope",
+    ):
+        if marker not in reference:
+            fail(f"generated plan library missing admission marker: {marker}")
+    root_policy = read("scripts/check-root-agent-policy.py")
+    for marker in (
+        "ROOT_ADMISSION_BOUNDARY_PLAN_ID = 264",
+        "def check_plan_admission",
+        "def check_plan_admission_boundary",
+    ):
+        if marker not in root_policy:
+            fail(f"root plan policy missing admission marker: {marker}")
+    lint = read("template/.project-agent-workflow/scripts/lint-plan-docs.py")
+    for marker in ("--check-admission", "--render-admission"):
+        if marker not in lint:
+            fail(f"generated plan lint missing admission option: {marker}")
+    for source in (
+        "template/.project-agent-workflow/scripts/create-plan.sh",
+        "template/.project-agent-workflow/scripts/promote-plan.sh",
+    ):
+        if "--check-admission" not in read(source):
+            fail(f"{source} must enforce the plan admission contract")
+    restructure = read("scripts/restructure-plan.py")
+    for marker in (
+        "OWNER_CONTINUATION_SCHEMA_VERSIONS = {4}",
+        "OWNER_CONTINUATION_AUTHORIZATION_MAX_BYTES = 400",
+        "def validate_owner_continuation_authorization",
+        "def validate_created_plan_admission",
+        "RECONSTRUCTION_SCHEMA_VERSIONS = {1, 3, 4}",
+    ):
+        if marker not in restructure:
+            fail(f"plan restructuring missing schema-4 admission marker: {marker}")
+    for source in (
+        "scripts/plan-execution-state.py",
+        "scripts/run-sandboxed-plan-worker.py",
+    ):
+        if "INDEPENDENT_REVIEW_LIMIT = 2" not in read(source):
+            fail(f"{source} must fix the run-wide independent review limit at two")
+    ledger = read("scripts/plan-execution-state.py")
+    for marker in (
+        "MAX_CORRECTIONS = INDEPENDENT_REVIEW_LIMIT - 1",
+        "MAX_PARENT_REMEDIATIONS = INDEPENDENT_REVIEW_LIMIT - 1",
+        "IMPLEMENTATION_FINDING_BUDGET = INDEPENDENT_REVIEW_LIMIT",
+        "BOUNDARY_FINDING_BUDGET = INDEPENDENT_REVIEW_LIMIT - 1",
+    ):
+        if marker not in ledger:
+            fail(f"plan execution ledger must derive its budget from the review limit: {marker}")
+    if "MAX_CORRECTION_ROUNDS = INDEPENDENT_REVIEW_LIMIT - 1" not in read(
+        "scripts/run-sandboxed-plan-worker.py"
+    ):
+        fail("sandboxed plan worker must derive its correction budget from the review limit")
+    for relative in (
+        ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+        "template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        skill = read(relative).lower()
+        for marker in (
+            "at most two independent review events",
+            "one bounded rereview",
+            "after one rejected correction",
+        ):
+            if marker not in skill:
+                fail(f"{relative} missing review-limit marker: {marker}")
 
 
 def require_sandboxed_plan_worker_alignment() -> None:
@@ -2617,6 +2740,7 @@ def main() -> int:
     require_user_communication_alignment()
     require_git_retirement_alignment()
     require_plan_workflow_alignment()
+    require_plan_admission_alignment()
     require_sandboxed_plan_worker_alignment()
     require_hook_logging_parity()
     require_root_pre_tool_hardening()

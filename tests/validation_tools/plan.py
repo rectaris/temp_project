@@ -164,6 +164,155 @@ class PlanValidationCommandsTest(unittest.TestCase):
             values = module.require_manifest_fields(legacy, module.LEGACY_REQUIRED_FIELDS)
             self.assertEqual(values["focused_validation"], [])
 
+    def admission_plan_text(self, **overrides: str) -> str:
+        """Render one admitted numbered plan manifest with optional field overrides."""
+
+        conditions = [
+            "Refuse a numbered plan without bounded feasibility evidence.",
+            "Bind every completion condition to one focused witness.",
+        ]
+        fields = {
+            "plan_purpose": "plan_purpose: implementation\n",
+            "feasibility_evidence": (
+                "feasibility_evidence:\n"
+                '  - {"kind":"existing_mechanism","evidence":"planlib already parses plan manifests."}\n'
+            ),
+            "completion_conditions": (
+                "completion_conditions:\n" + "".join(f"  - {item}\n" for item in conditions)
+            ),
+            "completion_witness_map": (
+                "completion_witness_map:\n"
+                + "".join(
+                    '  - {"condition_sha256":"%s","witness":"python3 tests/focused.py"}\n'
+                    % self.witness_digest(item)
+                    for item in conditions
+                )
+            ),
+            "write_scope": "write_scope:\n  - scripts/tool.py\n",
+            "focused_validation": "focused_validation:\n  - python3 tests/focused.py\n",
+        }
+        fields.update(overrides)
+        return (
+            "status: in_progress\n"
+            + "".join(fields[key] for key in fields)
+            + "validation:\n  - git diff --check\n\n## Tasks\n"
+        )
+
+    def test_planlib_admits_a_bounded_implementation_plan(self) -> None:
+        module = load_module(PLANLIB, "admission_planlib")
+        for field in (
+            "plan_purpose",
+            "feasibility_evidence",
+            "completion_conditions",
+            "completion_witness_map",
+        ):
+            self.assertIn(field, module.ADMISSION_FIELDS)
+            self.assertNotIn(field, module.REQUIRED_FIELDS)
+            self.assertNotIn(field, module.LEGACY_REQUIRED_FIELDS)
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+            plan.write_text(self.admission_plan_text(), encoding="utf-8")
+            values = module.parse_manifest(plan)
+            self.assertTrue(module.has_admission_record(values))
+            records = module.validate_admission_record(values)
+            self.assertEqual([record["witness"] for record in records], [
+                "python3 tests/focused.py", "python3 tests/focused.py"
+            ])
+
+    def test_planlib_rejects_every_admission_mutation(self) -> None:
+        module = load_module(PLANLIB, "admission_mutation_planlib")
+        conditions = [
+            "Refuse a numbered plan without bounded feasibility evidence.",
+            "Bind every completion condition to one focused witness.",
+        ]
+        mutations = {
+            "unsupported purpose": {"plan_purpose": "plan_purpose: investigation\n"},
+            "placeholder purpose": {"plan_purpose": "plan_purpose: TBD\n"},
+            "unsupported evidence kind": {
+                "feasibility_evidence": (
+                    "feasibility_evidence:\n"
+                    '  - {"kind":"future_plan","evidence":"A separate plan will prove this."}\n'
+                )
+            },
+            "placeholder evidence": {
+                "feasibility_evidence": (
+                    'feasibility_evidence:\n  - {"kind":"existing_mechanism","evidence":"TBD"}\n'
+                )
+            },
+            "missing evidence": {"feasibility_evidence": "feasibility_evidence:\n  - none\n"},
+            "oversized evidence": {
+                "feasibility_evidence": (
+                    'feasibility_evidence:\n  - {"kind":"existing_mechanism","evidence":"%s"}\n'
+                    % ("e" * 401)
+                )
+            },
+            "placeholder condition": {
+                "completion_conditions": "completion_conditions:\n  - TODO\n"
+            },
+            "reordered witness map": {
+                "completion_witness_map": (
+                    "completion_witness_map:\n"
+                    + "".join(
+                        '  - {"condition_sha256":"%s","witness":"python3 tests/focused.py"}\n'
+                        % self.witness_digest(item)
+                        for item in reversed(conditions)
+                    )
+                )
+            },
+            "missing witness coverage": {
+                "completion_witness_map": (
+                    'completion_witness_map:\n  - {"condition_sha256":"%s","witness":"python3 tests/focused.py"}\n'
+                    % self.witness_digest(conditions[0])
+                )
+            },
+            "authoritative witness": {
+                "completion_witness_map": (
+                    "completion_witness_map:\n"
+                    + "".join(
+                        '  - {"condition_sha256":"%s","witness":"git diff --check"}\n'
+                        % self.witness_digest(item)
+                        for item in conditions
+                    )
+                )
+            },
+            "plan lifecycle only scope": {
+                "write_scope": "write_scope:\n  - docs/plan/active/900-record.md\n"
+            },
+            "placeholder scope": {"write_scope": "write_scope:\n  - TBD\n"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+            for label, overrides in mutations.items():
+                with self.subTest(mutation=label):
+                    plan.write_text(self.admission_plan_text(**overrides), encoding="utf-8")
+                    values = module.parse_manifest(plan)
+                    with self.assertRaises(module.PlanError):
+                        module.validate_admission_record(values)
+
+    def test_lint_keeps_pre_policy_plans_readable_and_checks_admission_on_demand(self) -> None:
+        lint = ROOT / "template/.project-agent-workflow/scripts/lint-plan-docs.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "legacy.md"
+            legacy.write_text(
+                "status: backlog\nwrite_scope:\n  - scripts/tool.py\n"
+                "validation:\n  - git diff --check\n"
+                "acceptance:\n  - Preserve the pre-policy backlog plan.\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            refused = subprocess.run(
+                [sys.executable, str(lint), "--check-admission", str(legacy)],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("plan_purpose", refused.stdout + refused.stderr)
+            admitted = Path(tmp) / "admitted.md"
+            admitted.write_text(self.admission_plan_text(), encoding="utf-8")
+            accepted = subprocess.run(
+                [sys.executable, str(lint), "--check-admission", str(admitted)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+
     def test_planlib_parses_optional_validation_authority_scope(self) -> None:
         module = load_module(PLANLIB, "validation_authority_planlib")
         with tempfile.TemporaryDirectory() as tmp:

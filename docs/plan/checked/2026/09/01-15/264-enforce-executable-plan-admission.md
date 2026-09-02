@@ -1,6 +1,6 @@
 # Enforce executable admission for numbered plans
 
-status: in_progress
+status: checked
 primary_invariant: a numbered plan authorizes only bounded repository-changing implementation whose method is supported by recorded feasibility evidence and whose plan-local completion is testable before activation, while review exhaustion and lifecycle recovery stop for an owner decision instead of manufacturing procedural successors
 task_types:
   - planning_docs
@@ -134,19 +134,28 @@ checked_summary_ja: 番号付きplanを実装開始の許可に限定し、実�
 
 ## Tasks
 
-- [ ] Reproduce the three current admission gaps in focused tests: root or generated official creation or promotion accepts a newly admitted plan without bounded feasibility or local completion witnesses, independent review can restart after its mutable review identity changes, and reconstruction can create a plan-lifecycle-only successor without owner continuation authorization.
-- [ ] Define the numbered-plan admission contract in root and template policy, including the compatibility boundary for untouched legacy backlog records and the categories that remain outside numbered plans.
-- [ ] Add `plan_purpose`, bounded `feasibility_evidence`, `completion_conditions`, and `completion_witness_map` parsing and validation to the generated plan library and lint path.
-- [ ] Update the generated plan scaffold, human-facing plan documentation, and promotion command so newly created plans expose the admission fields and no plan enters active implementation without valid values.
-- [ ] Add the same admission validation to schema-4 root and template reconstruction preflight, persist `owner_continuation_authorization` in new contracts, keep schema-1 through schema-3 verification unchanged, and refuse plan-lifecycle-only or otherwise non-implementation successors before any repository write.
-- [ ] Enforce two independent reviews across the entire parent execution run in root and template ledgers and writable runners, including candidate, parent-direct, fallback, correction, and resumed-session paths, and refuse a second correction before worker start.
-- [ ] Amend Implementation Tiers, Bounded Descope, Review-Finding Budgets, Restructuring Contract, `AGENTS.md`, orchestration policy, and the sequential-plan skill so only one review-bearing correction fits in a run, `descope_pending` waits for an admission-ready owner decision, and no accepted closure can require a third review.
-- [ ] Extend root/template alignment checks for every new normative admission and review-limit rule.
-- [ ] Add positive, negative, mutation, legacy-active/backlog compatibility, Copier-update, and no-partial-write tests for plan creation, promotion, lint, review accounting, and reconstruction.
-- [ ] Confirm root Plan 251 remains readable in backlog, and confirm a generated-project legacy backlog plan with the same missing admission fields is refused at ordinary promotion without creating or requiring a successor.
-- [ ] Complete no more than two independent read-only review events, resolve every High or Medium finding within this plan or stop for the owner, and never create a procedural follow-up plan.
-- [ ] Run focused validation, run the authoritative suite exactly once for an otherwise acceptable candidate, archive the checked plan, and commit only the declared write scope plus parent-owned lifecycle files.
+- [x] Reproduce the three current admission gaps in focused tests: root or generated official creation or promotion accepts a newly admitted plan without bounded feasibility or local completion witnesses, independent review can restart after its mutable review identity changes, and reconstruction can create a plan-lifecycle-only successor without owner continuation authorization.
+- [x] Define the numbered-plan admission contract in root and template policy, including the compatibility boundary for untouched legacy backlog records and the categories that remain outside numbered plans.
+- [x] Add `plan_purpose`, bounded `feasibility_evidence`, `completion_conditions`, and `completion_witness_map` parsing and validation to the generated plan library and lint path.
+- [x] Update the generated plan scaffold, human-facing plan documentation, and promotion command so newly created plans expose the admission fields and no plan enters active implementation without valid values.
+- [x] Add the same admission validation to schema-4 root and template reconstruction preflight, persist `owner_continuation_authorization` in new contracts, keep schema-1 through schema-3 verification unchanged, and refuse plan-lifecycle-only or otherwise non-implementation successors before any repository write.
+- [x] Enforce two independent reviews across the entire parent execution run in root and template ledgers and writable runners, including candidate, parent-direct, fallback, correction, and resumed-session paths, and refuse a second correction before worker start.
+- [x] Amend Implementation Tiers, Bounded Descope, Review-Finding Budgets, Restructuring Contract, `AGENTS.md`, orchestration policy, and the sequential-plan skill so only one review-bearing correction fits in a run, `descope_pending` waits for an admission-ready owner decision, and no accepted closure can require a third review.
+- [x] Extend root/template alignment checks for every new normative admission and review-limit rule.
+- [x] Add positive, negative, mutation, legacy-active/backlog compatibility, Copier-update, and no-partial-write tests for plan creation, promotion, lint, review accounting, and reconstruction.
+- [x] Confirm root Plan 251 remains readable in backlog, and confirm a generated-project legacy backlog plan with the same missing admission fields is refused at ordinary promotion without creating or requiring a successor.
+- [x] Complete no more than two independent read-only review events, resolve every High or Medium finding within this plan or stop for the owner, and never create a procedural follow-up plan.
+- [x] Run focused validation, run the authoritative suite exactly once for an otherwise acceptable candidate, archive the checked plan, and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
-- Pending.
+- Focused validation passed: `sh tests/root-plan-lifecycle.sh`, `python3 tests/test-validation-tools.py` (54), `python3 tests/test-plan-execution-state.py` (76), `python3 tests/test-plan-restructure.py` (177), `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `python3 scripts/restructure-plan.py --verify`, and `git diff --check`.
+- Authoritative validation passed: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- `tests/smoke.sh` ran more than once because the earlier runs exposed candidate defects rather than an otherwise acceptable candidate: a stale `at most two correction rounds` assertion, a missing `create-plan.sh` and `promote-plan.sh` entry in the render-source inventory, a `WRITE_SCOPE=TBD` assertion, and a backlog row assertion against `docs/plan/plan.md` that never held for backlog plans. The final run after those repairs was the single authoritative run for the accepted candidate.
+- `scripts/check-root-agent-policy.py --check-plan-admission` was added as the bounded entry point that makes the root plan-ID admission boundary directly testable from `tests/root-plan-lifecycle.sh` without invoking the whole root policy suite.
+- Root Plan 251 stays readable in `docs/plan/backlog/` with `status: backlog`, is reported as predating the admission boundary, and needs no successor.
+- Residual: `tests/fixtures/orchestration/plan-restructuring-scenarios.json` still records `rejected_correction_count: 2` and `independently_reviewed_parent_remediation_count: 2`. Those input counts are unreachable under the run-wide review limit, but the enforced `reason_code`, `state`, and `next_action` expectations remain correct and are the only fields consumed by `scripts/check-root-agent-policy.py` and `tests/test-plan-execution-state.py`. The fixture sits outside `write_scope`.
+- Residual: `tests/fixtures/orchestration/review-sequencing-scenarios.json` still says `at most two isolated corrections` in requirement prose. The checker validates requirement count and non-emptiness rather than wording, so the stale text changes no enforced behaviour. The fixture sits outside `write_scope`.
+- Residual: `tests/fixtures/orchestration/staged-acceptance.json` pins `maximum_implementation_generations: 3`, so orchestration prose was left at the existing generation wording instead of being tightened to match the new correction budget. The fixture sits outside `write_scope`.
+- Judgment recorded for review: the `promote-plan.sh` admission gate applies to `docs/plan/backlog/` sources only. Shelved-plan restoration stays grandfathered because those records are already bound by an existing reconstruction contract, while every ordinary backlog promotion must now carry an admission record.
+- Helper delegation: none. All work was parent-direct.

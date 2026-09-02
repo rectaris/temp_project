@@ -59,6 +59,7 @@ LEGACY_REQUIRED_FIELDS = (
 SCALAR_KEYS = {
     "status",
     "task_type",
+    "plan_purpose",
     "review_class",
     "human_design_required",
     "human_approval_status",
@@ -85,6 +86,9 @@ LIST_KEYS = {
     "focused_validation",
     "validation_authority_scope",
     "validation_witness_map",
+    "feasibility_evidence",
+    "completion_conditions",
+    "completion_witness_map",
     "acceptance",
     "acceptance_focus",
     "integration_gates",
@@ -111,6 +115,42 @@ CONTEXT_KEYS = {
     "VALIDATION": "validation",
 }
 CONTEXT_REQUIRED = ("task_types", "write_scope", "context_files", "required_specs", "validation")
+ADMISSION_FIELDS = (
+    "plan_purpose",
+    "feasibility_evidence",
+    "completion_conditions",
+    "completion_witness_map",
+)
+PLAN_PURPOSE_VALUES = {"implementation"}
+FEASIBILITY_EVIDENCE_KINDS = {
+    "reproduced_defect",
+    "existing_mechanism",
+    "bounded_prototype",
+    "mechanical_transformation",
+}
+MAX_FEASIBILITY_EVIDENCE = 8
+MAX_COMPLETION_CONDITIONS = 8
+FEASIBILITY_EVIDENCE_MAX_BYTES = 400
+COMPLETION_CONDITION_MAX_BYTES = 400
+ADMISSION_PLACEHOLDER_VALUES = {
+    "-",
+    "?",
+    "n/a",
+    "na",
+    "none",
+    "pending",
+    "placeholder",
+    "t.b.d.",
+    "tbd",
+    "todo",
+    "unknown",
+    "xxx",
+}
+ADMISSION_LIFECYCLE_PREFIXES = (
+    "docs/plan/",
+    ".agent-logs/",
+    ".agent-artifacts/",
+)
 WITNESS_REQUIRED_STATUSES = {"in_progress"}
 VALIDATION_WITNESS_STAGES = {"static", "focused", "authoritative"}
 STATIC_VALIDATION_WITNESSES = {"resolved-context-files"}
@@ -135,8 +175,8 @@ COMPANION_LINEAGE_RESIDUE_FIELDS = (
 COMPANION_CONTRACT_DIRECTORY = "docs/plan/replanned/contracts"
 COMPANION_BASELINE_CONTRACT_SCHEMA = 1
 COMPANION_PROJECTION_WITNESS_SCHEMA = 1
-SELF_PROJECTING_CONTRACT_SCHEMAS = {2, 3}
-SELF_PROJECTING_MAPPED_ACCEPTANCE_SCHEMAS = {3}
+SELF_PROJECTING_CONTRACT_SCHEMAS = {2, 3, 4}
+SELF_PROJECTING_MAPPED_ACCEPTANCE_SCHEMAS = {3, 4}
 REPLANNED_INDEX_PATH = "docs/plan/replanned.md"
 REPLANNED_INDEX_ROW_RE = re.compile(r"^[0-9]{3}\t")
 PUBLISHED_CONTRACT_RE = re.compile(
@@ -1515,6 +1555,142 @@ def validate_validation_witness_map(
         )
     if required and plan_path is not None:
         validate_companion_validation_authority(plan_path, values, records)
+    return records
+
+
+def is_admission_placeholder(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    return stripped.lower().strip(" .") in ADMISSION_PLACEHOLDER_VALUES
+
+
+def bounded_admission_text(value: object, label: str, maximum_bytes: int) -> str:
+    if not isinstance(value, str):
+        raise PlanError(f"{label} must be text")
+    if (
+        value != value.strip()
+        or is_admission_placeholder(value)
+        or len(value.encode("utf-8")) > maximum_bytes
+        or any(ord(char) < 0x20 for char in value)
+    ):
+        raise PlanError(f"{label} must be bounded non-placeholder text")
+    return value
+
+
+def has_admission_record(values: dict[str, str | list[str]]) -> bool:
+    return any(values.get(field) not in (None, "", []) for field in ADMISSION_FIELDS)
+
+
+def product_changing_write_scope(write_scope: list[str]) -> list[str]:
+    """Return the declared write paths that leave plan-lifecycle records."""
+
+    return [
+        path
+        for path in write_scope
+        if not is_admission_placeholder(path)
+        and path != CONTEXT_FILES_NONE
+        and not path.startswith(ADMISSION_LIFECYCLE_PREFIXES)
+    ]
+
+
+def validate_admission_record(
+    values: dict[str, str | list[str]],
+) -> list[dict[str, str]]:
+    """Validate the executable admission contract of one numbered plan."""
+
+    purpose = manifest_scalar(values, "plan_purpose").strip()
+    if purpose not in PLAN_PURPOSE_VALUES:
+        raise PlanError("plan_purpose must be implementation")
+
+    for key in ("feasibility_evidence", "completion_conditions", "completion_witness_map",
+                "focused_validation", "write_scope"):
+        if not isinstance(values.get(key, []), list):
+            raise PlanError(f"plan {key} must be a list")
+    evidence_items = values.get("feasibility_evidence", [])
+    conditions = values.get("completion_conditions", [])
+    raw_map = values.get("completion_witness_map", [])
+    focused = values.get("focused_validation", [])
+    write_scope = values.get("write_scope", [])
+    assert isinstance(evidence_items, list)
+    assert isinstance(conditions, list)
+    assert isinstance(raw_map, list)
+    assert isinstance(focused, list)
+    assert isinstance(write_scope, list)
+
+    if not evidence_items or len(evidence_items) > MAX_FEASIBILITY_EVIDENCE:
+        raise PlanError(
+            "feasibility_evidence must declare between one and "
+            f"{MAX_FEASIBILITY_EVIDENCE} bounded records"
+        )
+    if len(evidence_items) != len(set(evidence_items)):
+        raise PlanError("feasibility_evidence must not repeat a record")
+    for index, raw in enumerate(evidence_items, start=1):
+        try:
+            record = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise PlanError(f"feasibility_evidence entry {index} is not valid JSON") from exc
+        if not isinstance(record, dict) or set(record) != {"kind", "evidence"}:
+            raise PlanError(
+                f"feasibility_evidence entry {index} must declare exactly kind and evidence"
+            )
+        if record["kind"] not in FEASIBILITY_EVIDENCE_KINDS:
+            raise PlanError(
+                f"feasibility_evidence entry {index} has an unsupported kind: {record['kind']!r}"
+            )
+        bounded_admission_text(
+            record["evidence"],
+            f"feasibility_evidence entry {index} evidence",
+            FEASIBILITY_EVIDENCE_MAX_BYTES,
+        )
+
+    if not conditions or len(conditions) > MAX_COMPLETION_CONDITIONS:
+        raise PlanError(
+            "completion_conditions must declare between one and "
+            f"{MAX_COMPLETION_CONDITIONS} plan-local predicates"
+        )
+    if len(conditions) != len(set(conditions)):
+        raise PlanError("completion_conditions must be unique")
+    for index, condition in enumerate(conditions, start=1):
+        bounded_admission_text(
+            condition, f"completion_conditions entry {index}", COMPLETION_CONDITION_MAX_BYTES
+        )
+
+    records: list[dict[str, str]] = []
+    for index, raw in enumerate(raw_map, start=1):
+        try:
+            record = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise PlanError(f"completion_witness_map entry {index} is not valid JSON") from exc
+        if not isinstance(record, dict) or set(record) != {"condition_sha256", "witness"}:
+            raise PlanError(
+                f"completion_witness_map entry {index} must declare exactly "
+                "condition_sha256 and witness"
+            )
+        if not all(isinstance(value, str) for value in record.values()):
+            raise PlanError(f"completion_witness_map entry {index} values must be text")
+        witness = record["witness"]
+        if not witness or witness != witness.strip():
+            raise PlanError(f"completion_witness_map entry {index} has an invalid witness")
+        if witness not in focused:
+            raise PlanError(
+                f"completion_witness_map entry {index} witness is not a declared "
+                "focused_validation command"
+            )
+        records.append(record)
+
+    condition_digests = [acceptance_digest(item) for item in conditions]
+    if [record["condition_sha256"] for record in records] != condition_digests:
+        raise PlanError(
+            "completion_witness_map must cover completion_conditions exactly once "
+            "and in source order"
+        )
+
+    if not product_changing_write_scope(write_scope):
+        raise PlanError(
+            "plan_purpose: implementation requires a write_scope path outside "
+            "plan-lifecycle records"
+        )
     return records
 
 

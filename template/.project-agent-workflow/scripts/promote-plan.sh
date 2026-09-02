@@ -9,8 +9,8 @@ fi
 
 src=$1
 case "$src" in
-  docs/plan/backlog/[0-9][0-9][0-9]-*.md) ;;
-  docs/plan/shelved/[0-9][0-9][0-9]-*.md) ;;
+  docs/plan/backlog/[0-9][0-9][0-9]-*.md) source_kind=backlog ;;
+  docs/plan/shelved/[0-9][0-9][0-9]-*.md) source_kind=shelved ;;
   *) echo "expected backlog or shelved plan path" >&2; exit 2 ;;
 esac
 
@@ -24,6 +24,9 @@ fi
 base=$(basename "$src")
 dst="docs/plan/active/$base"
 id=${base%%-*}
+if [ "$source_kind" = "backlog" ]; then
+  python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-admission "$src"
+fi
 python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-promotion "$id" "$src" "$dst"
 mkdir -p docs/plan/active
 python3 .project-agent-workflow/scripts/lint-plan-docs.py --copy-status-exclusive "$src" "$dst" in_progress

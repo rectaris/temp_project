@@ -29,8 +29,9 @@ EXECUTION_STATE_MAX_BYTES = 131_072
 CANDIDATE_MANIFEST_MAX_BYTES = 1024 * 1024
 MAX_EVENTS = 64
 MAX_MIGRATION_COMPATIBILITY_EVENTS = 3
-MAX_CORRECTIONS = 2
-MAX_PARENT_REMEDIATIONS = 2
+INDEPENDENT_REVIEW_LIMIT = 2
+MAX_CORRECTIONS = INDEPENDENT_REVIEW_LIMIT - 1
+MAX_PARENT_REMEDIATIONS = INDEPENDENT_REVIEW_LIMIT - 1
 MAX_DIAGNOSIS_ATTEMPTS = 3
 SESSION_CHECKPOINT_SCHEMA_VERSION = 2
 REVIEW_RECEIPT_SCHEMA_VERSION = 1
@@ -84,8 +85,8 @@ BOUNDARY_REVIEW_REASON_CODES = {
     "integration_contract_mismatch",
 }
 DESIGN_REVIEW_REASON_CODES = {"multiple_invariants_coupled"}
-IMPLEMENTATION_FINDING_BUDGET = 4
-BOUNDARY_FINDING_BUDGET = 2
+IMPLEMENTATION_FINDING_BUDGET = INDEPENDENT_REVIEW_LIMIT
+BOUNDARY_FINDING_BUDGET = INDEPENDENT_REVIEW_LIMIT - 1
 MODES = {"candidate", "parent_direct"}
 ATTEMPT_KINDS = {"initial", "correction"}
 REVIEW_OUTCOMES = {"accepted", "correction_requested", "rejected"}
@@ -1499,7 +1500,7 @@ def validate_state(value: Any) -> dict[str, Any]:
     validate_event_budget(events)
     seen_ids: set[str] = set()
     seen_review_receipts: set[str] = set()
-    bounded_review_counts: dict[str, int] = {}
+    bounded_review_count = 0
     candidate_attempt_reviews: dict[str, tuple[str, str, str]] = {}
     validated_events: list[dict[str, Any]] = []
     previous_ns = 0
@@ -1706,9 +1707,8 @@ def validate_state(value: Any) -> dict[str, Any]:
                     )
             elif attempt_id or event["candidate_digest"]:
                 raise StateError("parent-direct review cannot claim a writable candidate")
-            identity = event["candidate_lifecycle_digest"]
-            bounded_review_counts[identity] = bounded_review_counts.get(identity, 0) + 1
-            if bounded_review_counts[identity] > 2:
+            bounded_review_count += 1
+            if bounded_review_count > INDEPENDENT_REVIEW_LIMIT:
                 raise StateError(
                     "review budget permits one initial review and one bounded rereview"
                 )
@@ -3602,11 +3602,11 @@ def record_event(args: argparse.Namespace) -> None:
                 event for event in state["events"]
                 if event["event_type"] == "parent_review"
                 and event["independent_review_receipt_digest"]
-                and event["candidate_lifecycle_digest"] == review_identity
+                and event["review_target_digest"]
             ]
             if (
                 review_receipt["review_round"] != len(prior_reviews) + 1
-                or len(prior_reviews) >= 2
+                or len(prior_reviews) >= INDEPENDENT_REVIEW_LIMIT
             ):
                 raise StateError(
                     "review budget permits one initial review and one bounded rereview"

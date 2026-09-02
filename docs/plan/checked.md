@@ -200,3 +200,4 @@ id	path
 166	docs/plan/checked/2026/09/01-15/166-unify-copier-update-source-inventory.md
 167	docs/plan/checked/2026/09/01-15/167-integrate-validation-witness-enforcement.md
 249	docs/plan/checked/2026/09/01-15/249-reject-sourced-library-command-shadowing.md
+264	docs/plan/checked/2026/09/01-15/264-enforce-executable-plan-admission.md

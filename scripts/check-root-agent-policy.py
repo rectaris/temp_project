@@ -20,6 +20,52 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ROOT_ADMISSION_BOUNDARY_PLAN_ID = 264
+ADMISSION_FIELDS = (
+    "plan_purpose",
+    "feasibility_evidence",
+    "completion_conditions",
+    "completion_witness_map",
+)
+PLAN_PURPOSE_VALUES = {"implementation"}
+FEASIBILITY_EVIDENCE_KINDS = {
+    "reproduced_defect",
+    "existing_mechanism",
+    "bounded_prototype",
+    "mechanical_transformation",
+}
+MAX_FEASIBILITY_EVIDENCE = 8
+MAX_COMPLETION_CONDITIONS = 8
+FEASIBILITY_EVIDENCE_MAX_BYTES = 400
+COMPLETION_CONDITION_MAX_BYTES = 400
+ADMISSION_PLACEHOLDER_VALUES = {
+    "-",
+    "?",
+    "n/a",
+    "na",
+    "none",
+    "pending",
+    "placeholder",
+    "t.b.d.",
+    "tbd",
+    "todo",
+    "unknown",
+    "xxx",
+}
+ADMISSION_LIFECYCLE_PREFIXES = (
+    "docs/plan/",
+    ".agent-logs/",
+    ".agent-artifacts/",
+)
+ADMISSION_SCALAR_KEYS = {"status", "plan_purpose"}
+ADMISSION_LIST_KEYS = {
+    "write_scope",
+    "focused_validation",
+    "feasibility_evidence",
+    "completion_conditions",
+    "completion_witness_map",
+}
+PLAN_FILE_RE = re.compile(r"([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
 MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[:：]")
 APPROACH_MARKERS = {"A", "B", "C"}
 RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
@@ -2166,7 +2212,9 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "receipt claims are advisory only",
         "run-sandboxed-plan-worker.py correct",
         "aggregate patch",
-        "at most two correction rounds",
+        "at most one correction round",
+        "independent_review_limit` is two",
+        "third review request is refused",
         "rejected patch never touches the source",
         "candidate generation and correction do not run plan validation",
         "parent diff review",
@@ -2244,12 +2292,35 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "fresh run",
         "never reopen a stopped ledger run",
         "never relabel requirement, authority, or security-boundary drift",
+        "implementation-start authorization",
+        "plan_purpose: implementation",
+        "feasibility_evidence",
+        "completion_conditions",
+        "completion_witness_map",
+        "outside plan-lifecycle records",
+        "identifier is 264 or higher",
+        "run-wide independent review budget is exhausted",
+        "owner_continuation_authorization",
+        "schema 4",
+        "a third review is refused",
     ):
         if marker not in agents:
             fail(f"AGENTS.md missing orchestration ownership marker: {marker}")
 
     plan_workflow = read("docs/agent/SPEC_PLAN_WORKFLOW.md").lower()
     for marker in (
+        "plan admission contract",
+        "plan_purpose",
+        "feasibility_evidence",
+        "completion_conditions",
+        "completion_witness_map",
+        "reproduced_defect",
+        "existing_mechanism",
+        "bounded_prototype",
+        "mechanical_transformation",
+        "independent_review_limit` is two",
+        "owner_continuation_authorization",
+        "identifier is 264 or higher",
         "independent repair prerequisite",
         "diagnosis_required",
         "failed-operation digest",
@@ -2615,6 +2686,164 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
                 fail(f"staged orchestration exceeds the p95 regression threshold: {metric}")
 
 
+def parse_plan_manifest(text: str) -> dict[str, str | list[str]]:
+    """Read the bounded leading manifest of a root plan file."""
+
+    values: dict[str, str | list[str]] = {key: [] for key in ADMISSION_LIST_KEYS}
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("## "):
+            break
+        if not line.strip():
+            continue
+        if ":" in line and not line.startswith(" "):
+            key, rest = line.split(":", 1)
+            key = key.strip()
+            rest = rest.strip()
+            current = None
+            if key in ADMISSION_SCALAR_KEYS:
+                values[key] = rest
+            elif key in ADMISSION_LIST_KEYS:
+                current = key
+                if rest:
+                    values[key].append(rest)  # type: ignore[union-attr]
+            continue
+        if current and line.lstrip().startswith("- "):
+            values[current].append(line.lstrip()[2:].strip())  # type: ignore[union-attr]
+    return values
+
+
+def admission_placeholder(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    return stripped.lower().strip(" .") in ADMISSION_PLACEHOLDER_VALUES
+
+
+def bounded_admission_text(value: object, maximum_bytes: int) -> bool:
+    return (
+        isinstance(value, str)
+        and value == value.strip()
+        and not admission_placeholder(value)
+        and len(value.encode("utf-8")) <= maximum_bytes
+        and all(ord(char) >= 0x20 for char in value)
+    )
+
+
+def admission_digest(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def check_plan_admission(relative: str, values: dict[str, str | list[str]]) -> None:
+    """Require one bounded implementation-start authorization for a numbered plan."""
+
+    purpose = values.get("plan_purpose", "")
+    if purpose not in PLAN_PURPOSE_VALUES:
+        fail(f"{relative} must declare plan_purpose: implementation")
+    evidence_items = values["feasibility_evidence"]
+    conditions = values["completion_conditions"]
+    raw_map = values["completion_witness_map"]
+    focused = values["focused_validation"]
+    write_scope = values["write_scope"]
+    assert isinstance(evidence_items, list) and isinstance(conditions, list)
+    assert isinstance(raw_map, list) and isinstance(focused, list)
+    assert isinstance(write_scope, list)
+
+    if (
+        not evidence_items
+        or len(evidence_items) > MAX_FEASIBILITY_EVIDENCE
+        or len(evidence_items) != len(set(evidence_items))
+    ):
+        fail(f"{relative} feasibility_evidence must be a bounded unique non-empty list")
+    for index, raw in enumerate(evidence_items, start=1):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            fail(f"{relative} feasibility_evidence entry {index} is not valid JSON")
+        if not isinstance(record, dict) or set(record) != {"kind", "evidence"}:
+            fail(
+                f"{relative} feasibility_evidence entry {index} must declare exactly "
+                "kind and evidence"
+            )
+        if record["kind"] not in FEASIBILITY_EVIDENCE_KINDS:
+            fail(f"{relative} feasibility_evidence entry {index} has an unsupported kind")
+        if not bounded_admission_text(record["evidence"], FEASIBILITY_EVIDENCE_MAX_BYTES):
+            fail(
+                f"{relative} feasibility_evidence entry {index} must be bounded "
+                "non-placeholder text"
+            )
+
+    if (
+        not conditions
+        or len(conditions) > MAX_COMPLETION_CONDITIONS
+        or len(conditions) != len(set(conditions))
+    ):
+        fail(f"{relative} completion_conditions must be a bounded unique non-empty list")
+    for index, condition in enumerate(conditions, start=1):
+        if not bounded_admission_text(condition, COMPLETION_CONDITION_MAX_BYTES):
+            fail(
+                f"{relative} completion_conditions entry {index} must be bounded "
+                "non-placeholder text"
+            )
+
+    mapped: list[str] = []
+    for index, raw in enumerate(raw_map, start=1):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            fail(f"{relative} completion_witness_map entry {index} is not valid JSON")
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"condition_sha256", "witness"}
+            or not all(isinstance(value, str) for value in record.values())
+        ):
+            fail(
+                f"{relative} completion_witness_map entry {index} must declare exactly "
+                "condition_sha256 and witness"
+            )
+        witness = record["witness"]
+        if not witness or witness != witness.strip() or witness not in focused:
+            fail(
+                f"{relative} completion_witness_map entry {index} witness is not a "
+                "declared focused_validation command"
+            )
+        mapped.append(record["condition_sha256"])
+    if mapped != [admission_digest(condition) for condition in conditions]:
+        fail(
+            f"{relative} completion_witness_map must cover completion_conditions "
+            "exactly once and in source order"
+        )
+
+    if not [
+        path
+        for path in write_scope
+        if not admission_placeholder(path)
+        and not path.startswith(ADMISSION_LIFECYCLE_PREFIXES)
+    ]:
+        fail(
+            f"{relative} plan_purpose: implementation requires a write_scope path "
+            "outside plan-lifecycle records"
+        )
+
+
+def check_plan_admission_boundary() -> None:
+    """Admit new root plans only as bounded implementation authorizations."""
+
+    for directory in ("docs/plan/active", "docs/plan/backlog"):
+        plan_dir = ROOT / directory
+        if not plan_dir.is_dir():
+            continue
+        for path in sorted(plan_dir.glob("[0-9][0-9][0-9]-*.md")):
+            match = PLAN_FILE_RE.fullmatch(path.name)
+            if match is None:
+                fail(f"{directory}/{path.name} is not a normalized plan filename")
+            if int(match.group(1)) < ROOT_ADMISSION_BOUNDARY_PLAN_ID:
+                continue
+            relative = str(path.relative_to(ROOT))
+            check_plan_admission(relative, parse_plan_manifest(path.read_text(encoding="utf-8")))
+
+
 def check_active_plans() -> None:
     active_dir = ROOT / "docs/plan/active"
     if not active_dir.exists():
@@ -2935,7 +3164,29 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--include-holdout", action="store_true")
+    parser.add_argument(
+        "--check-plan-admission",
+        metavar="PLAN",
+        help="check one root plan file against the numbered-plan admission boundary",
+    )
     args = parser.parse_args()
+
+    if args.check_plan_admission:
+        path = Path(args.check_plan_admission)
+        if not path.is_file():
+            fail(f"{args.check_plan_admission} is not a readable plan file")
+        match = PLAN_FILE_RE.fullmatch(path.name)
+        if match is None:
+            fail(f"{path.name} is not a normalized plan filename")
+        if int(match.group(1)) < ROOT_ADMISSION_BOUNDARY_PLAN_ID:
+            print(f"{args.check_plan_admission} predates the admission boundary")
+            return 0
+        check_plan_admission(
+            args.check_plan_admission,
+            parse_plan_manifest(path.read_text(encoding="utf-8")),
+        )
+        print(f"{args.check_plan_admission} admission check passed")
+        return 0
 
     if args.self_test:
         self_test()
@@ -2955,6 +3206,7 @@ def main() -> int:
     check_review_turn_zero_contract()
     check_namespaced_documentation_targets()
     check_orchestration_policy(include_holdout=args.include_holdout)
+    check_plan_admission_boundary()
     check_active_plans()
     print("root agent policy check passed")
     return 0

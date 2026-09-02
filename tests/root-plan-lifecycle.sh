@@ -89,4 +89,89 @@ if grep -q '^001	' "$tmp/docs/plan/plan.md"; then
   exit 1
 fi
 
+mkdir -p "$tmp/admission"
+policy="$root/scripts/check-root-agent-policy.py"
+
+cat >"$tmp/admission/263-legacy.md" <<'EOF'
+# Legacy root plan
+
+status: backlog
+write_scope:
+  - scripts/tool.py
+validation:
+  - git diff --check
+acceptance:
+  - Preserve the pre-policy root backlog plan.
+
+## Tasks
+EOF
+python3 "$policy" --check-plan-admission "$tmp/admission/263-legacy.md" >/dev/null
+
+cp "$tmp/admission/263-legacy.md" "$tmp/admission/264-missing.md"
+if python3 "$policy" --check-plan-admission "$tmp/admission/264-missing.md" \
+    >/dev/null 2>"$tmp/admission/264-missing.err"; then
+  echo "root admission boundary accepted a plan without an admission record" >&2
+  exit 1
+fi
+grep -q 'plan_purpose' "$tmp/admission/264-missing.err"
+
+condition_one='Refuse a boundary plan without bounded feasibility evidence.'
+condition_two='Bind every boundary completion condition to one focused witness.'
+digest_one=$(printf '%s' "$condition_one" | python3 -c 'import hashlib,sys; print("sha256:" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+digest_two=$(printf '%s' "$condition_two" | python3 -c 'import hashlib,sys; print("sha256:" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+
+write_admitted_plan() {
+  target=$1
+  scope=$2
+  cat >"$target" <<EOF
+# Admitted root plan
+
+status: backlog
+plan_purpose: implementation
+feasibility_evidence:
+  - {"kind":"existing_mechanism","evidence":"The root policy command already parses plan manifests."}
+completion_conditions:
+  - $condition_one
+  - $condition_two
+completion_witness_map:
+  - {"condition_sha256":"$digest_one","witness":"python3 tests/focused.py"}
+  - {"condition_sha256":"$digest_two","witness":"python3 tests/focused.py"}
+write_scope:
+  - $scope
+focused_validation:
+  - python3 tests/focused.py
+validation:
+  - git diff --check
+acceptance:
+  - Preserve the admitted root backlog plan.
+
+## Tasks
+EOF
+}
+
+write_admitted_plan "$tmp/admission/265-admitted.md" "scripts/tool.py"
+python3 "$policy" --check-plan-admission "$tmp/admission/265-admitted.md" >/dev/null
+
+write_admitted_plan "$tmp/admission/266-lifecycle-only.md" "docs/plan/active/266-lifecycle-only.md"
+if python3 "$policy" --check-plan-admission "$tmp/admission/266-lifecycle-only.md" \
+    >/dev/null 2>"$tmp/admission/266-lifecycle-only.err"; then
+  echo "root admission boundary accepted a plan-lifecycle-only write scope" >&2
+  exit 1
+fi
+grep -q 'outside plan-lifecycle records' "$tmp/admission/266-lifecycle-only.err"
+
+sed 's/^  - {"condition_sha256":"'"$digest_two"'".*$//' \
+  "$tmp/admission/265-admitted.md" >"$tmp/admission/267-partial.md"
+if python3 "$policy" --check-plan-admission "$tmp/admission/267-partial.md" \
+    >/dev/null 2>"$tmp/admission/267-partial.err"; then
+  echo "root admission boundary accepted partial completion witness coverage" >&2
+  exit 1
+fi
+grep -q 'completion_witness_map' "$tmp/admission/267-partial.err"
+
+python3 "$policy" --check-plan-admission \
+  "$root/docs/plan/backlog/251-place-fixture-words-and-alias-sources.md" >/dev/null
+grep -q '^status: backlog$' \
+  "$root/docs/plan/backlog/251-place-fixture-words-and-alias-sources.md"
+
 echo "root plan lifecycle test passed"

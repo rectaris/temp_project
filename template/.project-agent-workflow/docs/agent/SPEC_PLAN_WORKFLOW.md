@@ -48,6 +48,19 @@
 - Put detailed option analysis in chat, raw logs, handoff research artifacts, dedicated decision artifacts, or `.agent-artifacts/decision-audits/`.
 - Keep enough context for implementation and validation without preserving the full discussion that produced the plan.
 
+## Plan Admission Contract
+
+A numbered plan is implementation-start authorization. Admission decides whether that authorization may be granted, and it is checked before the plan becomes an active implementation instruction.
+
+- `plan_purpose` records the repository-changing implementation purpose authorized for one numbered plan. The only admitted value is `implementation`.
+- `feasibility_evidence` records the bounded pre-activation evidence that the selected implementation method can finish within the declared scope. Each entry is a JSON object with exactly `kind` and `evidence`. The admitted kinds are `reproduced_defect`, `existing_mechanism`, `bounded_prototype`, and `mechanical_transformation`. Record between one and eight entries, each at most 400 bytes.
+- `completion_conditions` records the plan-specific behavior predicates this numbered plan must establish. Record between one and eight entries, each at most 400 bytes. Inherited `acceptance` items stay unchanged, and completion conditions never replace them.
+- `completion_witness_map` maps each completion condition to its witness. Each entry is a JSON object with exactly `condition_sha256` and `witness`. The entries appear in source order and cover every condition exactly once, bound by the SHA-256 digest of the condition text. Each `witness` must be a command already declared in `focused_validation`; an authoritative-only witness is refused.
+- Reject a placeholder value such as `TBD`, `TODO`, `none`, or an empty string in any admission field, and reject feasibility evidence that only promises a separate numbered feasibility plan.
+- Refuse admission when `write_scope` declares no path outside plan-lifecycle records. A scope confined to `docs/plan/`, `.agent-logs/`, or `.agent-artifacts/` is not implementation work.
+- Keep investigation, feasibility discovery, value evaluation, re-verification, stopping, candidate preservation, and execution-context reset outside numbered plans. They remain unnumbered evidence or lifecycle operations.
+- Do not add the admission fields to the globally required manifest field set. Pre-policy active, backlog, checked, replanned, and shelved plans stay readable without a migration, because admission is enforced at the creation, promotion, and reconstruction boundaries instead of by changing historical bytes.
+
 ## Implementation Tiers
 
 Classify every change into exactly one tier before creating plan artifacts. Plan weight, review depth, and available stop transitions follow from that tier. Tier selection is a bounded parent decision recorded as `implementation_tier` in the active plan; when two tiers are defensible, choose the higher one.
@@ -75,6 +88,7 @@ Classify every change into exactly one tier before creating plan artifacts. Plan
 - Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
 - Keep active plans executable. Use `## Decisions` for final accepted decisions, not full decision-audit output.
 - Keep active-plan operational prose in English by default.
+- Enforce the numbered-plan admission contract in `.project-agent-workflow/scripts/create-plan.sh` and in `.project-agent-workflow/scripts/promote-plan.sh --add-active`. Check one plan file with `.project-agent-workflow/scripts/lint-plan-docs.py --check-admission`; ordinary lint keeps pre-policy records readable.
 
 ## Manifest Contract
 
@@ -205,20 +219,28 @@ A bounded descope reduces the acceptance set of the current plan without restruc
 - Move the deferred acceptance items to the exact `deferred_backlog_path` backlog plan. A descope never deletes a requirement; it only changes when that requirement is executed.
 - `descope_required` stops candidate generation, correction, validation, apply, completion, and archival for that execution run. Only the `descope_plan` gate stays open, and the stopped run is never reopened.
 - A descope creates no replan contract, no successor lineage, and no additional active plan. Keep it as the default exit for Tier 0 and Tier 1 work.
+- `descope_pending` is a stopped owner-decision state. Create the exact deferred backlog plan only after the owner authorizes the descope and the deferred work independently satisfies the numbered-plan admission contract; otherwise leave the run stopped or shelve the source through the owner-directed lifecycle. No worker, correction, review, or classification effect may bypass that stop.
 
 ### Review-Finding Budgets
 
 - Classify review findings before selecting a stop state: implementation findings are `acceptance_unmet`, `focused_validation_failed`, and `evidence_incomplete`; boundary findings are `out_of_scope_change`, `required_spec_missed`, and `integration_contract_mismatch`; the design finding is `multiple_invariants_coupled`.
-- Implementation findings have a budget of 4 correction-requested or rejected attempt closures. Boundary findings have a budget of 2 correction-requested or rejected attempt closures. Accepted closures do not count.
-- A `parent_review` event carries finding severities but no review reason code, so two parent-direct remediation rounds that still leave a High or Medium finding record `descope_pending` with `parent_remediation_budget_exhausted` instead of asserting a finding class.
+- `independent_review_limit` is two for one whole numbered-plan execution: one initial independent review and one bounded rereview. A changed candidate digest, a parent-direct revision, a model-access fallback taken before a candidate is admitted, and a resumed session all leave the count unchanged, and a third review request is an explicit refusal rather than a new review identity.
+- Derive every finding budget from that limit. One bounded correction round fits inside it, so the execution ledger refuses a second correction attempt at `writable_attempt_started`, before any worker effect.
+- Implementation findings have a budget of 2 correction-requested or rejected attempt closures. Boundary findings have a budget of 1 correction-requested or rejected attempt closure. Accepted closures do not count.
+- A `parent_review` event carries finding severities but no review reason code, so one parent-direct remediation round that still leaves a High or Medium finding records `descope_pending` with `parent_remediation_budget_exhausted` instead of asserting a finding class.
 - Exhausting an implementation or boundary finding budget records `descope_pending`, with `implementation_finding_budget_exhausted` or `boundary_finding_budget_exhausted`. Only `descope_classification` or a hard drift event may follow.
 - `multiple_invariants_coupled` remains an immediate `replan_required` reason. Any scope, spec, security-boundary, or post-authoritative design drift still escalates to `replan_required`.
+- An exhausted budget stops the run for an owner decision. Never create a repair, descope, or reconstruction successor directly from a review finding.
 
 ## Restructuring Contract
 
 Plan restructuring changes execution boundaries, ordering, implementation methods, or validation methods. It does not change the user requirement baseline. The baseline consists of the user requirements, accepted safety conditions, and every normalized `acceptance` item in the source plan.
 
-- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a design change after authoritative validation has started; or exhaustion of the initial candidate plus two correction rounds.
+- Restructuring is mandatory after scope, required-spec, or security-boundary drift; discovery of multiple independently validatable invariants; a design change after authoritative validation has started; or exhaustion of the initial candidate plus one correction round.
+- Reconstruction specification and contract schema 4 adds `owner_continuation_authorization`: a bounded, non-placeholder quotation of at most 400 bytes recording the owner instruction to continue implementation by creating successors. It is persisted in the immutable schema-4 contract. Schema-1 through schema-3 contracts keep their exact historical shape and verify unchanged.
+- Validate the numbered-plan admission contract for every successor and prerequisite plan a schema-4 specification creates, before any repository write. Refuse a successor whose declared write scope is confined to plan-lifecycle records, and refuse a successor used only for investigation, re-verification, stopping, candidate preservation, or execution-context reset.
+- Make a product-changing successor own final integration verification whenever it can run it, instead of creating a separate integration-only plan.
+- Keep a source that needs reconstruction live at `status: replan_required` until the owner supplies continuation authorization or explicitly shelves the work. Dependent plans stay deferred while that live source remains unresolved.
 - Elapsed time is telemetry and a checkpoint signal only. It cannot prove semantic failure or authorize requirement changes.
 - Preserve the exact source plan path, source HEAD, source-plan digest, and digest of every normalized source acceptance item in a parent-owned replan contract.
 - Map every source acceptance digest to at least one successor plan or integration gate. The integration plan retains the source acceptance text exactly and proves the combined successors against it.

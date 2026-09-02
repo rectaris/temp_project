@@ -1751,7 +1751,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("already bound to another admitted candidate", rejected.stderr)
 
-    def test_same_patch_correction_has_a_distinct_candidate_review_identity(self) -> None:
+    def test_candidate_identity_change_does_not_reset_the_review_budget(self) -> None:
         state, lifecycle, run_id = self.initialize_execution("same-patch-correction")
         invariant = digest("one invariant")
         first_attempt = "first-attempt"
@@ -1819,17 +1819,6 @@ class PlanExecutionStateTest(unittest.TestCase):
             ).returncode,
             0,
         )
-        first_rereceipt = self.review_receipt(
-            "same-patch-first-rereview", digest(self.plan.read_text()), round_value=2,
-            review_target=f"sha256:{patch_digest}",
-        )
-        self.assertEqual(
-            self.run_candidate_review(
-                state, lifecycle, run_id, "same-patch-first-rereview", first_rereceipt,
-                first_manifest, invariant,
-            ).returncode,
-            0,
-        )
         first_lifecycle_digest = digest(lifecycle.read_bytes())
         closed = self.run_cli(
             "close", str(state), "--run-id", run_id, "--attempt-id", first_attempt,
@@ -1851,7 +1840,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         second_manifest, _ = candidate(second_attempt, 1)
         second_receipt = self.review_receipt(
-            "same-patch-second", digest(self.plan.read_text()), round_value=1,
+            "same-patch-second", digest(self.plan.read_text()), round_value=2,
             review_target=f"sha256:{patch_digest}",
         )
         second_review = self.run_candidate_review(
@@ -1859,6 +1848,19 @@ class PlanExecutionStateTest(unittest.TestCase):
             second_manifest, invariant,
         )
         self.assertEqual(second_review.returncode, 0, second_review.stderr)
+        third_receipt = self.review_receipt(
+            "same-patch-third", digest(self.plan.read_text()), round_value=2,
+            review_target=f"sha256:{patch_digest}",
+        )
+        third_review = self.run_candidate_review(
+            state, lifecycle, run_id, "same-patch-third", third_receipt,
+            second_manifest, invariant,
+        )
+        self.assertNotEqual(third_review.returncode, 0)
+        self.assertIn(
+            "review budget permits one initial review and one bounded rereview",
+            third_review.stderr,
+        )
         second_manifest_content = second_manifest.read_text(encoding="utf-8")
         lifecycle_payload = json.loads(lifecycle.read_text(encoding="utf-8"))
         lifecycle_payload.update({
@@ -2155,7 +2157,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(first.returncode, 0, first.stderr)
         (self.repo / "allowed.txt").write_text("final review\n", encoding="utf-8")
         second_receipt = self.review_receipt(
-            "final-parent-review", digest(self.plan.read_text()), round_value=1
+            "final-parent-review", digest(self.plan.read_text()), round_value=2
         )
         second = self.run_cli(
             "review", str(state), "--run-id", run_id,
@@ -2190,6 +2192,40 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("differs from the checked target", rejected.stderr)
+
+    def test_parent_direct_revision_does_not_reset_the_review_budget(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "parent-review-budget", mode="parent_direct"
+        )
+        invariant = digest("one invariant")
+
+        def parent_review(label: str, round_value: int) -> subprocess.CompletedProcess[str]:
+            receipt = self.review_receipt(
+                label, digest(self.plan.read_text()), round_value=round_value
+            )
+            return self.run_cli(
+                "review", str(state), "--run-id", run_id,
+                "--event-id", label,
+                "--implementation-mode", "parent_direct",
+                "--review-receipt", str(receipt),
+                "--review-resource-manifest", str(self.review_manifests[receipt]),
+                "--invariant-digest", invariant,
+                "--lifecycle-state", str(lifecycle),
+            )
+
+        (self.repo / "allowed.txt").write_text("budget review one\n", encoding="utf-8")
+        first = parent_review("parent-budget-1", 1)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        (self.repo / "allowed.txt").write_text("budget review two\n", encoding="utf-8")
+        second = parent_review("parent-budget-2", 2)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        (self.repo / "allowed.txt").write_text("budget review three\n", encoding="utf-8")
+        third = parent_review("parent-budget-3", 2)
+        self.assertNotEqual(third.returncode, 0)
+        self.assertIn(
+            "review budget permits one initial review and one bounded rereview",
+            third.stderr,
+        )
 
     def test_legacy_v4_event_without_successor_genesis_remains_appendable(self) -> None:
         recorded = self.record(
@@ -2450,7 +2486,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         reason: str = "required_spec_missed",
     ) -> None:
         invariant = digest("one invariant")
-        for index in (1, 2):
+        for index in (1,):
             attempt_id = f"boundary-budget-{index}"
             started = self.start_writable_attempt(
                 self.state, self.lifecycle, "run-1", attempt_id,
@@ -2842,16 +2878,17 @@ class PlanExecutionStateTest(unittest.TestCase):
             observed_exit_status=-15,
         )
 
-    def test_two_rejected_corrections_stop_and_replay_is_rejected(self) -> None:
+    def test_one_rejected_correction_stops_and_replay_is_rejected(self) -> None:
         self.assertEqual(self.record("generation-1", "candidate_generation").returncode, 0)
         self.assertEqual(self.record("correction-1", "correction_rejected").returncode, 0)
         replay = self.record("correction-1", "correction_rejected")
         self.assertNotEqual(replay.returncode, 0)
-        self.assertEqual(self.record("correction-2", "correction_rejected").returncode, 0)
+        self.assertNotEqual(self.record("correction-2", "correction_rejected").returncode, 0)
         state = self.payload()
         self.assertEqual(state["state"], "replan_required")
-        self.assertEqual(state["candidate_generations"], 3)
-        self.assertNotEqual(self.record("generation-4", "candidate_generation").returncode, 0)
+        self.assertEqual(state["candidate_generations"], 2)
+        self.assertEqual(state["correction_rounds"], 1)
+        self.assertNotEqual(self.record("generation-3", "candidate_generation").returncode, 0)
         value = self.payload()
         value["state"] = "active"
         value["replan_reason_codes"] = []
@@ -2884,7 +2921,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "parent-1", "--invariant-digest", invariant, "--finding-severity", "Medium"
         )
         self.assertNotEqual(missing.returncode, 0)
-        for index in (1, 2):
+        for index in (1,):
             result = parent_record(
                 f"parent-{index}", "--invariant-digest", invariant,
                 "--finding-severity", "Medium", "--independent-review-receipt-digest",
@@ -2902,7 +2939,7 @@ class PlanExecutionStateTest(unittest.TestCase):
     def test_implementation_review_reason_repeats_below_budget_remain_active(self) -> None:
         with mock.patch.object(STATE_MODULE, "MAX_CORRECTIONS", 10):
             summary = STATE_MODULE.derive_summary(
-                self.synthetic_attempt_events_for_reasons(["acceptance_unmet"] * 3)
+                self.synthetic_attempt_events_for_reasons(["acceptance_unmet"] * 1)
             )
         self.assertEqual(summary["state"], "active")
         self.assertEqual(summary["replan_reason_codes"], [])
@@ -2912,7 +2949,7 @@ class PlanExecutionStateTest(unittest.TestCase):
     def test_implementation_review_reason_budget_enters_descope_pending(self) -> None:
         with mock.patch.object(STATE_MODULE, "MAX_CORRECTIONS", 10):
             summary = STATE_MODULE.derive_summary(
-                self.synthetic_attempt_events_for_reasons(["evidence_incomplete"] * 4)
+                self.synthetic_attempt_events_for_reasons(["evidence_incomplete"] * 2)
             )
         self.assertEqual(summary["state"], "descope_pending")
         self.assertEqual(
@@ -3737,9 +3774,8 @@ class PlanExecutionStateTest(unittest.TestCase):
                 elif reason == "candidate_correction_budget_exhausted":
                     record_event("candidate_generation")
                     record_event("correction_rejected")
-                    record_event("correction_rejected")
                 elif reason == "parent_remediation_budget_exhausted":
-                    for round_number in (1, 2):
+                    for round_number in (1,):
                         record_event(
                             "parent_review", *invariant,
                             "--finding-severity", "Medium",
@@ -3937,9 +3973,18 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
         payload = json.loads(state.read_text(encoding="utf-8"))
-        self.assertEqual(payload["state"], "active")
-        self.assertEqual(payload["replan_reason_codes"], [])
-        self.assertEqual(payload["descope_pending_reason_codes"], [])
+        self.assertEqual(payload["state"], "replan_required")
+        self.assertEqual(
+            payload["replan_reason_codes"], ["candidate_correction_budget_exhausted"]
+        )
+        self.assertEqual(
+            payload["descope_pending_reason_codes"],
+            ["implementation_finding_budget_exhausted"],
+        )
+        exhausted = self.start_writable_attempt(
+            state, lifecycle, run_id, "classification-3", kind="correction"
+        )
+        self.assertNotEqual(exhausted.returncode, 0)
 
         crashed_state, crashed_lifecycle, crashed_run = self.initialize_execution("crashed")
         self.assertEqual(
@@ -3957,11 +4002,11 @@ class PlanExecutionStateTest(unittest.TestCase):
             json.loads(crashed_state.read_text(encoding="utf-8"))["state"], "rejected"
         )
 
-    def test_changed_reasons_use_two_corrections_then_budget_and_coupling_stop(self) -> None:
+    def test_changed_reasons_use_one_correction_then_budget_and_coupling_stop(self) -> None:
         state, lifecycle, run_id = self.initialize_execution("changed-reasons")
         invariant = digest("one invariant")
-        reasons = ("acceptance_unmet", "required_spec_missed", "focused_validation_failed")
-        kinds = ("initial", "correction", "correction")
+        reasons = ("acceptance_unmet", "required_spec_missed")
+        kinds = ("initial", "correction")
         for index, (reason, kind) in enumerate(zip(reasons, kinds), start=1):
             attempt = f"changed-{index}"
             started = self.start_writable_attempt(
@@ -3976,7 +4021,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         payload = json.loads(state.read_text(encoding="utf-8"))
         self.assertEqual(payload["state"], "replan_required")
         self.assertIn("candidate_correction_budget_exhausted", payload["replan_reason_codes"])
-        self.assertEqual(payload["correction_rounds"], 2)
+        self.assertEqual(payload["correction_rounds"], 1)
 
         coupled_state, coupled_lifecycle, coupled_run = self.initialize_execution("coupled")
         self.assertEqual(
@@ -4004,7 +4049,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "final-correction-rejected"
         )
         for index, outcome in enumerate(
-            ("correction_requested", "correction_requested", "rejected"), start=1
+            ("correction_requested", "rejected"), start=1
         ):
             kind = "initial" if index == 1 else "correction"
             attempt = f"final-rejected-{index}"
@@ -4015,7 +4060,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             closed = self.close_writable_attempt(
                 rejected_state, rejected_lifecycle, rejected_run, attempt,
                 invariant=invariant, outcome=outcome,
-                reason=("acceptance_unmet", "required_spec_missed", "evidence_incomplete")[index - 1],
+                reason=("acceptance_unmet", "evidence_incomplete")[index - 1],
             )
             self.assertEqual(closed.returncode, 0, closed.stderr)
         final_payload = json.loads(rejected_state.read_text(encoding="utf-8"))

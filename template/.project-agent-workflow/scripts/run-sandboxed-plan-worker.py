@@ -64,7 +64,8 @@ TELEMETRY_MAX_DURATION_SECONDS = 31_536_000.0
 LIFECYCLE_STATE_SCHEMA_VERSION = 2
 LIFECYCLE_STATE_MAX_BYTES = 8192
 CORRECTION_BRIEF_MAX_BYTES = 8192
-MAX_CORRECTION_ROUNDS = 2
+INDEPENDENT_REVIEW_LIMIT = 2
+MAX_CORRECTION_ROUNDS = INDEPENDENT_REVIEW_LIMIT - 1
 PLAN_PATTERN = re.compile(r"^docs/plan/active/\d{3}-[^/]+\.md$")
 STATUS_PATTERN = re.compile(r"^(?:\?\?|[ MARCUDT][ MD]) (.+)$")
 CODEX_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL)(?::|\b)", re.IGNORECASE)
@@ -4287,7 +4288,7 @@ def next_correction_lineage(
                 raise RunnerError(f"prior correction lineage has an invalid digest: {key}")
     correction_round = prior_round + 1
     if correction_round > MAX_CORRECTION_ROUNDS:
-        raise RunnerError("correction budget exhausted after two isolated corrections")
+        raise RunnerError("correction budget exhausted after one isolated correction")
     return {
         "prior_manifest_digest": prior_manifest_digest,
         "prior_patch_digest": prior_patch_digest,

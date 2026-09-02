@@ -5542,6 +5542,151 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("exact checked producer", rejected.stderr)
 
+    def admission_block(
+        self,
+        conditions: list[str],
+        witness: str,
+        *,
+        evidence_kind: str = "existing_mechanism",
+        evidence: str = "Reconstruction preflight already validates successor manifests.",
+    ) -> str:
+        """Render the numbered-plan admission fields for a created successor."""
+
+        evidence_record = json.dumps(
+            {"kind": evidence_kind, "evidence": evidence},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        witness_lines = "".join(
+            "  - "
+            + json.dumps(
+                {"condition_sha256": digest(item), "witness": witness},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+            for item in conditions
+        )
+        return (
+            "plan_purpose: implementation\n"
+            f"feasibility_evidence:\n  - {evidence_record}\n"
+            "completion_conditions:\n"
+            + "".join(f"  - {item}\n" for item in conditions)
+            + f"completion_witness_map:\n{witness_lines}"
+        )
+
+    def schema_four_spec(
+        self,
+        module,
+        source_paths: list[str],
+        *,
+        authorization: object = "Continue the implementation through the reconstructed successors.",
+        admission: str | None = None,
+        write_scope: str | None = None,
+    ) -> dict[str, object]:
+        """Build a schema-4 reconstruction specification from the direct-active route."""
+
+        spec = self.direct_active_spec(module, source_paths)
+        spec["schema_version"] = 4
+        if authorization is not None:
+            spec["owner_continuation_authorization"] = authorization
+        successor = spec["successors"][0]  # type: ignore[index]
+        conditions = [
+            "Refuse a reconstruction successor without owner continuation authorization.",
+            "Refuse a successor whose write scope stays inside plan-lifecycle records.",
+        ]
+        block = self.admission_block(conditions, "git diff --check") if admission is None else admission
+        content = str(successor["content"]).replace(
+            "focused_validation:\n", block + "focused_validation:\n", 1
+        )
+        if write_scope is not None:
+            content = content.replace("write_scope:\n  - coupled/\n", write_scope, 1)
+        successor["content"] = content
+        return spec
+
+    def test_schema_four_records_owner_continuation_and_admitted_successors(self) -> None:
+        module = self.load_restructure_module("schema_four_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.schema_four_spec(module, source_paths)
+        result = self.run_spec_data(spec, "schema-four.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract = json.loads(
+            (self.repo / str(spec["contract_path"])).read_text(encoding="utf-8")
+        )
+        self.assertEqual(contract["schema_version"], 4)
+        self.assertEqual(
+            contract["owner_continuation_authorization"],
+            "Continue the implementation through the reconstructed successors.",
+        )
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_schema_four_refuses_unauthorized_or_inadmissible_successors(self) -> None:
+        module = self.load_restructure_module("schema_four_refusal_module")
+        source_paths = self.prepare_direct_active_sources()
+        conditions = [
+            "Refuse a reconstruction successor without owner continuation authorization.",
+            "Refuse a successor whose write scope stays inside plan-lifecycle records.",
+        ]
+        cases: list[tuple[str, dict[str, object], str]] = [
+            (
+                "missing authorization",
+                {"authorization": None},
+                "owner_continuation_authorization",
+            ),
+            (
+                "placeholder authorization",
+                {"authorization": "TBD"},
+                "owner_continuation_authorization",
+            ),
+            (
+                "non-text authorization",
+                {"authorization": 1},
+                "owner_continuation_authorization",
+            ),
+            (
+                "missing admission record",
+                {"admission": ""},
+                "plan_purpose: implementation",
+            ),
+            (
+                "unsupported evidence kind",
+                {
+                    "admission": self.admission_block(
+                        conditions, "git diff --check", evidence_kind="future_plan"
+                    )
+                },
+                "feasibility_evidence",
+            ),
+            (
+                "placeholder evidence",
+                {
+                    "admission": self.admission_block(
+                        conditions, "git diff --check", evidence="TBD"
+                    )
+                },
+                "feasibility_evidence",
+            ),
+            (
+                "undeclared witness",
+                {"admission": self.admission_block(conditions, "python3 tests/absent.py")},
+                "completion_witness_map",
+            ),
+            (
+                "plan lifecycle only successor",
+                {"write_scope": "write_scope:\n  - docs/plan/active/013-record.md\n"},
+                "plan-lifecycle-only successor",
+            ),
+        ]
+        for index, (label, overrides, fragment) in enumerate(cases, start=1):
+            with self.subTest(case=label):
+                spec = self.schema_four_spec(module, source_paths, **overrides)
+                rejected = self.run_spec_data(spec, f"schema-four-refusal-{index}.json")
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(fragment, rejected.stderr)
+                for path in source_paths:
+                    self.assertTrue((self.repo / path).is_file())
+                self.assertFalse((self.repo / str(spec["contract_path"])).exists())
+
     def test_schema_three_rejects_partial_sources_and_duplicate_integrations(self) -> None:
         coupled, _, _, successor_path = self.prepare_coupled_spec()
         partial = copy.deepcopy(coupled)
