@@ -43,3 +43,7 @@ id	path	contract
 232	docs/plan/replanned/2026/08/16-31/232-settle-fixture-words-from-a-modelled-grammar.md	docs/plan/replanned/contracts/232-settle-fixture-words-from-a-modelled-grammar.json
 234	docs/plan/replanned/2026/08/16-31/234-derive-fixture-name-bindings-from-tokens.md	docs/plan/replanned/contracts/234-derive-fixture-name-bindings-from-tokens.json
 187	docs/plan/replanned/2026/08/16-31/187-verify-plan183-successor-acceptance.md	docs/plan/replanned/contracts/187-verify-plan183-successor-acceptance.json
+257	docs/plan/replanned/2026/09/01-15/257-require-a-reached-copier-dispatch.md	docs/plan/replanned/contracts/257-require-a-reached-copier-dispatch.json
+258	docs/plan/replanned/2026/09/01-15/258-project-reachable-wrapper-shadowing.md	docs/plan/replanned/contracts/258-project-reachable-wrapper-shadowing.json
+259	docs/plan/replanned/2026/09/01-15/259-integrate-reached-copier-dispatch.md	docs/plan/replanned/contracts/258-project-reachable-wrapper-shadowing.json
+260	docs/plan/replanned/2026/09/01-15/260-integrate-ordered-sourced-copier-dispatch.md	docs/plan/replanned/contracts/260-integrate-ordered-sourced-copier-dispatch.json
