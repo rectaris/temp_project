@@ -11,6 +11,18 @@ human_approval_status: approved
 implementation_tier: 2
 implementation_risk: high
 implementation_ambiguity: ordinary
+plan_purpose: implementation
+feasibility_evidence:
+  - {"kind":"reproduced_defect","evidence":"The current checker returns zero findings for install \"$topt$tmp/$lane\" AGENTS.md when topt=--target-directory= and lane=update-source, although the resolved option writes into the update source."}
+  - {"kind":"bounded_prototype","evidence":"The existing _word_parts and _resolve_parts path resolves that word to a literal --target-directory= prefix followed by the already modelled absolute tmp binding and literal update-source segment."}
+  - {"kind":"reproduced_defect","evidence":"The current checker returns zero findings for python3 -c creating $tmp/held as a symlink to $update_source, followed by a copy and Git staging through $tmp/held."}
+  - {"kind":"existing_mechanism","evidence":"The existing _is_interpreter, _operation_words, _update_source_names, and _mentions_name helpers identify the bounded interpreter, inline program word, and update-source name without parsing Python or shell program semantics."}
+completion_conditions:
+  - Target-directory option words composed only of existing bounded assignment values and written literals are resolved before operand classification; attached and following directory values are checked, and non-singleton or unresolvable options fail closed.
+  - Existing bounded shell or Python interpreter invocations using an inline-program option are rejected when the written program carries a name that may denote the update-source root, while file or standard-input script invocation remains accepted without parsing program semantics.
+completion_witness_map:
+  - {"condition_sha256":"sha256:471a8e87f72690454c81a010c8fb6907c8fe3a6d939dafe467b0d1ae24dfc189","witness":"python3 tests/test-copier-fixture-validator.py"}
+  - {"condition_sha256":"sha256:080059032cf815312934840009af264ff011524c6e3e5fa0719588256b76f214","witness":"python3 tests/test-copier-fixture-validator.py"}
 write_scope:
   - scripts/project_workflow/copier_fixture_validator.py
   - tests/test-copier-fixture-validator.py
@@ -57,18 +69,21 @@ checked_summary_ja: option語の判定を語のテキストから値の配置へ
 ## Decisions
 
 - Place the name a word carries instead of guessing from its text. Checked Plan 248 decided whether a word may reach its command as an option by reading the word itself, and three review rounds in a row defeated that reading by moving one expansion in front of the dash. The text of `"$topt$tmp/$lane"` and the text of `"$root/pyproject.toml"` are the same shape, so no predicate over the written characters separates them.
-- Resolve the update-source root only through an already bounded shell expansion form. Do not add a general shell substitution evaluator; an opaque root occurrence in a path, option value, aliasing operand, or inline program is rejected rather than treated as harmless.
-- Report an alias of the update source without gating on the command name. Checked Plan 248 closed `ln` and `mv` by name, which an interpreter running an inline program never matches. A name list keeps losing to the next spelling, so the rule reads a root-bearing operation instead of relying on its command name.
-- Do not parse arbitrary interpreter languages. Reject an inline program that carries the update-source root without deciding whether the program creates an alias.
+- Add a fixture-aware target-directory option reader beside the existing written-option reader. Resolve only words composed from the assignment values and literal segments the current binding model already accepts; do not evaluate parameter operators, command substitutions, arithmetic, splitting, globbing, or shell control flow.
+- Accept a resolved option only when every bounded value has one target-directory interpretation. Read an attached directory from the resolved suffix and a separate directory from the following word. Treat no resolution, mixed interpretations, or more than one semantic option value as unplaceable so the existing fail-closed path reports it.
+- Preserve ordinary path operands such as `"$root/pyproject.toml"`. Resolution is used to classify a target-directory option only when the settled word starts with an exact supported long-option name or short `-t` cluster; it does not make every expansion-bearing word an option.
+- Detect the interpreter case through the existing bounded shell and Python interpreter classifier and the existing inline-program option shape. Reject an inline program word that mentions any name `_update_source_names` says may denote the update source, without deciding what operation the program performs.
+- Do not reject interpreter file or standard-input forms. In particular, the committed fixture's `python3 - "$update_source/copier.yml" ...` invocation remains accepted because `-` selects a program from standard input rather than carrying an inline program.
+- Do not parse arbitrary interpreter languages. The rule reports the opaque root-bearing inline program as a fail-closed operation; it does not decide whether the program creates a symbolic link, rename, copy, or another alias.
 - Use bounded parent implementation because this is a validation-authority path and writable delegation is prohibited for it.
 
 ## Tasks
 
 - [ ] Reproduce both admissions read-only against the checked Plan 248 gate with `tests/copier-update.sh` left byte-identical, and record the finding counts before the change.
-- [ ] Resolve only the exact bounded nested expansion form needed to place the update-source root, and reject opaque root-bearing operands without a general shell evaluator.
-- [ ] Decide an option word by the name its expansions settle to rather than by its written characters, and keep every rejection checked Plan 248 added.
-- [ ] Report an operation that names the update-source root in an aliasing position or opaque inline interpreter program without deciding which interpreter operation the program runs.
-- [ ] Add mutation coverage for the inline `--target-directory=` form, the concatenated `-t` form, and the interpreter-created symbolic link.
+- [ ] Add the fixture-aware bounded target-directory option reader, resolve only current assignment-model values, and route absent, ambiguous, or mixed interpretations to the existing unplaceable-destination finding.
+- [ ] Decide the inline `--target-directory=` and concatenated `-t` words by the option and directory values they resolve to, while preserving ordinary expansion-bearing path operands and every rejection checked Plan 248 added.
+- [ ] Reject a bounded shell or Python inline program that carries an update-source name without parsing the program or deciding which interpreter operation it runs.
+- [ ] Add mutation coverage for the inline `--target-directory=` form, the concatenated `-t` form, the interpreter-created symbolic link, an ambiguous option value, an ordinary expansion-bearing path, and the committed standard-input Python invocation.
 - [ ] Complete one fresh independent read-only review and focused validation with zero unresolved High or Medium findings.
 - [ ] Archive and commit only the declared write scope plus parent-owned lifecycle files.
 
@@ -78,4 +93,5 @@ checked_summary_ja: option語の判定を語のテキストから値の配置へ
 - Reproduction 1, an option written with its value in one word: with `topt=--target-directory=` in scope, `install "$topt$tmp/$lane" AGENTS.md` and `install "${e}--target-directory=$tmp/$lane" AGENTS.md` produce zero findings, while the same word written with a literal leading dash produces one. The review could not chain this to a silent staging, because the staging rules still report the repository, so it defeats a fail-closed disposition rather than completing an import.
 - Reproduction 2, an alias an interpreter creates: `python3 -c "import os; os.symlink('$update_source', '$tmp/held')"` followed by an ordinary copy into `$tmp/held` and `git -C "$tmp/held" add -- AGENTS.md` produces zero findings and imports an undeclared path into the update source. Every word is placeable, so no disposition rule fires.
 - Both forms are admitted by the gate committed before Plan 248 as well, so neither is a regression that plan introduced.
+- Feasibility was rechecked after Plan 264. The existing binding model resolves `"$topt$tmp/$lane"` to a literal `--target-directory=` prefix plus the already modelled absolute `tmp` value and the literal `update-source` segment. The existing interpreter and update-source-name helpers identify `python3 -c` and the root-bearing program word without interpreting its Python statements.
 - This plan must not introduce a parser for an arbitrary interpreter language or a general shell substitution evaluator. An opaque root-bearing operand is a fail-closed finding, not a request to reconstruct its runtime semantics.
