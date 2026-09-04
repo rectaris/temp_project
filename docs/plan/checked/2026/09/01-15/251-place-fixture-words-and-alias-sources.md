@@ -1,6 +1,6 @@
 # Place fixture option words and read alias sources beyond the shell surface
 
-status: in_progress
+status: checked
 primary_invariant: the focused checker names the option a written word reaches its command as, and fail-closes an operation that gives the update-source root a second name or carries that root through an opaque inline interpreter program without interpreting arbitrary interpreter semantics
 task_types:
   - template_workflow
@@ -85,7 +85,7 @@ checked_summary_ja: option語の判定を語のテキストから値の配置へ
 - [x] Reject a bounded shell or Python inline program that carries an update-source name without parsing the program or deciding which interpreter operation it runs.
 - [x] Add mutation coverage for the inline `--target-directory=` form, the concatenated `-t` form, the interpreter-created symbolic link, an ambiguous option value, an ordinary expansion-bearing path, and the committed standard-input Python invocation.
 - [x] Complete one fresh independent read-only review and focused validation with zero unresolved High or Medium findings.
-- [ ] Archive and commit only the declared write scope plus parent-owned lifecycle files.
+- [x] Archive and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
@@ -101,6 +101,6 @@ checked_summary_ja: option語の判定を語のテキストから値の配置へ
 - An equals sign supplies the option value in the same word, so `--target-directory=` with nothing after it names the empty directory and is reported as an unplaceable destination rather than read as taking the next word.
 - Differential evidence against the commit this plan started from: 1248 fixtures over option values, word shapes, commands, and operand layouts, and 450 fixtures over option-letter clusters carrying an empty name at three positions. No fixture rejected before is accepted now, and no fixture raises where it did not before. 69 fixtures gain a finding. 36 lose one redundant fail-closed finding while staying rejected, because the word they carry is now read as the option it is.
 - Three independent read-only reviews were run. The first found one High defect, an `IndexError` from binding an empty value in the general path model, and two Medium defects, an over-broad short-option cluster reading and a trailing-separator destination that fell into the pre-existing `cp SRC DIR/` hole. The second found one High defect, an empty value supplied to a reader written above every assignment of the name. The third found no High or Medium finding and independently reproduced the differential result over about 15000 fixtures, confirming in a real shell that every recovered acceptance writes nothing into the update source.
-- This exceeded the one initial review and one rereview the run-wide review budget allows. The run is therefore stopped for the owner rather than archived. The declared write scope is committed because both authoritative suites pass and the change is measured non-weakening, and this plan stays `in_progress` until the owner accepts or rejects the overrun.
+- This exceeded the one initial review and one rereview the run-wide review budget allows. The run stopped for the owner rather than archiving itself. The owner reviewed the overrun and the completion evidence and instructed archival, so this plan is archived under that decision rather than by agent judgement.
 - `tests/root-plan-lifecycle.sh` named this plan's backlog path and asserted `status: backlog`, so activating this plan failed the root agent policy check. That assertion is now resolved from whichever numbered plan predates the admission boundary, which keeps the boundary message it checks and drops the dependency on one unrelated plan's lifecycle location. The file is outside this plan's `write_scope` and is reported as such.
 - `cp SRC DIR/` remains silent for a destination written with a trailing separator, including the literal spelling committed before this plan. That hole is pre-existing and independent of the option reading, so it is left for a separate plan rather than widened here.
