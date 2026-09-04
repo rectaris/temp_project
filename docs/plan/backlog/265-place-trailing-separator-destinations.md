@@ -1,7 +1,7 @@
 # Report a directory destination written with a trailing separator
 
 status: backlog
-primary_invariant: the focused checker places an operand inside a destination directory whether that directory is written with or without a trailing path separator, so no copy or install into the update source is admitted by the way its destination is spelled
+primary_invariant: when a non-deferred cp or install has at least two operands and no option form other than an optional leading literal -- terminator, and its final operand has at least one fully resolved form through ordinary path bindings with every form ending in a literal path separator, the focused checker places each settled source basename or nonempty literal written suffix other than . or .. below every resolved destination and treats an unavailable source basename as an unplaceable write without changing any other command form
 task_types:
   - template_workflow
   - security
@@ -13,15 +13,25 @@ implementation_risk: ordinary
 implementation_ambiguity: low
 plan_purpose: implementation
 feasibility_evidence:
-  - {"kind":"reproduced_defect","evidence":"At the commit that checked Plan 251, cp \"$root/AGENTS.md\" \"$tmp/update-source/\" returns zero findings while the identical mv form returns two, and install with the same destination also returns zero."}
-  - {"kind":"reproduced_defect","evidence":"The same cp written with an explicit filename destination, cp \"$root/AGENTS.md\" \"$tmp/update-source/AGENTS.md\", returns two findings, so only the trailing-separator spelling is admitted."}
-  - {"kind":"existing_mechanism","evidence":"The rename path already produces the inside pairs this plan needs; _helper_paths emits them for mv but not for a cp or install destination that ends in a path separator."}
+  - {"kind":"reproduced_defect","evidence":"At a60a0c7, cp or install \"$root/AGENTS.md\" \"$tmp/update-source/\" returns zero findings, while cp or install with \"$tmp/update-source/AGENTS.md\" returns two inventory_region findings."}
+  - {"kind":"bounded_prototype","evidence":"At a60a0c7, a path-only prototype using _word_parts with splits=True and allow_equals=False plus _resolve_parts with fixture.bindings_for(operation) preserves the final slash for slash=/ followed by \"$tmp/update-source$slash\", while e= followed by \"$e$tmp/update-source/\" remains unresolved instead of receiving the empty-only value reserved for option classification."}
+  - {"kind":"existing_mechanism","evidence":"The _helper_paths target-directory-option branch already falls back to _written_name(source.text) when a source path does not settle; the ordinary last-destination branch currently omits that fallback."}
 completion_conditions:
-  - A copy or install operation whose destination resolves to a directory written with a trailing path separator is placed inside that directory, so cp "$root/AGENTS.md" "$tmp/update-source/" reports the findings the equivalent mv already reports instead of zero.
-  - Existing accepted operations keep their disposition: the committed fixture still passes --check, and a destination written without a trailing separator keeps the reading it already has.
+  - For a non-deferred cp or install with at least two operands and no option form other than an optional leading literal -- terminator, a final operand with at least one fully resolved form whose forms all use ordinary path bindings and end in a literal path separator is treated as a directory, and every settled source basename is reported below every resolved destination.
+  - Separator detection never uses _option_bindings, so an empty-only assignment, an unresolved value, or mixed trailing and non-trailing forms cannot establish directory placement and retains its existing disposition.
+  - When an eligible source path does not settle, only a nonempty literal written suffix other than . or .. is placed below the destinations; any source without such a basename makes the directory write unplaceable.
+  - A bounded differential corpus has no reject-to-accept transition, no accept-to-reject transition outside the declared cp and install cases with either no option or a leading literal -- terminator, and no new exception.
+  - The -T, --no-target-directory, --parents, install -d, install -D, target-directory-option, unresolved-option, deferred-operation, mv, and ln controls retain their prior dispositions and gain no synthesized inside pair.
+  - tests/copier-update.sh is byte-identical to the implementation source HEAD.
+  - The committed tests/copier-update.sh fixture passes the focused checker with zero findings.
 completion_witness_map:
-  - {"condition_sha256":"sha256:d0f4b5007f5b38acdcbd9d9c835d372b7500eda0158a2223b1d164d26b2dcdd7","witness":"python3 tests/test-copier-fixture-validator.py"}
-  - {"condition_sha256":"sha256:6cfb62f66670a1fcd3f1f75167b75cb9c05174b21e8aa9f331ebb1bd3e5d51cb","witness":"python3 tests/test-copier-fixture-validator.py"}
+  - {"condition_sha256":"sha256:4675d623f4f69df78bd4f2917a48c40da4ce18d201f47bd888c1e50458f525be","witness":"python3 tests/test-copier-fixture-validator.py"}
+  - {"condition_sha256":"sha256:177665a711a1f1db1a714c07c4f0c4a5c08c72e505116946dd49ceeb265bae62","witness":"python3 tests/test-copier-fixture-validator.py"}
+  - {"condition_sha256":"sha256:8b3d929ae98aa0b4c6ca9f9b110c4d4038a78cc6489233893f565ab33e36ec15","witness":"python3 tests/test-copier-fixture-validator.py"}
+  - {"condition_sha256":"sha256:c5b04c12d5b3a605292300e6413a68beb823fc8a52c50b0a197f8a09e242bc46","witness":"python3 tests/test-copier-fixture-validator.py"}
+  - {"condition_sha256":"sha256:d41cd47e715d7d26404fe9bf3186775e3ef4e9e5854ae5ceff17f0272fb71887","witness":"python3 tests/test-copier-fixture-validator.py"}
+  - {"condition_sha256":"sha256:0865bbf73e1698205f46f91710776ec0b268b7d33253e415fd525372dcecd69b","witness":"git diff --exit-code HEAD -- tests/copier-update.sh"}
+  - {"condition_sha256":"sha256:d4be619e5b03795cb3c21aceb9082620cb365e4444cf00b67b744548919a4891","witness":"python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh"}
 write_scope:
   - scripts/project_workflow/copier_fixture_validator.py
   - tests/test-copier-fixture-validator.py
@@ -43,33 +53,47 @@ required_specs:
 focused_validation:
   - python3 tests/test-copier-fixture-validator.py
   - python3 scripts/project_workflow/copier_fixture_validator.py --check tests/copier-update.sh
+  - python3 scripts/check-copier-template.py
+  - git diff --exit-code HEAD -- tests/copier-update.sh
   - git diff --check
 validation:
   - scripts/lint-project-workflow.sh
   - tests/smoke.sh
 acceptance:
-  - Place a copy or install operand inside a destination directory written with a trailing path separator, and report the resulting write into the update source with the findings the equivalent rename already produces.
+  - For a non-deferred cp or install with at least two operands and no option form other than an optional leading literal -- terminator, use only ordinary path bindings to treat a final operand as a directory when it has at least one fully resolved form and every form ends in a literal path separator, and place each settled source basename or nonempty literal written suffix other than . or .. below every resolved destination.
+  - Fail closed when an eligible directory write has an unavailable source basename, and preserve every command form outside that declared boundary.
+validation_witness_schema: 1
+validation_witness_map:
+  - {"acceptance_sha256":"sha256:2e3aca7915825b2d35dd3acba3539cf561c1e7778b20224472739f014f1d6c04","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
+  - {"acceptance_sha256":"sha256:457ad46bb438bf38425ab4b419fec1d2888584279367be42a19dff3d86f6c6e7","stage":"focused","witness":"python3 tests/test-copier-fixture-validator.py"}
 predecessor_plans:
   - docs/plan/checked/2026/09/01-15/251-place-fixture-words-and-alias-sources.md
 integration_gates:
   - do not edit, stage, or commit tests/copier-update.sh in this plan; the committed fixture is the read-only subject under test
-  - measure the change differentially against the predecessor commit and admit no fixture that was rejected before and is accepted after
-  - keep every existing rejection test passing
-checked_summary_ja: 宛先ディレクトリを末尾セパレータ付きで書いた場合もoperandをその中に配置し、update sourceへの書き込みを報告できるようにする。
+  - compare the exact activation HEAD with the candidate over a deterministic matrix of cp, install, mv, ln, option classification, separator resolution, and source-name resolution; admit only the declared new cp and install findings and no new exception
+  - keep every existing rejection passing, keep every non-target acceptance passing, and keep option-bearing and target-directory-option paths unchanged
+checked_summary_ja: option を持たない cp と install の宛先を通常の path binding だけで解決し、すべての候補が末尾セパレータを持つ場合に、空でなく . や .. でもない source basename を各宛先の配下へ配置する。
 
 ## Decisions
 
-- Treat the trailing separator as a spelling of the same directory, not as a different destination kind. The rename path already decides this correctly, so the fix belongs in the shared destination placement rather than in a new command-specific rule.
-- Do not widen the reading of a destination that carries an unresolved expansion. This plan closes a spelling gap for destinations the model already resolves; an opaque destination stays a fail-closed finding.
+- Derive separator evidence for non-deferred operations in a new path-only helper by passing `_word_parts(..., splits=True, allow_equals=False)` to `_resolve_parts` with `fixture.bindings_for(operation)` and `fixture.unsettled_for(operation)`. Do not call `_resolved_word_parts` or `_option_bindings`: the empty-only values supplied there are reserved for option classification and must never settle a path or establish its separator.
+- Apply the new placement only when the resolved command is `cp` or `install`, at least two operands remain, and either the first post-command word is the literal `--` terminator or every post-command word is proved not to be an option. A word is proved not to be an option only when `_resolved_word_texts` returns bounded texts that are all `-` or do not start with `-`, or `_cannot_name_an_option` proves the word carries a slash or an anchored path. Use those existing option-classification helpers only for this eligibility decision; they cannot supply path parts. `-T`, `--no-target-directory`, `--parents`, `install -d`, `install -D`, target-directory options, unresolved or mixed option words, and a `--` written after an operand are outside this rule and keep their existing dispositions.
+- Require the path-only helper to return at least one fully resolved destination form and every form to end in a literal path separator before removing that separator for path placement. An empty-only assignment, an unresolved value, and mixed trailing and non-trailing forms do not prove this condition.
+- For a settled source, retain every existing final path segment. When a source path does not settle, reuse `_written_name(source.text)` without changing that shared helper, and accept its result only when it is nonempty and differs from `.` and `..`; otherwise mark the known directory write unplaceable so the existing fail-closed finding reports it.
+- A deferred operation or destination word that does not satisfy every boundary above keeps its existing reading. Do not change `mv`, `ln`, target-directory-option handling, or any option-bearing `cp` or `install` form.
+- Use bounded parent implementation because both write-scope paths are validation authority and the writable runner refuses them. Require an independent read-only review before authoritative validation.
 
 ## Tasks
 
-- [ ] Reproduce the cp and install admissions read-only against the checked Plan 251 commit with `tests/copier-update.sh` left byte-identical, and record the finding counts before the change.
-- [ ] Emit the inside pairs for a copy or install destination that resolves to a directory written with a trailing path separator, reusing the placement the rename path already performs.
-- [ ] Add mutation coverage for the cp, install, and mv trailing-separator forms and for a destination written without the separator.
-- [ ] Measure the change differentially against the predecessor commit and record that no previously rejected fixture became accepted.
+- [ ] Reproduce the direct and ordinary-assignment-resolved trailing-separator admissions at the exact activation HEAD, record the findings and `_helper_paths` outputs, confirm that `tests/copier-update.sh` is byte-identical, and show that an empty-only assignment does not settle through the path-only prototype.
+- [ ] Add the path-only separator helper and invoke it only for the bounded option-free or leading-`--` command forms, reuse the valid written-name fallback for each unsettled source, and mark the write unplaceable when no valid basename is available.
+- [ ] Add `InventoryRegionTest` coverage for direct and ordinary-assignment-resolved separators, a leading literal `--`, multiple source operands, an unavailable or expansion-ended source basename, source suffixes `/.` and `/..`, empty-only and unresolved bindings, mixed separator forms, the no-separator and explicit-filename controls, an outside directory, and unchanged `mv` and `ln` behavior.
+- [ ] Add regression coverage proving that `-T`, `--no-target-directory`, `--parents`, `install -d`, `install -D`, target-directory options, an unresolved option word, a `--` after an operand, and a deferred operation remain outside the new rule with their prior dispositions and no synthesized inside pair.
+- [ ] Compare the activation HEAD and candidate over the bounded matrix declared by the integration gate, and record every disposition change and exception count.
 - [ ] Complete one independent read-only review and focused validation with zero unresolved High or Medium findings.
 
 ## Validation Notes
 
-- Pending. The admission was found while checking Plan 251 and was confirmed to predate it, so it is a pre-existing hole rather than a regression that plan introduced.
+- Pre-activation reproduction at `a60a0c7` confirmed zero findings for the direct `cp` and `install` trailing-separator forms and two `inventory_region` findings for their explicit-filename controls.
+- `_helper_paths` returns no inside pair for the corresponding `mv` form either; its two findings come from alias and unplaceable-operand rules, so `mv` is a regression control rather than the implementation model.
+- Implementation, differential evidence, review, and validation remain pending.
