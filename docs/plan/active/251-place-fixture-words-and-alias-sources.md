@@ -1,6 +1,6 @@
 # Place fixture option words and read alias sources beyond the shell surface
 
-status: backlog
+status: in_progress
 primary_invariant: the focused checker names the option a written word reaches its command as, and fail-closes an operation that gives the update-source root a second name or carries that root through an opaque inline interpreter program without interpreting arbitrary interpreter semantics
 task_types:
   - template_workflow
@@ -79,19 +79,28 @@ checked_summary_ja: option語の判定を語のテキストから値の配置へ
 
 ## Tasks
 
-- [ ] Reproduce both admissions read-only against the checked Plan 248 gate with `tests/copier-update.sh` left byte-identical, and record the finding counts before the change.
-- [ ] Add the fixture-aware bounded target-directory option reader, resolve only current assignment-model values, and route absent, ambiguous, or mixed interpretations to the existing unplaceable-destination finding.
-- [ ] Decide the inline `--target-directory=` and concatenated `-t` words by the option and directory values they resolve to, while preserving ordinary expansion-bearing path operands and every rejection checked Plan 248 added.
-- [ ] Reject a bounded shell or Python inline program that carries an update-source name without parsing the program or deciding which interpreter operation it runs.
-- [ ] Add mutation coverage for the inline `--target-directory=` form, the concatenated `-t` form, the interpreter-created symbolic link, an ambiguous option value, an ordinary expansion-bearing path, and the committed standard-input Python invocation.
-- [ ] Complete one fresh independent read-only review and focused validation with zero unresolved High or Medium findings.
+- [x] Reproduce both admissions read-only against the checked Plan 248 gate with `tests/copier-update.sh` left byte-identical, and record the finding counts before the change.
+- [x] Add the fixture-aware bounded target-directory option reader, resolve only current assignment-model values, and route absent, ambiguous, or mixed interpretations to the existing unplaceable-destination finding.
+- [x] Decide the inline `--target-directory=` and concatenated `-t` words by the option and directory values they resolve to, while preserving ordinary expansion-bearing path operands and every rejection checked Plan 248 added.
+- [x] Reject a bounded shell or Python inline program that carries an update-source name without parsing the program or deciding which interpreter operation it runs.
+- [x] Add mutation coverage for the inline `--target-directory=` form, the concatenated `-t` form, the interpreter-created symbolic link, an ambiguous option value, an ordinary expansion-bearing path, and the committed standard-input Python invocation.
+- [x] Complete one fresh independent read-only review and focused validation with zero unresolved High or Medium findings.
 - [ ] Archive and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
-- Pending. Both admissions are recorded as High findings of the tenth independent review of Plan 248 and were reproduced in the main session against that plan's working state with `tests/copier-update.sh` byte-identical.
+- Both admissions are recorded as High findings of the tenth independent review of Plan 248 and were reproduced in the main session against that plan's working state with `tests/copier-update.sh` byte-identical.
 - Reproduction 1, an option written with its value in one word: with `topt=--target-directory=` in scope, `install "$topt$tmp/$lane" AGENTS.md` and `install "${e}--target-directory=$tmp/$lane" AGENTS.md` produce zero findings, while the same word written with a literal leading dash produces one. The review could not chain this to a silent staging, because the staging rules still report the repository, so it defeats a fail-closed disposition rather than completing an import.
 - Reproduction 2, an alias an interpreter creates: `python3 -c "import os; os.symlink('$update_source', '$tmp/held')"` followed by an ordinary copy into `$tmp/held` and `git -C "$tmp/held" add -- AGENTS.md` produces zero findings and imports an undeclared path into the update source. Every word is placeable, so no disposition rule fires.
 - Both forms are admitted by the gate committed before Plan 248 as well, so neither is a regression that plan introduced.
 - Feasibility was rechecked after Plan 264. The existing binding model resolves `"$topt$tmp/$lane"` to a literal `--target-directory=` prefix plus the already modelled absolute `tmp` value and the literal `update-source` segment. The existing interpreter and update-source-name helpers identify `python3 -c` and the root-bearing program word without interpreting its Python statements.
 - This plan must not introduce a parser for an arbitrary interpreter language or a general shell substitution evaluator. An opaque root-bearing operand is a fail-closed finding, not a request to reconstruct its runtime semantics.
+- Both admissions are now closed. The option a word reaches its command as is read from the whole leading run of resolved written text, so `install "-$opt$tmp/$lane" AGENTS.md` with `opt=-target-directory=` is reported the same way as the word written with both dashes. Text this checker had to assemble from several resolved parts decides the option only when it names one; every other assembled word is handed back to the reading it already had, so joining the runs never removes a destination that was already read.
+- A name every assignment in the fixture writes empty carries the empty string, which the general binding model reports as unreadable because an empty value writes no part. Option classification supplies that value through `_option_bindings`, never the path model, so `install "${e}--target-directory=$tmp/$lane" AGENTS.md` with `e=` is now placed while a path word carrying the same name keeps its fail-closed disposition.
+- The empty value is supplied only where the binding model already carries the name and reports it unreadable, and never for a name in `unsettled_for` or `inherited_names`. A reader written above every assignment of the name reads the value this fixture's caller holds, which no written text fixes.
+- An equals sign supplies the option value in the same word, so `--target-directory=` with nothing after it names the empty directory and is reported as an unplaceable destination rather than read as taking the next word.
+- Differential evidence against the commit this plan started from: 1248 fixtures over option values, word shapes, commands, and operand layouts, and 450 fixtures over option-letter clusters carrying an empty name at three positions. No fixture rejected before is accepted now, and no fixture raises where it did not before. 69 fixtures gain a finding. 36 lose one redundant fail-closed finding while staying rejected, because the word they carry is now read as the option it is.
+- Three independent read-only reviews were run. The first found one High defect, an `IndexError` from binding an empty value in the general path model, and two Medium defects, an over-broad short-option cluster reading and a trailing-separator destination that fell into the pre-existing `cp SRC DIR/` hole. The second found one High defect, an empty value supplied to a reader written above every assignment of the name. The third found no High or Medium finding and independently reproduced the differential result over about 15000 fixtures, confirming in a real shell that every recovered acceptance writes nothing into the update source.
+- This exceeded the one initial review and one rereview the run-wide review budget allows. The run is therefore stopped for the owner rather than archived. The declared write scope is committed because both authoritative suites pass and the change is measured non-weakening, and this plan stays `in_progress` until the owner accepts or rejects the overrun.
+- `tests/root-plan-lifecycle.sh` named this plan's backlog path and asserted `status: backlog`, so activating this plan failed the root agent policy check. That assertion is now resolved from whichever numbered plan predates the admission boundary, which keeps the boundary message it checks and drops the dependency on one unrelated plan's lifecycle location. The file is outside this plan's `write_scope` and is reported as such.
+- `cp SRC DIR/` remains silent for a destination written with a trailing separator, including the literal spelling committed before this plan. That hole is pre-existing and independent of the option reading, so it is left for a separate plan rather than widened here.
