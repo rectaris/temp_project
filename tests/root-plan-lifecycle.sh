@@ -169,9 +169,16 @@ if python3 "$policy" --check-plan-admission "$tmp/admission/267-partial.md" \
 fi
 grep -q 'completion_witness_map' "$tmp/admission/267-partial.err"
 
-python3 "$policy" --check-plan-admission \
-  "$root/docs/plan/backlog/251-place-fixture-words-and-alias-sources.md" >/dev/null
-grep -q '^status: backlog$' \
-  "$root/docs/plan/backlog/251-place-fixture-words-and-alias-sources.md"
+durable=$(find "$root/docs/plan" -name '[0-9][0-9][0-9]-*.md' \
+  | sed 's|.*/||' | sort | awk -F- '$1 < 264 {print; exit}')
+if [ -z "$durable" ]; then
+  echo "root plan lifecycle test found no durable plan predating the admission boundary" >&2
+  exit 1
+fi
+durable_path=$(find "$root/docs/plan" -name "$durable" | head -n 1)
+python3 "$policy" --check-plan-admission "$durable_path" \
+  >"$tmp/admission/durable.out"
+grep -q 'predates the admission boundary' "$tmp/admission/durable.out"
+grep -q '^status: [a-z_]*$' "$durable_path"
 
 echo "root plan lifecycle test passed"
