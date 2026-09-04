@@ -1837,8 +1837,42 @@ def _resolved_word_parts(
     if parts is None:
         return None
     return _resolve_parts(
-        parts, fixture.bindings_for(operation), fixture.unsettled_for(operation)
+        parts, _option_bindings(fixture, operation), fixture.unsettled_for(operation)
     )
+
+
+def _option_bindings(fixture: _Fixture, operation: _Operation) -> _Bindings:
+    """Return the bindings option classification reads one word against.
+
+    A name every assignment writes empty carries the empty string at every
+    reader below one of those assignments, so the word around it reaches its
+    command as the text written around it. The general binding model reads
+    that name as unreadable, because an empty value writes no part and no part
+    is also how a word this checker refuses to read is reported. Option
+    classification supplies the empty value here rather than in that model, so
+    only the option a word reaches its command as is decided from it and no
+    path reading is widened.
+
+    A reader written above every assignment of the name is not one of those
+    readers: it reads whatever value the caller of this fixture holds, which
+    no written text fixes. The empty value is therefore supplied only where
+    the binding model already carries the name and reports it unreadable, and
+    never for a name whose first assignment may not run at all.
+    """
+
+    empty = fixture.empty_only_names()
+    if not empty:
+        return fixture.bindings_for(operation)
+    settled = fixture.bindings_for(operation)
+    inherited = fixture.inherited_names()
+    unsettled = fixture.unsettled_for(operation)
+    bindings = dict(settled)
+    for name in empty:
+        if name in unsettled or name in inherited:
+            continue
+        if name in settled and settled[name] is None:
+            bindings[name] = ((),)
+    return bindings
 
 
 def _resolved_word_texts(
@@ -2479,6 +2513,7 @@ class _Fixture:
         self._loop_values: dict[int, _Bindings] = {}
         self._assigning: set[str] = set()
         self._operations_by_offset: dict[int, _Operation] | None = None
+        self._empty_only: frozenset[str] | None = None
 
     def command_runs(self) -> tuple["_CommandRun", ...]:
         """Return every command this fixture writes, read from its tokens.
@@ -2944,6 +2979,26 @@ class _Fixture:
             ):
                 settled.discard(name)
         return frozenset(settled)
+
+    def empty_only_names(self) -> frozenset[str]:
+        """Return every name this fixture only ever assigns the empty value.
+
+        Such a name holds the empty string at every reader: the assignments
+        that write it all write nothing, and a reader above them all reads it
+        unset, which expands to nothing as well.
+        """
+
+        cached = self._empty_only
+        if cached is not None:
+            return cached
+        assigned: dict[str, bool] = {}
+        for assignment in self.assignments:
+            empty = assignment.is_empty
+            assigned[assignment.name] = assigned.get(assignment.name, True) and empty
+        self._empty_only = frozenset(
+            name for name, empty in assigned.items() if empty
+        )
+        return self._empty_only
 
     def unsettled_for(self, operation: _Operation) -> frozenset[str]:
         """Return every name one operation cannot settle where it is written."""
@@ -7879,40 +7934,107 @@ def _target_directory_value(written: str) -> object | None:
 
 def _target_directory_option(
     fixture: _Fixture, operation: _Operation, token: Token
-) -> tuple[bool, _Parts | None] | None:
+) -> tuple[bool, _Parts | None, bool] | None:
     """Return one uniquely resolved target-directory option, if any.
 
     A word carrying multiple bounded texts is not assigned an option meaning:
     one of those texts may be an ordinary operand or may carry a different
     option value. The caller therefore keeps it on the unplaceable path.
+
+    The option name is read from the whole leading run of written text rather
+    than from one part of it, because resolving a name splits the text it
+    carries at the place the name was written. `-` followed by a name holding
+    `-target-directory=` reaches the command as the same option as the word
+    written with both dashes, so both are read the same way here.
+
+    The result reports whether the option is written, the parts its directory
+    is built from, and whether that reading is certain. ``None`` parts mean the
+    option takes the next word. An uncertain reading keeps whatever directory
+    the word settles to and reports the destination as one no written text
+    places, so an undecided word never removes a finding.
     """
 
     resolved = _resolved_word_parts(fixture, operation, token.text)
     if resolved is None or len(resolved) != 1:
         return None
     candidate = resolved[0]
+    run = 0
+    while run < len(candidate) and candidate[run][0] == LITERAL_SEGMENT:
+        run += 1
+    if run == 0:
+        return (False, None, False)
+    written = "".join(text for _, text in candidate[:run])
+    tail = candidate[run:]
+    # Text this checker had to assemble from several resolved parts decides
+    # the option only when it names one. Every other assembled word keeps the
+    # reading it already had, so no operand this checker used to report stops
+    # being read because the assembled text was inspected.
+    assembled = run > 1
+    undecided = _written_target_directory_option(candidate) if assembled else None
+    if written.startswith(OPTION_END):
+        name, separator, attached = written[2:].partition("=")
+        if not _abbreviates_target_directory(f"{OPTION_END}{name}"):
+            return undecided if assembled else (False, None, False)
+        if not separator:
+            if not tail:
+                return (True, None, False)
+            return undecided if assembled else (True, tail, False)
+        value = (("literal", attached),) if attached else ()
+        value += tail
+        if value:
+            return (True, value, False)
+        # An equals sign supplies the value in the same word, so an empty one
+        # names the empty directory rather than taking the next word.
+        return (True, None, True)
+    if not written.startswith(OPTION_MARK):
+        return undecided if assembled else (False, None, False)
+    letters = written[1:]
+    place = letters.find(TARGET_DIRECTORY_MARK)
+    if place < 0:
+        return undecided if assembled else (False, None, False)
+    if place > 0 and assembled:
+        # The cluster reaches `t` only after letters this checker does not
+        # model, and the text was assembled rather than written as one run.
+        return undecided
+    attached = letters[place + 1 :]
+    value = (("literal", attached),) if attached else ()
+    value += tail
+    return (True, value or None, False)
+
+
+def _written_target_directory_option(
+    candidate: _Parts,
+) -> tuple[bool, _Parts | None, bool] | None:
+    """Return the option reading taken from one word's first written run.
+
+    This is the reading used where assembled text names no option. It places
+    only what the first run of written characters says, which is what this
+    checker read before it joined the runs a resolved name divides, so a word
+    the joined reading leaves undecided keeps the disposition it already had.
+    """
+
     if not candidate or candidate[0][0] != LITERAL_SEGMENT:
-        return (False, None)
+        return None
     written = candidate[0][1]
     if written.startswith(OPTION_END):
         name, separator, attached = written[2:].partition("=")
         if not _abbreviates_target_directory(f"{OPTION_END}{name}"):
-            return (False, None)
+            return None
         if not separator and len(candidate) == 1:
-            return (True, None)
+            return (True, None, False)
         value = (("literal", attached),) if separator and attached else ()
         value += candidate[1:]
-        return (True, value or None)
+        return (True, value or None, False)
     if not written.startswith(OPTION_MARK):
-        return (False, None)
+        return None
     letters = written[1:]
     place = letters.find(TARGET_DIRECTORY_MARK)
     if place < 0:
-        return (False, None)
+        return None
     attached = letters[place + 1 :]
     value = (("literal", attached),) if attached else ()
     value += candidate[1:]
-    return (True, value or None)
+    return (True, value or None, False)
 
 
 def _target_directories(
@@ -7952,8 +8074,9 @@ def _target_directories(
             if option is not None and option[0]:
                 present = True
                 value_parts = option[1]
+                unknown = unknown or option[2]
                 if value_parts is None:
-                    named = True
+                    named = not option[2]
                     continue
                 path = _settled_path(value_parts)
                 settled = frozenset() if path is None else frozenset({path})

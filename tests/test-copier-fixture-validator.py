@@ -1178,6 +1178,112 @@ class OperandReadingTest(ContractSupportTest):
                     "inventory region",
                 )
 
+    def test_an_option_split_across_resolved_parts_is_read_as_one_option(
+        self,
+    ) -> None:
+        """The option name is read after resolution, not per written part.
+
+        Each form below reaches its command as the same target-directory
+        option as a word written with one literal dash run, so each writes
+        into the update source and must be reported the same way.
+        """
+
+        for form in (
+            # A name holding every character after the first dash.
+            'opt=-target-directory=\nlane=update-source\n'
+            'install "-$opt$tmp/$lane" AGENTS.md\n',
+            # A name holding only the short option letter.
+            'o=t\nlane=update-source\n'
+            'install "-$o$tmp/$lane" AGENTS.md\n',
+            # A name holding the first half of the long option name.
+            'pre=--target\nlane=update-source\n'
+            'install "$pre-directory=$tmp/$lane" AGENTS.md\n',
+            # An option name that runs into an unread value with no equals
+            # sign: undecided, so the directory it would name is still read.
+            'topt=--target-directory\nlane=update-source\n'
+            'install "$topt$tmp/$lane" AGENTS.md\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "a write into the update source stands outside the "
+                    "inventory region",
+                )
+
+    def test_an_empty_assignment_does_not_erase_the_words_that_carry_it(
+        self,
+    ) -> None:
+        """`name=` binds the empty string rather than an unreadable value.
+
+        Writing an empty name in front of an option used to leave the whole
+        word unreadable, which placed no destination and reported nothing.
+        """
+
+        for form in (
+            'e=\nlane=update-source\n'
+            'install "${e}--target-directory=$tmp/$lane" AGENTS.md\n',
+            'e=""\nlane=update-source\n'
+            'install "${e}--target-directory=$tmp/$lane" AGENTS.md\n',
+            "e=''\nlane=update-source\n"
+            'install "${e}-t$tmp/$lane" AGENTS.md\n',
+            'e=\ninstall "${e}--target-directory" "$tmp/update-source" AGENTS.md\n',
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(form),
+                    RULE_INVENTORY_REGION,
+                    "a write into the update source stands outside the "
+                    "inventory region",
+                )
+
+    def test_an_assembled_word_naming_no_option_keeps_its_reading(self) -> None:
+        """Joining resolved parts never removes a destination already read.
+
+        The first word below reaches `t` only after letters this checker does
+        not model, and the second names no option at all. Reading either as
+        the target-directory option would take the next word as a directory
+        and stop the written destination from being read, so both keep the
+        reading they already had.
+        """
+
+        for form, expected in (
+            (
+                'own=oroot\ninstall "-$own" AGENTS.md "$tmp/update-source"\n',
+                "a write into the update source stands outside the inventory "
+                "region",
+            ),
+            (
+                'b=-target-directory=\n'
+                'install "-$b" AGENTS.md "$tmp/update-source"\n',
+                "a write this checker cannot place",
+            ),
+        ):
+            with self.subTest(form=form):
+                self.assert_rejected(
+                    self.outside(form), RULE_INVENTORY_REGION, expected
+                )
+
+    def test_an_empty_assignment_does_not_widen_a_path_reading(self) -> None:
+        """Only option classification supplies the empty value.
+
+        A path word carrying an empty name stays a word this checker refuses
+        to read, so the operation keeps its fail-closed disposition instead of
+        settling to a destination the general path model never proved.
+        """
+
+        self.assert_rejected(
+            self.outside('e=\ncp "$root/AGENTS.md" "${e}$update_source/AGENTS.md"\n'),
+            RULE_INVENTORY_REGION,
+            "a write this checker cannot place is written where the update "
+            "source is named",
+        )
+
+    def test_an_empty_assignment_keeps_an_ordinary_path_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside('e=\ncat "${e}$root/pyproject.toml" >/dev/null\n')
+        )
+
     def test_an_ambiguous_target_directory_option_stays_unplaceable(self) -> None:
         for form, expected in (
             (
@@ -1191,6 +1297,13 @@ class OperandReadingTest(ContractSupportTest):
                 'install_helper -t\n'
                 'install_helper --target-directory\n',
                 "a write this checker cannot place",
+            ),
+            # A cluster reaching `t` only after unmodelled letters keeps the
+            # reading it already had, so the real destination is still read.
+            (
+                'own=oroot\ninstall "-$own" AGENTS.md "$tmp/update-source"\n',
+                "a write into the update source stands outside the inventory "
+                "region",
             ),
         ):
             with self.subTest(form=form):
