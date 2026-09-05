@@ -104,6 +104,63 @@ jobs:
       - name: Test the Copier fixture contract
         run: python3 tests/test-copier-fixture-validator.py
 
+  plan-restructure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test plan restructuring
+        run: python3 tests/test-plan-restructure.py
+
+  plan-execution-state:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test plan execution state
+        run: python3 tests/test-plan-execution-state.py
+
+  sandboxed-plan-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and probe bubblewrap
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          probe() {
+            bwrap --unshare-all --share-net --unshare-user --new-session \
+              --disable-userns --cap-drop ALL --die-with-parent --clearenv \
+              --ro-bind / / --proc /proc --dev /dev -- /bin/true
+          }
+          if ! probe; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+            probe
+          fi
+
+      - name: Test the sandboxed plan worker
+        run: python3 tests/test-sandboxed-plan-worker.py
+
   minimum-compatibility:
     runs-on: ubuntu-latest
     steps:

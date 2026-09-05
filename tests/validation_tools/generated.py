@@ -1,6 +1,7 @@
 """Generated CI and security tests."""
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,58 @@ class GeneratedCiTest(unittest.TestCase):
         self.assertIn('python3 .project-agent-workflow/scripts/security-static-check.py --managed', workflow)
         self.assertNotIn('npm run test', workflow)
         self.assertIn("fetch-depth: 0", workflow)
+
+    def test_large_python_suites_run_as_independent_root_ci_jobs(self) -> None:
+        jobs = self.root_workflow_jobs()
+        dedicated = {
+            "plan-restructure": "python3 tests/test-plan-restructure.py",
+            "plan-execution-state": "python3 tests/test-plan-execution-state.py",
+            "sandboxed-plan-worker": "python3 tests/test-sandboxed-plan-worker.py",
+        }
+        for job, command in dedicated.items():
+            with self.subTest(job=job):
+                self.assertIn(job, jobs)
+                self.assertIn(f"        run: {command}\n", jobs[job])
+                self.assertIn("    runs-on: ubuntu-latest\n", jobs[job])
+                self.assertIn("        uses: actions/checkout@v4\n", jobs[job])
+                self.assertNotIn("    needs:", jobs[job])
+                self.assertNotIn(command, jobs["validate"])
+        self.assertIn("bubblewrap", jobs["sandboxed-plan-worker"])
+
+    def test_existing_ci_jobs_and_commands_are_preserved(self) -> None:
+        jobs = self.root_workflow_jobs()
+        for job in ("validate", "copier-fixture-validator", "minimum-compatibility"):
+            self.assertIn(job, jobs)
+        for command in (
+            "scripts/lint-project-workflow.sh",
+            "tests/smoke.sh",
+            "tests/test-hooks.py",
+            "tests/copier-update.sh",
+            "scripts/check-yaml.py",
+            "scripts/lint-github-actions.sh",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, jobs["validate"])
+        self.assertIn("python3 tests/test-copier-fixture-validator.py", jobs["copier-fixture-validator"])
+        self.assertIn("tests/copier-minimum.sh", jobs["minimum-compatibility"])
+
+    @staticmethod
+    def root_workflow_jobs() -> dict[str, str]:
+        text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        jobs: dict[str, list[str]] = {}
+        current: str | None = None
+        seen_jobs_key = False
+        for line in text.splitlines(keepends=True):
+            if not seen_jobs_key:
+                seen_jobs_key = line.rstrip("\n") == "jobs:"
+                continue
+            match = re.fullmatch(r"  ([A-Za-z0-9_-]+):\n", line)
+            if match:
+                current = match.group(1)
+                jobs[current] = []
+            elif current is not None:
+                jobs[current].append(line)
+        return {name: "".join(body) for name, body in jobs.items()}
 
     def test_empty_tree_range_checks_the_full_initial_push_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

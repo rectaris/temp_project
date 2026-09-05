@@ -207,3 +207,4 @@ id	path
 267	docs/plan/checked/2026/09/01-15/267-modularize-change-aware-copier-validator-tests.md
 270	docs/plan/checked/2026/09/01-15/270-admit-referent-validation-commands.md
 271	docs/plan/checked/2026/09/01-15/271-complete-referent-contract-resolution.md
+268	docs/plan/checked/2026/09/01-15/268-restore-large-test-baseline-and-ci.md

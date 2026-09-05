@@ -48,7 +48,7 @@ context_files:
   - scripts/plan-execution-state.py
   - scripts/plan_validation_commands.py
   - tests/test-plan-execution-state.py
-  - docs/plan/active/268-restore-large-test-baseline-and-ci.md
+  - docs/plan/checked/2026/09/01-15/268-restore-large-test-baseline-and-ci.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md

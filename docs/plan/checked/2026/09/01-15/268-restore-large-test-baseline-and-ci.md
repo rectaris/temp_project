@@ -1,6 +1,6 @@
 # Restore the large Python test baseline and CI coverage
 
-status: in_progress
+status: checked
 primary_invariant: the current one-correction execution contract is tested without stale expectations, and each previously omitted large root Python suite runs in CI without weakening existing validation
 task_types:
   - template_workflow
@@ -101,16 +101,21 @@ checked_summary_ja: sandbox worker の訂正回数テストを現行の 1 回上
 
 ## Tasks
 
-- [ ] Record the two sandbox worker failure identities and confirm that no other test in the complete suite fails at the activation baseline.
-- [ ] Change the correction-lineage scenario to accept one correction and reject the next correction before worker execution, while retaining lineage, output, and source-cleanliness assertions.
-- [ ] Change the availability-state scenario to reuse state between the initial attempt and the single permitted correction, then preserve run mismatch and semantic-failure coverage in fresh eligible execution states.
-- [ ] Add three independent root CI jobs that run the existing complete commands for plan restructuring, plan execution state, and sandboxed plan worker behavior.
-- [ ] Extend `GeneratedCiTest` to require the new job identifiers and commands, prove that they are not appended to `validate`, and continue checking the existing jobs and commands.
-- [ ] Run every focused validation command and obtain an independent read-only review with no unresolved High or Medium finding.
-- [ ] Run the authoritative validation suite exactly once for an otherwise accepted change, then archive and commit only the declared write scope plus parent-owned lifecycle files.
+- [x] Record the two sandbox worker failure identities and confirm that no other test in the complete suite fails at the activation baseline.
+- [x] Change the correction-lineage scenario to accept one correction and reject the next correction before worker execution, while retaining lineage, output, and source-cleanliness assertions.
+- [x] Change the availability-state scenario to reuse state between the initial attempt and the single permitted correction, then preserve run mismatch and semantic-failure coverage in fresh eligible execution states.
+- [x] Add three independent root CI jobs that run the existing complete commands for plan restructuring, plan execution state, and sandboxed plan worker behavior.
+- [x] Extend `GeneratedCiTest` to require the new job identifiers and commands, prove that they are not appended to `validate`, and continue checking the existing jobs and commands.
+- [x] Run every focused validation command and obtain an independent read-only review with no unresolved High or Medium finding.
+- [x] Run the authoritative validation suite exactly once for an otherwise accepted change, then archive and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
 - Activation evidence: `python3 tests/test-plan-restructure.py` passes 177 tests in 97.372 seconds; `python3 tests/test-plan-execution-state.py` passes 76 tests in 80.834 seconds; `python3 tests/test-sandboxed-plan-worker.py` runs 96 tests in 57.494 seconds and fails only `test_correction_lineage_allows_two_rounds_and_rejects_third` and `test_correction_reuses_same_run_availability_and_only_falls_back_for_availability`.
 - The failing sandbox tests both attempt a second correction. `scripts/plan-execution-state.py` and its regression tests establish one permitted correction followed by `replan_required`, matching the current root policy.
 - The full decision comparison remains local under `.agent-artifacts/decision-audits/`; this plan records only the accepted implementation decisions.
+- Implementation evidence: the sandboxed plan worker suite passes 97 tests, up from 96 run and 2 failed, because the stale second-correction expectations were replaced by one accepted correction, one refused correction, and a separate correction-path availability classification regression.
+- Focused validation at the final state: `python3 tests/test-sandboxed-plan-worker.py` 97 OK; `python3 tests/test-plan-restructure.py` 177 OK; `python3 tests/test-plan-execution-state.py` 76 OK; `python3 tests/test-validation-tools.py` 81 OK; `python3 scripts/plan_validation_commands.py --self-test`, `python3 scripts/check-copier-template.py`, `python3 scripts/check-yaml.py .`, pinned actionlint with shellcheck, and `git diff --check` all pass.
+- Independent read-only review ran twice. The first round reported one Medium finding for lost correction-path availability classification coverage and three Low findings. One parent-direct remediation round added `test_correction_classifies_unavailable_preferred_model_and_records_fallback`, replaced the unreachable mismatch assertion with an output-directory absence assertion, anchored the non-availability failure message on its full prefix, and aligned the CI bubblewrap probe with `ensure_bwrap_usable`. The second round reported no High, Medium, or Low finding.
+- Authoritative validation ran once after the review cleared: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` both pass.
+- CI additions stay root-only. `plan-restructure`, `plan-execution-state`, and `sandboxed-plan-worker` are independent jobs with no `needs` edge, and every existing job, step, trigger, and permission is unchanged.

@@ -3018,47 +3018,53 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         self.assertEqual(apply.returncode, 0, apply.stderr)
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "corrected candidate\n")
 
-    def test_correction_lineage_allows_two_rounds_and_rejects_third(self) -> None:
+    def test_correction_lineage_allows_one_round_and_rejects_second(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
-        initial, initial_output, _worker = self.run_with_worker(
+        initial, _initial_output, _worker = self.run_with_worker(
             repo,
             plan_path,
             '(worker_repo / "allowed.txt").write_text("round zero\\n", encoding="utf-8")',
             output_dir=root / "round-zero",
         )
         self.assertEqual(initial.returncode, 0, initial.stderr)
-        prior = Path(initial.stdout.strip())
-        for round_number in (1, 2):
-            brief = root / f"brief-{round_number}.txt"
-            brief.write_text(f"Correction round {round_number}.\n", encoding="utf-8")
-            result = self.run_correction_with_worker(
-                repo,
-                plan_path,
-                prior,
-                brief,
-                f'(worker_repo / "allowed.txt").write_text("round {round_number}\\n", encoding="utf-8")',
-                output_dir=root / f"round-{round_number}",
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            prior = Path(result.stdout.strip())
-            manifest = json.loads(prior.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["correction_lineage"]["correction_round"], round_number)
-        third_brief = root / "brief-3.txt"
-        third_brief.write_text("Third correction must be refused.\n", encoding="utf-8")
-        third = self.run_correction_with_worker(
+        first_brief = root / "brief-1.txt"
+        first_brief.write_text("Correction round 1.\n", encoding="utf-8")
+        first = self.run_correction_with_worker(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            first_brief,
+            '(worker_repo / "allowed.txt").write_text("round 1\\n", encoding="utf-8")',
+            output_dir=root / "round-1",
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        prior = Path(first.stdout.strip())
+        accepted = json.loads(prior.read_text(encoding="utf-8"))
+        self.assertEqual(accepted["correction_lineage"]["correction_round"], 1)
+        second_brief = root / "brief-2.txt"
+        second_brief.write_text("Second correction must be refused.\n", encoding="utf-8")
+        second = self.run_correction_with_worker(
             repo,
             plan_path,
             prior,
-            third_brief,
-            '(worker_repo / "allowed.txt").write_text("round 3\\n", encoding="utf-8")',
-            output_dir=root / "round-3",
+            second_brief,
+            '(worker_repo / "allowed.txt").write_text("round 2\\n", encoding="utf-8")',
+            output_dir=root / "round-2",
         )
-        self.assertEqual(third.returncode, 1)
-        self.assertIn("stopped for restructuring", third.stderr)
-        self.assertFalse((root / "round-3" / "worker.stdout").exists())
+        self.assertEqual(second.returncode, 1)
+        self.assertIn("stopped for restructuring", second.stderr)
+        self.assertFalse((root / "round-2" / "worker.stdout").exists())
+        self.assertFalse((root / "round-2" / "candidate.patch").exists())
         self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+        with self.assertRaisesRegex(RUNNER.RunnerError, "correction budget exhausted"):
+            RUNNER.next_correction_lineage(
+                accepted,
+                prior_manifest_digest="0" * 64,
+                prior_patch_digest="0" * 64,
+                correction_brief_digest="0" * 64,
+            )
 
     def test_correction_rejects_tampered_prior_manifest_and_brief_boundaries(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
@@ -3185,17 +3191,6 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
-        initial, _initial_output, _worker = self.run_with_worker(
-            repo,
-            plan_path,
-            '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
-            output_dir=root / "availability-correction-initial",
-            extra_args=("--orchestration-run-id", "same-correction-run"),
-        )
-        self.assertEqual(initial.returncode, 0, initial.stderr)
-        prior = Path(initial.stdout.strip())
-        brief = root / "availability-correction-brief.txt"
-        brief.write_text("Correct the candidate.\n", encoding="utf-8")
         state = root / "correction-state.json"
         common = (
             "--availability-state",
@@ -3203,66 +3198,154 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             "--orchestration-run-id",
             "same-correction-run",
         )
-        first = self.run_correction_with_fake_codex(
+        initial = self.run_with_fake_codex(
             repo,
             plan_path,
-            prior,
-            brief,
             "unavailable_then_success",
-            output_dir=root / "correction-availability-first",
+            output_dir=root / "availability-correction-initial",
             extra_args=common,
         )
-        self.assertEqual(first.returncode, 0, first.stderr)
-        first_manifest = json.loads(Path(first.stdout.strip()).read_text(encoding="utf-8"))
-        self.assertEqual(first_manifest["telemetry"]["model_starts"], 2)
-        self.assertEqual(first_manifest["telemetry"]["availability_failures"], 1)
-
-        second = self.run_correction_with_fake_codex(
-            repo,
-            plan_path,
-            Path(first.stdout.strip()),
-            brief,
-            "unavailable_then_success",
-            output_dir=root / "correction-availability-second",
-            extra_args=common,
-        )
-        self.assertEqual(second.returncode, 0, second.stderr)
-        second_manifest = json.loads(Path(second.stdout.strip()).read_text(encoding="utf-8"))
-        self.assertEqual(second_manifest["telemetry"]["model_starts"], 1)
-        self.assertEqual(second_manifest["telemetry"]["skipped_known_unavailable_starts"], 1)
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        initial_manifest = json.loads(Path(initial.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(initial_manifest["telemetry"]["model_starts"], 2)
+        self.assertEqual(initial_manifest["telemetry"]["availability_failures"], 1)
         self.assertEqual(
-            [attempt["label"] for attempt in second_manifest["worker_result"]["attempts"]],
+            json.loads(state.read_text(encoding="utf-8"))["unavailable_models"],
+            [{"model": "gpt-5.3-codex-spark", "reason": "usage_limit"}],
+        )
+        brief = root / "availability-correction-brief.txt"
+        brief.write_text("Correct the candidate.\n", encoding="utf-8")
+        correction_output = root / "correction-availability-reuse"
+        correction = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief,
+            "unavailable_then_success",
+            output_dir=correction_output,
+            extra_args=common,
+        )
+        self.assertEqual(correction.returncode, 0, correction.stderr)
+        correction_manifest = json.loads(Path(correction.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(correction_manifest["correction_lineage"]["correction_round"], 1)
+        self.assertEqual(correction_manifest["telemetry"]["model_starts"], 1)
+        self.assertEqual(correction_manifest["telemetry"]["availability_failures"], 0)
+        self.assertEqual(correction_manifest["telemetry"]["skipped_known_unavailable_starts"], 1)
+        self.assertEqual(
+            [attempt["label"] for attempt in correction_manifest["worker_result"]["attempts"]],
             ["fallback"],
         )
+        self.assertFalse((correction_output / "worker-primary.stdout").exists())
 
+        mismatch_state = root / "correction-mismatch-state.json"
+        mismatch_initial = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "primary_success",
+            output_dir=root / "correction-mismatch-initial",
+            extra_args=(
+                "--availability-state",
+                str(mismatch_state),
+                "--orchestration-run-id",
+                "mismatch-correction-run",
+            ),
+        )
+        self.assertEqual(mismatch_initial.returncode, 0, mismatch_initial.stderr)
         mismatched = self.run_correction_with_fake_codex(
             repo,
             plan_path,
-            prior,
+            Path(mismatch_initial.stdout.strip()),
             brief,
             "primary_success",
             output_dir=root / "correction-run-mismatch",
             extra_args=(
                 "--availability-state",
-                str(state),
+                str(mismatch_state),
                 "--orchestration-run-id",
                 "different-run",
             ),
         )
         self.assertEqual(mismatched.returncode, 1)
         self.assertIn("run identifier differs", mismatched.stderr)
+        self.assertFalse((root / "correction-run-mismatch").exists())
 
+        semantic_initial = self.run_with_fake_codex(
+            repo,
+            plan_path,
+            "primary_success",
+            output_dir=root / "correction-semantic-initial",
+        )
+        self.assertEqual(semantic_initial.returncode, 0, semantic_initial.stderr)
         semantic = self.run_correction_with_fake_codex(
             repo,
             plan_path,
-            prior,
+            Path(semantic_initial.stdout.strip()),
             brief,
             "nonavailability_failure",
             output_dir=root / "correction-semantic-failure",
         )
         self.assertEqual(semantic.returncode, 1)
-        self.assertIn("stopped for restructuring", semantic.stderr)
+        self.assertIn(
+            "sandboxed plan worker failed: correction worker exited with 1;", semantic.stderr
+        )
+        self.assertTrue((root / "correction-semantic-failure" / "worker-primary.stdout").is_file())
         self.assertFalse((root / "correction-semantic-failure" / "worker-fallback.stdout").exists())
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+
+    def test_correction_classifies_unavailable_preferred_model_and_records_fallback(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial, _initial_output, _worker = self.run_with_worker(
+            repo,
+            plan_path,
+            '(worker_repo / "allowed.txt").write_text("initial candidate\\n", encoding="utf-8")',
+            output_dir=root / "classification-initial",
+            extra_args=("--orchestration-run-id", "classification-correction-run"),
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        brief = root / "classification-brief.txt"
+        brief.write_text("Correct the candidate.\n", encoding="utf-8")
+        state = root / "classification-state.json"
+        output_dir = root / "correction-classification"
+        correction = self.run_correction_with_fake_codex(
+            repo,
+            plan_path,
+            Path(initial.stdout.strip()),
+            brief,
+            "unavailable_then_success",
+            output_dir=output_dir,
+            extra_args=(
+                "--availability-state",
+                str(state),
+                "--orchestration-run-id",
+                "classification-correction-run",
+            ),
+        )
+        self.assertEqual(correction.returncode, 0, correction.stderr)
+        manifest = json.loads(Path(correction.stdout.strip()).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["correction_lineage"]["correction_round"], 1)
+        self.assertEqual(manifest["telemetry"]["model_starts"], 2)
+        self.assertEqual(manifest["telemetry"]["availability_failures"], 1)
+        self.assertEqual(manifest["telemetry"]["skipped_known_unavailable_starts"], 0)
+        worker_result = manifest["worker_result"]
+        self.assertEqual(worker_result["selected_attempt"], "fallback")
+        self.assertEqual(worker_result["fallback_reason"], "usage_limit")
+        self.assertEqual(
+            [attempt["label"] for attempt in worker_result["attempts"]], ["primary", "fallback"]
+        )
+        self.assertNotIn("usage limit", json.dumps(worker_result).lower())
+        self.assertEqual(
+            json.loads(state.read_text(encoding="utf-8")),
+            {
+                "schema_version": 1,
+                "orchestration_run_id": "classification-correction-run",
+                "unavailable_models": [{"model": "gpt-5.3-codex-spark", "reason": "usage_limit"}],
+            },
+        )
+        self.assertTrue((output_dir / "worker-primary.stdout").is_file())
+        self.assertEqual(manifest["changed_paths"], ["allowed.txt"])
+        self.assertEqual((repo / "allowed.txt").read_text(encoding="utf-8"), "original\n")
 
     def test_correction_sandbox_denies_source_out_of_scope_and_git_metadata_writes(self) -> None:
         temporary, repo, plan_path = self.make_repo(["allowed.txt"])
