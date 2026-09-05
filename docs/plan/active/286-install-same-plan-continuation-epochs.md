@@ -38,7 +38,7 @@ write_scope:
   - references/orchestration.md
   - template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
   - AGENTS.md
-  - template/AGENTS.md.jinja
+  - template/.project-agent-workflow/AGENTS.md.jinja
   - scripts/project_workflow/copier_inventory.py
   - scripts/check-copier-template.py
   - tests/smoke.sh
