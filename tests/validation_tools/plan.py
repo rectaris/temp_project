@@ -13,6 +13,16 @@ from .support import PLANLIB, PLAN_COMMAND_MODULES, ROOT, load_module
 
 
 class PlanValidationCommandsTest(unittest.TestCase):
+    def test_root_semantic_test_commands_accept_only_fixed_invocations(self) -> None:
+        module = load_module(ROOT / "scripts/plan_validation_commands.py", "root_semantic_commands")
+        for script in ("tests/test-referent-contract.py", "tests/test-hooks.py"):
+            command = f"python3 {script}"
+            module.parse_validation_command(command)
+            for suffix in (" --help", " extra", " ; true", " && true", " | cat"):
+                with self.subTest(command=command + suffix):
+                    with self.assertRaises(module.ValidationCommandError):
+                        module.parse_validation_command(command + suffix)
+
     MIGRATION_POLICY = ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
     MIGRATION_RECORD = (
         ".project-agent-workflow-migration/validation-witness-provenance-v1.json"

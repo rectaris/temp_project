@@ -50,6 +50,8 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "tests/test-plan-execution-state.py": {()},
     "tests/test-sandboxed-plan-worker.py": {()},
     "tests/test-validation-tools.py": {()},
+    "tests/test-referent-contract.py": {()},
+    "tests/test-hooks.py": {()},
     "tests/test-verify-copier-update.py": {()},
 }
 VALIDATE_CHANGES_FLAGS = frozenset({"--all", "--staged", "--print-only", "--json"})
