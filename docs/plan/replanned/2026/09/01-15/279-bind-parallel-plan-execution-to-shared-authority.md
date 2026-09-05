@@ -1,8 +1,6 @@
 # Bind independent parallel plan execution to parent-owned authority
 
-status: deferred
-completion_deferred_reason: Complete and archive the declared predecessors before starting this implementation.
-primary_invariant: An explicitly admitted set of independent plans may receive isolated candidate-generation permits, while one parent-owned authority preserves exact membership, each logical plan's cumulative budgets and stop state, and exclusive claims on predecessor and publication state across all worktrees and baseline changes.
+status: replanned
 task_types:
   - template_workflow
   - planning_docs
@@ -117,25 +115,27 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:93c6691b05bc22afc3dc72b7601b5aeb5d67743787ab01c42d59eb915e1ac374","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
   - {"acceptance_sha256":"sha256:1bdd1dc3f6afb721ed95cfe35e24d4c8432051244e671db4d72ae17bdefe6f5c","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:e7329dac215ccc9c5fc2738f35b522e2c261781e34b1a8264fc938e22d68b5a0","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/278-create-resumable-parent-worktrees.md
+  - docs/plan/active/279-bind-parallel-plan-execution-to-shared-authority.md
+  - docs/plan/active/280-integrate-parallel-plan-candidates-in-order.md
+replan_contract: docs/plan/replanned/contracts/278-complete-resumable-parent-worktrees.json
 integration_gates:
-  - Start only after plan 278 is checked and its active predecessor path has been rebound to the exact checked archive. Implement under the existing serial workflow, not through the parallel authority being added.
-  - Use bounded parent implementation with the existing external execution ledger and independent review. Preserve the existing owner-decision stops and do not use a new schema to bypass a stopped implementation of this plan.
-  - Add scripts/parallel-plan-state.py and its generated counterpart as a bounded local authority module. Keep the actual mode-0600 runtime records outside the repository; store digests and fixed bounded values, not code, command output, credentials or findings.
-  - The project-owned committed description lives under docs/plan/execution-groups/ and names one exact target local ref and an exact finite member list with plan paths/digests and declared independence. Use an optional explicit manifest reference to that description; no record is trusted because of its path or origin URL. The description contains neither its own containing commit nor a digest of itself.
-  - An enrolled member remains a numbered implementation plan and must pass its normal purpose, feasibility, completion witness, scope, approval, spec and predecessor checks. Members may be in_progress together only within one fully valid explicit group. Unmarked plans and the sequential selector keep their existing behavior.
-  - Commit the complete member plans and group description first. Parent admission then captures their containing clean HEAD as the common executable start commit C0 and records C0 plus exact member/group blob digests only in the external runtime record. Both worker checkouts start at C0; do not introduce a second product baseline, hash self-reference, or an equivalence rule that excludes unreviewed metadata from candidate evidence.
-  - Validate the committed group description statically in root/generated plan lint; validate current permission, ownership, counters and stopped state separately from the external record before any runner operation. Offline lint success alone is not an execution permit.
-  - Limit initial groups to two independent members. Reject known write-scope overlaps, validation/spec authority edits by delegated workers, member-to-member predecessor edges and declared dependence on unfinished member output. Do not infer semantic independence solely from distinct paths.
-  - A group consumes any upstream accepted chain leaf once. Its independent member starts use distinct group permits, not repeated legacy predecessor proofs; only the fully accepted group exposes one successor claim. A member failure retains already published work but cannot claim full group completion.
-  - Add one atomic parent-adjustment accounting transition to the new group/member record: before a substantive parent edit of assembled candidate bytes, reserve the member single correction slot, bind the exact incoming member/candidate/base identity, and close it against the resulting patch digest. It blocks any later worker correction or second parent adjustment, preserves spent reviews, and cannot run from a stopped state; it does not forge a review-triggered legacy correction event. Interrupted adjustment stays spent and unresolved until exact same-attempt recovery or an owner stop.
-  - Each logical member, not the entire A/B group, owns its existing one-initial/one-correction/two-review budget. A baseline transfer never changes that identity. Carry cumulative counters and reviewer-registry event-chain proof atomically; forbid concurrent transfers and old-epoch execution after consumption.
-  - Freeze member requirements, acceptance digests, exact write scope and validation authority. Reject authority/scope drift as the existing stop condition; permit only normal verified lifecycle relocation when a member plan is archived, without treating the historical frozen group description as stale authority to run it again.
-  - Record new baseline evidence as a new versioned identity linked to the consumed member state; never edit old worker receipts/manifests or manufacture a new worker claim for a parent-adjusted patch. Existing schemas remain verified byte-for-byte under their old dispatch.
-  - Keep diagnosis_required, repair_required, replan_required and owner-decision states terminal for the affected member execution. Do not allow transfer, regrouping, group deletion or another workspace to clear them. A recorded authoritative failure must enter diagnosis_required before transfer or repair.
-  - Acquire cooperative repository/group/member locks in one documented order and bind the common Git directory so separate worktrees cannot obtain independent publication authority for the same target. Do not hold the publication lease during candidate model computation.
-  - Immediately gate the existing root/generated runner, ledger start and completion/finalization entrypoints against enrolled members without a fully verified versioned group permit. Until plan 280 supplies the adapter, all such production operations fail closed before worker prerequisites, validation, apply or lifecycle writes. Test every bypass through direct legacy CLI invocation, not only group APIs.
-  - This plan establishes and tests records and permission APIs only; it launches no parallel model process and publishes no product result. Plan 280 must wire and validate the full runner path before grouped production execution is available.
-  - Keep plan 276 independent: its optional diagnostic preflight is not a prerequisite and provides no acceptance evidence. Group execution must be correct without it.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/283-complete-resumable-parent-worktrees.md
+  - docs/plan/active/284-bind-parallel-plan-execution-to-shared-authority.md
+  - docs/plan/active/285-integrate-parallel-plan-candidates-in-order.md
+inherited_acceptance_digests:
+  - sha256:832f81d26c7deace802c9de03926f046dd198216ca68dcf89a853c5e56b74865
+  - sha256:879b71f3e6dd97ddd2b2d989369e528f02384d28937938ff0fe63a846e0dbb14
+  - sha256:0f9c0d014b019f32448829e374205ebb62c893f6e22b90e7da80c7e539b21972
+  - sha256:98f5395f4ad3c77ef5f71dd8a6c0d508dd95a6579ea15b86212980fb98bc80a1
+  - sha256:e20a416e2433ddeac43db7cd1ed6128c9c53c6952ed1c481491c214274d0405a
+  - sha256:93c6691b05bc22afc3dc72b7601b5aeb5d67743787ab01c42d59eb915e1ac374
+  - sha256:1bdd1dc3f6afb721ed95cfe35e24d4c8432051244e671db4d72ae17bdefe6f5c
+  - sha256:e7329dac215ccc9c5fc2738f35b522e2c261781e34b1a8264fc938e22d68b5a0
 checked_summary_ja: 独立した二つのプランの実行権限を親が管理し、開始コミットを変更しても各プランの回数制限と停止状態を維持する。
 
 ## Decisions

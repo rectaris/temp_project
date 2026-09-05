@@ -1,9 +1,6 @@
 # Create and resume parent-owned development worktrees
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
-primary_invariant: Managed worktree creation and resumption bind one parent development checkout to one exact plan and committed baseline while preserving the ordinary checkout, existing Git state and retained work; delegated implementation keeps the existing independent clone and sandbox.
+status: replanned
 task_types:
   - template_workflow
   - planning_docs
@@ -86,18 +83,22 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:73b12f9939519cef986a89097913978fd8cd5fa852848ffcd85d88f8ce85c0c6","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:91debfddfa563272121fb95a5f5924bc6d286130501351ee2788caa2d2bba294","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:964fb466ff6e6b9581d97e9d3c9673463ea37efe21664bcb0f45b2084db9d2db","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/278-create-resumable-parent-worktrees.md
+  - docs/plan/active/279-bind-parallel-plan-execution-to-shared-authority.md
+  - docs/plan/active/280-integrate-parallel-plan-candidates-in-order.md
+replan_contract: docs/plan/replanned/contracts/278-complete-resumable-parent-worktrees.json
 integration_gates:
-  - Implement this first; plans 279 and 280 remain deferred until their declared predecessors are checked. This plan does not enable simultaneous writable plans.
-  - Use bounded parent implementation with an external execution ledger and independent read-only review because this scope changes orchestration and validation authority; do not dispatch this plan to a writable worker.
-  - The ownership record is runtime-only, bounded, mode 0600 and outside the repository. Bind a canonical common-Git-directory identity in addition to the credential-free canonical origin identity; origin alone cannot distinguish clones.
-  - The ordinary checkout may be dirty, but the selected start commit and plan must already be committed. Do not stash, reset, copy uncommitted files, change the ordinary branch/index, replace an existing branch, or infer a base from a moving ref after admission.
-  - Require an explicit external allowed root and exact branch name. Reject symlinked paths, unsafe roots, existing unowned paths, branch reuse and ambiguous worktree registration before mutation. Managed Git changes are limited to the new branch and registration, which worktrees necessarily share.
-  - Use a parent-owned lock/lease and journal around create and resume. An interrupted create preserves its exact owned directory and reports or resumes the partial operation after identity verification; never delete unknown or useful work to recover.
-  - Resume allows retained modifications in the managed checkout but does not relax the runner clean-source gate. Verify branch ancestry against the recorded start and bound accepted commits; reject an unexplained branch switch or unrelated history.
-  - Keep credentials and ignored local files out of automatic copying. Reuse the existing parent dependency snapshot for worker validation; the manager itself runs no package installer, setup hook, database migration or arbitrary shell command.
-  - Start the parent session explicitly from the managed checkout. Test repository-root resolution when .git is a file and document that ordinary Git worktrees do not sandbox an unrestricted parent process or isolate host ports.
-  - Preserve SPEC_GIT_RETIREMENT and git-retirement.yaml unchanged. There is no remove subcommand or automatic cleanup, and no upstream or remote push prerequisite for create/resume. Existing explicit retirement may leave detached, unmerged or upstream-less work in place.
-  - Register new root/generated scripts in the existing Copier inventory, syntax/parity checks and generated smoke assertions. The root-only test module is imported by the existing test-validation-tools entrypoint; do not add a new free-form validation-command escape.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/283-complete-resumable-parent-worktrees.md
+  - docs/plan/active/284-bind-parallel-plan-execution-to-shared-authority.md
+  - docs/plan/active/285-integrate-parallel-plan-candidates-in-order.md
+inherited_acceptance_digests:
+  - sha256:73b12f9939519cef986a89097913978fd8cd5fa852848ffcd85d88f8ce85c0c6
+  - sha256:91debfddfa563272121fb95a5f5924bc6d286130501351ee2788caa2d2bba294
+  - sha256:964fb466ff6e6b9581d97e9d3c9673463ea37efe21664bcb0f45b2084db9d2db
 checked_summary_ja: 親エージェント用の作業場所を安全に作成して再開し、元の未コミット変更と既存の実装用 clone の隔離を維持する。
 
 ## Decisions

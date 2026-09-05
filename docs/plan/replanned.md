@@ -50,3 +50,6 @@ id	path	contract
 261	docs/plan/replanned/2026/09/01-15/261-source-aware-copier-dispatch.md	docs/plan/replanned/contracts/261-defer-unbounded-copier-dispatch-proof.json
 250	docs/plan/replanned/2026/09/01-15/250-require-reachable-fixture-constructions.md	docs/plan/replanned/contracts/250-require-reachable-fixture-constructions.json
 269	docs/plan/replanned/2026/09/01-15/269-resolve-stale-referent-contracts.md	docs/plan/replanned/contracts/269-complete-referent-contract-resolution.json
+278	docs/plan/replanned/2026/09/01-15/278-create-resumable-parent-worktrees.md	docs/plan/replanned/contracts/278-complete-resumable-parent-worktrees.json
+279	docs/plan/replanned/2026/09/01-15/279-bind-parallel-plan-execution-to-shared-authority.md	docs/plan/replanned/contracts/278-complete-resumable-parent-worktrees.json
+280	docs/plan/replanned/2026/09/01-15/280-integrate-parallel-plan-candidates-in-order.md	docs/plan/replanned/contracts/278-complete-resumable-parent-worktrees.json
