@@ -1,6 +1,8 @@
 # Create and resume parent-owned development worktrees
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 primary_invariant: Managed worktree creation and resumption bind one parent development checkout to one exact plan and committed baseline while preserving the ordinary checkout, existing Git state and retained work; delegated implementation keeps the existing independent clone and sandbox.
 task_types:
   - template_workflow
@@ -128,3 +130,5 @@ checked_summary_ja: 親エージェント用の作業場所を安全に作成し
 - Recheck the current committed baseline and exact scope before implementation; read applicable directory AGENTS.md and required specifications directly. Preserve any intervening owner changes.
 - The parent owns scope admission, validation acceptance, independent-review acceptance, lifecycle, commits and reporting. Read-only helpers may supply bounded evidence; no writable helper is authorized by this planning turn.
 - No measured speedup or resource saving is claimed. Root plan files describe this repository's implementation work and are not copied as product-specific plans into the reusable template.
+- The first parent-direct implementation passed the declared focused tests, but the second independent review still found four Medium safety defects after the one permitted remediation round. The execution ledger stopped at `descope_pending` with `parent_remediation_budget_exhausted`; authoritative validation and commit were not attempted.
+- Owner continuation authorization: 「継続して開発せよ。」 The rejected implementation is preserved outside the repository under the parent session state and the worktree was restored to the committed baseline before reconstruction.
