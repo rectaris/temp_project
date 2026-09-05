@@ -662,6 +662,345 @@ class InventoryRegionTest(ContractSupportTest):
             )
         )
 
+    def test_a_copy_into_a_directory_destination_is_rejected(self) -> None:
+        for command in ("cp", "install"):
+            with self.subTest(command=command):
+                self.assert_rejected(
+                    self.outside(f'{command} "$root/AGENTS.md" "$update_source/"\n'),
+                    RULE_INVENTORY_REGION,
+                    "a write into the update source stands outside",
+                )
+
+    def test_a_directory_destination_resolved_from_a_name_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside('slash=/\ncp "$root/AGENTS.md" "$update_source$slash"\n'),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside",
+        )
+
+    def test_a_directory_destination_after_a_terminator_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside('cp -- "$root/AGENTS.md" "$update_source/"\n'),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside",
+        )
+
+    def test_every_source_of_a_directory_destination_is_placed(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                'cp "$root/AGENTS.md" "$root/NOTICE" "$update_source/"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside",
+        )
+
+    def test_a_directory_destination_reached_from_every_call_is_rejected(self) -> None:
+        self.assert_rejected(
+            self.outside(
+                "seed() {\n"
+                '  cp "$root/AGENTS.md" "$tmp/$1"\n'
+                "}\n"
+                'seed "update-source/"\n'
+                'seed "other-source/"\n'
+            ),
+            RULE_INVENTORY_REGION,
+            "a write into the update source stands outside",
+        )
+
+    def test_a_source_with_no_name_of_its_own_is_reported_unplaceable(self) -> None:
+        for index, source in enumerate(('"$root/."', '"$root/.."', '"$root/$1"')):
+            with self.subTest(source=source):
+                self.assert_rejected(
+                    self.outside(f'cp {source} "$update_source/"\n'),
+                    RULE_INVENTORY_REGION,
+                    "a write this checker cannot place is written where the "
+                    "update source is named",
+                )
+
+    def test_a_directory_destination_outside_the_update_source_is_accepted(
+        self,
+    ) -> None:
+        self.assert_accepted(
+            self.outside('cp "$root/AGENTS.md" "$tmp/other/"\n')
+        )
+
+    def test_a_destination_written_without_a_separator_is_accepted(self) -> None:
+        self.assert_accepted(
+            self.outside('cp "$root/AGENTS.md" "$tmp/update-source"\n')
+        )
+
+    def test_a_destination_carrying_the_separator_in_one_form_is_accepted(
+        self,
+    ) -> None:
+        """One form that writes no separator leaves the destination a file.
+
+        The shell creates the destination word itself whenever the value it
+        carries ends in a name, so a word that may carry either form proves no
+        directory and keeps the reading it already had.
+        """
+
+        self.assert_accepted(
+            self.outside(
+                "seed() {\n"
+                '  cp "$root/AGENTS.md" "$tmp/$1"\n'
+                "}\n"
+                'seed "update-source/"\n'
+                'seed "update-source"\n'
+            )
+        )
+
+    def test_an_empty_only_name_settles_no_directory_destination(self) -> None:
+        """The empty value option classification supplies never places a path.
+
+        The word reaches its command as `$update_source/`, but the binding
+        model reports the name unreadable, so the destination stays one this
+        checker cannot place rather than becoming a directory it reads.
+        """
+
+        self.assert_rejected(
+            self.outside('empty=\ncp "$root/AGENTS.md" "$empty$update_source/"\n'),
+            RULE_INVENTORY_REGION,
+            "takes a destination this checker cannot place",
+        )
+
+    def test_an_alias_written_with_a_directory_destination_is_unchanged(self) -> None:
+        for command in ("mv", "ln", "ln -s"):
+            with self.subTest(command=command):
+                self.assert_rejected(
+                    self.outside(f'{command} "$root/AGENTS.md" "$update_source/"\n'),
+                    RULE_INVENTORY_REGION,
+                    "an alias of the update source stands outside",
+                )
+
+    def test_an_option_bearing_copy_keeps_its_reading(self) -> None:
+        for written in (
+            'cp -T "$root/AGENTS.md" "$update_source/"',
+            'cp --no-target-directory "$root/AGENTS.md" "$update_source/"',
+            'cp --parents "$root/AGENTS.md" "$update_source/"',
+            'cp -R "$root/AGENTS.md" "$update_source/"',
+            'install -d "$update_source/"',
+            'install -d "$root/AGENTS.md" "$update_source/"',
+            'install -D "$root/AGENTS.md" "$update_source/"',
+            'cp "$root/AGENTS.md" -- "$update_source/"',
+        ):
+            with self.subTest(written=written):
+                self.assert_accepted(self.outside(written + "\n"))
+
+    def test_a_deferred_copy_with_a_directory_destination_is_unchanged(self) -> None:
+        self.assert_accepted(
+            self.outside(
+                "seed() {\n"
+                '  cp "$root/AGENTS.md" "$update_source/"\n'
+                "}\n"
+                "trap seed USR1\n"
+            )
+        )
+
+
+class TrailingSeparatorDestinationTest(unittest.TestCase):
+    """Place the sources of a copy whose destination is written as a directory.
+
+    A destination written with a trailing separator names a directory, so the
+    command creates each source under the name that source ends with. The
+    placement is read here from the words one operation records, because the
+    rules above report only whether some created path reached a searched
+    directory and not which names were placed.
+    """
+
+    def build(self, body: str):
+        """Return the derived fixture for one written body."""
+
+        text = "#!/bin/sh\nset -eu\n" + body
+        records = shell_lexical.project(text)
+        table = shell_functions.derive(records)
+        graph = shell_execution.derive(records, table)
+        return copier_fixture_validator._Fixture(text, records, table, graph)
+
+    def helper_paths(self, body: str):
+        """Return what the one helper-writing command of a body creates."""
+
+        fixture = self.build(body)
+        for operation in fixture.operations:
+            words = copier_fixture_validator._operation_words(operation)
+            literals = copier_fixture_validator._word_literals(words)
+            index = copier_fixture_validator._command_index(
+                literals, copier_fixture_validator.HELPER_WRITING_COMMANDS
+            )
+            if index >= 0:
+                return copier_fixture_validator._helper_paths(fixture, operation)
+        raise AssertionError("the body writes no helper-writing command")
+
+    def inside(self, body: str) -> set:
+        return set(self.helper_paths(body)[1])
+
+    def unplaceable(self, body: str) -> bool:
+        return self.helper_paths(body)[3]
+
+    DEST = (True, ("dest",))
+
+    def test_an_unsettled_source_is_placed_under_the_written_name(self) -> None:
+        for command in ("cp", "install"):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    self.inside(f'{command} "$1/one" "/dest/"\n'),
+                    {(self.DEST, "one")},
+                )
+
+    def test_every_unsettled_source_is_placed(self) -> None:
+        self.assertEqual(
+            self.inside('cp "$1/one" "$1/two" "/dest/"\n'),
+            {(self.DEST, "one"), (self.DEST, "two")},
+        )
+
+    def test_a_settled_source_keeps_its_settled_name(self) -> None:
+        self.assertEqual(
+            self.inside('cp /src/one /src/two "/dest/"\n'),
+            {(self.DEST, "one"), (self.DEST, "two")},
+        )
+
+    def test_a_separator_carried_by_a_name_places_the_source(self) -> None:
+        self.assertEqual(
+            self.inside('slash=/\ncp "$1/one" "/dest$slash"\n'),
+            {(self.DEST, "one")},
+        )
+
+    def test_a_leading_terminator_places_the_source(self) -> None:
+        self.assertEqual(
+            self.inside('cp -- "$1/one" "/dest/"\n'), {(self.DEST, "one")}
+        )
+
+    def test_a_source_that_names_no_file_is_reported_unplaceable(self) -> None:
+        for source in ('"$1/."', '"$1/.."', '"$1/$2"'):
+            with self.subTest(source=source):
+                body = f'cp {source} "/dest/"\n'
+                self.assertEqual(self.inside(body), set())
+                self.assertTrue(self.unplaceable(body))
+
+    def test_a_destination_written_without_a_separator_places_nothing(self) -> None:
+        body = 'cp "$1/one" "/dest"\n'
+        self.assertEqual(self.inside(body), set())
+        self.assertFalse(self.unplaceable(body))
+
+    def test_an_option_bearing_command_places_nothing(self) -> None:
+        for written in (
+            'cp -T "$1/one" "/dest/"',
+            'cp --no-target-directory "$1/one" "/dest/"',
+            'cp --parents "$1/one" "/dest/"',
+            'install -d "$1/one" "/dest/"',
+            'install -D "$1/one" "/dest/"',
+            'cp "$1/one" -- "/dest/"',
+            'mv "$1/one" "/dest/"',
+            'ln "$1/one" "/dest/"',
+        ):
+            with self.subTest(written=written):
+                body = written + "\n"
+                self.assertEqual(self.inside(body), set())
+                self.assertFalse(self.unplaceable(body))
+
+    def test_a_deferred_body_places_nothing(self) -> None:
+        """No written call site says which values an unmodelled body holds.
+
+        The separator such a body writes is read against the values every
+        binding place in the fixture holds, which is a different model from
+        the one this reading proves its destination against, so a deferred
+        operation keeps the reading it already had.
+        """
+
+        fixture = self.build(
+            "seed() {\n"
+            '  cp "$1/one" "/dest/"\n'
+            "}\n"
+            "trap seed USR1\n"
+        )
+        placed = set()
+        unplaceable = False
+        bodies = copier_fixture_validator._deferred_bodies(fixture)
+        self.assertTrue(bodies, "the fixture writes no unmodelled body")
+        for declaration in bodies:
+            for operation in (
+                copier_fixture_validator._deferred_operations(fixture, declaration)
+                or ()
+            ):
+                _created, inside, _words, unknown = (
+                    copier_fixture_validator._helper_paths(fixture, operation)
+                )
+                placed |= set(inside)
+                unplaceable = unplaceable or unknown
+        self.assertEqual(placed, set())
+        self.assertFalse(unplaceable)
+
+    def test_a_target_directory_option_keeps_its_own_placement(self) -> None:
+        self.assertEqual(
+            self.inside('cp -t "/dest/" "$1/one"\n'), {(self.DEST, "one")}
+        )
+
+    def test_an_unresolved_option_word_places_nothing(self) -> None:
+        body = 'cp $opt "$1/one" "/dest/"\n'
+        self.assertEqual(self.inside(body), set())
+        self.assertTrue(self.unplaceable(body))
+
+    def test_an_unreadable_destination_places_nothing(self) -> None:
+        for body in (
+            'empty=\ncp "$1/one" "$empty/dest/"\n',
+            'cp "$1/one" "$(printf %s /dest)/"\n',
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(self.inside(body), set())
+                self.assertTrue(self.unplaceable(body))
+
+    def test_a_path_reading_never_takes_the_option_empty_value(self) -> None:
+        """The value option classification supplies settles no path here."""
+
+        fixture = self.build('empty=\ncp "$1/one" "$empty/dest/"\n')
+        operation = next(
+            operation
+            for operation in fixture.operations
+            if copier_fixture_validator._command_index(
+                copier_fixture_validator._word_literals(
+                    copier_fixture_validator._operation_words(operation)
+                ),
+                copier_fixture_validator.HELPER_WRITING_COMMANDS,
+            )
+            >= 0
+        )
+        self.assertEqual(
+            copier_fixture_validator._resolved_word_texts(
+                fixture, operation, '"$empty/dest/"'
+            ),
+            ("/dest/",),
+        )
+        self.assertIsNone(
+            copier_fixture_validator._path_forms(
+                fixture, operation, '"$empty/dest/"'
+            )
+        )
+
+    def test_mixed_separator_forms_place_nothing(self) -> None:
+        body = (
+            "seed() {\n"
+            '  cp "$3/one" "/dest/$1"\n'
+            "}\n"
+            'seed "two/"\n'
+            "seed two\n"
+        )
+        self.assertEqual(self.inside(body), set())
+
+    def test_agreeing_separator_forms_place_every_destination(self) -> None:
+        body = (
+            "seed() {\n"
+            '  cp "$3/one" "/dest/$1"\n'
+            "}\n"
+            'seed "two/"\n'
+            'seed "three/"\n'
+        )
+        self.assertEqual(
+            self.inside(body),
+            {
+                ((True, ("dest", "two")), "one"),
+                ((True, ("dest", "three")), "one"),
+            },
+        )
+
 
 class InventoryDeclarationTest(ContractSupportTest):
     """Bind the editing carve-out to the paths the inventory declares."""

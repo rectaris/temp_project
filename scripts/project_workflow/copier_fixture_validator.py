@@ -563,6 +563,10 @@ FORKING_LAUNCHERS = frozenset(
 # A shell resolves a command word carrying a slash as a pathname, so such a word
 # never names a builtin and never gives the shell that writes it a value.
 PATH_SEPARATOR = "/"
+# The two segments that name a directory already in place rather than a file
+# one command creates inside it. A source written to end with either says no
+# name the destination directory may carry.
+CURRENT_AND_PARENT_NAMES = frozenset({".", ".."})
 NAMED_OPTION = "-v"
 # An expansion a shell gives a value through rather than only reads through.
 ASSIGNING_EXPANSION = "="
@@ -8138,6 +8142,91 @@ def _target_directories(
     return present, frozenset(directories), unknown, sources
 
 
+def _path_forms(
+    fixture: _Fixture, operation: _Operation, word: str
+) -> tuple[_Parts, ...] | None:
+    """Return every part sequence one written word may carry as a path.
+
+    This is the path reading of one word, kept apart from the option reading
+    above. Option classification supplies an empty value for a name every
+    assignment writes empty, and that value is a statement about the option a
+    word reaches its command as, not about the file it names. A path read
+    against it would settle a word the binding model reports unreadable, so
+    the ordinary bindings are used here and a name they leave unread yields
+    ``None``.
+
+    The parts are returned rather than the settled path because a settled path
+    drops the empty segment a trailing separator writes, and that separator is
+    the only written text saying the destination is a directory. An unmodelled
+    body is refused outright: no written call site fixes the values it holds,
+    so no word of it proves what its separator was written against.
+    """
+
+    if operation.deferred:
+        return None
+    parts = _word_parts(
+        word, f"s{operation.offset}", splits=True, allow_equals=False
+    )
+    if parts is None:
+        return None
+    return _resolve_parts(
+        parts, fixture.bindings_for(operation), fixture.unsettled_for(operation)
+    )
+
+
+def _names_a_directory(forms: tuple[_Parts, ...] | None) -> bool:
+    """Report whether every form one destination word carries ends in a separator.
+
+    A word written with a trailing separator names a directory, and a command
+    given one creates its sources inside it rather than at the word itself. One
+    form proves nothing when another form of the same word writes no separator,
+    because the shell then creates the destination as a file, so every form
+    must end that way and at least one form must be resolved at all.
+    """
+
+    if not forms:
+        return False
+    for candidate in forms:
+        if not candidate:
+            return False
+        kind, text = candidate[-1]
+        if kind != LITERAL_SEGMENT or not text.endswith(PATH_SEPARATOR):
+            return False
+    return True
+
+
+def _writes_only_operands(
+    fixture: _Fixture, operation: _Operation, words: Sequence[Token], index: int
+) -> bool:
+    """Report whether one command run writes no option after its command word.
+
+    A separator only says the destination is a directory when no option
+    changes what the command does with its operands, so this proof is required
+    before the directory reading is taken. A leading `--` terminator ends
+    option reading before any operand is written, so every word after it is an
+    operand whatever it spells. Otherwise every word must be proved not to be
+    an option: a word carrying a slash or an anchored path can never be one,
+    and a word whose bounded texts all read as operands is one as well. A word
+    this checker cannot bound, and a terminator written after an operand, keep
+    the reading the command already had.
+    """
+
+    following = words[index + 1 :]
+    if following and following[0].text == OPTION_END:
+        return True
+    for token in following:
+        if _cannot_name_an_option(fixture, operation, token):
+            continue
+        texts = _resolved_word_texts(fixture, operation, token.text)
+        if texts is None:
+            return False
+        if any(
+            text.startswith(OPTION_MARK) and text != OPTION_MARK for text in texts
+        ):
+            return False
+    return True
+
+
 def _helper_paths(
     fixture: _Fixture, operation: _Operation
 ) -> tuple[frozenset[_Path], frozenset[tuple[_Path, str]], tuple[str, ...], bool]:
@@ -8234,6 +8323,29 @@ def _helper_paths(
             if not segments:
                 continue
             inside.update((destination, segments[-1]) for destination in destinations)
+    if (
+        command in COPY_COMMANDS
+        and destinations
+        and _writes_only_operands(fixture, operation, recorded, index)
+        and _names_a_directory(_path_forms(fixture, operation, operands[-1].text))
+    ):
+        # The destination is written as a directory, so the command creates
+        # each source under the name that source ends with rather than at the
+        # destination word itself. A source this checker cannot settle still
+        # says that name whenever it ends in written text, and a source that
+        # says no name leaves the created path unplaceable rather than
+        # unwritten.
+        for source, paths in zip(operands[:-1], settled[:-1]):
+            names = {segments[-1] for _, segments in paths if segments}
+            if not names:
+                written_name = _written_name(source.text)
+                if written_name and written_name not in CURRENT_AND_PARENT_NAMES:
+                    names = {written_name}
+            if not names:
+                unsettled = True
+                continue
+            for name in names:
+                inside.update((destination, name) for destination in destinations)
     return frozenset(created), frozenset(inside), tuple(words), unsettled
 
 
