@@ -1,6 +1,8 @@
 # Complete resumable parent-owned development worktrees
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 primary_invariant: Managed worktree creation and resumption bind one parent development checkout to one exact plan and committed baseline while preserving the ordinary checkout, existing Git state and retained work; delegated implementation keeps the existing independent clone and sandbox.
 replan_sources:
   - docs/plan/active/278-create-resumable-parent-worktrees.md
@@ -126,3 +128,6 @@ checked_summary_ja: 親エージェント用作業ツリーの作成と再開を
 - Owner continuation authorization: 「継続して開発せよ。」
 - The rejected Plan 278 candidate is preserved outside the repository in the parent session state. It is not product acceptance evidence.
 - Plan 278 stopped after the second review left Medium findings; this successor receives a fresh execution ledger and review budget under the immutable schema-4 reconstruction contract.
+- Plan 283 stopped after its second independent review left Medium findings. Its external ledger remains terminal at `descope_pending` with `parent_remediation_budget_exhausted`.
+- Owner bootstrap authorization: 「提案の方針で進める。」 The owner approved one final reconstruction to install bounded same-plan continuation epochs and deterministic adversarial preflight; later review-budget exhaustion must not create another numbered successor merely to reset review.
+- The uncommitted Plan 283 candidate was preserved outside the repository with a SHA-256 manifest, then the repository was restored to the committed source baseline before this lifecycle transition.
