@@ -1,9 +1,6 @@
 # Resolve stale referent contracts without claiming unperformed review
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
-primary_invariant: ending or relocating a referent contract preserves its recorded semantic evidence and cannot create semantic acceptance, while active records remain actionable
+status: replanned
 implementation_tier: 2
 implementation_risk: ordinary
 implementation_ambiguity: ordinary
@@ -65,10 +62,16 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256": "sha256:2cb05261df94708d4babddb2029c366cb71ab24978c8d66b31b0d54bddb22b35", "stage": "focused", "witness": "python3 tests/test-referent-contract.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/269-resolve-stale-referent-contracts.md
+replan_contract: docs/plan/replanned/contracts/269-complete-referent-contract-resolution.json
 integration_gates:
-  - Use bounded parent implementation for inseparable contract-state policy, validation, and hook changes; obtain one independent read-only review before authoritative validation.
-  - Preserve existing successful required-review semantics; ended applicability must remain a failed acceptance check.
-  - Do not alter unrelated Plan 268 implementation; temporarily defer it while the owner-prioritized referent repair executes.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/271-complete-referent-contract-resolution.md
+inherited_acceptance_digests:
+  - sha256:2cb05261df94708d4babddb2029c366cb71ab24978c8d66b31b0d54bddb22b35
 checked_summary_ja: 用語の記録に下書きの参照先変更と適用終了の手続きを追加し、未完了の記録に必要な対応を通知する。
 
 ## Decisions

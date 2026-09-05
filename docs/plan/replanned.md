@@ -49,3 +49,4 @@ id	path	contract
 260	docs/plan/replanned/2026/09/01-15/260-integrate-ordered-sourced-copier-dispatch.md	docs/plan/replanned/contracts/260-integrate-ordered-sourced-copier-dispatch.json
 261	docs/plan/replanned/2026/09/01-15/261-source-aware-copier-dispatch.md	docs/plan/replanned/contracts/261-defer-unbounded-copier-dispatch-proof.json
 250	docs/plan/replanned/2026/09/01-15/250-require-reachable-fixture-constructions.md	docs/plan/replanned/contracts/250-require-reachable-fixture-constructions.json
+269	docs/plan/replanned/2026/09/01-15/269-resolve-stale-referent-contracts.md	docs/plan/replanned/contracts/269-complete-referent-contract-resolution.json
