@@ -1,6 +1,6 @@
 # Admit the existing referent and hook test commands in root plans
 
-status: in_progress
+status: checked
 primary_invariant: root plans can invoke the two existing fixed semantic test entrypoints without permitting arguments or shell composition
 implementation_tier: 2
 implementation_risk: ordinary
@@ -61,10 +61,15 @@ checked_summary_ja: 計画に記載済みの用語記録と hook のテストを
 
 ## Tasks
 
-- [ ] Add the two fixed root command entries and positive and negative regressions.
-- [ ] Obtain independent review and pass focused and authoritative validation.
-- [ ] Commit and archive this prerequisite, then reconstruct Plan269 with its full original validation list.
+- [x] Add the two fixed root command entries and positive and negative regressions.
+- [x] Obtain independent review and pass focused and authoritative validation.
+- [x] Commit and archive this prerequisite, then reconstruct Plan269 with its full original validation list.
 
 ## Validation Notes
 
-Pending implementation and validation.
+- Focused validation passed: 79 validation-tool tests, command-parser self-test, and git diff --check.
+- Independent change review found no High, Medium, or Low findings; the parent verified the exact two-file patch digest.
+- scripts/lint-project-workflow.sh passed in a separate validation copy. Its first sandbox launch could not create the migration-test Unix socket; the owner-approved host retry passed unchanged.
+- REQUIRE_COPIER=1 tests/smoke.sh passed in a separate validation copy with the installed Copier environment.
+- Product commit: 0b53e5fd82717d65b839d9c70f7da3e38cf006ff.
+- Root-only placement is intentional because generated projects do not contain these two root repository tests.
