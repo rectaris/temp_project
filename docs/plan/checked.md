@@ -202,3 +202,4 @@ id	path
 249	docs/plan/checked/2026/09/01-15/249-reject-sourced-library-command-shadowing.md
 264	docs/plan/checked/2026/09/01-15/264-enforce-executable-plan-admission.md
 251	docs/plan/checked/2026/09/01-15/251-place-fixture-words-and-alias-sources.md
+265	docs/plan/checked/2026/09/01-15/265-place-trailing-separator-destinations.md

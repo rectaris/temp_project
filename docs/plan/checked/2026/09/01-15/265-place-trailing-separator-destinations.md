@@ -1,6 +1,6 @@
 # Report a directory destination written with a trailing separator
 
-status: in_progress
+status: checked
 primary_invariant: when a non-deferred cp or install has at least two operands and no option form other than an optional leading literal -- terminator, and its final operand has at least one fully resolved form through ordinary path bindings with every form ending in a literal path separator, the focused checker places each settled source basename or nonempty literal written suffix other than . or .. below every resolved destination and treats an unavailable source basename as an unplaceable write without changing any other command form
 task_types:
   - template_workflow
@@ -91,7 +91,7 @@ checked_summary_ja: option を持たない cp と install の宛先を通常の 
 - [x] Add regression coverage proving that `-T`, `--no-target-directory`, `--parents`, `install -d`, `install -D`, target-directory options, an unresolved option word, a `--` after an operand, and a deferred operation remain outside the new rule with their prior dispositions and no synthesized inside pair.
 - [x] Compare the activation HEAD and candidate over the bounded matrix declared by the integration gate, and record every disposition change and exception count.
 - [x] Complete one independent read-only review and focused validation with zero unresolved High or Medium findings.
-- [ ] Archive and commit only the declared write scope plus parent-owned lifecycle files.
+- [x] Archive and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
