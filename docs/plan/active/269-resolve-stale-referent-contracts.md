@@ -1,6 +1,8 @@
 # Resolve stale referent contracts without claiming unperformed review
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 primary_invariant: ending or relocating a referent contract preserves its recorded semantic evidence and cannot create semantic acceptance, while active records remain actionable
 implementation_tier: 2
 implementation_risk: ordinary
@@ -85,4 +87,9 @@ checked_summary_ja: 用語の記録に下書きの参照先変更と適用終了
 
 ## Validation Notes
 
-Pending focused validation and independent review.
+- Focused validation passed: referent contracts 17 tests; hooks 43 tests; Copier template alignment; git diff --check.
+- Initial independent review found three Medium issues; one bounded parent correction addressed evidence shape and retention, relocation history, and the mapped hook witness.
+- The final independent rereview still found two Medium issues: filtered reminders omit the effective relocated path after reopen, and relocation permits a non-regular replacement at the previous target. The parent accepts both findings.
+- The two-review budget is exhausted. The external ledger /tmp/referent-269-state.json is stopped at descope_pending with parent_remediation_budget_exhausted. No further correction, successor creation, authoritative validation, local-record ending, completion, or archive is authorized without an owner continuation decision.
+- The plan remains live at replan_required. Review receipts, original contract backups, and history evidence are preserved under .agent-artifacts/referent-resolution-269/. The reviewed implementation patch is preserved at /tmp/referent-269-final.patch and remains uncommitted in the declared write scope.
+- Authoritative lint and smoke were not started; the 243, 265, and 266 local records remain unchanged. Plan 268 remains deferred while the owner decides how to continue this repair.
