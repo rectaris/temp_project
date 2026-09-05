@@ -106,8 +106,15 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.state = self.base / "execution.json"
         self.lifecycle = self.base / "candidate-lifecycle.json"
         self.registry = self.base / "reviewer-registry.jsonl"
+        self.continuation_registry = self.base / "epoch-registry.jsonl"
         self.review_manifests: dict[Path, Path] = {}
         self.run_cli("registry-init", "--output", str(self.registry), check=True)
+        self.run_cli(
+            "continuation-registry-init",
+            "--output",
+            str(self.continuation_registry),
+            check=True,
+        )
         self.run_cli("init", str(self.state), "--run-id", "run-1", "--plan", "docs/plan/active/001-test.md",
                  "--plan-digest", digest(self.plan.read_text()), "--source-head", self.head,
                  "--primary-invariant-digest", digest("one invariant"), "--lifecycle-state", str(self.lifecycle),
@@ -787,6 +794,662 @@ class PlanExecutionStateTest(unittest.TestCase):
         )
         self.assertNotEqual(restarted.returncode, 0)
         self.assertIn("differs from the admitted candidate diff", restarted.stderr)
+
+    def test_same_plan_continuation_requires_preflight_and_refuses_replay(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "continuation-source", mode="parent_direct", require_preflight=True
+        )
+        (self.repo / "allowed.txt").write_text("continued candidate\n", encoding="utf-8")
+        plan_digest = digest(self.plan.read_text())
+        invariant = digest("one invariant")
+        source_target = digest(
+            subprocess.check_output(
+                [
+                    "git", "diff", "--binary", "--full-index",
+                    self.head, "--", "allowed.txt",
+                ],
+                cwd=self.repo,
+            )
+        )
+        source_identity = STATE_MODULE.canonical_digest(
+            {
+                "implementation_mode": "parent_direct",
+                "source_head": self.head,
+                "admitted_diff_digest": source_target,
+            }
+        )
+        source_preflight = self.base / "continuation-source-preflight.json"
+        source_preflight.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "plan_digest": plan_digest,
+                    "review_target_digest": source_target,
+                    "review_identity_digest": source_identity,
+                    "applicable_specification_digests": [
+                        digest((self.repo / "AGENTS.md").read_bytes())
+                    ],
+                    "cases": [
+                        {
+                            "id": "source-target",
+                            "result": "passed",
+                            "evidence_digest": digest("source preflight"),
+                        }
+                    ],
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        source_preflight.chmod(0o600)
+        source_preflight_result = self.run_cli(
+            "preflight", str(state), "--run-id", run_id,
+            "--event-id", "continuation-source-preflight",
+            "--implementation-mode", "parent_direct",
+            "--preflight-evidence", str(source_preflight),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(
+            source_preflight_result.returncode, 0, source_preflight_result.stderr
+        )
+        for round_value, severities in ((1, []), (2, ["Medium"])):
+            receipt = self.review_receipt(
+                f"continuation-source-{round_value}",
+                plan_digest,
+                round_value=round_value,
+            )
+            arguments = [
+                "review", str(state), "--run-id", run_id,
+                "--event-id", f"continuation-source-{round_value}",
+                "--implementation-mode", "parent_direct",
+                "--review-receipt", str(receipt),
+                "--review-resource-manifest", str(self.review_manifests[receipt]),
+                "--invariant-digest", invariant,
+                "--lifecycle-state", str(lifecycle),
+            ]
+            for severity in severities:
+                arguments.extend(("--finding-severity", severity))
+            reviewed = self.run_cli(*arguments)
+            self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        stopped_bytes = state.read_bytes()
+        stopped = json.loads(stopped_bytes)
+        self.assertEqual(stopped["state"], "descope_pending")
+
+        registry = self.continuation_registry
+        registry_header = json.loads(
+            registry.read_text(encoding="utf-8").splitlines()[0]
+        )
+        child = self.base / "continuation-child.json"
+        child_lifecycle = self.base / "continuation-child-lifecycle.json"
+        child_run = "run-continuation-child"
+        authorization = self.base / "continuation-authorization.json"
+        authorization.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "plan_path": "docs/plan/active/001-test.md",
+                    "plan_digest": plan_digest,
+                    "source_head": self.head,
+                    "primary_invariant_digest": invariant,
+                    "implementation_mode": "parent_direct",
+                    "predecessor_state_digest": digest(stopped_bytes),
+                    "predecessor_run_id": run_id,
+                    "predecessor_event_chain_digest": stopped["event_chain_digest"],
+                    "next_epoch": 1,
+                    "child_run_id": child_run,
+                    "child_state_path_digest": digest(str(child.absolute())),
+                    "continuation_registry_identity_digest": registry_header[
+                        "genesis_digest"
+                    ],
+                    "cumulative_review_limit": 4,
+                    "owner_authorization": "Continue this unchanged plan once.",
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        authorization.chmod(0o644)
+        insecure = self.run_cli(
+            "continue", str(child),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(registry),
+            "--authorization", str(authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(insecure.returncode, 0)
+        self.assertIn("single-link mode-0600 regular file", insecure.stderr)
+        authorization.chmod(0o600)
+        copied_registry = self.base / "copied-continuation-registry.jsonl"
+        shutil.copyfile(registry, copied_registry)
+        copied_registry.chmod(0o600)
+        copied = self.run_cli(
+            "continue", str(child),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(copied_registry),
+            "--authorization", str(authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(copied.returncode, 0)
+        self.assertIn("identity mismatch", copied.stderr)
+        hard_linked_authorization = self.base / "hard-linked-authorization.json"
+        os.link(authorization, hard_linked_authorization)
+        hard_linked = self.run_cli(
+            "continue", str(child),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(registry),
+            "--authorization", str(hard_linked_authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(hard_linked.returncode, 0)
+        self.assertIn("single-link mode-0600 regular file", hard_linked.stderr)
+        hard_linked_authorization.unlink()
+        registry_before_invalid_run = registry.read_bytes()
+        invalid_run = self.run_cli(
+            "continue", str(child),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(registry),
+            "--authorization", str(authorization),
+            "--run-id", "invalid/run",
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(invalid_run.returncode, 0)
+        self.assertEqual(registry.read_bytes(), registry_before_invalid_run)
+        continued = self.run_cli(
+            "continue", str(child),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(registry),
+            "--authorization", str(authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertEqual(continued.returncode, 0, continued.stderr)
+        self.assertEqual(state.read_bytes(), stopped_bytes)
+        child_payload = json.loads(child.read_text(encoding="utf-8"))
+        epoch = child_payload["events"][0]["execution_epoch"]
+        self.assertEqual(epoch["epoch"], 1)
+        self.assertEqual(epoch["predecessor_review_count"], 2)
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "already continued",
+        ):
+            with mock.patch.object(
+                STATE_MODULE, "repository_root", return_value=self.repo
+            ):
+                STATE_MODULE.consume_continuation_authorization(
+                    registry,
+                    plan_digest=plan_digest,
+                    predecessor_state_digest=digest("checkpoint-advanced state"),
+                    predecessor_run_id=run_id,
+                    predecessor_genesis_digest=stopped["genesis_digest"],
+                    predecessor_event_chain_digest=digest(
+                        "checkpoint-advanced event chain"
+                    ),
+                    authorization_digest=digest(authorization.read_bytes()),
+                    child_run_id="run-continuation-after-checkpoint",
+                    child_state_path_digest=digest(
+                        str(
+                            (
+                                self.base
+                                / "continuation-after-checkpoint.json"
+                            ).absolute()
+                        )
+                    ),
+                    child_genesis_digest=digest("another child genesis"),
+                    expected_registry_identity_digest=registry_header[
+                        "genesis_digest"
+                    ],
+                )
+        registry_before_wrong_identity = registry.read_bytes()
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "differs from the predecessor execution",
+        ):
+            with mock.patch.object(
+                STATE_MODULE, "repository_root", return_value=self.repo
+            ):
+                STATE_MODULE.consume_continuation_authorization(
+                    registry,
+                    plan_digest=plan_digest,
+                    predecessor_state_digest=digest("other state"),
+                    predecessor_run_id="run-other-predecessor",
+                    predecessor_genesis_digest=digest("other predecessor genesis"),
+                    predecessor_event_chain_digest=digest("other event chain"),
+                    authorization_digest=digest("other authorization"),
+                    child_run_id="run-other-child",
+                    child_state_path_digest=digest("other child path"),
+                    child_genesis_digest=digest("other child genesis"),
+                    expected_registry_identity_digest=digest("wrong registry"),
+                )
+        self.assertEqual(registry.read_bytes(), registry_before_wrong_identity)
+        child.unlink()
+        recovered = self.run_cli(
+            "continue", str(child),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(registry),
+            "--authorization", str(authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        repeated = self.run_cli(
+            "continue", str(child),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(registry),
+            "--authorization", str(authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        forked_path = self.run_cli(
+            "continue", str(self.base / "same-child-different-state.json"),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(registry),
+            "--authorization", str(authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(forked_path.returncode, 0)
+        self.assertIn("authorization differs", forked_path.stderr)
+        reformatted_predecessor = self.base / "reformatted-predecessor.json"
+        reformatted_predecessor.write_text(
+            json.dumps(stopped, sort_keys=True, indent=4) + "\n",
+            encoding="utf-8",
+        )
+        reformatted = self.run_cli(
+            "continue", str(self.base / "reformatted-child.json"),
+            "--predecessor-state", str(reformatted_predecessor),
+            "--continuation-registry", str(registry),
+            "--authorization", str(authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(reformatted.returncode, 0)
+        self.assertIn("not canonical", reformatted.stderr)
+        rogue_registry = self.base / "rogue-continuation-registry.jsonl"
+        rogue_initialized = self.run_cli(
+            "continuation-registry-init", "--output", str(rogue_registry)
+        )
+        self.assertEqual(rogue_initialized.returncode, 0, rogue_initialized.stderr)
+        rogue_header = json.loads(
+            rogue_registry.read_text(encoding="utf-8").splitlines()[0]
+        )
+        rogue_authorization = self.base / "rogue-continuation-authorization.json"
+        rogue_payload = json.loads(authorization.read_text(encoding="utf-8"))
+        rogue_payload["child_run_id"] = "run-continuation-rogue"
+        rogue_payload["child_state_path_digest"] = digest(
+            str((self.base / "continuation-rogue.json").absolute())
+        )
+        rogue_payload["continuation_registry_identity_digest"] = rogue_header[
+            "genesis_digest"
+        ]
+        rogue_authorization.write_text(
+            json.dumps(rogue_payload, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        rogue_authorization.chmod(0o600)
+        rogue = self.run_cli(
+            "continue", str(self.base / "continuation-rogue.json"),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(rogue_registry),
+            "--authorization", str(rogue_authorization),
+            "--run-id", "run-continuation-rogue",
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(self.base / "continuation-rogue-lifecycle.json"),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(rogue.returncode, 0)
+        self.assertIn("differs from the predecessor execution", rogue.stderr)
+
+        receipt = self.review_receipt(
+            "continuation-child-review", plan_digest, round_value=1
+        )
+        blocked = self.run_cli(
+            "review", str(child), "--run-id", child_run,
+            "--event-id", "continuation-child-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", invariant,
+            "--lifecycle-state", str(child_lifecycle),
+        )
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("requires a passing adversarial preflight", blocked.stderr)
+
+        target = digest(
+            subprocess.check_output(
+                [
+                    "git", "diff", "--binary", "--full-index",
+                    self.head, "--", "allowed.txt",
+                ],
+                cwd=self.repo,
+            )
+        )
+        identity = STATE_MODULE.canonical_digest(
+            {
+                "implementation_mode": "parent_direct",
+                "source_head": self.head,
+                "admitted_diff_digest": target,
+            }
+        )
+        evidence = self.base / "continuation-preflight.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "plan_digest": plan_digest,
+                    "review_target_digest": target,
+                    "review_identity_digest": identity,
+                    "applicable_specification_digests": [
+                        digest((self.repo / "AGENTS.md").read_bytes())
+                    ],
+                    "cases": [
+                        {
+                            "id": "stopped-ledger-immutable",
+                            "result": "passed",
+                            "evidence_digest": digest("preflight result"),
+                        }
+                    ],
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        evidence.chmod(0o600)
+        preflight = self.run_cli(
+            "preflight", str(child), "--run-id", child_run,
+            "--event-id", "continuation-preflight",
+            "--implementation-mode", "parent_direct",
+            "--preflight-evidence", str(evidence),
+            "--lifecycle-state", str(child_lifecycle),
+        )
+        self.assertEqual(preflight.returncode, 0, preflight.stderr)
+        reviewed = self.run_cli(
+            "review", str(child), "--run-id", child_run,
+            "--event-id", "continuation-child-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", invariant,
+            "--lifecycle-state", str(child_lifecycle),
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+
+        replay_authorization = self.base / "continuation-replay.json"
+        replay_payload = json.loads(authorization.read_text(encoding="utf-8"))
+        replay_payload["child_run_id"] = "run-continuation-fork"
+        replay_payload["child_state_path_digest"] = digest(
+            str((self.base / "continuation-fork.json").absolute())
+        )
+        replay_authorization.write_text(
+            json.dumps(replay_payload, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        replay_authorization.chmod(0o600)
+        replayed = self.run_cli(
+            "continue", str(self.base / "continuation-fork.json"),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(registry),
+            "--authorization", str(replay_authorization),
+            "--run-id", "run-continuation-fork",
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(self.base / "continuation-fork-lifecycle.json"),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(replayed.returncode, 0)
+        self.assertIn("already continued", replayed.stderr)
+
+        second_receipt = self.review_receipt(
+            "continuation-child-review-2", plan_digest, round_value=2
+        )
+        second_review = self.run_cli(
+            "review", str(child), "--run-id", child_run,
+            "--event-id", "continuation-child-review-2",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(second_receipt),
+            "--review-resource-manifest", str(self.review_manifests[second_receipt]),
+            "--invariant-digest", invariant,
+            "--finding-severity", "Medium",
+            "--lifecycle-state", str(child_lifecycle),
+        )
+        self.assertEqual(second_review.returncode, 0, second_review.stderr)
+        exhausted = self.run_cli(
+            "continue", str(self.base / "continuation-epoch-2.json"),
+            "--predecessor-state", str(child),
+            "--continuation-registry", str(registry),
+            "--authorization", str(authorization),
+            "--run-id", "run-continuation-epoch-2",
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(self.base / "continuation-epoch-2-lifecycle.json"),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(exhausted.returncode, 0)
+        self.assertIn("epoch limit is exhausted", exhausted.stderr)
+
+    def test_preflight_is_bound_to_the_exact_current_target(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "preflight-target",
+            mode="parent_direct",
+            require_preflight=True,
+        )
+        (self.repo / "allowed.txt").write_text("first target\n", encoding="utf-8")
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        target = digest(
+            subprocess.check_output(
+                [
+                    "git", "diff", "--binary", "--full-index",
+                    self.head, "--", "allowed.txt",
+                ],
+                cwd=self.repo,
+            )
+        )
+        identity = STATE_MODULE.canonical_digest(
+            {
+                "implementation_mode": "parent_direct",
+                "source_head": self.head,
+                "admitted_diff_digest": target,
+            }
+        )
+        evidence = self.base / "preflight-target.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "plan_digest": digest(self.plan.read_text()),
+                    "review_target_digest": target,
+                    "review_identity_digest": identity,
+                    "applicable_specification_digests": [
+                        digest((self.repo / "AGENTS.md").read_bytes())
+                    ],
+                    "cases": [
+                        {
+                            "id": "target-one",
+                            "result": "passed",
+                            "evidence_digest": digest("target one"),
+                        }
+                    ],
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        evidence.chmod(0o600)
+        recorded = self.run_cli(
+            "preflight", str(state), "--run-id", run_id,
+            "--event-id", "target-one",
+            "--implementation-mode", "parent_direct",
+            "--preflight-evidence", str(evidence),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        tampered = json.loads(state.read_text(encoding="utf-8"))
+        preflight_event = tampered["events"][-1]
+        preflight_event["preflight_evidence_digest"] = digest("forged evidence")
+        preflight_event["event_digest"] = STATE_MODULE.canonical_digest(
+            {
+                key: preflight_event[key]
+                for key in preflight_event
+                if key != "event_digest"
+            }
+        )
+        tampered["event_chain_digest"] = preflight_event["event_digest"]
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError,
+            "preflight evidence digest mismatch",
+        ):
+            STATE_MODULE.validate_state(tampered)
+        forged = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "forged-preflight",
+            "--event-type", "adversarial_preflight",
+            "--implementation-mode", "parent_direct",
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(forged.returncode, 0)
+        policy = self.repo / "AGENTS.md"
+        original_policy = policy.read_text(encoding="utf-8")
+        policy.write_text("changed policy\n", encoding="utf-8")
+        changed_spec_receipt = self.review_receipt(
+            "preflight-changed-spec",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        changed_spec = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "changed-spec-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(changed_spec_receipt),
+            "--review-resource-manifest",
+            str(self.review_manifests[changed_spec_receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(changed_spec.returncode, 0)
+        self.assertIn(
+            "specifications differ from adversarial preflight",
+            changed_spec.stderr,
+        )
+        policy.write_text(original_policy, encoding="utf-8")
+        (self.repo / "allowed.txt").write_text("second target\n", encoding="utf-8")
+        receipt = self.review_receipt(
+            "preflight-stale-target",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        stale = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "stale-preflight-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn("requires a passing adversarial preflight", stale.stderr)
+
+    def test_candidate_preflight_binds_admitted_candidate_identity(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "candidate-preflight",
+            mode="candidate",
+            require_preflight=True,
+        )
+        attempt_id = "candidate-preflight-attempt"
+        started = self.start_writable_attempt(
+            state, lifecycle, run_id, attempt_id
+        )
+        self.assertEqual(started.returncode, 0, started.stderr)
+        manifest = self.base / "candidate-preflight-manifest.json"
+        manifest.write_text("{}\n", encoding="utf-8")
+        target = digest("candidate patch")
+        candidate_digest = digest(manifest.read_bytes())
+        identity = STATE_MODULE.review_candidate_identity_digest(
+            attempt_id, candidate_digest, target
+        )
+        evidence = self.base / "candidate-preflight-evidence.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "plan_digest": digest(self.plan.read_text()),
+                    "review_target_digest": target,
+                    "review_identity_digest": identity,
+                    "applicable_specification_digests": [
+                        digest((self.repo / "AGENTS.md").read_bytes())
+                    ],
+                    "cases": [
+                        {
+                            "id": "candidate-identity",
+                            "result": "passed",
+                            "evidence_digest": digest("candidate evidence"),
+                        }
+                    ],
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        evidence.chmod(0o600)
+        args = SimpleNamespace(
+            state=str(state),
+            run_id=run_id,
+            event_id="candidate-preflight",
+            implementation_mode="candidate",
+            preflight_evidence=str(evidence),
+            candidate_manifest=str(manifest),
+            lifecycle_state=str(lifecycle),
+        )
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(
+                STATE_MODULE,
+                "candidate_review_identity",
+                return_value=(
+                    target,
+                    identity,
+                    attempt_id,
+                    candidate_digest,
+                    [digest("worker receipt")],
+                ),
+            ),
+        ):
+            STATE_MODULE.record_adversarial_preflight(args)
+        payload = json.loads(state.read_text(encoding="utf-8"))
+        event = payload["events"][-1]
+        self.assertEqual(event["event_type"], "adversarial_preflight")
+        self.assertEqual(event["attempt_id"], attempt_id)
+        self.assertEqual(event["candidate_digest"], candidate_digest)
+        self.assertEqual(event["candidate_lifecycle_digest"], identity)
 
     def test_reviewer_registry_is_required_for_review_and_checkpoint(self) -> None:
         review = subprocess.run(
@@ -2273,6 +2936,7 @@ class PlanExecutionStateTest(unittest.TestCase):
         plan: Path | None = None,
         predecessor: Path | None = None,
         mode: str = "candidate",
+        require_preflight: bool = False,
     ) -> tuple[Path, Path, str]:
         selected_plan = plan or self.plan
         run_id = f"run-{label}"
@@ -2296,6 +2960,14 @@ class PlanExecutionStateTest(unittest.TestCase):
         ]
         if predecessor is not None:
             arguments.extend(("--predecessor-state", str(predecessor)))
+        if require_preflight:
+            arguments.extend(
+                (
+                    "--require-adversarial-preflight",
+                    "--continuation-registry",
+                    str(self.continuation_registry),
+                )
+            )
         initialized = self.run_cli(*arguments)
         self.assertEqual(initialized.returncode, 0, initialized.stderr)
         return state, lifecycle, run_id

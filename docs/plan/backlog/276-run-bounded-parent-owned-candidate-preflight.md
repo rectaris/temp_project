@@ -89,7 +89,7 @@ integration_gates:
   - Permit no second preflight for the same candidate, even after process failure; a correction candidate has its own identity but remains under the same run-wide single-correction budget.
   - Record preflight output only in a separate bounded diagnostic artifact, never in completion_witness_map or validation_witness_map and never as focused or authoritative success.
   - Before correct can start, the parent must close the matching open attempt through the existing correction_requested outcome with the candidate digest, primary invariant digest, and diagnostic evidence digest; use only an already allowed implementation reason code and never reclassify authority drift as a test failure.
-  - Recheck existing ledger stop gates at operation start and before offering correction; do not add ledger event types or change ledger or candidate-manifest schemas.
+  - Recheck existing ledger stop gates at operation start and before offering correction. Do not add a diagnostic-preflight ledger event or change ledger or candidate-manifest schemas; the existing mandatory `adversarial_preflight` event remains a separate exact-target review-order gate and cannot be satisfied by this diagnostic artifact alone.
   - Hold the existing plan_execution_lease, using its established lock order, continuously from the final stop/baseline recheck through candidate binding, atomic claim, and subprocess start; never release it between a successful check and spawn.
   - Add stop-versus-start race tests proving that an already committed stop prevents claim and spawn, and that no stop event can interleave in the protected check-to-spawn interval.
   - Keep original worker credentials inaccessible to tested code and retain read-only dependencies plus scratch-only caches; abort if existing isolation prerequisites are missing.
@@ -104,6 +104,7 @@ checked_summary_ja: 候補生成後に親だけが隔離環境で短いテスト
 - 親が変更差分と重要な不変条件を確認した候補だけを、資格情報とネットワークを持たない複製で実行する。
 - 対象コマンドは、そのプランが既に宣言している focused_validation の一件に限定する。
 - この実行結果は診断情報であり、正式検証の成功、承認、完了証拠にはしない。
+- この隔離実行は、正式レビュー前に必須となる exact-target adversarial preflight の証拠生成を補助できるが、単独ではその台帳イベントを記録せず、対象・仕様・case evidence の照合を代替しない。
 - 失敗結果を親が訂正指示へ渡す場合も、既存の候補生成一回と訂正一回の上限を共有する。
 - 停止済みの実行、レビュー予算の枯渇、正式検証失敗後の診断要求を、この操作で解除しない。
 

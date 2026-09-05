@@ -75,7 +75,7 @@ integration_gates:
   - Do not change scripts/plan-execution-state.py, its template copy, ledger schemas, review budgets, or correction limits.
   - An unstarted plan may remain backlog; started work retains the applicable existing stopped/deferred state and evidence, never a fresh unstarted identity.
   - After an existing budget-exhaustion transition, an indivisible Tier 1 ledger remains descope_pending with its recorded exhaustion reason; preserve the deferred source and all evidence, and refuse descope because no nonempty partition exists.
-  - Add no fresh-run continuation, successor, reset, or reopening route for that exhausted indivisible work; owner authorization alone does not make an unsupported ledger transition valid.
+  - This plan adds no continuation, successor, reset, or reopening route. If the separately implemented same-plan continuation policy is already checked, an otherwise eligible `parent_remediation_budget_exhausted` run may use that one fresh epoch without partitioning or deleting the Tier 1 acceptance item; every other stopped state remains stopped.
   - Before budget exhaustion, a parent may stop scheduling and defer the unchanged source under existing policy; do not fabricate an exhaustion event or hard-drift reason merely because the acceptance item cannot be divided.
 checked_summary_ja: 完了条件が一つの Tier 1 に分割不能な縮小手続を要求せず、条件を保持したまま停止する規則と新規受入時の件数検査を整える。
 
@@ -87,7 +87,7 @@ checked_summary_ja: 完了条件が一つの Tier 1 に分割不能な縮小手�
 - 未着手の作業と、実行記録を持つ停止済みの作業を区別する。
 - 停止済みの実行記録を消してバックログからやり直す操作は認めない。
 - 予算上限に達して descope_pending になった実行は、その状態に残す。
-- 本プランでは、その実行を再開する新しい遷移を追加しない。
+- 本プランでは、その実行を再開する新しい遷移を追加しない。別途導入済みの同一プラン継続条件を満たす場合だけ、その既存経路を妨げない。
 - Tier 0 にはプラン自体がないため、bounded descope を既定の出口として案内しない。
 - 新規作成と昇格の受入処理で件数を検査し、過去のプランに新しい大域的 lint 制約を遡及適用しない。
 

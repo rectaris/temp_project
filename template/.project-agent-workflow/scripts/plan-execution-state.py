@@ -36,7 +36,12 @@ MAX_DIAGNOSIS_ATTEMPTS = 3
 SESSION_CHECKPOINT_SCHEMA_VERSION = 2
 REVIEW_RECEIPT_SCHEMA_VERSION = 1
 REVIEWER_REGISTRY_SCHEMA_VERSION = 1
+CONTINUATION_REGISTRY_SCHEMA_VERSION = 1
+CONTINUATION_AUTHORIZATION_SCHEMA_VERSION = 1
+ADVERSARIAL_PREFLIGHT_SCHEMA_VERSION = 1
 MAX_REGISTRY_RECORD_BYTES = 4096
+MAX_CONTINUATION_EPOCH = 1
+MAX_CUMULATIVE_REVIEWS = INDEPENDENT_REVIEW_LIMIT * (MAX_CONTINUATION_EPOCH + 1)
 SESSION_BOUNDARIES = {
     "checked",
     "replanned",
@@ -112,8 +117,15 @@ EVENT_TYPES = {
     "session_checkpoint_claimed",
     "session_checkpoint_migrated",
     "predecessor_checkpoint_bound",
+    "execution_epoch_started",
+    "adversarial_preflight",
 }
-RECORD_EVENT_TYPES = EVENT_TYPES - {"writable_attempt_started", "attempt_closed"}
+RECORD_EVENT_TYPES = EVENT_TYPES - {
+    "writable_attempt_started",
+    "attempt_closed",
+    "execution_epoch_started",
+    "adversarial_preflight",
+}
 EXACT_KEYS = {
     "schema_version", "run_id", "plan_path", "plan_digest", "source_head",
     "primary_invariant_digest", "candidate_lifecycle_identity_digest", "state",
@@ -157,6 +169,42 @@ LEGACY_DIAGNOSIS_EVENT_KEYS = DIAGNOSIS_EVENT_KEYS - {
     "successor_genesis_digest", "review_target_digest"
 }
 DESCOPE_EVENT_KEYS = EVENT_KEYS | {"descope_classification", "descope_evidence_digest"}
+EPOCH_EVENT_KEYS = EVENT_KEYS | {"execution_epoch"}
+PREFLIGHT_EVENT_KEYS = EVENT_KEYS | {
+    "preflight_evidence", "preflight_evidence_digest"
+}
+REVIEW_EVENT_KEYS = EVENT_KEYS | {"review_specification_digests"}
+EXECUTION_EPOCH_KEYS = {
+    "schema_version", "epoch", "predecessor_state_digest",
+    "predecessor_run_id", "predecessor_event_chain_digest",
+    "predecessor_review_count", "cumulative_review_limit",
+    "owner_authorization_digest", "continuation_registry_identity_digest",
+    "continuation_registry_event_digest",
+}
+CONTINUATION_AUTHORIZATION_KEYS = {
+    "schema_version", "plan_path", "plan_digest", "source_head",
+    "primary_invariant_digest", "implementation_mode",
+    "predecessor_state_digest", "predecessor_run_id",
+    "predecessor_event_chain_digest", "next_epoch", "child_run_id",
+    "child_state_path_digest", "continuation_registry_identity_digest",
+    "cumulative_review_limit", "owner_authorization",
+}
+PREFLIGHT_EVIDENCE_KEYS = {
+    "schema_version", "plan_digest", "review_target_digest",
+    "review_identity_digest", "applicable_specification_digests", "cases",
+}
+PREFLIGHT_CASE_KEYS = {"id", "result", "evidence_digest"}
+CONTINUATION_REGISTRY_HEADER_KEYS = {
+    "record_type", "schema_version", "registry_id", "path_digest", "genesis_digest",
+}
+CONTINUATION_REGISTRY_EVENT_KEYS = {
+    "record_type", "schema_version", "sequence", "registry_id",
+    "plan_digest", "predecessor_state_digest", "predecessor_run_id",
+    "predecessor_genesis_digest", "predecessor_event_chain_digest",
+    "authorization_digest", "child_run_id",
+    "child_state_path_digest", "child_genesis_digest",
+    "previous_event_digest", "event_digest",
+}
 REPAIR_CLASSIFICATION_KEYS = {
     "schema_version", "plan_path", "plan_digest", "source_head", "primary_invariant_digest",
     "affected_invariant_digests", "candidate_lifecycle_identity_digest", "candidate_lifecycle_digest",
@@ -1378,6 +1426,134 @@ def validate_event_budget(events: Any) -> None:
         )
 
 
+def formal_review_count(state: dict[str, Any]) -> int:
+    return sum(
+        event["event_type"] == "parent_review"
+        and bool(event["independent_review_receipt_digest"])
+        and bool(event.get("review_target_digest", ""))
+        for event in state["events"]
+    )
+
+
+def execution_epoch(state: dict[str, Any]) -> dict[str, Any] | None:
+    epochs = [
+        event["execution_epoch"]
+        for event in state["events"]
+        if event["event_type"] == "execution_epoch_started"
+    ]
+    if len(epochs) > 1:
+        raise StateError("execution ledger contains multiple epoch starts")
+    return epochs[0] if epochs else None
+
+
+def validate_execution_epoch(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != EXECUTION_EPOCH_KEYS:
+        raise StateError("execution epoch has an invalid exact field shape")
+    if value["schema_version"] != 1:
+        raise StateError("execution epoch has an unsupported schema version")
+    epoch = value["epoch"]
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or not 0 <= epoch <= MAX_CONTINUATION_EPOCH:
+        raise StateError("execution epoch is outside the supported bound")
+    prior_reviews = value["predecessor_review_count"]
+    limit = value["cumulative_review_limit"]
+    if (
+        isinstance(prior_reviews, bool)
+        or not isinstance(prior_reviews, int)
+        or prior_reviews < 0
+        or isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit < INDEPENDENT_REVIEW_LIMIT
+        or limit > MAX_CUMULATIVE_REVIEWS
+    ):
+        raise StateError("execution epoch review accounting is invalid")
+    digest_fields = (
+        "predecessor_state_digest",
+        "predecessor_event_chain_digest",
+        "owner_authorization_digest",
+        "continuation_registry_identity_digest",
+        "continuation_registry_event_digest",
+    )
+    for field in digest_fields:
+        require_digest(value[field], field, allow_empty=epoch == 0)
+    predecessor_run_id = value["predecessor_run_id"]
+    if not isinstance(predecessor_run_id, str) or (
+        predecessor_run_id and not ID_RE.fullmatch(predecessor_run_id)
+    ):
+        raise StateError("execution epoch predecessor run id is invalid")
+    if epoch == 0:
+        if (
+            predecessor_run_id
+            or prior_reviews
+            or value["predecessor_state_digest"]
+            or value["predecessor_event_chain_digest"]
+            or value["owner_authorization_digest"]
+            or value["continuation_registry_event_digest"]
+            or not value["continuation_registry_identity_digest"]
+            or limit != INDEPENDENT_REVIEW_LIMIT
+        ):
+            raise StateError("initial execution epoch contains continuation evidence")
+    elif (
+        not predecessor_run_id
+        or prior_reviews != INDEPENDENT_REVIEW_LIMIT
+        or limit != MAX_CUMULATIVE_REVIEWS
+        or any(not value[field] for field in digest_fields)
+    ):
+        raise StateError("continuation epoch evidence is incomplete")
+    return value
+
+
+def validate_preflight_evidence(
+    value: Any,
+    *,
+    state: dict[str, Any],
+    review_target: str,
+    review_identity: str,
+    expected_specification_digests: list[str] | None,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != PREFLIGHT_EVIDENCE_KEYS:
+        raise StateError("adversarial preflight evidence has an invalid exact shape")
+    if value["schema_version"] != ADVERSARIAL_PREFLIGHT_SCHEMA_VERSION:
+        raise StateError("adversarial preflight evidence has an unsupported schema version")
+    specifications = value["applicable_specification_digests"]
+    if (
+        not isinstance(specifications, list)
+        or not specifications
+        or len(specifications) != len(set(specifications))
+    ):
+        raise StateError("adversarial preflight specification digests are invalid")
+    for specification in specifications:
+        require_digest(specification, "preflight specification digest")
+    if (
+        value["plan_digest"] != state["plan_digest"]
+        or value["review_target_digest"] != review_target
+        or value["review_identity_digest"] != review_identity
+        or (
+            expected_specification_digests is not None
+            and specifications != expected_specification_digests
+        )
+    ):
+        raise StateError("adversarial preflight evidence differs from the current review target")
+    cases = value["cases"]
+    if not isinstance(cases, list) or not 1 <= len(cases) <= 32:
+        raise StateError("adversarial preflight requires between one and 32 cases")
+    identifiers: set[str] = set()
+    for case in cases:
+        if not isinstance(case, dict) or set(case) != PREFLIGHT_CASE_KEYS:
+            raise StateError("adversarial preflight case has an invalid exact shape")
+        identifier = case["id"]
+        if (
+            not isinstance(identifier, str)
+            or not ID_RE.fullmatch(identifier)
+            or identifier in identifiers
+        ):
+            raise StateError("adversarial preflight case id is invalid or duplicated")
+        identifiers.add(identifier)
+        if case["result"] != "passed":
+            raise StateError("adversarial preflight contains a non-passing case")
+        require_digest(case["evidence_digest"], "preflight case evidence_digest")
+    return value
+
+
 def validate_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != EXACT_KEYS:
         raise StateError("execution state has an invalid exact schema")
@@ -1517,6 +1693,9 @@ def validate_state(value: Any) -> dict[str, Any]:
             frozenset(PRE_SUCCESSOR_GENESIS_DIAGNOSIS_EVENT_KEYS),
             frozenset(LEGACY_DIAGNOSIS_EVENT_KEYS),
             frozenset(DESCOPE_EVENT_KEYS),
+            frozenset(EPOCH_EVENT_KEYS),
+            frozenset(PREFLIGHT_EVENT_KEYS),
+            frozenset(REVIEW_EVENT_KEYS),
         }
         if not isinstance(event, dict) or frozenset(event) not in allowed_event_keys:
             raise StateError("event has an invalid exact schema")
@@ -1530,6 +1709,59 @@ def validate_state(value: Any) -> dict[str, Any]:
         seen_ids.add(event["event_id"])
         if event["event_type"] not in EVENT_TYPES or event["implementation_mode"] not in MODES:
             raise StateError("invalid event classification")
+        event_keys = frozenset(event)
+        if event["event_type"] == "execution_epoch_started":
+            if event_keys != frozenset(EPOCH_EVENT_KEYS):
+                raise StateError("execution epoch start has an invalid exact schema")
+        elif event["event_type"] == "adversarial_preflight":
+            if event_keys != frozenset(PREFLIGHT_EVENT_KEYS):
+                raise StateError("adversarial preflight has an invalid exact schema")
+        elif event_keys in {
+            frozenset(EPOCH_EVENT_KEYS),
+            frozenset(PREFLIGHT_EVENT_KEYS),
+        }:
+            raise StateError("event carries evidence reserved for another event type")
+        if event["event_type"] == "execution_epoch_started":
+            if index != 1:
+                raise StateError("execution epoch start must be the first event")
+            epoch = validate_execution_epoch(event["execution_epoch"])
+            if event["implementation_mode"] != value["implementation_mode"]:
+                raise StateError("execution epoch implementation mode mismatch")
+            if any(
+                (
+                    event["invariant_digests"],
+                    event["finding_severities"],
+                    event["independent_review_receipt_digest"],
+                    event["repair_classification"],
+                    event["repair_evidence_digest"],
+                    event["candidate_lifecycle_digest"],
+                    event["attempt_id"],
+                    event["attempt_kind"],
+                    event["candidate_digest"],
+                    event["review_outcome"],
+                    event["review_reason_code"],
+                    event["review_author"],
+                    event["review_evidence_digest"],
+                    event["review_target_digest"],
+                    event["predecessor_plan_digest"],
+                    event["predecessor_accepted_candidate_digest"],
+                    event["predecessor_closing_event_digest"],
+                    event["predecessor_accepted_source_head"],
+                    event["accepted_source_head"],
+                    event["successor_run_id"],
+                    event["successor_plan_digest"],
+                    event["successor_source_head"],
+                    event["successor_primary_invariant_digest"],
+                    successor_genesis_digest,
+                )
+            ):
+                raise StateError("execution epoch start carries unrelated event evidence")
+            if epoch["predecessor_review_count"] + bounded_review_count > epoch[
+                "cumulative_review_limit"
+            ]:
+                raise StateError("execution epoch exceeds the cumulative review limit")
+        elif "execution_epoch" in event:
+            raise StateError("only an execution epoch start may carry epoch evidence")
         prior_summary = derive_summary(validated_events)
         if prior_summary["state"] != "active":
             successor_is_allowed = (
@@ -1636,7 +1868,7 @@ def validate_state(value: Any) -> dict[str, Any]:
         review_target_digest = event.get("review_target_digest", "")
         require_digest(review_target_digest, "review_target_digest", allow_empty=True)
         if event["event_type"] not in {
-            "parent_review", "attempt_closed",
+            "parent_review", "adversarial_preflight", "attempt_closed",
             "session_checkpoint_emitted", "session_checkpoint_claimed",
             "session_checkpoint_migrated", "predecessor_checkpoint_bound",
         } and review_target_digest:
@@ -1712,6 +1944,76 @@ def validate_state(value: Any) -> dict[str, Any]:
                 raise StateError(
                     "review budget permits one initial review and one bounded rereview"
                 )
+            epoch = execution_epoch({"events": validated_events + [event]})
+            if epoch and epoch["predecessor_review_count"] + bounded_review_count > epoch[
+                "cumulative_review_limit"
+            ]:
+                raise StateError("numbered-plan cumulative review budget is exhausted")
+            if epoch:
+                matching_preflight = [
+                    prior for prior in validated_events
+                    if prior["event_type"] == "adversarial_preflight"
+                    and prior["review_target_digest"] == review_target_digest
+                    and prior["candidate_lifecycle_digest"]
+                    == event["candidate_lifecycle_digest"]
+                ]
+                if not matching_preflight:
+                    raise StateError(
+                        "formal review requires a passing adversarial preflight "
+                        "for the exact review target"
+                    )
+                review_specifications = event.get("review_specification_digests")
+                if (
+                    not isinstance(review_specifications, list)
+                    or review_specifications
+                    != matching_preflight[-1]["preflight_evidence"][
+                        "applicable_specification_digests"
+                    ]
+                ):
+                    raise StateError(
+                        "formal review specifications differ from adversarial preflight"
+                    )
+            elif "review_specification_digests" in event:
+                raise StateError("legacy review cannot carry epoch specification evidence")
+        elif event["event_type"] == "adversarial_preflight":
+            if (
+                not review_target_digest
+                or not event["candidate_lifecycle_digest"]
+                or event["review_outcome"]
+                or event["review_reason_code"]
+                or event["review_author"]
+                or event["review_evidence_digest"]
+                or receipt_digest
+                or severities
+                or invariants
+                or event_accepted_source
+                or any(event_predecessors)
+                or event_predecessor_source
+                or successor_run_id
+                or event["successor_plan_digest"]
+                or successor_source
+                or event["successor_primary_invariant_digest"]
+                or successor_genesis_digest
+            ):
+                raise StateError("adversarial preflight has invalid event evidence")
+            evidence = event["preflight_evidence"]
+            validate_preflight_evidence(
+                evidence,
+                state=value,
+                review_target=review_target_digest,
+                review_identity=event["candidate_lifecycle_digest"],
+                expected_specification_digests=None,
+            )
+            require_digest(
+                event["preflight_evidence_digest"],
+                "preflight_evidence_digest",
+            )
+            if event["preflight_evidence_digest"] != canonical_digest(evidence):
+                raise StateError("adversarial preflight evidence digest mismatch")
+        elif "preflight_evidence" in event or "preflight_evidence_digest" in event:
+            raise StateError("only adversarial preflight may carry preflight evidence")
+        elif "review_specification_digests" in event:
+            raise StateError("only an epoch formal review may carry specification evidence")
         elif event["event_type"] == "writable_attempt_started":
             if not attempt_id or not event["attempt_kind"]:
                 raise StateError("writable attempt start is missing its identifier or kind")
@@ -2144,14 +2446,25 @@ def derive_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def read_state(path: Path) -> dict[str, Any]:
+    return read_state_with_digest(path)[0]
+
+
+def read_state_with_digest(
+    path: Path, *, require_canonical: bool = False
+) -> tuple[dict[str, Any], str]:
     reject_symlink_ancestors(path, include_target=True)
     _, data = open_read(path, EXECUTION_STATE_MAX_BYTES)
     if len(data) > EXECUTION_STATE_MAX_BYTES:
         raise StateError("execution state exceeds size limit")
     try:
-        return validate_state(json.loads(data))
+        value = validate_state(json.loads(data))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise StateError(f"invalid execution state JSON: {exc}") from exc
+    if require_canonical and data != (
+        json.dumps(value, sort_keys=True, indent=2) + "\n"
+    ).encode():
+        raise StateError("predecessor execution state is not canonical")
+    return value, digest(data)
 
 
 def predecessor_acceptance_from_state(predecessor: dict[str, Any]) -> dict[str, str]:
@@ -2398,6 +2711,243 @@ def initialize_reviewer_registry(args: argparse.Namespace) -> None:
         os.close(directory_descriptor)
 
 
+def continuation_registry_path_digest(path: Path) -> str:
+    return digest(str(path.absolute()))
+
+
+def continuation_state_path_digest(path: Path) -> str:
+    return digest(str(path.absolute()))
+
+
+def initialize_continuation_registry(args: argparse.Namespace) -> None:
+    path = Path(args.output)
+    require_outside_repository(path, "continuation registry")
+    reject_symlink_ancestors(path, include_target=True)
+    if path.exists() or path.is_symlink():
+        raise StateError("continuation registry already exists")
+    registry_id = digest(secrets.token_bytes(32))
+    identity = {
+        "record_type": "continuation_registry",
+        "schema_version": CONTINUATION_REGISTRY_SCHEMA_VERSION,
+        "registry_id": registry_id,
+        "path_digest": continuation_registry_path_digest(path),
+    }
+    header = {**identity, "genesis_digest": canonical_digest(identity)}
+    data = canonical_registry_record(header)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    directory_descriptor = os.open(
+        path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fsync(directory_descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory_descriptor)
+
+
+def read_continuation_registry(path: Path) -> dict[str, Any]:
+    require_outside_repository(path, "continuation registry")
+    reject_symlink_ancestors(path, include_target=True)
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    records: list[dict[str, Any]] = []
+    with os.fdopen(descriptor, "rb") as handle:
+        metadata = os.fstat(handle.fileno())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise StateError("continuation registry must use mode 0600")
+        for line_number, line in enumerate(handle, start=1):
+            if len(line) > MAX_REGISTRY_RECORD_BYTES:
+                raise StateError("continuation registry record exceeds size limit")
+            if not line.endswith(b"\n"):
+                raise StateError("continuation registry has a truncated record")
+            try:
+                record = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise StateError("continuation registry contains invalid JSON") from exc
+            if not isinstance(record, dict) or canonical_registry_record(record) != line:
+                raise StateError("continuation registry record is not canonical")
+            records.append(record)
+    if not records:
+        raise StateError("continuation registry is empty")
+    header = records[0]
+    if set(header) != CONTINUATION_REGISTRY_HEADER_KEYS:
+        raise StateError("continuation registry header has an invalid exact shape")
+    if (
+        header["record_type"] != "continuation_registry"
+        or header["schema_version"] != CONTINUATION_REGISTRY_SCHEMA_VERSION
+        or header["path_digest"] != continuation_registry_path_digest(path)
+    ):
+        raise StateError("continuation registry identity mismatch")
+    expected_genesis = canonical_digest(
+        {key: header[key] for key in header if key != "genesis_digest"}
+    )
+    if header["genesis_digest"] != expected_genesis:
+        raise StateError("continuation registry genesis digest mismatch")
+    previous = header["genesis_digest"]
+    events: list[dict[str, Any]] = []
+    consumed: dict[str, dict[str, Any]] = {}
+    for sequence, event in enumerate(records[1:], start=1):
+        if set(event) != CONTINUATION_REGISTRY_EVENT_KEYS:
+            raise StateError("continuation registry event has an invalid exact shape")
+        if (
+            event["record_type"] != "continuation_consumed"
+            or event["schema_version"] != CONTINUATION_REGISTRY_SCHEMA_VERSION
+            or event["sequence"] != sequence
+            or event["registry_id"] != header["registry_id"]
+            or event["previous_event_digest"] != previous
+        ):
+            raise StateError("continuation registry event identity mismatch")
+        for field in (
+            "plan_digest",
+            "predecessor_state_digest",
+            "predecessor_genesis_digest",
+            "predecessor_event_chain_digest",
+            "authorization_digest",
+            "child_state_path_digest",
+            "child_genesis_digest",
+            "event_digest",
+        ):
+            require_digest(event[field], field)
+        if (
+            not ID_RE.fullmatch(event["predecessor_run_id"])
+            or not ID_RE.fullmatch(event["child_run_id"])
+        ):
+            raise StateError("continuation registry run id is invalid")
+        expected = canonical_digest(
+            {key: event[key] for key in event if key != "event_digest"}
+        )
+        if event["event_digest"] != expected:
+            raise StateError("continuation registry event digest mismatch")
+        continuation_identity = canonical_digest(
+            {
+                "plan_digest": event["plan_digest"],
+                "predecessor_run_id": event["predecessor_run_id"],
+                "predecessor_genesis_digest": event["predecessor_genesis_digest"],
+            }
+        )
+        prior = consumed.setdefault(continuation_identity, event)
+        if prior is not event:
+            raise StateError("continuation predecessor identity was consumed more than once")
+        previous = event["event_digest"]
+        events.append(event)
+    return {
+        "header": header,
+        "events": events,
+        "consumed": consumed,
+        "event_chain_digest": previous,
+        "file_identity": (metadata.st_dev, metadata.st_ino),
+        "identity_digest": header["genesis_digest"],
+    }
+
+
+def consume_continuation_authorization(
+    path: Path,
+    *,
+    plan_digest: str,
+    predecessor_state_digest: str,
+    predecessor_run_id: str,
+    predecessor_genesis_digest: str,
+    predecessor_event_chain_digest: str,
+    authorization_digest: str,
+    child_run_id: str,
+    child_state_path_digest: str,
+    child_genesis_digest: str,
+    expected_registry_identity_digest: str,
+) -> str:
+    require_digest(plan_digest, "continuation plan digest")
+    require_digest(predecessor_state_digest, "continuation predecessor state digest")
+    require_digest(predecessor_genesis_digest, "continuation predecessor genesis digest")
+    require_digest(
+        predecessor_event_chain_digest,
+        "continuation predecessor event-chain digest",
+    )
+    require_digest(authorization_digest, "continuation authorization digest")
+    require_digest(child_state_path_digest, "continuation child state path digest")
+    require_digest(child_genesis_digest, "continuation child genesis digest")
+    require_digest(
+        expected_registry_identity_digest,
+        "continuation registry identity digest",
+    )
+    if not ID_RE.fullmatch(predecessor_run_id) or not ID_RE.fullmatch(child_run_id):
+        raise StateError("continuation run id is invalid")
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        registry = read_continuation_registry(path)
+        if registry["identity_digest"] != expected_registry_identity_digest:
+            raise StateError(
+                "continuation registry differs from the predecessor execution"
+            )
+        identity = {
+            "plan_digest": plan_digest,
+            "predecessor_state_digest": predecessor_state_digest,
+            "predecessor_run_id": predecessor_run_id,
+            "predecessor_genesis_digest": predecessor_genesis_digest,
+            "predecessor_event_chain_digest": predecessor_event_chain_digest,
+            "authorization_digest": authorization_digest,
+            "child_run_id": child_run_id,
+            "child_state_path_digest": child_state_path_digest,
+            "child_genesis_digest": child_genesis_digest,
+        }
+        continuation_identity = canonical_digest(
+            {
+                "plan_digest": plan_digest,
+                "predecessor_run_id": predecessor_run_id,
+                "predecessor_genesis_digest": predecessor_genesis_digest,
+            }
+        )
+        prior = registry["consumed"].get(continuation_identity)
+        if prior is not None:
+            if all(prior[key] == value for key, value in identity.items()):
+                return prior["event_digest"]
+            raise StateError("stopped execution ledger is already continued")
+        event = {
+            "record_type": "continuation_consumed",
+            "schema_version": CONTINUATION_REGISTRY_SCHEMA_VERSION,
+            "sequence": len(registry["events"]) + 1,
+            "registry_id": registry["header"]["registry_id"],
+            **identity,
+            "previous_event_digest": registry["event_chain_digest"],
+            "event_digest": "",
+        }
+        event["event_digest"] = canonical_digest(
+            {key: event[key] for key in event if key != "event_digest"}
+        )
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_APPEND | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        with os.fdopen(descriptor, "ab") as handle:
+            metadata = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or (metadata.st_dev, metadata.st_ino) != registry["file_identity"]
+            ):
+                raise StateError("continuation registry changed while consuming authorization")
+            handle.write(canonical_registry_record(event))
+            handle.flush()
+            os.fsync(handle.fileno())
+        return event["event_digest"]
+
+
 def read_reviewer_registry(path: Path) -> dict[str, Any]:
     require_outside_repository(path, "reviewer session registry")
     reject_symlink_ancestors(path, include_target=True)
@@ -2587,6 +3137,128 @@ def admit_reviewer_session(
         return event
 
 
+def empty_execution_event(
+    state: dict[str, Any],
+    *,
+    event_id: str,
+    event_type: str,
+    candidate_lifecycle_digest: str = "",
+    attempt_id: str = "",
+    candidate_digest: str = "",
+    review_target_digest: str = "",
+) -> dict[str, Any]:
+    monotonic_ns = max(time.monotonic_ns(), state["last_monotonic_ns"] + 1)
+    return {
+        "sequence": len(state["events"]) + 1,
+        "event_id": event_id,
+        "event_type": event_type,
+        "implementation_mode": state["implementation_mode"],
+        "invariant_digests": [],
+        "finding_severities": [],
+        "independent_review_receipt_digest": "",
+        "repair_classification": {},
+        "repair_evidence_digest": "",
+        "candidate_lifecycle_digest": candidate_lifecycle_digest,
+        "attempt_id": attempt_id,
+        "attempt_kind": "",
+        "candidate_digest": candidate_digest,
+        "review_outcome": "",
+        "review_reason_code": "",
+        "review_author": "",
+        "review_evidence_digest": "",
+        "review_target_digest": review_target_digest,
+        "predecessor_plan_digest": "",
+        "predecessor_accepted_candidate_digest": "",
+        "predecessor_closing_event_digest": "",
+        "predecessor_accepted_source_head": "",
+        "accepted_source_head": "",
+        "successor_run_id": "",
+        "successor_plan_digest": "",
+        "successor_source_head": "",
+        "successor_primary_invariant_digest": "",
+        "successor_genesis_digest": "",
+        "elapsed_seconds": 0.0,
+        "monotonic_ns": monotonic_ns,
+        "previous_event_digest": state["event_chain_digest"],
+    }
+
+
+def append_execution_epoch(
+    state: dict[str, Any],
+    epoch: dict[str, Any],
+) -> None:
+    event = empty_execution_event(
+        state,
+        event_id=f"epoch:{epoch['epoch']}",
+        event_type="execution_epoch_started",
+    )
+    event["monotonic_ns"] = state["last_monotonic_ns"] + 1
+    event["execution_epoch"] = epoch
+    event["event_digest"] = canonical_digest(
+        {key: event[key] for key in event if key != "event_digest"}
+    )
+    state["events"].append(event)
+    state["last_monotonic_ns"] = event["monotonic_ns"]
+    state["event_chain_digest"] = event["event_digest"]
+
+
+def initial_state(
+    *,
+    run_id: str,
+    plan_path: str,
+    plan_digest: str,
+    source_head: str,
+    invariant_digest: str,
+    lifecycle_path: Path,
+    implementation_mode: str,
+    predecessor: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    predecessor = predecessor or {
+        "predecessor_plan_digest": "",
+        "predecessor_accepted_candidate_digest": "",
+        "predecessor_closing_event_digest": "",
+        "predecessor_accepted_source_head": "",
+    }
+    state = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "plan_path": plan_path,
+        "plan_digest": plan_digest,
+        "source_head": source_head,
+        "primary_invariant_digest": invariant_digest,
+        "candidate_lifecycle_identity_digest": lifecycle_identity_digest(
+            run_id, lifecycle_path
+        ),
+        "state": "active",
+        "implementation_mode": implementation_mode,
+        "candidate_generations": 0,
+        "correction_rounds": 0,
+        "parent_direct_remediation_rounds": 0,
+        "focused_validation_events": 0,
+        "authoritative_validation_events": 0,
+        **predecessor,
+        "writable_attempt_starts": 0,
+        "writable_attempt_closures": 0,
+        "open_attempt_id": "",
+        "accepted_candidate_digest": "",
+        "accepted_closing_event_digest": "",
+        "accepted_source_head": "",
+        "successor_claim_digest": "",
+        "review_reason_codes": [],
+        "repair_reason_codes": [],
+        "descope_reason_codes": [],
+        "descope_pending_reason_codes": [],
+        "replan_reason_codes": [],
+        "last_monotonic_ns": 0,
+        "genesis_digest": "",
+        "event_chain_digest": "",
+        "events": [],
+    }
+    state["genesis_digest"] = state_genesis_digest(state)
+    state["event_chain_digest"] = state["genesis_digest"]
+    return state
+
+
 def init_state(args: argparse.Namespace) -> None:
     path = Path(args.state)
     lifecycle_path = Path(args.lifecycle_state)
@@ -2627,41 +3299,41 @@ def init_state(args: argparse.Namespace) -> None:
             require_predecessor_ancestry(
                 predecessor["predecessor_accepted_source_head"], args.source_head
             )
-    state = {
-        "schema_version": SCHEMA_VERSION,
-        "run_id": args.run_id,
-        "plan_path": args.plan,
-        "plan_digest": args.plan_digest,
-        "source_head": args.source_head,
-        "primary_invariant_digest": invariant_digest,
-        "candidate_lifecycle_identity_digest": lifecycle_identity_digest(args.run_id, lifecycle_path),
-        "state": "active",
-        "implementation_mode": args.implementation_mode,
-        "candidate_generations": 0,
-        "correction_rounds": 0,
-        "parent_direct_remediation_rounds": 0,
-        "focused_validation_events": 0,
-        "authoritative_validation_events": 0,
-        **predecessor,
-        "writable_attempt_starts": 0,
-        "writable_attempt_closures": 0,
-        "open_attempt_id": "",
-        "accepted_candidate_digest": "",
-        "accepted_closing_event_digest": "",
-        "accepted_source_head": "",
-        "successor_claim_digest": "",
-        "review_reason_codes": [],
-        "repair_reason_codes": [],
-        "descope_reason_codes": [],
-        "descope_pending_reason_codes": [],
-        "replan_reason_codes": [],
-        "last_monotonic_ns": 0,
-        "genesis_digest": "",
-        "event_chain_digest": "",
-        "events": [],
-    }
-    state["genesis_digest"] = state_genesis_digest(state)
-    state["event_chain_digest"] = state["genesis_digest"]
+    state = initial_state(
+        run_id=args.run_id,
+        plan_path=args.plan,
+        plan_digest=args.plan_digest,
+        source_head=args.source_head,
+        invariant_digest=invariant_digest,
+        lifecycle_path=lifecycle_path,
+        implementation_mode=args.implementation_mode,
+        predecessor=predecessor,
+    )
+    if args.require_adversarial_preflight:
+        if not args.continuation_registry:
+            raise StateError(
+                "epoch-enabled execution requires a continuation registry"
+            )
+        registry = read_continuation_registry(Path(args.continuation_registry))
+        append_execution_epoch(
+            state,
+            {
+                "schema_version": 1,
+                "epoch": 0,
+                "predecessor_state_digest": "",
+                "predecessor_run_id": "",
+                "predecessor_event_chain_digest": "",
+                "predecessor_review_count": 0,
+                "cumulative_review_limit": INDEPENDENT_REVIEW_LIMIT,
+                "owner_authorization_digest": "",
+                "continuation_registry_identity_digest": registry["identity_digest"],
+                "continuation_registry_event_digest": "",
+            },
+        )
+    elif args.continuation_registry:
+        raise StateError(
+            "a continuation registry is only valid with adversarial preflight"
+        )
     validate_state(state)
     if len([
         item for item in (
@@ -2702,6 +3374,215 @@ def init_state(args: argparse.Namespace) -> None:
         if path.exists() or path.is_symlink():
             raise StateError("execution state already exists")
         atomic_write(path, state)
+
+
+def read_private_json(path: Path, label: str) -> tuple[dict[str, Any], str]:
+    require_outside_repository(path, label)
+    reject_symlink_ancestors(path, include_target=True)
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise StateError(f"{label} must be a single-link mode-0600 regular file")
+        data = os.read(descriptor, MAX_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    if len(data) > MAX_BYTES:
+        raise StateError(f"{label} exceeds size limit")
+    try:
+        value = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StateError(f"{label} is invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise StateError(f"{label} must be an object")
+    return value, digest(data)
+
+
+def validate_continuation_authorization(
+    value: dict[str, Any],
+    *,
+    predecessor: dict[str, Any],
+    predecessor_state_digest: str,
+    child_run_id: str,
+    child_state_path_digest: str,
+    continuation_registry_identity_digest: str,
+) -> dict[str, Any]:
+    if set(value) != CONTINUATION_AUTHORIZATION_KEYS:
+        raise StateError("continuation authorization has an invalid exact shape")
+    if value["schema_version"] != CONTINUATION_AUTHORIZATION_SCHEMA_VERSION:
+        raise StateError("continuation authorization has an unsupported schema version")
+    current_epoch = execution_epoch(predecessor)
+    prior_epoch = current_epoch["epoch"] if current_epoch else 0
+    expected = {
+        "plan_path": predecessor["plan_path"],
+        "plan_digest": predecessor["plan_digest"],
+        "source_head": predecessor["source_head"],
+        "primary_invariant_digest": predecessor["primary_invariant_digest"],
+        "implementation_mode": predecessor["implementation_mode"],
+        "predecessor_state_digest": predecessor_state_digest,
+        "predecessor_run_id": predecessor["run_id"],
+        "predecessor_event_chain_digest": predecessor["event_chain_digest"],
+        "next_epoch": prior_epoch + 1,
+        "child_run_id": child_run_id,
+        "child_state_path_digest": child_state_path_digest,
+        "continuation_registry_identity_digest": (
+            continuation_registry_identity_digest
+        ),
+        "cumulative_review_limit": MAX_CUMULATIVE_REVIEWS,
+    }
+    if any(value.get(key) != expected_value for key, expected_value in expected.items()):
+        raise StateError("continuation authorization differs from the stopped execution")
+    authorization = value["owner_authorization"]
+    if (
+        not isinstance(authorization, str)
+        or not authorization.strip()
+        or len(authorization.encode("utf-8")) > 400
+        or authorization.strip().lower() in {"todo", "tbd", "placeholder"}
+    ):
+        raise StateError("owner continuation authorization is not bounded")
+    return value
+
+
+def continue_state(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    predecessor_path = Path(args.predecessor_state)
+    lifecycle_path = Path(args.lifecycle_state)
+    authorization_path = Path(args.authorization)
+    registry_path = Path(args.continuation_registry)
+    for external, label in (
+        (path, "execution state"),
+        (predecessor_path, "predecessor execution state"),
+        (lifecycle_path, "candidate lifecycle state"),
+        (authorization_path, "continuation authorization"),
+        (registry_path, "continuation registry"),
+    ):
+        require_outside_repository(external, label)
+    if not ID_RE.fullmatch(args.run_id):
+        raise StateError("invalid run_id")
+    with with_lock(predecessor_path) as predecessor_lock:
+        fcntl.flock(predecessor_lock.fileno(), fcntl.LOCK_EX)
+        predecessor, predecessor_digest = read_state_with_digest(
+            predecessor_path, require_canonical=True
+        )
+        if (
+            predecessor["state"] != "descope_pending"
+            or predecessor["descope_pending_reason_codes"]
+            != ["parent_remediation_budget_exhausted"]
+            or predecessor["open_attempt_id"]
+        ):
+            raise StateError(
+                "continuation requires a closed parent-review budget exhaustion"
+            )
+        prior_epoch = execution_epoch(predecessor)
+        if prior_epoch is None:
+            raise StateError(
+                "legacy execution ledger is not eligible for same-plan continuation"
+            )
+        if prior_epoch["epoch"] >= MAX_CONTINUATION_EPOCH:
+            raise StateError("same-plan continuation epoch limit is exhausted")
+        if formal_review_count(predecessor) != INDEPENDENT_REVIEW_LIMIT:
+            raise StateError("continuation requires exactly two prior formal reviews")
+        registry = read_continuation_registry(registry_path)
+        if (
+            registry["identity_digest"]
+            != prior_epoch["continuation_registry_identity_digest"]
+        ):
+            raise StateError(
+                "continuation registry differs from the predecessor execution"
+            )
+        authorization, authorization_digest = read_private_json(
+            authorization_path, "continuation authorization"
+        )
+        validate_continuation_authorization(
+            authorization,
+            predecessor=predecessor,
+            predecessor_state_digest=predecessor_digest,
+            child_run_id=args.run_id,
+            child_state_path_digest=continuation_state_path_digest(path),
+            continuation_registry_identity_digest=registry["identity_digest"],
+        )
+        if args.plan != predecessor["plan_path"]:
+            raise StateError("continuation plan path differs from the stopped execution")
+        if args.implementation_mode != predecessor["implementation_mode"]:
+            raise StateError("continuation implementation mode differs from the stopped execution")
+        plan = Path(args.plan)
+        plan_bytes = plan.read_bytes()
+        if digest(plan_bytes) != predecessor["plan_digest"]:
+            raise StateError("continuation plan digest differs from the stopped execution")
+        if current_head(repository_root()) != predecessor["source_head"]:
+            raise StateError("continuation source HEAD differs from the stopped execution")
+        invariant = re.findall(
+            r"^primary_invariant: (.+)$",
+            plan_bytes.decode("utf-8"),
+            flags=re.MULTILINE,
+        )
+        if (
+            len(invariant) != 1
+            or digest(invariant[0]) != predecessor["primary_invariant_digest"]
+        ):
+            raise StateError("continuation primary invariant differs from the stopped execution")
+        state = initial_state(
+            run_id=args.run_id,
+            plan_path=args.plan,
+            plan_digest=predecessor["plan_digest"],
+            source_head=predecessor["source_head"],
+            invariant_digest=predecessor["primary_invariant_digest"],
+            lifecycle_path=lifecycle_path,
+            implementation_mode=args.implementation_mode,
+        )
+        append_execution_epoch(
+            state,
+            {
+                "schema_version": 1,
+                "epoch": 1,
+                "predecessor_state_digest": predecessor_digest,
+                "predecessor_run_id": predecessor["run_id"],
+                "predecessor_event_chain_digest": predecessor["event_chain_digest"],
+                "predecessor_review_count": formal_review_count(predecessor),
+                "cumulative_review_limit": MAX_CUMULATIVE_REVIEWS,
+                "owner_authorization_digest": authorization_digest,
+                "continuation_registry_identity_digest": registry[
+                    "identity_digest"
+                ],
+                "continuation_registry_event_digest": digest("pending"),
+            },
+        )
+        validate_state(state)
+        registry_event_digest = consume_continuation_authorization(
+            registry_path,
+            plan_digest=predecessor["plan_digest"],
+            predecessor_state_digest=predecessor_digest,
+            predecessor_run_id=predecessor["run_id"],
+            predecessor_genesis_digest=predecessor["genesis_digest"],
+            predecessor_event_chain_digest=predecessor["event_chain_digest"],
+            authorization_digest=authorization_digest,
+            child_run_id=args.run_id,
+            child_state_path_digest=continuation_state_path_digest(path),
+            child_genesis_digest=state["genesis_digest"],
+            expected_registry_identity_digest=prior_epoch[
+                "continuation_registry_identity_digest"
+            ],
+        )
+        epoch_event = state["events"][0]
+        epoch_event["execution_epoch"][
+            "continuation_registry_event_digest"
+        ] = registry_event_digest
+        epoch_event["event_digest"] = canonical_digest(
+            {key: epoch_event[key] for key in epoch_event if key != "event_digest"}
+        )
+        state["event_chain_digest"] = epoch_event["event_digest"]
+        validate_state(state)
+        with with_lock(path) as state_lock:
+            fcntl.flock(state_lock.fileno(), fcntl.LOCK_EX)
+            if path.exists() or path.is_symlink():
+                if read_state(path) == state:
+                    return
+                raise StateError("continuation execution state already exists")
+            atomic_write(path, state)
 
 
 def checkpoint_boundary_matches(state: dict[str, Any], boundary: str) -> bool:
@@ -3406,6 +4287,81 @@ def candidate_review_identity(
     )
 
 
+def record_adversarial_preflight(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        if state["run_id"] != args.run_id:
+            raise StateError("run_id mismatch")
+        if state["implementation_mode"] != args.implementation_mode:
+            raise StateError("preflight implementation mode differs from the execution ledger")
+        if state["state"] != "active":
+            raise StateError(stopped_message(state))
+        if execution_epoch(state) is None:
+            raise StateError("legacy execution ledger does not require adversarial preflight")
+        require_repository_baseline(state)
+        if args.implementation_mode == "candidate":
+            if not args.candidate_manifest:
+                raise StateError("candidate preflight requires the admitted candidate manifest")
+            (
+                review_target,
+                review_identity,
+                attempt_id,
+                candidate_digest,
+                _worker_receipts,
+            ) = candidate_review_identity(
+                state,
+                Path(args.lifecycle_state),
+                Path(args.candidate_manifest),
+            )
+        else:
+            if args.candidate_manifest:
+                raise StateError("parent-direct preflight cannot use a candidate manifest")
+            review_target, review_identity = parent_direct_review_identity(state)
+            attempt_id = ""
+            candidate_digest = ""
+        evidence, _evidence_digest = read_private_json(
+            Path(args.preflight_evidence),
+            "adversarial preflight evidence",
+        )
+        validate_preflight_evidence(
+            evidence,
+            state=state,
+            review_target=review_target,
+            review_identity=review_identity,
+            expected_specification_digests=applicable_specification_digests(state),
+        )
+        if any(
+            event["event_type"] == "adversarial_preflight"
+            and event["review_target_digest"] == review_target
+            and event["candidate_lifecycle_digest"] == review_identity
+            for event in state["events"]
+        ):
+            raise StateError("adversarial preflight for this review target already exists")
+        event = empty_execution_event(
+            state,
+            event_id=args.event_id,
+            event_type="adversarial_preflight",
+            candidate_lifecycle_digest=review_identity,
+            attempt_id=attempt_id,
+            candidate_digest=candidate_digest,
+            review_target_digest=review_target,
+        )
+        event["preflight_evidence"] = evidence
+        event["preflight_evidence_digest"] = canonical_digest(evidence)
+        event["event_digest"] = canonical_digest(
+            {key: event[key] for key in event if key != "event_digest"}
+        )
+        state["events"].append(event)
+        state["last_monotonic_ns"] = event["monotonic_ns"]
+        state["event_chain_digest"] = event["event_digest"]
+        for key, value in derive_summary(state["events"]).items():
+            state[key] = value
+        validate_state(state)
+        atomic_write(path, state)
+
+
 def record_bounded_review(args: argparse.Namespace) -> None:
     if args.implementation_mode == "candidate":
         if not args.candidate_manifest:
@@ -3584,6 +4540,29 @@ def record_event(args: argparse.Namespace) -> None:
                 review_attempt_id = ""
                 review_candidate_digest = ""
                 expected_worker_receipts = []
+            epoch = execution_epoch(state)
+            matching_preflight = [
+                event
+                for event in state["events"]
+                if event["event_type"] == "adversarial_preflight"
+                and event["review_target_digest"] == review_target
+                and event["candidate_lifecycle_digest"] == review_identity
+            ]
+            if epoch:
+                if not matching_preflight:
+                    raise StateError(
+                        "formal review requires a passing adversarial preflight "
+                        "for the exact review target"
+                    )
+                if (
+                    review_receipt["applicable_specification_digests"]
+                    != matching_preflight[-1]["preflight_evidence"][
+                        "applicable_specification_digests"
+                    ]
+                ):
+                    raise StateError(
+                        "formal review specifications differ from adversarial preflight"
+                    )
             if (
                 review_receipt["review_target_digest"] != review_target
                 or review_receipt["admitted_diff_digest"] != review_target
@@ -3669,6 +4648,11 @@ def record_event(args: argparse.Namespace) -> None:
             args.review_target_digest = review_target
             args.review_attempt_id = review_attempt_id
             args.review_candidate_digest = review_candidate_digest
+            args.review_specification_digests = (
+                review_receipt["applicable_specification_digests"]
+                if epoch
+                else None
+            )
         receipt = args.independent_review_receipt_digest or ""
         repair_classification: dict[str, Any] = {}
         repair_evidence = ""
@@ -3808,6 +4792,8 @@ def record_event(args: argparse.Namespace) -> None:
             "monotonic_ns": monotonic_ns,
             "previous_event_digest": state["event_chain_digest"],
         }
+        if getattr(args, "review_specification_digests", None) is not None:
+            event["review_specification_digests"] = args.review_specification_digests
         if args.event_type in {"authoritative_failure", "failure_diagnosis"}:
             event.update(
                 {
@@ -4302,6 +5288,9 @@ def parser() -> argparse.ArgumentParser:
     registry_init = sub.add_parser("registry-init")
     registry_init.add_argument("--output", required=True)
     registry_init.set_defaults(handler=initialize_reviewer_registry)
+    continuation_registry_init = sub.add_parser("continuation-registry-init")
+    continuation_registry_init.add_argument("--output", required=True)
+    continuation_registry_init.set_defaults(handler=initialize_continuation_registry)
     init = sub.add_parser("init")
     init.add_argument("state")
     init.add_argument("--run-id", required=True)
@@ -4315,7 +5304,21 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--root-session-manifest")
     init.add_argument("--reviewer-registry")
     init.add_argument("--implementation-mode", choices=sorted(MODES), required=True)
+    init.add_argument("--require-adversarial-preflight", action="store_true")
+    init.add_argument("--continuation-registry")
     init.set_defaults(handler=init_state)
+    continuation = sub.add_parser("continue")
+    continuation.add_argument("state")
+    continuation.add_argument("--predecessor-state", required=True)
+    continuation.add_argument("--continuation-registry", required=True)
+    continuation.add_argument("--authorization", required=True)
+    continuation.add_argument("--run-id", required=True)
+    continuation.add_argument("--plan", required=True)
+    continuation.add_argument("--lifecycle-state", required=True)
+    continuation.add_argument(
+        "--implementation-mode", choices=sorted(MODES), required=True
+    )
+    continuation.set_defaults(handler=continue_state)
     record = sub.add_parser("record")
     record.add_argument("state")
     record.add_argument("--run-id", required=True)
@@ -4419,6 +5422,17 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("--lifecycle-state", required=True)
     review.add_argument("--elapsed-seconds", type=float, default=0.0)
     review.set_defaults(handler=record_bounded_review)
+    preflight = sub.add_parser("preflight")
+    preflight.add_argument("state")
+    preflight.add_argument("--run-id", required=True)
+    preflight.add_argument("--event-id", required=True)
+    preflight.add_argument(
+        "--implementation-mode", choices=sorted(MODES), required=True
+    )
+    preflight.add_argument("--preflight-evidence", required=True)
+    preflight.add_argument("--candidate-manifest")
+    preflight.add_argument("--lifecycle-state", required=True)
+    preflight.set_defaults(handler=record_adversarial_preflight)
     return root
 
 

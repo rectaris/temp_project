@@ -1,6 +1,6 @@
 # Install bounded same-plan continuation epochs
 
-status: in_progress
+status: checked
 primary_invariant: Review-budget exhaustion may authorize one fresh execution epoch for the same unchanged numbered plan, but never reopen a stopped ledger, reset cumulative authority, bypass exact-target preflight, or create an unbounded continuation loop.
 task_types:
   - template_workflow
@@ -105,11 +105,11 @@ checked_summary_ja: 停止済み台帳を変更せず、同じプランに一度
 
 ## Tasks
 
-- [ ] Add continuation authorization, registry, fresh-ledger creation and replay-safe recovery fixtures.
-- [ ] Add continuation and preflight event validation, cumulative review accounting and review-order gates.
-- [ ] Update root/generated lifecycle policy, orchestration guidance, AGENTS rules, inventories and smoke assertions.
-- [ ] Reconcile the conflicting future instructions in Plans 273 and 276 without deleting their independent requirements.
-- [ ] Run focused validation, independent review and the authoritative suite, then archive this prerequisite.
+- [x] Add continuation authorization, registry, fresh-ledger creation and replay-safe recovery fixtures.
+- [x] Add continuation and preflight event validation, cumulative review accounting and review-order gates.
+- [x] Update root/generated lifecycle policy, orchestration guidance, AGENTS rules, inventories and smoke assertions.
+- [x] Reconcile the conflicting future instructions in Plans 273 and 276 without deleting their independent requirements.
+- [x] Run focused validation, independent review and the authoritative suite, then archive this prerequisite.
 
 ## Validation Notes
 
@@ -117,3 +117,7 @@ checked_summary_ja: 停止済み台帳を変更せず、同じプランに一度
 - Full decision audit: `.agent-artifacts/decision-audits/283-same-plan-continuation-bootstrap.md`.
 - Plan 283 remains stopped externally; this prerequisite does not reopen or mutate its ledger.
 - The first implementation of continuation is intentionally non-renewable. Another epoch requires a future policy change, not another ordinary owner quote.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` (79 tests), `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `python3 scripts/restructure-plan.py --verify`, and `git diff --check`.
+- The initial independent review found renewable-registry, predecessor-identity, pre-consumption validation, specification-binding, event-shape, crash-recovery, and hard-link defects. The bounded correction fixed them; the final rereview reported no High or Medium findings.
+- Authoritative validation passed once in the parent workflow: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- The implementation keeps schema 6 readable, requires epoch-enabled ledgers to bind their continuation registry at initialization, and intentionally does not grant legacy ledgers the new continuation route retroactively.
