@@ -63,6 +63,11 @@ case "$status" in
         exit 1
         ;;
     esac
+    # Local semantic records are advisory and remain parent-owned.
+    if [ -f .project-agent-workflow/scripts/referent-contract.py ]; then
+      python3 .project-agent-workflow/scripts/referent-contract.py pending --target "$src" >&2 || :
+    fi
+
     python3 .project-agent-workflow/scripts/lint-plan-docs.py --complete-transition "$id" "$src" "$status"
     echo "$src"
     ;;

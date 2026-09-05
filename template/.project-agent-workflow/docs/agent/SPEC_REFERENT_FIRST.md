@@ -175,3 +175,32 @@ Keep median, edge, negative-trigger, and hold-out scenarios outside the skill.
 Evaluate at least referent collisions, kind collisions, lost causal order, undefined new terms, unsupported certainty, false triggers, and added workflow cost.
 
 Do not treat same-session self-review as independent empirical validation.
+
+## Draft Relocation And Ended Applicability
+
+Keep the original source and target in the sealed projection unchanged.
+Use `relocate-target <contract> --target <path> --reason <reason>` only for identical registered draft bytes, including an immutable local snapshot saved before a plan lifecycle edit.
+The command records the location chain and verifies the recorded draft hash; it never replaces the sealed target identity or approves changed text.
+An existing changed target must be investigated rather than hidden by relocation.
+If the draft changed, compare the changes and use the ordinary reopen, naming, and draft-registration workflow when the contract still applies.
+Reopening appends the prior draft hash and relocation chain to `draft_history`, retains the latest location for the next registration, and never rewrites an earlier history entry.
+
+Use `end-applicability <contract> --reason <reason> --report <evidence-file>` only after the parent confirms that this particular working contract no longer applies.
+The evidence report must be a JSON object with exactly four nonblank string fields: `target_history`, `applicability_ended_reason`, `unresolved_facts`, and `owner_instruction`.
+These fields explain the target history, why this record no longer governs current work, unresolved facts, and the owner instruction authorizing the disposition.
+Use a normalized repository-relative path under `.agent-artifacts/` to a regular file with no symlinked component or hard link.
+The checker enforces the field structure and local retention boundary; the parent verifies the content against the owner instruction and history.
+A missing file, old timestamp, plan number match, or checked plan alone does not establish ended applicability.
+The command preserves the complete prior contract and a hash of the evidence report in `end_record`, then records `ended_without_review` and `active: false`.
+`ended_without_review` means an inactive working contract whose applicability ended with reasons and evidence, without establishing semantic acceptance.
+This state never passes `check`, including for advisory contracts, and never satisfies a required independent review.
+It cannot reopen; register a new contract if the work becomes applicable again, retaining the ended record as history.
+The operation does not complete, shelve, or waive any plan or user requirement.
+The tool verifies structural evidence, not the truth of a parent's applicability judgment.
+
+Close advisory contracts intentionally with `close-advisory`; close required contracts only through a passing independent-agent or human review.
+Before completing or archiving a plan, inspect its related records with `python3 .project-agent-workflow/scripts/referent-contract.py pending --target <plan-path>` and reconcile their draft locations and applicability.
+Both lifecycle scripts emit the same read-only advisory before mutation when the checker is installed.
+They do not close records, change contract references, block plan completion, or grant review acceptance.
+`pending` also runs from restoration hooks, reports missing targets, changed drafts, and the next outstanding completion step, and leaves unrelated active records visible during session restoration.
+Retain ended contracts and evidence under `.agent-artifacts/`; do not delete them to suppress reminders.

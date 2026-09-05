@@ -59,6 +59,15 @@ def main() -> int:
     checker = ".project-agent-workflow/scripts/referent-contract.py"
     if not (root / checker).is_file():
         checker = "scripts/referent-contract.py"
+    if (root / checker).is_file():
+        result = subprocess.run(
+            [sys.executable, str(root / checker), "pending"], cwd=root,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        if result.returncode == 0:
+            message = result.stdout.strip()
+            print(json.dumps({"continue": True, "systemMessage": message} if message else {}))
+            return 0
     active = active_contracts(root)
     if not active:
         print("{}")

@@ -28,6 +28,11 @@ awk '/^## Validation Notes$/{in_notes=1; next} /^## /{in_notes=0} in_notes && NF
   exit 1
 }
 
+# Local semantic records are advisory and remain parent-owned.
+if [ -f .project-agent-workflow/scripts/referent-contract.py ]; then
+  python3 .project-agent-workflow/scripts/referent-contract.py pending --target "$src" >&2 || :
+fi
+
 base=$(basename "$src")
 id=${base%%-*}
 python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-active-mapping "$id" "$src" ready_to_archive

@@ -9,6 +9,11 @@ status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
 [ "$status" = "ready_to_archive" ] || { echo "cannot finalize $src: status is $status, expected ready_to_archive" >&2; exit 1; }
 grep -q '^checked_summary_ja: .\+' "$src" || { echo "cannot finalize $src: missing non-empty checked_summary_ja" >&2; exit 1; }
 awk '/^## Validation Notes$/{in_notes=1; next} /^## /{in_notes=0} in_notes && NF {found=1} END{exit(found ? 0 : 1)}' "$src" || { echo "cannot finalize $src: Validation Notes are empty" >&2; exit 1; }
+# Local semantic records are advisory and remain parent-owned.
+if [ -f scripts/referent-contract.py ]; then
+  python3 scripts/referent-contract.py pending --target "$src" >&2 || :
+fi
+
 base=$(basename "$src"); id=${base%%-*}
 index_count=$(awk -F"	" -v id="$id" '$1 == id {count++} END{print count+0}' docs/plan/plan.md)
 [ "$index_count" -eq 1 ] || { echo "cannot finalize $src: expected exactly one active-plan index entry" >&2; exit 1; }

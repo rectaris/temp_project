@@ -59,6 +59,11 @@ case "$evidence" in
   *) echo "cannot mark plan ready: Validation Notes are empty or pending in $src" >&2; exit 1 ;;
 esac
 
+# Local semantic records are advisory and remain parent-owned.
+if [ -f scripts/referent-contract.py ]; then
+  python3 scripts/referent-contract.py pending --target "$src" >&2 || :
+fi
+
 base=$(basename "$src"); id=${base%%-*}
 python3 - "$id" "$src" "$status" <<'PY'
 from pathlib import Path
