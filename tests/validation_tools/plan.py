@@ -2649,6 +2649,60 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     self.assertEqual(result.returncode, variant["ready_returncode"])
                     self.assertIn(str(variant["ready_message"]), result.stderr)
 
+    ROOT_PLAN_COMMAND_MODULE = ROOT / "scripts/plan_validation_commands.py"
+    TEMPLATE_PLAN_COMMAND_MODULE = (
+        ROOT / "template/.project-agent-workflow/scripts/plan_validation_commands.py"
+    )
+    COPIER_VALIDATOR_SELECTOR = "python3 tests/select-copier-fixture-validator-tests.py"
+    COPIER_VALIDATOR_DOMAINS = ("contract", "inventory", "execution", "grammar", "placement")
+
+    def test_root_allowlist_accepts_the_copier_validator_selector_and_domains(self) -> None:
+        module = load_module(self.ROOT_PLAN_COMMAND_MODULE, "copier_selector_allowlist")
+        accepted = [
+            self.COPIER_VALIDATOR_SELECTOR,
+            f"{self.COPIER_VALIDATOR_SELECTOR} --all",
+            f"{self.COPIER_VALIDATOR_SELECTOR} --staged",
+            f"{self.COPIER_VALIDATOR_SELECTOR} --all --print-only --json",
+            "python3 tests/test-copier-fixture-validator.py",
+            *(
+                f"python3 tests/copier_fixture_validator/{name}.py"
+                for name in self.COPIER_VALIDATOR_DOMAINS
+            ),
+        ]
+        module.parse_validation_commands(accepted)
+
+    def test_root_allowlist_rejects_unsafe_copier_validator_commands(self) -> None:
+        module = load_module(self.ROOT_PLAN_COMMAND_MODULE, "copier_selector_rejection")
+        rejected = [
+            f"{self.COPIER_VALIDATOR_SELECTOR} --all --staged",
+            f"{self.COPIER_VALIDATOR_SELECTOR} --json --json",
+            f"{self.COPIER_VALIDATOR_SELECTOR} --unknown",
+            f"{self.COPIER_VALIDATOR_SELECTOR} tests/copier_fixture_validator/contract.py",
+            "python3 /tmp/select-copier-fixture-validator-tests.py",
+            "python3 ../tests/select-copier-fixture-validator-tests.py",
+            "python3 tests/copier_fixture_validator/support.py",
+            "python3 tests/copier_fixture_validator/__init__.py",
+            "python3 tests/copier_fixture_validator/contract.py --verbose",
+        ]
+        for command in rejected:
+            with self.subTest(command=command):
+                with self.assertRaises(module.ValidationCommandError):
+                    module.parse_validation_command(command)
+
+    def test_the_generated_counterpart_never_allowlists_the_root_only_selector(self) -> None:
+        module = load_module(self.TEMPLATE_PLAN_COMMAND_MODULE, "copier_selector_generated")
+        rejected = [
+            self.COPIER_VALIDATOR_SELECTOR,
+            *(
+                f"python3 tests/copier_fixture_validator/{name}.py"
+                for name in self.COPIER_VALIDATOR_DOMAINS
+            ),
+        ]
+        for command in rejected:
+            with self.subTest(command=command):
+                with self.assertRaises(module.ValidationCommandError):
+                    module.parse_validation_command(command)
+
 
 if __name__ == "__main__":
     unittest.main()

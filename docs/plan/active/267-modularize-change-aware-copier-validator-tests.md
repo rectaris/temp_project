@@ -110,15 +110,19 @@ checked_summary_ja: Copier fixture validator の既存テストを責務別モ�
 
 ## Tasks
 
-- [ ] Capture the activation-baseline unittest ids, count, exit status, and per-class timings for the existing aggregate command without changing test behavior.
-- [ ] Move shared fixtures and helpers into `support.py`, then move every existing test class into exactly one declared domain module using explicit imports and no wildcard dependency.
-- [ ] Replace the original file body with the compatibility imports and aggregate `unittest.main()` entrypoint, and prove that the pre- and post-extraction unittest id inventories are identical.
-- [ ] Implement the root-only changed-path selector with static argv, staged/all modes, print-only and JSON reports, conservative relevant-path fallback, and fail-closed Git and command-validation behavior.
-- [ ] Add validation-tool tests for exact domain selection, shared and unknown relevant fallback, unrelated paths, staged precedence, command deduplication, JSON output, unsafe input rejection, Git failure, direct module execution, and exact aggregate inventory preservation.
-- [ ] Add the new sources and executable commands to the root inventory and command allowlist, document the focused editing command in `tests/AGENTS.md`, and add the complete aggregate command as a separate CI job.
-- [ ] Run focused validation and one independent read-only review with zero unresolved High or Medium findings.
-- [ ] Run the authoritative validation suite exactly once for an otherwise accepted change, then archive and commit only the declared write scope plus parent-owned lifecycle files.
+- [x] Capture the activation-baseline unittest ids, count, exit status, and per-class timings for the existing aggregate command without changing test behavior.
+- [x] Move shared fixtures and helpers into `support.py`, then move every existing test class into exactly one declared domain module using explicit imports and no wildcard dependency.
+- [x] Replace the original file body with the compatibility imports and aggregate `unittest.main()` entrypoint, and prove that the pre- and post-extraction unittest id inventories are identical.
+- [x] Implement the root-only changed-path selector with static argv, staged/all modes, print-only and JSON reports, conservative relevant-path fallback, and fail-closed Git and command-validation behavior.
+- [x] Add validation-tool tests for exact domain selection, shared and unknown relevant fallback, unrelated paths, staged precedence, command deduplication, JSON output, unsafe input rejection, Git failure, direct module execution, and exact aggregate inventory preservation.
+- [x] Add the new sources and executable commands to the root inventory and command allowlist, document the focused editing command in `tests/AGENTS.md`, and add the complete aggregate command as a separate CI job.
+- [x] Run focused validation and one independent read-only review with zero unresolved High or Medium findings.
+- [x] Run the authoritative validation suite exactly once for an otherwise accepted change, then archive and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
-- Pending implementation.
+- Activation baseline: 563 unittest ids across 38 classes from the pre-extraction `python3 tests/test-copier-fixture-validator.py`, no duplicates. The post-extraction aggregate inventory is byte-identical to that baseline, and the five domain modules partition it disjointly as contract 28, inventory 94, execution 80, grammar 232, placement 129.
+- Focused validation: `python3 tests/test-copier-fixture-validator.py` (563 tests OK), `python3 tests/test-validation-tools.py` (78 tests OK), `python3 scripts/plan_validation_commands.py --self-test`, `python3 scripts/check-copier-template.py`, and `git diff --check` all pass.
+- Independent read-only review found no High findings. It reported one Medium, three Low, and one untested branch, all fixed before the authoritative run: Git-quoted non-ASCII paths were dropped instead of escalating, a staged-mode selection ignored a relevant unstaged shared path, the direct-execution shim relied on the deprecated `__package__` fallback, `ModuleBoundaryTest` self-inspection had narrowed to one module, and the command-rejection branch had no test. A rereview cleared every item with no High or Medium finding.
+- The fold of the selector tests into `ValidateChangesTest` exposed real `sys.modules` pollution: a plain `import plan_validation_commands` could bind the generated-project allowlist. The selector now binds `scripts/plan_validation_commands.py` by absolute path, which the rereview confirmed cannot be subverted by `sys.path` or `sys.modules` pre-registration.
+- The new selector tests live in the existing `ValidateChangesTest` class rather than a new class, because registering a new class would have required editing `tests/test-validation-tools.py`, which this plan does not declare in `write_scope`.

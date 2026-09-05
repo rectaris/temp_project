@@ -41,6 +41,11 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "tests/test-shell-functions.py": {()},
     "tests/test-shell-execution.py": {()},
     "tests/test-copier-fixture-validator.py": {()},
+    "tests/copier_fixture_validator/contract.py": {()},
+    "tests/copier_fixture_validator/inventory.py": {()},
+    "tests/copier_fixture_validator/execution.py": {()},
+    "tests/copier_fixture_validator/grammar.py": {()},
+    "tests/copier_fixture_validator/placement.py": {()},
     "tests/test-plan-restructure.py": {()},
     "tests/test-plan-execution-state.py": {()},
     "tests/test-sandboxed-plan-worker.py": {()},
@@ -48,6 +53,7 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "tests/test-verify-copier-update.py": {()},
 }
 VALIDATE_CHANGES_FLAGS = frozenset({"--all", "--staged", "--print-only", "--json"})
+COPIER_FIXTURE_VALIDATOR_SELECTOR = "tests/select-copier-fixture-validator-tests.py"
 SHELL_SCRIPT_ARGUMENTS = {
     "scripts/lint-plan-docs.sh": {()},
     "scripts/format-plan-docs.sh": {("--check",)},
@@ -176,6 +182,7 @@ def validate_argv(argv: tuple[str, ...], command: str) -> None:
             is_git_diff_check,
             is_python_script_check,
             is_validate_changes,
+            is_copier_fixture_validator_selector,
             is_shell_script_check,
             is_direct_script_check,
             is_npm_script_check,
@@ -210,6 +217,15 @@ def is_python_script_check(argv: tuple[str, ...]) -> bool:
 
 def is_validate_changes(argv: tuple[str, ...]) -> bool:
     if argv[:2] != ("python3", "scripts/validate-changes.py"):
+        return False
+    flags = argv[2:]
+    if len(flags) != len(set(flags)) or any(flag not in VALIDATE_CHANGES_FLAGS for flag in flags):
+        return False
+    return not ({"--all", "--staged"} <= set(flags))
+
+
+def is_copier_fixture_validator_selector(argv: tuple[str, ...]) -> bool:
+    if argv[:2] != ("python3", COPIER_FIXTURE_VALIDATOR_SELECTOR):
         return False
     flags = argv[2:]
     if len(flags) != len(set(flags)) or any(flag not in VALIDATE_CHANGES_FLAGS for flag in flags):

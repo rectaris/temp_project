@@ -90,6 +90,20 @@ jobs:
             git diff --check "$EMPTY_TREE" "$HEAD_SHA"
           fi
 
+  copier-fixture-validator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test the Copier fixture contract
+        run: python3 tests/test-copier-fixture-validator.py
+
   minimum-compatibility:
     runs-on: ubuntu-latest
     steps:
