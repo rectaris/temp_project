@@ -13,6 +13,7 @@ from validation_tools.generated import (
     SecurityStaticCheckTest,
 )
 from validation_tools.plan import PlanValidationCommandsTest
+from validation_tools.worktrees import ManagedPlanWorktreesTest
 
 
 if __name__ == "__main__":

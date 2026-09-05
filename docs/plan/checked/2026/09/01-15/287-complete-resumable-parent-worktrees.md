@@ -1,6 +1,6 @@
 # Finish resumable parent-owned development worktrees
 
-status: in_progress
+status: checked
 primary_invariant: Managed worktree creation and resumption bind one parent development checkout to one exact plan and committed baseline while preserving the ordinary checkout, existing Git state and retained work; delegated implementation keeps the existing independent clone and sandbox.
 replan_sources:
   - docs/plan/active/283-complete-resumable-parent-worktrees.md
@@ -115,10 +115,10 @@ checked_summary_ja: 親エージェント用作業ツリーの作成と再開を
 
 ## Tasks
 
-- [ ] Reimplement create, inspect and resume with canonical ownership, raw history and worktree-administration identity checks.
-- [ ] Add regression fixtures for dirty committed attributes, external diff drivers, registered-worktree roots, unsafe target parents, replacement refs and recreated registrations.
-- [ ] Restore root/generated guidance, inventory, smoke assertions and linked-parent worker coverage.
-- [ ] Run focused validation, independent review, authoritative validation, completion and archival.
+- [x] Reimplement create, inspect and resume with canonical ownership, raw history and worktree-administration identity checks.
+- [x] Add regression fixtures for dirty committed attributes, external diff drivers, registered-worktree roots, unsafe target parents, replacement refs and recreated registrations.
+- [x] Restore root/generated guidance, inventory, smoke assertions and linked-parent worker coverage.
+- [x] Run focused validation, independent review, authoritative validation, completion and archival.
 
 ## Validation Notes
 
@@ -130,3 +130,8 @@ checked_summary_ja: 親エージェント用作業ツリーの作成と再開を
 - Plan 283 stopped after its second independent review left Medium findings. Its external ledger remains terminal at `descope_pending` with `parent_remediation_budget_exhausted`.
 - Owner bootstrap authorization: 「提案の方針で進める。」 The owner approved one final reconstruction to install bounded same-plan continuation epochs and deterministic adversarial preflight; later review-budget exhaustion must not create another numbered successor merely to reset review.
 - The uncommitted Plan 283 candidate was preserved outside the repository with a SHA-256 manifest, then the repository was restored to the committed source baseline before this lifecycle transition.
+- The preserved Plan 283 candidate was reapplied only as advisory implementation input. The final manager uses the operating-system account home for ownership records, raw index/worktree hashing with global excludes disabled, committed-tree attribute inspection, disabled replacement objects and grafts, exact registered-worktree ancestry rejection, and target directory device/inode/owner/mode binding.
+- Create recovery now distinguishes effect-free expired journals, exact empty directories, and matching completed registrations. Resume reports pending journals read-only, permits same-owner forward progress, and permits a different owner only after the recorded lease expires.
+- Focused validation passed: `python3 tests/test-validation-tools.py` (112 tests), `python3 tests/test-sandboxed-plan-worker.py` (98 tests), `python3 scripts/check-copier-template.py`, and `git diff --check`.
+- Independent review found and corrected prunable-registration handling, stable-home guards, create/resume journal recovery, global excludes, and post-`fchmod` identity binding. The final exact-target review reported no High or Medium finding.
+- Authoritative validation passed once: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.

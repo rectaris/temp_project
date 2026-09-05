@@ -80,6 +80,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
     template/.project-agent-workflow/scripts/human-report.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/create-plan.sh \
     template/.project-agent-workflow/scripts/planlib.py \
@@ -137,6 +138,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
     template/.project-agent-workflow/scripts/human-report.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/create-plan.sh \
     template/.project-agent-workflow/scripts/planlib.py \
@@ -1347,6 +1349,7 @@ test -f "$tmp/typescript/.codex/agents/evidence_synthesizer.toml"
 test -f "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
 test -f "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+test -f "$tmp/typescript/.project-agent-workflow/scripts/manage-plan-worktrees.py"
 test -f "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
 grep -q '"suite": "worker-execution-contract-integration"' "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
 test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
@@ -1357,6 +1360,12 @@ test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-evidence.j
 test -x "$root/scripts/run-sandboxed-plan-worker.py"
 test -x "$root/template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 test -x "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+test -x "$root/scripts/manage-plan-worktrees.py"
+test -x "$root/template/.project-agent-workflow/scripts/manage-plan-worktrees.py"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/manage-plan-worktrees.py"
+python3 "$tmp/typescript/.project-agent-workflow/scripts/manage-plan-worktrees.py" --help >/dev/null
+grep -q 'manage-plan-worktrees.py create' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'remove worktrees or branches' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q '^model = "gpt-5.6-sol"$' "$tmp/typescript/.codex/agents/change_reviewer.toml"
 grep -q '^model_reasoning_effort = "high"$' "$tmp/typescript/.codex/agents/change_reviewer.toml"
 grep -q '^model = "gpt-5.6-luna"$' "$tmp/typescript/.codex/agents/docs_researcher.toml"

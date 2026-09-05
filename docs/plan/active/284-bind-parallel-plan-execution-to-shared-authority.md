@@ -94,7 +94,7 @@ context_files:
   - docs/agent/SPEC_REFERENT_FIRST.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
-  - docs/plan/active/287-complete-resumable-parent-worktrees.md
+  - docs/plan/checked/2026/09/01-15/287-complete-resumable-parent-worktrees.md
   - docs/agent/SPEC_AGENT_LOGGING.md
   - docs/plan/backlog/276-run-bounded-parent-owned-candidate-preflight.md
 required_specs:

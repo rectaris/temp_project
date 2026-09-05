@@ -144,6 +144,14 @@ Consider delegation or a separate review when:
 - Do not use Luna for deterministic pass-or-fail commands, code edits, or final security, ownership, migration, release, or policy judgment.
 - Do not define Luna max as a default helper profile. Its bounded sequential-worker availability fallback does not authorize final judgment; otherwise move the hardest final judgment to Terra or Sol unless a representative evaluation demonstrates a measurable Luna max benefit.
 
+## Parent-owned development worktrees
+
+- Use `.project-agent-workflow/scripts/manage-plan-worktrees.py create` when sustained parent implementation must remain separate from an ordinary checkout that may contain unrelated tracked or untracked changes.
+- Supply one committed active plan, an exact new local branch, a symlink-free worktree path below an explicit external allowed root, and a bounded owner lease. The command binds the plan and starting commit to the repository's credential-free origin identity and canonical common Git directory, rejects paths nested under any registered worktree, and stores ownership under the operating-system account home rather than caller-controlled `HOME`.
+- Use `.project-agent-workflow/scripts/manage-plan-worktrees.py inspect` for read-only identity and retained-state checks, including reporting a pending resume journal without consuming it. Use `.project-agent-workflow/scripts/manage-plan-worktrees.py resume` to renew the same owner or take over an expired lease after verifying the registered path, exact branch, raw history without grafts or replacement objects, plan identity, repository identity, and the target directory's device, inode, owner, and mode. A matching create journal may finalize only its exact empty directory or completed registration; an expired prior owner cannot strand a valid resume journal.
+- Start the parent session explicitly from the returned managed checkout. Source-preservation checks hash the index and raw tracked/untracked bytes with global excludes disabled and without invoking checkout filters, text conversion, external diff drivers, or status conversion. The manager does not copy ignored files or credentials, share writable dependency caches, run setup commands, install dependencies, publish refs, or remove worktrees or branches.
+- A normal Git worktree does not sandbox an unrestricted parent process and does not isolate host ports. Keep delegated implementation in the existing independent `--no-hardlinks` worker clones and use the explicit Git-retirement workflow for any later removal.
+
 ## Stop Review Gate
 
 - The Stop gate blocks only when a deterministic repository lifecycle check fails, such as a completed plan that still needs archiving.

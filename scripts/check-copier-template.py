@@ -762,6 +762,40 @@ def require_git_retirement_alignment() -> None:
         fail("Copier ownership does not preserve generated-project Git-retirement configuration")
 
 
+def require_parent_worktree_alignment() -> None:
+    root_cli = ROOT / "scripts/manage-plan-worktrees.py"
+    template_cli = ROOT / "template/.project-agent-workflow/scripts/manage-plan-worktrees.py"
+    if root_cli.read_bytes() != template_cli.read_bytes():
+        fail("root and generated parent-worktree CLIs differ")
+    if (root_cli.stat().st_mode & 0o777) != (template_cli.stat().st_mode & 0o777):
+        fail("root and generated parent-worktree CLI modes differ")
+    if root_cli.stat().st_mode & 0o111 == 0:
+        fail("parent-worktree CLIs must be executable")
+    for marker in (
+        '"common_git_dir_device"',
+        '"common_git_dir_inode"',
+        '"lease_expires_at"',
+        "interrupted create journal",
+        '"requested branch already exists"',
+    ):
+        if marker not in read("scripts/manage-plan-worktrees.py"):
+            fail(f"parent-worktree CLI missing safety marker: {marker}")
+    root_guidance = read("references/orchestration.md")
+    generated_guidance = read(
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+    )
+    for marker in (
+        "manage-plan-worktrees.py create",
+        "manage-plan-worktrees.py inspect",
+        "manage-plan-worktrees.py resume",
+        "does not sandbox an unrestricted parent process",
+        "does not isolate host ports",
+        "remove worktrees or branches",
+    ):
+        if marker not in root_guidance or marker not in generated_guidance:
+            fail(f"parent-worktree guidance missing marker: {marker}")
+
+
 SHARED_HUMAN_REPORT_ROOT = "docs/human-report/"
 
 
@@ -2739,6 +2773,7 @@ def main() -> int:
     require_referent_first_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()
+    require_parent_worktree_alignment()
     require_plan_workflow_alignment()
     require_plan_admission_alignment()
     require_sandboxed_plan_worker_alignment()

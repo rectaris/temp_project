@@ -1,0 +1,1024 @@
+"""Disposable-repository tests for parent-owned worktrees."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import pwd
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from types import SimpleNamespace
+from unittest import mock
+from pathlib import Path
+
+from .support import ROOT
+
+
+SCRIPT = ROOT / "scripts/manage-plan-worktrees.py"
+
+
+def load_worktree_module():
+    spec = importlib.util.spec_from_file_location("manage_plan_worktrees", SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load managed-worktree module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+WORKTREE_MODULE = load_worktree_module()
+
+
+def git(repository: Path, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        check=check,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+class ManagedPlanWorktreesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.repository = self.base / "repository"
+        self.allowed_root = self.base / "managed"
+        self.home = self.base / "home"
+        self.repository.mkdir()
+        self.allowed_root.mkdir(mode=0o700)
+        self.allowed_root.chmod(0o700)
+        self.home.mkdir(mode=0o700)
+        git(self.repository, "init", "-q")
+        git(self.repository, "config", "user.name", "Worktree Test")
+        git(self.repository, "config", "user.email", "worktree@example.invalid")
+        git(self.repository, "remote", "add", "origin", "git@github.com:example/project.git")
+        plan = self.repository / "docs/plan/active/278-example.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text(
+            "status: in_progress\nprimary_invariant: example\nwrite_scope:\n  - file.txt\n",
+            encoding="utf-8",
+        )
+        (self.repository / "file.txt").write_text("baseline\n", encoding="utf-8")
+        git(self.repository, "add", ".")
+        git(self.repository, "commit", "-qm", "baseline")
+        self.plan = "docs/plan/active/278-example.md"
+        self.target = self.allowed_root / "plan-278"
+        self.metadata_paths = WORKTREE_MODULE.metadata_paths(
+            WORKTREE_MODULE.repository_identity(self.repository),
+            self.plan,
+        )
+
+    def tearDown(self) -> None:
+        for key in ("record", "journal", "lock"):
+            self.metadata_paths[key].unlink(missing_ok=True)
+        try:
+            self.metadata_paths["directory"].rmdir()
+        except OSError:
+            pass
+        self.temp.cleanup()
+
+    def run_command(
+        self,
+        *arguments: str,
+        cwd: Path | None = None,
+        home: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *arguments],
+            cwd=cwd or self.repository,
+            env={**os.environ, "HOME": str(home or self.home)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def create(self, *, owner: str = "owner-a") -> subprocess.CompletedProcess[str]:
+        return self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--worktree",
+            str(self.target),
+            "--branch",
+            "plan/278",
+            "--owner-id",
+            owner,
+        )
+
+    def record_path(self, result: subprocess.CompletedProcess[str]) -> Path:
+        return Path(json.loads(result.stdout)["record"])
+
+    def test_create_preserves_dirty_primary_and_supports_linked_invocation(self) -> None:
+        (self.repository / "file.txt").write_text("dirty tracked\n", encoding="utf-8")
+        (self.repository / "untracked.txt").write_text("dirty untracked\n", encoding="utf-8")
+        before = git(
+            self.repository, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+        ).stdout
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        self.assertEqual(
+            git(self.repository, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout,
+            before,
+        )
+        record_path = self.record_path(created)
+        self.assertEqual(record_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(git(self.target, "branch", "--show-current").stdout.strip(), "plan/278")
+        inspected = self.run_command(
+            "inspect", self.plan, "--allowed-root", str(self.allowed_root), cwd=self.target
+        )
+        self.assertEqual(inspected.returncode, 0, inspected.stderr)
+
+    def test_create_rejects_collisions_symlinks_and_uncommitted_plan(self) -> None:
+        git(self.repository, "branch", "plan/278")
+        self.assertNotEqual(self.create().returncode, 0)
+        self.assertFalse(self.metadata_paths["journal"].exists())
+        git(self.repository, "branch", "-D", "plan/278")
+        self.target.mkdir()
+        self.assertNotEqual(self.create().returncode, 0)
+        self.target.rmdir()
+        symlink_root = self.base / "managed-link"
+        symlink_root.symlink_to(self.allowed_root, target_is_directory=True)
+        result = self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(symlink_root),
+            "--worktree",
+            str(symlink_root / "plan-278"),
+            "--branch",
+            "plan/278",
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        (self.repository / self.plan).write_text("changed\n", encoding="utf-8")
+        self.assertNotEqual(self.create().returncode, 0)
+
+    def test_create_rejects_an_allowed_root_that_contains_the_repository(self) -> None:
+        result = self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(self.base),
+            "--worktree",
+            str(self.base / "plan-278"),
+            "--branch",
+            "plan/278",
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("forbidden broad or repository path", result.stderr)
+
+    def test_resume_preserves_dirty_work_and_rejects_duplicate_owner(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        (self.target / "file.txt").write_text("retained\n", encoding="utf-8")
+        (self.target / "new.txt").write_text("retained untracked\n", encoding="utf-8")
+        before = git(
+            self.target, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+        ).stdout
+        other = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-b",
+        )
+        self.assertNotEqual(other.returncode, 0)
+        resumed = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(
+            git(self.target, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout,
+            before,
+        )
+
+    def test_create_rejects_a_second_owner_across_allowed_roots(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        other_root = self.base / "managed-other"
+        other_root.mkdir(mode=0o700)
+        other_root.chmod(0o700)
+        duplicate = self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(other_root),
+            "--worktree",
+            str(other_root / "plan-278"),
+            "--branch",
+            "plan/278-other",
+            "--owner-id",
+            "owner-b",
+        )
+        self.assertNotEqual(duplicate.returncode, 0)
+        self.assertIn("ownership record already exists", duplicate.stderr)
+
+    def test_origin_change_does_not_create_another_ownership_namespace(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        git(self.repository, "remote", "set-url", "origin", "https://github.com/example/project.git")
+        other_root = self.base / "managed-origin-change"
+        other_root.mkdir(mode=0o700)
+        other_root.chmod(0o700)
+        duplicate = self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(other_root),
+            "--worktree",
+            str(other_root / "plan-278"),
+            "--branch",
+            "plan/278-origin-change",
+            "--owner-id",
+            "owner-b",
+        )
+        self.assertNotEqual(duplicate.returncode, 0)
+        self.assertIn("ownership record already exists", duplicate.stderr)
+
+    def test_home_change_does_not_change_the_ownership_namespace(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        other_home = self.base / "other-home"
+        other_home.mkdir(mode=0o700)
+        resumed = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+            home=other_home,
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(
+            self.record_path(created),
+            Path(json.loads(resumed.stdout)["record"]),
+        )
+        account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        rejected = self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(account_home),
+            "--worktree",
+            str(account_home / "project-agent-workflow-forbidden-test"),
+            "--branch",
+            "plan/forbidden-home",
+            "--owner-id",
+            "owner-a",
+            home=other_home,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("forbidden broad or repository path", rejected.stderr)
+
+    def test_resume_rejects_replaced_record_branch_and_worktree(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        record_path = self.record_path(created)
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["worktree_path"] = str(self.allowed_root / "other")
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        os.chmod(record_path, 0o600)
+        replaced = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(replaced.returncode, 0)
+
+        record_path.unlink()
+        metadata = self.allowed_root / ".project-agent-workflow-parent-worktrees"
+        for path in metadata.glob("*.journal.json"):
+            path.unlink()
+        git(self.repository, "worktree", "remove", str(self.target))
+        git(self.repository, "branch", "-D", "plan/278")
+        recreated = self.create()
+        self.assertEqual(recreated.returncode, 0, recreated.stderr)
+        git(self.target, "checkout", "--detach", "-q")
+        switched = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(switched.returncode, 0)
+
+    def test_interrupted_create_journal_is_reported_without_deletion(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        record_path = self.record_path(created)
+        journal_path = record_path.with_name(record_path.name.replace(".json", ".journal.json"))
+        shutil.copyfile(record_path, journal_path)
+        os.chmod(journal_path, 0o600)
+        record_path.unlink()
+        marker = self.target / "retained.txt"
+        marker.write_text("keep\n", encoding="utf-8")
+        result = self.run_command(
+            "inspect", self.plan, "--allowed-root", str(self.allowed_root)
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("interrupted create journal", result.stderr)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "keep\n")
+
+    def test_expired_lease_allows_new_owner_and_advances_accepted_tip(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        (self.target / "file.txt").write_text("committed\n", encoding="utf-8")
+        git(self.target, "add", "file.txt")
+        git(self.target, "commit", "-qm", "managed change")
+        record_path = self.record_path(created)
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["owner"]["lease_expires_at"] = int(time.time()) - 1
+        unsigned = dict(record)
+        unsigned.pop("content_digest")
+        record["content_digest"] = "sha256:" + __import__("hashlib").sha256(
+            json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        os.chmod(record_path, 0o600)
+        result = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-b",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        updated = json.loads(record_path.read_text(encoding="utf-8"))
+        self.assertEqual(updated["owner"]["id"], "owner-b")
+        self.assertEqual(updated["accepted_tip"], git(self.target, "rev-parse", "HEAD").stdout.strip())
+
+    def test_resume_recovers_its_exact_interrupted_journal(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        record_path = self.record_path(created)
+        journal_path = record_path.with_name(record_path.name.replace(".json", ".journal.json"))
+        pending = json.loads(record_path.read_text(encoding="utf-8"))
+        pending["owner"]["lease_expires_at"] += 60
+        unsigned = dict(pending)
+        unsigned.pop("content_digest")
+        pending["content_digest"] = "sha256:" + __import__("hashlib").sha256(
+            json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()
+        journal_path.write_text(json.dumps(pending), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        inspected = self.run_command(
+            "inspect", self.plan, "--allowed-root", str(self.allowed_root)
+        )
+        self.assertEqual(inspected.returncode, 0, inspected.stderr)
+        self.assertTrue(json.loads(inspected.stdout)["pending_resume"])
+        resumed = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertFalse(journal_path.exists())
+
+    def test_same_owner_can_advance_past_a_stale_resume_journal(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        record_path = self.record_path(created)
+        pending = json.loads(record_path.read_text(encoding="utf-8"))
+        pending["owner"]["lease_expires_at"] += 60
+        unsigned = dict(pending)
+        unsigned.pop("content_digest")
+        pending["content_digest"] = "sha256:" + __import__("hashlib").sha256(
+            json.dumps(
+                unsigned,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        journal_path = record_path.with_name(
+            record_path.name.replace(".json", ".journal.json")
+        )
+        journal_path.write_text(json.dumps(pending), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        (self.target / "file.txt").write_text("advanced\n", encoding="utf-8")
+        git(self.target, "add", "file.txt")
+        git(self.target, "commit", "-qm", "advance after interrupted resume")
+        resumed = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertFalse(journal_path.exists())
+        updated = json.loads(record_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            updated["accepted_tip"],
+            git(self.target, "rev-parse", "HEAD").stdout.strip(),
+        )
+
+    def test_expired_owner_can_replace_a_stale_resume_journal(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        record_path = self.record_path(created)
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["owner"]["lease_expires_at"] = int(time.time()) - 1
+        unsigned = dict(record)
+        unsigned.pop("content_digest")
+        record["content_digest"] = "sha256:" + __import__("hashlib").sha256(
+            json.dumps(
+                unsigned,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        os.chmod(record_path, 0o600)
+        pending = dict(record)
+        pending["owner"] = {
+            "id": "owner-a",
+            "lease_expires_at": int(time.time()) + 3600,
+        }
+        unsigned = dict(pending)
+        unsigned.pop("content_digest")
+        pending["content_digest"] = "sha256:" + __import__("hashlib").sha256(
+            json.dumps(
+                unsigned,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        journal_path = record_path.with_name(
+            record_path.name.replace(".json", ".journal.json")
+        )
+        journal_path.write_text(json.dumps(pending), encoding="utf-8")
+        os.chmod(journal_path, 0o600)
+        inspected = self.run_command(
+            "inspect", self.plan, "--allowed-root", str(self.allowed_root)
+        )
+        self.assertEqual(inspected.returncode, 0, inspected.stderr)
+        self.assertTrue(json.loads(inspected.stdout)["pending_resume"])
+        resumed = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-b",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertFalse(journal_path.exists())
+
+    def test_create_rejects_checkout_filters(self) -> None:
+        (self.repository / ".gitattributes").write_text("file.txt filter=probe\n", encoding="utf-8")
+        git(self.repository, "add", ".gitattributes")
+        git(self.repository, "commit", "-qm", "add checkout filter")
+        (self.repository / ".gitattributes").write_text("", encoding="utf-8")
+        marker = self.base / "filter-ran"
+        git(
+            self.repository,
+            "config",
+            "filter.probe.smudge",
+            f"tee {marker}",
+        )
+        result = self.create()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("rejects checkout filters", result.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_create_does_not_run_external_diff_drivers(self) -> None:
+        (self.repository / ".gitattributes").write_text("file.txt diff=probe\n", encoding="utf-8")
+        git(self.repository, "add", ".gitattributes")
+        git(self.repository, "commit", "-qm", "add diff driver")
+        marker = self.base / "diff-ran"
+        git(self.repository, "config", "diff.probe.command", f"touch {marker}")
+        (self.repository / "file.txt").write_text("dirty\n", encoding="utf-8")
+        result = self.create()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_raw_snapshot_ignores_caller_global_excludes(self) -> None:
+        config = self.home / ".config/git"
+        config.mkdir(parents=True)
+        (config / "ignore").write_text("untracked.txt\n", encoding="utf-8")
+        untracked = self.repository / "untracked.txt"
+        untracked.write_text("first\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}, clear=False):
+            before = WORKTREE_MODULE.raw_worktree_digest(self.repository)
+            untracked.write_text("second\n", encoding="utf-8")
+            after = WORKTREE_MODULE.raw_worktree_digest(self.repository)
+        self.assertNotEqual(before, after)
+
+    def test_create_does_not_run_dirty_clean_filters(self) -> None:
+        marker = self.base / "clean-filter-ran"
+        git(self.repository, "config", "filter.probe.clean", f"tee {marker}")
+        (self.repository / ".gitattributes").write_text("file.txt filter=probe\n", encoding="utf-8")
+        (self.repository / "file.txt").write_text("dirty\n", encoding="utf-8")
+        result = self.create()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_create_rejects_a_registered_worktree_as_allowed_root(self) -> None:
+        linked = self.base / "linked"
+        git(self.repository, "worktree", "add", "-q", "-b", "linked-root", str(linked), "HEAD")
+        linked.chmod(0o700)
+        result = self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(linked),
+            "--worktree",
+            str(linked / "nested"),
+            "--branch",
+            "plan/nested",
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("registered worktree", result.stderr)
+
+    def test_create_rejects_a_target_nested_under_a_registered_worktree(self) -> None:
+        linked = self.allowed_root / "linked"
+        git(self.repository, "worktree", "add", "-q", "-b", "linked-root", str(linked), "HEAD")
+        linked.chmod(0o700)
+        result = self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--worktree",
+            str(linked / "nested"),
+            "--branch",
+            "plan/nested",
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("registered worktree", result.stderr)
+
+    def test_create_rejects_a_writable_nested_target_parent(self) -> None:
+        nested = self.allowed_root / "shared"
+        nested.mkdir(mode=0o777)
+        nested.chmod(0o777)
+        result = self.run_command(
+            "create",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--worktree",
+            str(nested / "plan-278"),
+            "--branch",
+            "plan/278",
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("group- or world-writable", result.stderr)
+
+    def test_create_never_populates_a_replacement_target_parent(self) -> None:
+        parent = self.allowed_root / "stable-parent"
+        parent.mkdir(mode=0o700)
+        target = parent / "plan-278"
+        moved_parent = self.allowed_root / "moved-parent"
+        original_git = WORKTREE_MODULE.git
+        exchanged = False
+
+        def racing_git(
+            repository: Path,
+            *arguments: str,
+            check: bool = True,
+            pass_fds: tuple[int, ...] = (),
+        ) -> subprocess.CompletedProcess[bytes]:
+            nonlocal exchanged
+            if arguments[:2] == ("worktree", "add") and not exchanged:
+                parent.rename(moved_parent)
+                parent.mkdir(mode=0o700)
+                exchanged = True
+            return original_git(
+                repository,
+                *arguments,
+                check=check,
+                pass_fds=pass_fds,
+            )
+
+        args = SimpleNamespace(
+            plan=self.plan,
+            allowed_root=str(self.allowed_root),
+            worktree=str(target),
+            branch="plan/278",
+            owner_id="owner-a",
+            lease_seconds=3600,
+        )
+        previous = Path.cwd()
+        try:
+            os.chdir(self.repository)
+            with (
+                mock.patch.object(
+                    WORKTREE_MODULE,
+                    "repository_root",
+                    return_value=self.repository.resolve(),
+                ),
+                mock.patch.object(WORKTREE_MODULE, "git", side_effect=racing_git),
+            ):
+                with self.assertRaisesRegex(
+                    WORKTREE_MODULE.WorktreeError,
+                    "parent or target changed",
+                ):
+                    WORKTREE_MODULE.create(args)
+        finally:
+            os.chdir(previous)
+        self.assertFalse(target.exists())
+        self.assertTrue((moved_parent / "plan-278").exists())
+
+    def test_create_recovers_after_post_add_verification_failure(self) -> None:
+        original_snapshot = WORKTREE_MODULE.snapshot_source
+        snapshots = 0
+
+        def changed_snapshot(repository: Path) -> tuple[bytes, bytes]:
+            nonlocal snapshots
+            snapshots += 1
+            observed = original_snapshot(repository)
+            if snapshots == 2:
+                return observed[0], observed[1] + b"changed"
+            return observed
+
+        args = SimpleNamespace(
+            plan=self.plan,
+            allowed_root=str(self.allowed_root),
+            worktree=str(self.target),
+            branch="plan/278",
+            owner_id="owner-a",
+            lease_seconds=3600,
+        )
+        previous = Path.cwd()
+        try:
+            os.chdir(self.repository)
+            with (
+                mock.patch.object(
+                    WORKTREE_MODULE,
+                    "repository_root",
+                    return_value=self.repository.resolve(),
+                ),
+                mock.patch.object(
+                    WORKTREE_MODULE,
+                    "snapshot_source",
+                    side_effect=changed_snapshot,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    WORKTREE_MODULE.WorktreeError,
+                    "ordinary checkout state changed",
+                ):
+                    WORKTREE_MODULE.create(args)
+        finally:
+            os.chdir(previous)
+        recovered = self.create()
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertFalse(
+            self.record_path(recovered)
+            .with_name(self.record_path(recovered).name.replace(".json", ".journal.json"))
+            .exists()
+        )
+
+    def test_create_recovers_an_empty_directory_after_journal_write(self) -> None:
+        identity = WORKTREE_MODULE.repository_identity(self.repository)
+        start = git(self.repository, "rev-parse", "HEAD").stdout.strip()
+        plan = WORKTREE_MODULE.plan_identity_at_commit(
+            self.repository, self.plan, start
+        )
+        _, branch_ref = WORKTREE_MODULE.normalize_branch(
+            "plan/278", self.repository
+        )
+        paths = WORKTREE_MODULE.metadata_paths(identity, self.plan)
+        WORKTREE_MODULE.ensure_metadata_directory(paths["directory"])
+        journal = WORKTREE_MODULE.add_content_digest(
+            {
+                "schema_version": WORKTREE_MODULE.SCHEMA_VERSION,
+                "repository_identity": identity,
+                "plan": plan,
+                "start_commit": start,
+                "accepted_tip": start,
+                "branch_ref": branch_ref,
+                "allowed_root": str(self.allowed_root),
+                "worktree_path": str(self.target),
+                "worktree_identity": {
+                    "git_dir": None,
+                    "git_dir_device": None,
+                    "git_dir_inode": None,
+                    "worktree_device": None,
+                    "worktree_inode": None,
+                    "worktree_owner": None,
+                    "worktree_mode": None,
+                },
+                "owner": {
+                    "id": "owner-a",
+                    "lease_expires_at": int(time.time()) + 1,
+                },
+            }
+        )
+        WORKTREE_MODULE.atomic_write(paths["journal"], journal)
+        self.target.mkdir(mode=0o500)
+        recovered = self.create()
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(self.target.stat().st_mode & 0o777, 0o700)
+        self.assertFalse(paths["journal"].exists())
+
+    def test_empty_directory_recovery_survives_post_chmod_interruption(self) -> None:
+        identity = WORKTREE_MODULE.repository_identity(self.repository)
+        start = git(self.repository, "rev-parse", "HEAD").stdout.strip()
+        plan = WORKTREE_MODULE.plan_identity_at_commit(
+            self.repository, self.plan, start
+        )
+        paths = WORKTREE_MODULE.metadata_paths(identity, self.plan)
+        WORKTREE_MODULE.ensure_metadata_directory(paths["directory"])
+        journal = WORKTREE_MODULE.add_content_digest(
+            {
+                "schema_version": WORKTREE_MODULE.SCHEMA_VERSION,
+                "repository_identity": identity,
+                "plan": plan,
+                "start_commit": start,
+                "accepted_tip": start,
+                "branch_ref": "refs/heads/plan/278",
+                "allowed_root": str(self.allowed_root),
+                "worktree_path": str(self.target),
+                "worktree_identity": {
+                    "git_dir": None,
+                    "git_dir_device": None,
+                    "git_dir_inode": None,
+                    "worktree_device": None,
+                    "worktree_inode": None,
+                    "worktree_owner": None,
+                    "worktree_mode": None,
+                },
+                "owner": {
+                    "id": "owner-a",
+                    "lease_expires_at": int(time.time()) + 3600,
+                },
+            }
+        )
+        WORKTREE_MODULE.atomic_write(paths["journal"], journal)
+        self.target.mkdir(mode=0o500)
+        original_git = WORKTREE_MODULE.git
+
+        def interrupted_git(
+            repository: Path,
+            *arguments: str,
+            check: bool = True,
+            pass_fds: tuple[int, ...] = (),
+        ) -> subprocess.CompletedProcess[bytes]:
+            if arguments[:2] == ("worktree", "add"):
+                raise WORKTREE_MODULE.WorktreeError("injected interruption")
+            return original_git(
+                repository,
+                *arguments,
+                check=check,
+                pass_fds=pass_fds,
+            )
+
+        args = SimpleNamespace(
+            plan=self.plan,
+            allowed_root=str(self.allowed_root),
+            worktree=str(self.target),
+            branch="plan/278",
+            owner_id="owner-a",
+            lease_seconds=3600,
+        )
+        previous = Path.cwd()
+        try:
+            os.chdir(self.repository)
+            with (
+                mock.patch.object(
+                    WORKTREE_MODULE,
+                    "repository_root",
+                    return_value=self.repository.resolve(),
+                ),
+                mock.patch.object(
+                    WORKTREE_MODULE,
+                    "git",
+                    side_effect=interrupted_git,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    WORKTREE_MODULE.WorktreeError,
+                    "injected interruption",
+                ):
+                    WORKTREE_MODULE.create(args)
+        finally:
+            os.chdir(previous)
+        self.assertEqual(self.target.stat().st_mode & 0o777, 0o700)
+        recovered = self.create()
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+
+    def test_expired_effect_free_create_journal_can_be_replaced(self) -> None:
+        identity = WORKTREE_MODULE.repository_identity(self.repository)
+        start = git(self.repository, "rev-parse", "HEAD").stdout.strip()
+        plan = WORKTREE_MODULE.plan_identity_at_commit(
+            self.repository, self.plan, start
+        )
+        paths = WORKTREE_MODULE.metadata_paths(identity, self.plan)
+        WORKTREE_MODULE.ensure_metadata_directory(paths["directory"])
+        stale_target = self.allowed_root / "stale-target"
+        journal = WORKTREE_MODULE.add_content_digest(
+            {
+                "schema_version": WORKTREE_MODULE.SCHEMA_VERSION,
+                "repository_identity": identity,
+                "plan": plan,
+                "start_commit": start,
+                "accepted_tip": start,
+                "branch_ref": "refs/heads/plan/stale",
+                "allowed_root": str(self.allowed_root),
+                "worktree_path": str(stale_target),
+                "worktree_identity": {
+                    "git_dir": None,
+                    "git_dir_device": None,
+                    "git_dir_inode": None,
+                    "worktree_device": None,
+                    "worktree_inode": None,
+                    "worktree_owner": None,
+                    "worktree_mode": None,
+                },
+                "owner": {
+                    "id": "old-owner",
+                    "lease_expires_at": int(time.time()) - 1,
+                },
+            }
+        )
+        WORKTREE_MODULE.atomic_write(paths["journal"], journal)
+        result = self.create(owner="owner-a")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(paths["journal"].exists())
+
+    def test_prunable_unrelated_worktree_does_not_block_inspect(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        unrelated = self.base / "prunable"
+        git(
+            self.repository,
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "prunable",
+            str(unrelated),
+            "HEAD",
+        )
+        shutil.rmtree(unrelated)
+        inspected = self.run_command(
+            "inspect",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+        )
+        self.assertEqual(inspected.returncode, 0, inspected.stderr)
+
+    def test_resume_allows_retained_plan_edits_in_managed_checkout(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        (self.target / self.plan).write_text("retained plan notes\n", encoding="utf-8")
+        resumed = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+            cwd=self.target,
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+
+    def test_resume_rejects_recreated_worktree_registration(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        git(self.repository, "worktree", "remove", str(self.target))
+        git(self.repository, "worktree", "add", "-q", str(self.target), "plan/278")
+        result = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("registration was replaced", result.stderr)
+
+    def test_resume_rejects_changed_target_directory_metadata(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        self.target.chmod(0o755)
+        result = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("registration was replaced", result.stderr)
+
+    def test_resume_ignores_git_grafts_for_history(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        start = git(self.target, "rev-parse", "HEAD").stdout.strip()
+        (self.target / "file.txt").write_text("managed change\n", encoding="utf-8")
+        git(self.target, "add", "file.txt")
+        git(self.target, "commit", "-qm", "managed change")
+        tip = git(self.target, "rev-parse", "HEAD").stdout.strip()
+        unrelated = self.base / "unrelated"
+        git(self.repository, "worktree", "add", "--detach", str(unrelated), start)
+        git(unrelated, "checkout", "--orphan", "unrelated")
+        for path in unrelated.iterdir():
+            if path.name != ".git" and path.is_file():
+                path.unlink()
+        (unrelated / "other.txt").write_text("unrelated\n", encoding="utf-8")
+        git(unrelated, "add", ".")
+        git(unrelated, "commit", "-qm", "unrelated root")
+        unrelated_tip = git(unrelated, "rev-parse", "HEAD").stdout.strip()
+        git(self.repository, "worktree", "remove", str(unrelated))
+        common = Path(
+            git(
+                self.repository,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ).stdout.strip()
+        )
+        (common / "info/grafts").write_text(
+            f"{tip} {unrelated_tip}\n",
+            encoding="ascii",
+        )
+        result = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_resume_ignores_git_replacement_refs_for_history(self) -> None:
+        created = self.create()
+        self.assertEqual(created.returncode, 0, created.stderr)
+        orphan = self.base / "orphan"
+        git(self.repository, "worktree", "add", "--detach", str(orphan), "HEAD")
+        git(orphan, "checkout", "--orphan", "unrelated")
+        for path in orphan.iterdir():
+            if path.name != ".git" and path.is_file():
+                path.unlink()
+        (orphan / "other.txt").write_text("unrelated\n", encoding="utf-8")
+        git(orphan, "add", ".")
+        git(orphan, "commit", "-qm", "unrelated root")
+        unrelated = git(orphan, "rev-parse", "HEAD").stdout.strip()
+        git(self.repository, "worktree", "remove", str(orphan))
+        start = git(self.target, "rev-parse", "HEAD").stdout.strip()
+        replacement_tree = git(self.repository, "show", "-s", "--format=%T", unrelated).stdout.strip()
+        replacement_commit = subprocess.run(
+            ["git", "-C", str(self.repository), "commit-tree", replacement_tree, "-p", start],
+            input="synthetic parent\n",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
+        git(self.repository, "replace", unrelated, replacement_commit)
+        git(self.repository, "update-ref", "refs/heads/plan/278", unrelated)
+        git(self.target, "reset", "--hard", "-q", unrelated)
+        result = self.run_command(
+            "resume",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("bound commits", result.stderr)

@@ -1238,6 +1238,30 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(RUNNER.RunnerError, "canonical remote.origin.url"):
             RUNNER.derive_repository_identity(repo, "git")
 
+    def test_linked_parent_worktree_resolves_and_clones_without_hardlinks(self) -> None:
+        temporary, repo, _plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        linked = Path(temporary.name) / "linked-parent"
+        git(repo, "worktree", "add", "-q", "-b", "parent-plan", str(linked), "HEAD")
+        with mock.patch.object(Path, "cwd", return_value=linked):
+            self.assertEqual(RUNNER.detect_repo_root("git"), linked.resolve())
+
+        clone = Path(temporary.name) / "worker-clone"
+        head = git(linked, "rev-parse", "HEAD").stdout.strip()
+        RUNNER.clone_at_head(linked, "git", head, clone)
+        self.assertEqual((clone / "allowed.txt").read_text(encoding="utf-8"), "original\n")
+        self.assertEqual(git(clone, "rev-parse", "HEAD").stdout.strip(), head)
+
+        source_objects = object_directory(linked)
+        clone_objects = object_directory(clone)
+        shared_loose_objects = []
+        for source in source_objects.glob("[0-9a-f][0-9a-f]/*"):
+            candidate = clone_objects / source.relative_to(source_objects)
+            if candidate.is_file():
+                shared_loose_objects.append(source.stat().st_ino == candidate.stat().st_ino)
+        self.assertTrue(shared_loose_objects)
+        self.assertFalse(any(shared_loose_objects))
+
     def evaluate_worker_contract_case(
         self, base: dict[str, object], case: dict[str, object]
     ) -> dict[str, object]:
