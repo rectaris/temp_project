@@ -1,8 +1,34 @@
 #!/bin/sh
 set -eu
 
+# 0: completion evidence is present, 1: unchecked tasks remain,
+# 2: Validation Notes are empty or pending.
+completion_evidence() {
+  if grep -Eq '^[[:space:]]*[-*+][[:space:]]+\[ \]' "$1"; then
+    return 1
+  fi
+  awk '
+    /^## Validation Notes$/ { in_notes=1; next }
+    /^## / { in_notes=0 }
+    in_notes {
+      line=$0
+      sub(/^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/, "", line)
+      sub(/^[[:space:]]+/, "", line)
+      if (line != "" && tolower(line) !~ /^pending([ .:]|$)/) found=1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$1" || return 2
+  return 0
+}
+
+check_only=0
+if [ "${1:-}" = "--check-completion-evidence" ]; then
+  check_only=1
+  shift
+fi
+
 if [ "$#" -ne 1 ]; then
-  echo "Usage: $0 docs/plan/active/NNN-slug.md" >&2
+  echo "Usage: $0 [--check-completion-evidence] docs/plan/active/NNN-slug.md" >&2
   exit 2
 fi
 
@@ -13,30 +39,30 @@ case "$src" in
 esac
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
 
+if [ "$check_only" -eq 1 ]; then
+  completion_evidence "$src" || exit 1
+  exit 0
+fi
+
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
 id=$(basename "$src"); id=${id%%-*}
 case "$status" in
   in_progress)
     python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-manifest "$src"
     python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-active-mapping "$id" "$src" "$status"
-    if grep -Eq '^[[:space:]]*[-*+][[:space:]]+\[ \]' "$src"; then
-      echo "cannot mark plan ready: unchecked tasks remain in $src" >&2
-      exit 1
-    fi
-    awk '
-      /^## Validation Notes$/ { in_notes=1; next }
-      /^## / { in_notes=0 }
-      in_notes {
-        line=$0
-        sub(/^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+/, "", line)
-        sub(/^[[:space:]]+/, "", line)
-        if (line != "" && tolower(line) !~ /^pending([ .:]|$)/) found=1
-      }
-      END { exit(found ? 0 : 1) }
-    ' "$src" || {
-      echo "cannot mark plan ready: Validation Notes are empty or pending in $src" >&2
-      exit 1
-    }
+    evidence=0
+    completion_evidence "$src" || evidence=$?
+    case "$evidence" in
+      0) ;;
+      1)
+        echo "cannot mark plan ready: unchecked tasks remain in $src" >&2
+        exit 1
+        ;;
+      *)
+        echo "cannot mark plan ready: Validation Notes are empty or pending in $src" >&2
+        exit 1
+        ;;
+    esac
     python3 .project-agent-workflow/scripts/lint-plan-docs.py --complete-transition "$id" "$src" "$status"
     echo "$src"
     ;;

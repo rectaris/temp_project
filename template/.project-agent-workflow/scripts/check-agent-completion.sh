@@ -19,16 +19,25 @@ if [ -f docs/plan/plan.md ]; then
     esac
     [ -f "$plan" ] || continue
     lifecycle=$(awk -F': ' '$1 == "status" { print $2; exit }' "$plan")
-    [ "$lifecycle" = "ready_to_archive" ] || continue
-    blocked=1
-    echo "ready-to-archive plan blocks completion: $plan (status: $lifecycle)" >&2
-    if ! grep -q '^checked_summary_ja: .\+' "$plan"; then
-      echo "Missing evidence: checked_summary_ja" >&2
+    if [ "$lifecycle" = "ready_to_archive" ]; then
+      blocked=1
+      echo "ready-to-archive plan blocks completion: $plan (status: $lifecycle)" >&2
+      if ! grep -q '^checked_summary_ja: .\+' "$plan"; then
+        echo "Missing evidence: checked_summary_ja" >&2
+      fi
+      if ! awk '/^## Validation Notes$/{in_notes=1; next} /^## /{in_notes=0} in_notes && NF {found=1} END{exit(found ? 0 : 1)}' "$plan"; then
+        echo "Missing evidence: non-empty Validation Notes" >&2
+      fi
+      echo "Next: .project-agent-workflow/scripts/finalize-active-plan.sh $plan" >&2
+      continue
     fi
-    if ! awk '/^## Validation Notes$/{in_notes=1; next} /^## /{in_notes=0} in_notes && NF {found=1} END{exit(found ? 0 : 1)}' "$plan"; then
-      echo "Missing evidence: non-empty Validation Notes" >&2
+    [ "$status" = "in_progress" ] || continue
+    [ "$lifecycle" = "in_progress" ] || continue
+    if sh .project-agent-workflow/scripts/complete-plan.sh --check-completion-evidence "$plan" </dev/null; then
+      blocked=1
+      echo "completed plan is not marked ready: $plan (status: $lifecycle)" >&2
+      echo "Next: .project-agent-workflow/scripts/complete-plan.sh $plan" >&2
     fi
-    echo "Next: .project-agent-workflow/scripts/finalize-active-plan.sh $plan" >&2
   done < docs/plan/plan.md
 fi
 

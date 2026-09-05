@@ -1,6 +1,6 @@
 # Report a completed active plan the archive step never marked
 
-status: backlog
+status: in_progress
 primary_invariant: the root and generated-project completion gates exit non-zero without changing repository state when matching in_progress lifecycle records pass the same completion-evidence predicates used by complete-plan.sh, and each gate directs the caller to its corresponding mark-ready command
 task_types:
   - template_workflow
@@ -78,15 +78,26 @@ checked_summary_ja: complete-plan.sh と同じ完了証拠の判定を通る in_
 
 ## Tasks
 
-- [ ] Reproduce both silent passes at the exact activation HEAD in temporary Git repositories, and record exit status, output, and plan and index digests before and after each gate.
-- [ ] Refactor each `complete-plan.sh` so the ordinary transition and `--check-completion-evidence` call the same unchecked-task and non-pending-Validation-Notes predicates, with the read-only mode returning before any lifecycle write or lock.
-- [ ] Make each completion gate call the read-only mode only for matching `in_progress` index and file records, block on success, and print its own exact mark-ready command without changing repository bytes.
-- [ ] Add root and generated-project behavior tests for eligible evidence, each incomplete-evidence form, deferred and replan_required states, index/file mismatch, ready-to-archive evidence messages, dirty and clean worktrees, --plans-only, invalid usage, read-only byte identity, and the unchanged ordinary completion transition.
-- [ ] Run the root/template alignment check and record that only the installed command prefixes differ in the new report and invocation.
-- [ ] Complete one independent read-only review and focused validation with zero unresolved High or Medium findings.
+- [x] Reproduce both silent passes at the exact activation HEAD in temporary Git repositories, and record exit status, output, and plan and index digests before and after each gate.
+- [x] Refactor each `complete-plan.sh` so the ordinary transition and `--check-completion-evidence` call the same unchecked-task and non-pending-Validation-Notes predicates, with the read-only mode returning before any lifecycle write or lock.
+- [x] Make each completion gate call the read-only mode only for matching `in_progress` index and file records, block on success, and print its own exact mark-ready command without changing repository bytes.
+- [x] Add root and generated-project behavior tests for eligible evidence, each incomplete-evidence form, deferred and replan_required states, index/file mismatch, ready-to-archive evidence messages, dirty and clean worktrees, --plans-only, invalid usage, read-only byte identity, and the unchanged ordinary completion transition.
+- [x] Run the root/template alignment check and record that only the installed command prefixes differ in the new report and invocation.
+- [x] Complete one independent read-only review and focused validation with zero unresolved High or Medium findings.
+- [ ] Archive and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
 - Pre-activation synthetic repositories at `a60a0c7` confirmed that both gates exit zero and print `agent completion gate passed` for matching `in_progress` records with only checked tasks and non-pending Validation Notes.
 - The Plan 251 commit immediately before archival still had one unchecked archive task, so it explains where the gap was noticed but is not evidence for the all-tasks-checked predicate.
-- Implementation, no-mutation evidence, review, and validation remain pending.
+- The activation HEAD for this run is `c4afb73`. The reproduction holds there unchanged: with a matching `in_progress` index row and plan file, only checked tasks, and a non-pending Validation Notes line, both gates exit zero and print `agent completion gate passed` while every plan and index digest stays identical.
+- Each `complete-plan.sh` now factors the two predicates into one `completion_evidence` shell function whose body is byte-identical across the root and generated variants (`sha256:caa4684ddbd66b0d9cfc3d3a3a14aba6ef13e5e158accc5afa8b65696aff9370` over the function text). The ordinary transition maps its two nonzero returns to the unchanged `unchecked tasks remain` and `Validation Notes are empty or pending` messages.
+- `--check-completion-evidence <active-plan-path>` returns immediately after those predicates, before the status dispatch, the generated lint dispatch, the `.agent-artifacts` lock, and every lifecycle write. It is silent on both the accepted and the rejected result, so the gate stays silent for an incomplete plan, and `.agent-artifacts` is never created by the read-only mode.
+- Each gate calls the read-only mode only when the active-index row and the plan file both declare `in_progress`, blocks with `completed plan is not marked ready`, and names its own mark-ready command: `scripts/complete-plan.sh` at the root and `.project-agent-workflow/scripts/complete-plan.sh` in a generated project. The nested call reads `/dev/null`, so it cannot consume the index the loop is reading.
+- The root/template alignment difference in the new report and invocation is the installed command prefix alone. The remaining differences between the two gates are the pre-existing generated-only usage check and the two files' established formatting styles, not new behavior.
+- New behavior tests in `tests/validation_tools/plan.py` cover both variants for eligible evidence, unchecked and mixed tasks, empty and two pending Validation Notes forms, `deferred`, `replan_required`, both index/file mismatch directions, an absent plan file, an empty index, both ready-to-archive report forms, dirty and clean worktrees, `--plans-only`, unexpected arguments, read-only byte identity, the invalid-usage and missing-plan paths of the read-only mode, and every ordinary completion transition including the accepted mark-ready write.
+- Mutation evidence: with the four changed shell scripts reverted to `c4afb73` and the new tests kept, `python3 tests/test-validation-tools.py` reports 16 failures across all five new tests; with the change applied it reports 59 tests OK.
+- Focused validation: `python3 tests/test-validation-tools.py` runs 59 tests OK, `python3 scripts/check-copier-template.py` passes, and `git diff --check` is clean. `python3 tests/test-shell-execution.py` (118 tests) and `sh tests/root-plan-lifecycle.sh` also pass, so the derived execution graph of `scripts/complete-plan.sh` and the existing root lifecycle behavior are unchanged.
+- The independent read-only review reported no High and no Medium finding. It re-derived the mutation evidence independently: reverting all four scripts fails 16 tests, dropping either the index-status or the file-status check fails 2, always accepting the evidence fails 25, swapping the two evidence return codes fails 6, and swapping either `Next:` prefix fails 1.
+- Two Low observations are recorded rather than repaired. If `complete-plan.sh` is absent the gate prints the shell's own open error yet still passes, which is the fail-open direction the checked Plan 028 decision requires; and the read-only mode deliberately returns before the generated manifest lint, so a manifest-invalid plan is still directed to the correct mark-ready command, which is this plan's recorded decision.
+- Authoritative validation: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` pass.

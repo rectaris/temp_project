@@ -2248,6 +2248,406 @@ class PlanValidationCommandsTest(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("run-plan requires a numbered active plan path", result.stderr)
 
+    COMPLETION_PLAN = "docs/plan/active/900-example.md"
+    COMPLETION_SPEC = ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+    COMPLETION_GATE_VARIANTS = (
+        {
+            "name": "root",
+            "source": "scripts",
+            "install": "scripts",
+            "linted": False,
+            "rejects_extra_arguments": False,
+            "ready_returncode": 1,
+            "ready_message": "cannot mark plan ready from status: ready_to_archive",
+        },
+        {
+            "name": "generated",
+            "source": "template/.project-agent-workflow/scripts",
+            "install": ".project-agent-workflow/scripts",
+            "linted": True,
+            "rejects_extra_arguments": True,
+            "ready_returncode": 0,
+            "ready_message": "plan is already ready_to_archive",
+        },
+    )
+
+    @classmethod
+    def completion_plan_text(
+        cls,
+        *,
+        status: str = "in_progress",
+        tasks: str = "- [x] Did the work.",
+        notes: str = "- Focused validation passed.",
+        summary: bool = True,
+    ) -> str:
+        summary_line = "checked_summary_ja: 例の作業を記録する。\n" if summary else ""
+        return (
+            "# Example\n\n"
+            f"status: {status}\n"
+            "task_types:\n  - planning_docs\n"
+            "review_class: B\n"
+            "human_design_required: no\n"
+            "human_approval_status: approved\n"
+            "write_scope:\n  - src/example.ts\n"
+            "context_files:\n  - AGENTS.md\n"
+            f"required_specs:\n  - {cls.COMPLETION_SPEC}\n"
+            "validation:\n  - git diff --check\n"
+            "acceptance:\n  - Record the example work.\n"
+            f"{summary_line}"
+            f"\n## Tasks\n\n{tasks}\n\n## Validation Notes\n\n{notes}\n"
+        )
+
+    def build_completion_repo(
+        self,
+        repo: Path,
+        variant: dict[str, object],
+        *,
+        plan_status: str = "in_progress",
+        index_status: str | None = None,
+        plan_present: bool = True,
+        index_rows: bool = True,
+        **plan_fields: object,
+    ) -> None:
+        """Install one completion gate with its plan lifecycle records."""
+
+        install = repo / str(variant["install"])
+        install.mkdir(parents=True, exist_ok=True)
+        names = ["check-agent-completion.sh", "complete-plan.sh"]
+        if variant["linted"]:
+            names += ["lint-plan-docs.py", "planlib.py", "plan_validation_commands.py"]
+        for name in names:
+            target = install / name
+            target.write_bytes((ROOT / str(variant["source"]) / name).read_bytes())
+            target.chmod(0o755)
+        if variant["linted"]:
+            spec = repo / self.COMPLETION_SPEC
+            spec.parent.mkdir(parents=True, exist_ok=True)
+            spec.write_text("Generated plan workflow policy.\n", encoding="utf-8")
+            (spec.parent / "spec-index.yaml").write_text(
+                "version: 1\n\ntask_types:\n"
+                "  planning_docs:\n"
+                "    summary: Plan documents.\n"
+                f"    required:\n      - {self.COMPLETION_SPEC}\n",
+                encoding="utf-8",
+            )
+        if plan_present:
+            plan = repo / self.COMPLETION_PLAN
+            plan.parent.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                self.completion_plan_text(status=plan_status, **plan_fields),
+                encoding="utf-8",
+            )
+        index = repo / "docs/plan/plan.md"
+        index.parent.mkdir(parents=True, exist_ok=True)
+        row = (
+            f"900\t{self.COMPLETION_PLAN}\t{index_status or plan_status}\n"
+            if index_rows
+            else ""
+        )
+        index.write_text(f"# Active Plan\n\nid\tpath\tstatus\n{row}", encoding="utf-8")
+        for args in (
+            ("init", "-q"),
+            ("config", "user.email", "test@example.invalid"),
+            ("config", "user.name", "Test"),
+            ("add", "-A"),
+            ("-c", "commit.gpgsign=false", "commit", "-qm", "install completion gate"),
+        ):
+            subprocess.run(["git", *args], cwd=repo, check=True)
+
+    @staticmethod
+    def run_in_repo(repo: Path, *argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", *argv],
+            cwd=repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    @classmethod
+    def run_completion_gate(
+        cls, repo: Path, variant: dict[str, object], *argv: str
+    ) -> subprocess.CompletedProcess:
+        gate = f"{variant['install']}/check-agent-completion.sh"
+        return cls.run_in_repo(repo, gate, *argv)
+
+    @classmethod
+    def run_completion_plan(
+        cls, repo: Path, variant: dict[str, object], *argv: str
+    ) -> subprocess.CompletedProcess:
+        completer = f"{variant['install']}/complete-plan.sh"
+        return cls.run_in_repo(repo, completer, *argv)
+
+    @staticmethod
+    def repository_state(repo: Path) -> tuple[tuple[str, str], ...]:
+        entries = []
+        for path in sorted(repo.rglob("*")):
+            parts = path.relative_to(repo).parts
+            if ".git" in parts or "__pycache__" in parts or not path.is_file():
+                continue
+            entries.append(
+                (
+                    "/".join(parts),
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                )
+            )
+        return tuple(entries)
+
+    def test_completion_gate_reports_a_completed_plan_without_mutation(self) -> None:
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            with self.subTest(gate=variant["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant)
+                    before = self.repository_state(repo)
+                    result = self.run_completion_gate(repo, variant)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn(
+                        "completed plan is not marked ready: "
+                        f"{self.COMPLETION_PLAN} (status: in_progress)",
+                        result.stderr,
+                    )
+                    self.assertIn(
+                        f"Next: {variant['install']}/complete-plan.sh {self.COMPLETION_PLAN}",
+                        result.stderr,
+                    )
+                    if variant["name"] == "root":
+                        self.assertNotIn(".project-agent-workflow", result.stderr)
+                    self.assertNotIn("finalize-active-plan.sh", result.stderr)
+                    self.assertEqual(self.repository_state(repo), before)
+                    self.assertEqual(
+                        subprocess.run(
+                            ["git", "status", "--short"],
+                            cwd=repo,
+                            text=True,
+                            stdout=subprocess.PIPE,
+                            check=True,
+                        ).stdout,
+                        "",
+                    )
+
+    def test_completion_gate_stays_silent_for_incomplete_and_stopped_plans(self) -> None:
+        cases = {
+            "unchecked task": {"tasks": "- [ ] Still open."},
+            "mixed tasks": {"tasks": "- [x] Did the work.\n- [ ] Still open."},
+            "empty validation notes": {"notes": ""},
+            "pending validation notes": {"notes": "- Pending."},
+            "pending prefixed validation notes": {"notes": "- pending: implementation"},
+            "deferred plan": {"plan_status": "deferred"},
+            "replan required plan": {"plan_status": "replan_required"},
+            "index row is not in_progress": {
+                "plan_status": "in_progress",
+                "index_status": "deferred",
+            },
+            "plan file is not in_progress": {
+                "plan_status": "deferred",
+                "index_status": "in_progress",
+            },
+            "plan file is absent": {"plan_present": False},
+            "empty active index": {"index_rows": False},
+        }
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            for case, fields in cases.items():
+                with self.subTest(gate=variant["name"], silent=case):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        repo = Path(tmp)
+                        self.build_completion_repo(repo, variant, **fields)
+                        before = self.repository_state(repo)
+                        result = self.run_completion_gate(repo, variant)
+                        self.assertEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "agent completion gate passed\n")
+                        self.assertEqual(result.stderr, "")
+                        self.assertEqual(self.repository_state(repo), before)
+
+    def test_completion_gate_preserves_its_existing_reports(self) -> None:
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            finalize = f"{variant['install']}/finalize-active-plan.sh"
+            with self.subTest(gate=variant["name"], report="ready to archive with evidence"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant, plan_status="ready_to_archive")
+                    before = self.repository_state(repo)
+                    result = self.run_completion_gate(repo, variant)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(
+                        "ready-to-archive plan blocks completion: "
+                        f"{self.COMPLETION_PLAN} (status: ready_to_archive)",
+                        result.stderr,
+                    )
+                    self.assertNotIn("Missing evidence", result.stderr)
+                    self.assertNotIn("complete-plan.sh", result.stderr)
+                    self.assertIn(f"Next: {finalize} {self.COMPLETION_PLAN}", result.stderr)
+                    self.assertEqual(self.repository_state(repo), before)
+
+            with self.subTest(gate=variant["name"], report="ready to archive without evidence"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(
+                        repo,
+                        variant,
+                        plan_status="ready_to_archive",
+                        summary=False,
+                        notes="",
+                    )
+                    result = self.run_completion_gate(repo, variant)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("Missing evidence: checked_summary_ja", result.stderr)
+                    self.assertIn("Missing evidence: non-empty Validation Notes", result.stderr)
+                    self.assertIn(f"Next: {finalize} {self.COMPLETION_PLAN}", result.stderr)
+
+            with self.subTest(gate=variant["name"], report="dirty worktree"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant, tasks="- [ ] Still open.")
+                    (repo / "untracked.txt").write_text("generated\n", encoding="utf-8")
+                    result = self.run_completion_gate(repo, variant)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("dirty worktree blocks completion report", result.stderr)
+                    plans_only = self.run_completion_gate(repo, variant, "--plans-only")
+                    self.assertEqual(plans_only.returncode, 0)
+                    self.assertEqual(plans_only.stdout, "agent completion gate passed\n")
+
+            with self.subTest(gate=variant["name"], report="completed plan before worktree"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant)
+                    (repo / "untracked.txt").write_text("generated\n", encoding="utf-8")
+                    result = self.run_completion_gate(repo, variant)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("completed plan is not marked ready", result.stderr)
+                    self.assertNotIn("dirty worktree blocks completion report", result.stderr)
+                    plans_only = self.run_completion_gate(repo, variant, "--plans-only")
+                    self.assertEqual(plans_only.returncode, 1)
+                    self.assertIn("completed plan is not marked ready", plans_only.stderr)
+
+            with self.subTest(gate=variant["name"], report="unexpected argument"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant, tasks="- [ ] Still open.")
+                    result = self.run_completion_gate(repo, variant, "--plans-only", "extra")
+                    if variant["rejects_extra_arguments"]:
+                        self.assertEqual(result.returncode, 2)
+                        self.assertIn("Usage:", result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "agent completion gate passed\n")
+
+    def test_completion_evidence_mode_reads_without_lifecycle_effects(self) -> None:
+        accepted = {
+            "checked tasks and settled notes": {},
+            "evidence complete while deferred": {"plan_status": "deferred"},
+        }
+        rejected = {
+            "unchecked task": {"tasks": "- [ ] Still open."},
+            "empty validation notes": {"notes": ""},
+            "pending validation notes": {"notes": "- Pending."},
+        }
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            for case, fields in {**accepted, **rejected}.items():
+                with self.subTest(mode=variant["name"], evidence=case):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        repo = Path(tmp)
+                        self.build_completion_repo(repo, variant, **fields)
+                        before = self.repository_state(repo)
+                        result = self.run_completion_plan(
+                            repo, variant, "--check-completion-evidence", self.COMPLETION_PLAN
+                        )
+                        self.assertEqual(result.returncode, 0 if case in accepted else 1)
+                        self.assertEqual(result.stdout, "")
+                        self.assertEqual(result.stderr, "")
+                        self.assertEqual(self.repository_state(repo), before)
+                        self.assertFalse((repo / ".agent-artifacts").exists())
+
+            with self.subTest(mode=variant["name"], evidence="invalid invocation"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant)
+                    before = self.repository_state(repo)
+                    outside = self.run_completion_plan(
+                        repo, variant, "--check-completion-evidence", "docs/plan/backlog/900-example.md"
+                    )
+                    self.assertEqual(outside.returncode, 2)
+                    self.assertIn("expected active plan path", outside.stderr)
+                    missing = self.run_completion_plan(
+                        repo, variant, "--check-completion-evidence", "docs/plan/active/901-absent.md"
+                    )
+                    self.assertEqual(missing.returncode, 1)
+                    self.assertIn("missing plan: docs/plan/active/901-absent.md", missing.stderr)
+                    extra = self.run_completion_plan(
+                        repo, variant, "--check-completion-evidence", self.COMPLETION_PLAN, "extra"
+                    )
+                    self.assertEqual(extra.returncode, 2)
+                    self.assertIn("Usage:", extra.stderr)
+                    self.assertEqual(self.repository_state(repo), before)
+
+    def test_ordinary_completion_transition_stays_unchanged(self) -> None:
+        plan_path = self.COMPLETION_PLAN
+        rejected = {
+            "unchecked task": (
+                {"tasks": "- [ ] Still open."},
+                f"cannot mark plan ready: unchecked tasks remain in {plan_path}",
+            ),
+            "empty validation notes": (
+                {"notes": ""},
+                "cannot mark plan ready: Validation Notes are empty or pending in "
+                f"{plan_path}",
+            ),
+            "pending validation notes": (
+                {"notes": "- Pending."},
+                "cannot mark plan ready: Validation Notes are empty or pending in "
+                f"{plan_path}",
+            ),
+            "deferred plan": (
+                {"plan_status": "deferred"},
+                "cannot mark deferred plan ready",
+            ),
+            "replan required plan": (
+                {"plan_status": "replan_required"},
+                "cannot complete a plan that requires restructuring",
+            ),
+        }
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            for case, (fields, message) in rejected.items():
+                with self.subTest(transition=variant["name"], refused=case):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        repo = Path(tmp)
+                        self.build_completion_repo(repo, variant, **fields)
+                        plan = repo / self.COMPLETION_PLAN
+                        index = repo / "docs/plan/plan.md"
+                        before = (plan.read_bytes(), index.read_bytes())
+                        result = self.run_completion_plan(repo, variant, self.COMPLETION_PLAN)
+                        self.assertEqual(result.returncode, 1)
+                        self.assertIn(message, result.stderr)
+                        self.assertEqual((plan.read_bytes(), index.read_bytes()), before)
+
+            with self.subTest(transition=variant["name"], accepted="completed plan"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant)
+                    result = self.run_completion_plan(repo, variant, self.COMPLETION_PLAN)
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, f"{self.COMPLETION_PLAN}\n")
+                    self.assertIn(
+                        "status: ready_to_archive",
+                        (repo / self.COMPLETION_PLAN).read_text(encoding="utf-8"),
+                    )
+                    self.assertIn(
+                        f"900\t{self.COMPLETION_PLAN}\tready_to_archive",
+                        (repo / "docs/plan/plan.md").read_text(encoding="utf-8"),
+                    )
+                    gate = self.run_completion_gate(repo, variant, "--plans-only")
+                    self.assertEqual(gate.returncode, 1)
+                    self.assertIn("ready-to-archive plan blocks completion", gate.stderr)
+
+            with self.subTest(transition=variant["name"], refused="already ready to archive"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant, plan_status="ready_to_archive")
+                    result = self.run_completion_plan(repo, variant, self.COMPLETION_PLAN)
+                    self.assertEqual(result.returncode, variant["ready_returncode"])
+                    self.assertIn(str(variant["ready_message"]), result.stderr)
 
 
 if __name__ == "__main__":
