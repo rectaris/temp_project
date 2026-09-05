@@ -1,24 +1,6 @@
 # Complete resumable parent-owned development worktrees
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
-primary_invariant: Managed worktree creation and resumption bind one parent development checkout to one exact plan and committed baseline while preserving the ordinary checkout, existing Git state and retained work; delegated implementation keeps the existing independent clone and sandbox.
-replan_sources:
-  - docs/plan/active/278-create-resumable-parent-worktrees.md
-  - docs/plan/active/279-bind-parallel-plan-execution-to-shared-authority.md
-  - docs/plan/active/280-integrate-parallel-plan-candidates-in-order.md
-replan_contract: docs/plan/replanned/contracts/278-complete-resumable-parent-worktrees.json
-successor_plans:
-  - docs/plan/active/283-complete-resumable-parent-worktrees.md
-  - docs/plan/active/284-bind-parallel-plan-execution-to-shared-authority.md
-  - docs/plan/active/285-integrate-parallel-plan-candidates-in-order.md
-inherited_acceptance_digests:
-  - sha256:73b12f9939519cef986a89097913978fd8cd5fa852848ffcd85d88f8ce85c0c6
-  - sha256:91debfddfa563272121fb95a5f5924bc6d286130501351ee2788caa2d2bba294
-  - sha256:964fb466ff6e6b9581d97e9d3c9673463ea37efe21664bcb0f45b2084db9d2db
-integration_source_ids:
-  - 278
+status: replanned
 task_types:
   - template_workflow
   - planning_docs
@@ -102,11 +84,18 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:73b12f9939519cef986a89097913978fd8cd5fa852848ffcd85d88f8ce85c0c6","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:91debfddfa563272121fb95a5f5924bc6d286130501351ee2788caa2d2bba294","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:964fb466ff6e6b9581d97e9d3c9673463ea37efe21664bcb0f45b2084db9d2db","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/283-complete-resumable-parent-worktrees.md
+replan_contract: docs/plan/replanned/contracts/283-bootstrap-same-plan-continuation.json
 integration_gates:
-  - Reimplement from the committed source baseline; the rejected candidate is advisory evidence only and must not be applied as an accepted patch.
-  - Evaluate checkout attributes from the exact start commit, disable external diff and text-conversion commands, reject every registered worktree as an allowed root, and bind private target-directory identity before Git mutation.
-  - Use bounded parent implementation with a fresh external execution ledger and two-review budget; the stopped Plan 278 ledger is never reopened.
-  - Preserve the existing explicit retirement policy and keep plans 279 and 280 deferred until this successor is checked.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/287-complete-resumable-parent-worktrees.md
+inherited_acceptance_digests:
+  - sha256:73b12f9939519cef986a89097913978fd8cd5fa852848ffcd85d88f8ce85c0c6
+  - sha256:91debfddfa563272121fb95a5f5924bc6d286130501351ee2788caa2d2bba294
+  - sha256:964fb466ff6e6b9581d97e9d3c9673463ea37efe21664bcb0f45b2084db9d2db
 checked_summary_ja: 親エージェント用作業ツリーの作成と再開を、単一所有と安全な checkout 境界を含めて完成させる。
 
 ## Decisions

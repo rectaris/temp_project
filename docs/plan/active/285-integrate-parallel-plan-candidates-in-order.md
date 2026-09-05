@@ -90,7 +90,7 @@ context_files:
   - docs/agent/SPEC_REFERENT_FIRST.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
-  - docs/plan/active/283-complete-resumable-parent-worktrees.md
+  - docs/plan/active/287-complete-resumable-parent-worktrees.md
   - docs/plan/active/284-bind-parallel-plan-execution-to-shared-authority.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/SPEC_AGENT_LOGGING.md
@@ -106,7 +106,7 @@ required_specs:
   - docs/agent/SPEC_AGENT_LOGGING.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
 predecessor_plans:
-  - docs/plan/active/283-complete-resumable-parent-worktrees.md
+  - docs/plan/active/287-complete-resumable-parent-worktrees.md
   - docs/plan/active/284-bind-parallel-plan-execution-to-shared-authority.md
 focused_validation:
   - python3 tests/test-sandboxed-plan-worker.py
