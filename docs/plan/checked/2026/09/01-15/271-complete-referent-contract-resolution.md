@@ -1,6 +1,6 @@
 # Complete referent contract resolution with preserved draft identity
 
-status: in_progress
+status: checked
 primary_invariant: ending or relocating a referent contract preserves its recorded semantic evidence and cannot create semantic acceptance, while active records remain actionable
 implementation_tier: 2
 implementation_risk: ordinary
@@ -93,12 +93,18 @@ checked_summary_ja: 用語の記録に下書きの参照先変更と適用終了
 
 ## Tasks
 
-- [ ] Apply the preserved candidate in the isolated implementation copy and correct the two remaining defects in root and template.
-- [ ] Add focused regressions for filtered reminders across reopen and non-regular previous-target replacements.
-- [ ] Obtain independent review of the complete candidate and pass all focused and authoritative validation.
-- [ ] Reconcile the three local contracts with preserved evidence, integrate the tested commits, archive this plan, and restore Plan 268 to its pre-existing active state.
+- [x] Apply the preserved candidate in the isolated implementation copy and correct the two remaining defects in root and template.
+- [x] Add focused regressions for filtered reminders across reopen and non-regular previous-target replacements.
+- [x] Obtain independent review of the complete candidate and pass all focused and authoritative validation.
+- [x] Reconcile the three local contracts with preserved evidence, integrate the tested commits, archive this plan, and restore Plan 268 to its pre-existing active state.
 
 ## Validation Notes
 
 - Source Plan 269 is stopped with two unresolved Medium findings and no authoritative validation attempt. This successor inherits no successful product acceptance.
 - Original candidate SHA-256: bd6e1f368809ac6d9b0106310c169b8e34e3d0881d650b266e556e7b1c369481. The original worktree preserves all 12 uncommitted product paths; the clean reconstruction copy does not discard or modify them.
+
+- Final parent acceptance: the complete 12-file patch SHA-256 f3777ed492dd8bbe743c1a96e139de7829f2166cc5d6f2e26ee87376bb34fbc7 received one independent read-only review with no findings and was committed unchanged as 6c7671047207762ae7f085c7eb4032211a96ec1e.
+- Focused validation passed: referent-contract tests (18), hook tests (43), Copier template alignment, and Git whitespace checks. Authoritative scripts/lint-project-workflow.sh and tests/smoke.sh passed on independent copies of that exact patch with REQUIRE_COPIER=1. Host execution was required for Unix-socket tests; optional actionlint was unavailable.
+- The three owner-identified local contracts now record ended_without_review with active false, exact prior contracts, and hashed structured evidence. Their acceptance checks correctly fail; pending reports no active records. The unrelated Plan 268 contract was already closed_advisory and was not modified.
+- Main-session evidence and missing transcript/hook source declarations are retained under .agent-artifacts/referent-resolution-271/ in the original worktree. Original unaccepted product bytes remain backed up before final fast-forward integration.
+- The baseline-only ledger check was invoked after the product commit and correctly rejected the advanced HEAD. Parent acceptance separately verified the ledger remains active, the commit is exactly one descendant of its baseline, its complete patch equals the independently reviewed patch, and the worktree is clean; no ledger or review budget was reset.

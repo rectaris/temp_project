@@ -1,7 +1,6 @@
 # Restore the large Python test baseline and CI coverage
 
-status: deferred
-completion_deferred_reason: Resume after the owner-prioritized referent-contract repair in Plan 269 is checked.
+status: in_progress
 primary_invariant: the current one-correction execution contract is tested without stale expectations, and each previously omitted large root Python suite runs in CI without weakening existing validation
 task_types:
   - template_workflow
