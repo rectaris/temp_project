@@ -203,3 +203,4 @@ id	path
 264	docs/plan/checked/2026/09/01-15/264-enforce-executable-plan-admission.md
 251	docs/plan/checked/2026/09/01-15/251-place-fixture-words-and-alias-sources.md
 265	docs/plan/checked/2026/09/01-15/265-place-trailing-separator-destinations.md
+266	docs/plan/checked/2026/09/01-15/266-report-unmarked-completed-plans.md

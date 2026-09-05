@@ -1,6 +1,6 @@
 # Report a completed active plan the archive step never marked
 
-status: in_progress
+status: checked
 primary_invariant: the root and generated-project completion gates exit non-zero without changing repository state when matching in_progress lifecycle records pass the same completion-evidence predicates used by complete-plan.sh, and each gate directs the caller to its corresponding mark-ready command
 task_types:
   - template_workflow
@@ -84,7 +84,7 @@ checked_summary_ja: complete-plan.sh と同じ完了証拠の判定を通る in_
 - [x] Add root and generated-project behavior tests for eligible evidence, each incomplete-evidence form, deferred and replan_required states, index/file mismatch, ready-to-archive evidence messages, dirty and clean worktrees, --plans-only, invalid usage, read-only byte identity, and the unchanged ordinary completion transition.
 - [x] Run the root/template alignment check and record that only the installed command prefixes differ in the new report and invocation.
 - [x] Complete one independent read-only review and focused validation with zero unresolved High or Medium findings.
-- [ ] Archive and commit only the declared write scope plus parent-owned lifecycle files.
+- [x] Archive and commit only the declared write scope plus parent-owned lifecycle files.
 
 ## Validation Notes
 
