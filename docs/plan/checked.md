@@ -204,3 +204,4 @@ id	path
 251	docs/plan/checked/2026/09/01-15/251-place-fixture-words-and-alias-sources.md
 265	docs/plan/checked/2026/09/01-15/265-place-trailing-separator-destinations.md
 266	docs/plan/checked/2026/09/01-15/266-report-unmarked-completed-plans.md
+267	docs/plan/checked/2026/09/01-15/267-modularize-change-aware-copier-validator-tests.md

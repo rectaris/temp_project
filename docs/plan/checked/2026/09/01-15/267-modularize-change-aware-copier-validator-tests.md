@@ -1,6 +1,6 @@
 # Modularize and select Copier fixture validator tests
 
-status: in_progress
+status: checked
 primary_invariant: every existing Copier fixture validator test remains reachable exactly once through the unchanged complete-suite command, while Git-visible changes may select only an explicitly mapped nonempty domain subset and every shared or unclassified relevant change falls back to that complete suite
 task_types:
   - template_workflow
