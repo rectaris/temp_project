@@ -1,7 +1,6 @@
 # Finish resumable parent-owned development worktrees
 
-status: deferred
-completion_deferred_reason: Complete and archive Plan 286 before starting this successor.
+status: in_progress
 primary_invariant: Managed worktree creation and resumption bind one parent development checkout to one exact plan and committed baseline while preserving the ordinary checkout, existing Git state and retained work; delegated implementation keeps the existing independent clone and sandbox.
 replan_sources:
   - docs/plan/active/283-complete-resumable-parent-worktrees.md
@@ -15,7 +14,7 @@ inherited_acceptance_digests:
 integration_source_ids:
   - 283
 predecessor_plans:
-  - docs/plan/active/286-install-same-plan-continuation-epochs.md
+  - docs/plan/checked/2026/09/01-15/286-install-same-plan-continuation-epochs.md
 task_types:
   - template_workflow
   - planning_docs
