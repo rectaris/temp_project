@@ -1059,20 +1059,29 @@ def retire_worktree(
     branch_ref: str,
     branch_short: str,
 ) -> None:
-    """Remove the exact task worktree and its temporary local branch."""
+    """Remove the exact task worktree and its temporary local branch.
 
+    Every command runs from a checkout that outlives the removal. Running them
+    from the worktree being deleted leaves the transaction unable to prune its
+    own registration or delete its branch, which strands the ownership record
+    and blocks the next preparation for the same task.
+    """
+
+    anchor = guard.primary_worktree(repository)
+    if anchor == target:
+        raise WorktreeError("refusing to retire the pre-existing checkout")
     if target.exists():
         if not worktree_is_clean(target):
             raise WorktreeError("task worktree still holds uncommitted or untracked work")
-        git(repository, "worktree", "remove", str(target))
-    git(repository, "worktree", "prune")
+        git(anchor, "worktree", "remove", str(target))
+    git(anchor, "worktree", "prune")
     if target.exists() or target.is_symlink():
         raise WorktreeError("task worktree directory remains after removal")
-    if find_registered_worktree(parse_worktrees(repository), target) is not None:
+    if find_registered_worktree(parse_worktrees(anchor), target) is not None:
         raise WorktreeError("task worktree registration remains after removal")
-    if exact_ref_tip(repository, branch_ref) is not None:
-        git(repository, "branch", "-d", branch_short)
-    if exact_ref_tip(repository, branch_ref) is not None:
+    if exact_ref_tip(anchor, branch_ref) is not None:
+        git(anchor, "branch", "-d", branch_short)
+    if exact_ref_tip(anchor, branch_ref) is not None:
         raise WorktreeError("temporary task branch remains after deletion")
 
 

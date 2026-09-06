@@ -1329,6 +1329,38 @@ class TaskPublicationTest(unittest.TestCase):
         git(worktree, "commit", "-qm", f"add {name}")
         return git(worktree, "rev-parse", "HEAD").stdout.strip()
 
+    def test_publication_from_inside_the_task_worktree_retires_it_fully(self) -> None:
+        """Retirement must not depend on the directory it deletes.
+
+        An agent naturally publishes from the worktree it worked in. Running the
+        removal from there once left the registration pruned but the branch and
+        ownership record stranded, which blocked the next preparation.
+        """
+
+        worktree = self.prepare()
+        accepted = self.commit_task_work(worktree)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "publish", self.plan, "--owner-id", "owner-a"],
+            cwd=worktree,
+            env={**os.environ, "HOME": str(self.home)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            git(self.repository, "rev-parse", "refs/heads/dev").stdout.strip(), accepted
+        )
+        self.assertFalse(worktree.exists())
+        self.assertEqual(
+            git(self.repository, "rev-parse", "--verify", "refs/heads/plan/311-publish",
+                check=False).returncode,
+            128,
+        )
+        self.assertFalse(self.paths["record"].exists())
+        self.assertFalse(self.paths["journal"].exists())
+
     def test_publication_fast_forwards_and_retires_the_exact_task(self) -> None:
         worktree = self.prepare()
         evidence = worktree / ".agent-logs"
