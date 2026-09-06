@@ -252,6 +252,27 @@ def locate_worktree_guard() -> Any:
     return module
 
 
+def shared_lifecycle_state_available() -> bool:
+    """Report whether this directory can hold state shared across linked worktrees.
+
+    Only the absence of that possibility justifies worktree-local locking and
+    scanning. A lock-wait timeout, a corrupt ledger, or a full ledger are the
+    exact situations the shared mechanism exists for, so those failures must
+    reach the caller instead of silently restoring the behaviour that let two
+    checkouts allocate the same identifier.
+    """
+
+    try:
+        guard = locate_worktree_guard()
+    except PlanError:
+        return False
+    try:
+        guard.common_git_directory(ROOT)
+    except (OSError, UnicodeError, guard.WorktreeError):
+        return False
+    return True
+
+
 @contextmanager
 def lifecycle_lock():
     """Hold the exclusive plan lifecycle lock every linked worktree shares.
@@ -264,12 +285,10 @@ def lifecycle_lock():
     """
 
     shared = None
-    try:
+    if shared_lifecycle_state_available():
         candidate = locate_worktree_guard().plan_lifecycle_lock(ROOT)
         candidate.__enter__()
         shared = candidate
-    except Exception:  # noqa: BLE001 - any guard failure falls back to the local lock
-        shared = None
     if shared is not None:
         try:
             yield
@@ -1910,10 +1929,8 @@ def next_id() -> str:
     """
 
     ids = plan_ids()
-    try:
+    if shared_lifecycle_state_available():
         ids |= locate_worktree_guard().reserved_plan_ids(ROOT)
-    except Exception:  # noqa: BLE001 - a checkout without shared state reports local ids
-        pass
     value = 1
     while value in ids:
         value += 1
