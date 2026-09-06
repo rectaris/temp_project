@@ -1,8 +1,11 @@
 """Plan validation-command tests."""
 
+import contextlib
 import hashlib
+import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -223,6 +226,192 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 with self.subTest(command=command + suffix):
                     with self.assertRaises(module.ValidationCommandError):
                         module.parse_validation_command(command + suffix)
+
+    TIER_ZERO_SPECS = (
+        "docs/agent/SPEC_PLAN_WORKFLOW.md",
+        "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+    )
+
+    def build_tier_zero_fixture(self, directory: Path) -> None:
+        """Copy the live tier policies so every mutation starts from real text."""
+
+        for relative in self.TIER_ZERO_SPECS:
+            target = directory / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
+
+    def drop_tier_zero_text(self, directory: Path, marker: str, specs) -> None:
+        """Remove one stated marker, leaving the surrounding policy in place."""
+
+        for relative in specs:
+            target = directory / relative
+            text = target.read_text(encoding="utf-8")
+            replaced, count = re.subn(re.escape(marker), "", text, flags=re.IGNORECASE)
+            self.assertEqual(count, 1, f"{relative} must state {marker} exactly once")
+            target.write_text(replaced, encoding="utf-8")
+
+    def load_tier_zero_policy(self, directory: Path, name: str):
+        module = load_module(self.ROOT_POLICY, name)
+        module.ROOT = directory
+        return module
+
+    def test_root_policy_accepts_the_current_mirrored_tier_zero_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_tier_zero_fixture(directory)
+            module = self.load_tier_zero_policy(directory, "root_policy_tier_zero_ok")
+            module.check_tier_zero_pair_policy()
+
+    def test_root_policy_rejects_a_dropped_mirrored_tier_zero_statement(self) -> None:
+        module = load_module(self.ROOT_POLICY, "root_policy_tier_zero_markers")
+        markers = (*module.TIER_ZERO_PAIR_MARKERS, *module.TIER_ZERO_PAIR_EXCLUSION_MARKERS)
+        self.assertTrue(module.TIER_ZERO_PAIR_EXCLUSION_MARKERS)
+        for index, marker in enumerate(markers):
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_tier_zero_fixture(directory)
+                    self.drop_tier_zero_text(directory, marker, self.TIER_ZERO_SPECS)
+                    mutated = self.load_tier_zero_policy(
+                        directory, f"root_policy_tier_zero_drop_{index}"
+                    )
+                    report = io.StringIO()
+                    with contextlib.redirect_stderr(report):
+                        with self.assertRaises(SystemExit):
+                            mutated.check_tier_zero_pair_policy()
+                    self.assertIn(marker, report.getvalue())
+
+    def test_root_policy_rejects_a_one_sided_mirrored_tier_zero_exclusion(self) -> None:
+        module = load_module(self.ROOT_POLICY, "root_policy_tier_zero_sides")
+        exclusion = module.TIER_ZERO_PAIR_EXCLUSION_MARKERS[0]
+        for index, relative in enumerate(self.TIER_ZERO_SPECS):
+            with self.subTest(spec=relative):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_tier_zero_fixture(directory)
+                    self.drop_tier_zero_text(directory, exclusion, (relative,))
+                    mutated = self.load_tier_zero_policy(
+                        directory, f"root_policy_tier_zero_side_{index}"
+                    )
+                    with self.assertRaises(SystemExit):
+                        mutated.check_tier_zero_pair_policy()
+
+    def test_root_policy_rejects_a_widened_tier_zero_base_condition(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_tier_zero_fixture(directory)
+            for relative in self.TIER_ZERO_SPECS:
+                target = directory / relative
+                text = target.read_text(encoding="utf-8")
+                replaced, count = re.subn(
+                    r"- Tier 0: one file, reversible",
+                    "- Tier 0: any number of files, reversible",
+                    text,
+                )
+                self.assertEqual(count, 1)
+                target.write_text(replaced, encoding="utf-8")
+            module = self.load_tier_zero_policy(directory, "root_policy_tier_zero_base")
+            with self.assertRaises(SystemExit):
+                module.check_tier_zero_pair_policy()
+
+    def replace_tier_zero_text(self, directory: Path, old: str, new: str, specs) -> None:
+        """Rewrite one stated sentence without deleting any required marker."""
+
+        for relative in specs:
+            target = directory / relative
+            text = target.read_text(encoding="utf-8")
+            self.assertEqual(text.count(old), 1, f"{relative} must state {old} exactly once")
+            target.write_text(text.replace(old, new), encoding="utf-8")
+
+    def test_root_policy_rejects_an_inverted_or_widened_tier_zero_exception(self) -> None:
+        mutations = {
+            "inverted_exclusion": (
+                "- Exclude a behavior change,",
+                "- Tier 0 also covers a behavior change,",
+            ),
+            "qualified_condition": (
+                "is not evidence.",
+                "is not evidence that a heavier tier applies.",
+            ),
+            "qualified_escalation": (
+                "or security requirement.",
+                "or security requirement, unless the parent decides otherwise.",
+            ),
+            "appended_allowance": (
+                "or security requirement.\n",
+                "or security requirement.\n- Count any number of counterpart copies the same way.\n",
+            ),
+            "unreviewed_tier_zero_rule": (
+                "- Do not route Tier 0 or Tier 1 work",
+                "- Treat a same-topic multi-file change as Tier 0.\n"
+                "- Do not route Tier 0 or Tier 1 work",
+            ),
+            "allowance_after_the_exception": (
+                "- Never lower a recorded tier without explicit user authorization.",
+                "- Never lower a recorded tier without explicit user authorization.\n"
+                "- Count any number of counterpart copies the same way.",
+            ),
+            "qualifier_after_the_exception": (
+                "- Never lower a recorded tier without explicit user authorization.",
+                "- Never lower a recorded tier without explicit user authorization.\n"
+                "- The mirrored-pair rules apply unless the parent decides otherwise.",
+            ),
+            "nullified_counterpart_evidence": (
+                "- Never lower a recorded tier without explicit user authorization.",
+                "- Never lower a recorded tier without explicit user authorization.\n"
+                "- A parent statement that two files are counterparts satisfies the "
+                "counterpart relation requirement.",
+            ),
+            "exclusions_downgraded_to_guidance": (
+                "- Never lower a recorded tier without explicit user authorization.",
+                "- Never lower a recorded tier without explicit user authorization.\n"
+                "- The exclusions above are guidance only.",
+            ),
+            "paraphrased_widening": (
+                "- Never lower a recorded tier without explicit user authorization.",
+                "- Never lower a recorded tier without explicit user authorization.\n"
+                "- The lowest tier also covers a mirrored set of any size.",
+            ),
+        }
+        for name, (old, new) in mutations.items():
+            with self.subTest(mutation=name):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_tier_zero_fixture(directory)
+                    self.replace_tier_zero_text(directory, old, new, self.TIER_ZERO_SPECS)
+                    mutated = self.load_tier_zero_policy(
+                        directory, f"root_policy_tier_zero_{name}"
+                    )
+                    with self.assertRaises(SystemExit):
+                        mutated.check_tier_zero_pair_policy()
+
+    def test_root_policy_rejects_a_tier_zero_rule_outside_the_tier_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_tier_zero_fixture(directory)
+            for relative in self.TIER_ZERO_SPECS:
+                target = directory / relative
+                target.write_text(
+                    target.read_text(encoding="utf-8")
+                    + "\n## Tier Notes\n\nTier 0 also covers any mirrored set of files.\n",
+                    encoding="utf-8",
+                )
+            module = self.load_tier_zero_policy(directory, "root_policy_tier_zero_outside")
+            with self.assertRaises(SystemExit):
+                module.check_tier_zero_pair_policy()
+
+    def test_root_policy_requires_exactly_one_implementation_tiers_section(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_tier_zero_fixture(directory)
+            target = directory / self.TIER_ZERO_SPECS[0]
+            target.write_text(
+                target.read_text(encoding="utf-8") + "\n## Implementation Tiers\n\nduplicate\n",
+                encoding="utf-8",
+            )
+            module = self.load_tier_zero_policy(directory, "root_policy_tier_zero_duplicate")
+            with self.assertRaises(SystemExit):
+                module.check_tier_zero_pair_policy()
 
     MIGRATION_POLICY = ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
     MIGRATION_RECORD = (

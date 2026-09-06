@@ -252,6 +252,88 @@ VALIDATION_WITNESS_MAP_ORCHESTRATION_MARKERS = (
     "never removes, reorders, or weakens the authoritative suite",
 )
 
+TIER_ZERO_PAIR_SPECS = (
+    "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+)
+
+# The mirrored-pair exception counts two physical files as one Tier 0 change,
+# so the base Tier 0 conditions must survive it unchanged.
+TIER_ZERO_BASE_CONDITIONS = (
+    "- tier 0: one file, reversible, already covered by an existing validation "
+    "command, with no new external effect and an unchanged security boundary."
+)
+
+TIER_ZERO_PAIR_MARKERS = (
+    "count one exact mirrored pair as one tier 0 file",
+    "every remaining tier 0 condition holds for both files",
+    "already exists and is already checked mechanically",
+    "is not evidence",
+    "require both files to stay covered by an existing validation command",
+    "unchanged validation authority, and unchanged meaning",
+)
+
+# Each exclusion names one way a mirrored edit stops being mechanical. Dropping
+# any of them would silently widen the exception, so all are required.
+TIER_ZERO_PAIR_EXCLUSION_MARKERS = (
+    "a behavior change",
+    "two independent edits carried in one change",
+    "reaches only one side or differs in shape between the sides",
+    "a counterpart-only branch",
+    "a change to a validation definition",
+    "a change to what a rule means",
+    "escalate every excluded case to the tier it already takes",
+    "lowers no review, validation, or security requirement",
+)
+
+# The markers above are fragments, so a reworded or inverted sentence could keep
+# every one of them while permitting what it must forbid. The whole exception is
+# therefore pinned as exact contiguous text, including the escalation bullet that
+# closes it, so an inserted, inverted, or qualified sentence fails the check.
+TIER_ZERO_PAIR_BLOCK_LINES = (
+    "count one exact mirrored pair as one tier 0 file. a single mechanical edit "
+    "and the same edit in that file's established counterpart, such as a source "
+    "document and its generated copy, stay tier 0 together when every remaining "
+    "tier 0 condition holds for both files.",
+    "",
+    "- admit the pair only on a counterpart relation that already exists and is "
+    "already checked mechanically. a correspondence asserted for this change, or "
+    "a human claim that two files are the same, is not evidence.",
+    "- require both files to stay covered by an existing validation command, with "
+    "an unchanged security boundary, unchanged validation authority, and "
+    "unchanged meaning. a typo fix, a comment fix, and a formatting fix that "
+    "leaves meaning unchanged are the qualifying examples.",
+    "- exclude a behavior change, two independent edits carried in one change, an "
+    "edit that reaches only one side or differs in shape between the sides, a "
+    "change to a counterpart-only branch, a change to a validation definition, "
+    "and a change to what a rule means.",
+    "- escalate every excluded case to the tier it already takes. the pair "
+    "exception widens no other tier 0 condition and lowers no review, validation, "
+    "or security requirement.",
+    "",
+    "- escalate a tier as soon as new evidence crosses its boundary, and treat "
+    "the escalation as a plan update rather than a stop.",
+)
+TIER_ZERO_PAIR_BLOCK = "\n".join(TIER_ZERO_PAIR_BLOCK_LINES)
+
+# Every Tier 0 statement the section may make is accounted for above: the base
+# bullet, the three mentions in the exception paragraph, the exception's own
+# no-widening clause, and the restructuring-contract bullet. The two remaining
+# whole-file mentions are the plan-file exemption and the descope routing rule
+# in the Rules section, so a new Tier 0 sentence anywhere in either tier policy
+# must be reviewed against this exception before these budgets move.
+TIER_ZERO_SECTION_MENTIONS = 6
+TIER_ZERO_FILE_MENTIONS = 8
+
+# Substring pinning bounds only the text it names, so prose placed after the
+# exception could still qualify it. The exact section bytes are therefore
+# digest-bound: any addition, reordering, or rewording inside the tier policy
+# fails until it is re-reviewed here. Both specs share one digest because this
+# section carries no command path for the generated rewrite to change.
+TIER_ZERO_SECTION_DIGEST = (
+    "sha256:e212696f9120466a5d31aa4f267edfac8a83bc0ada88f4c8eb4282409a8cc312"
+)
+
 
 def fail(message: str) -> None:
     print(f"root agent policy check failed: {message}", file=sys.stderr)
@@ -393,6 +475,63 @@ def check_validation_witness_map_policy() -> None:
     )
     if root_orchestration != template_orchestration:
         fail("root/generated orchestration validation-witness map policy differs")
+
+
+def implementation_tiers_section(relative: str) -> str:
+    matches = re.findall(
+        r"^#{2,3} Implementation Tiers\n(.*?)(?=^#{2,3} |\Z)",
+        read(relative),
+        re.MULTILINE | re.DOTALL,
+    )
+    if len(matches) != 1:
+        fail(f"{relative} must contain exactly one Implementation Tiers section")
+    return matches[0]
+
+
+def check_tier_zero_pair_policy() -> None:
+    """Keep the mirrored Tier 0 exception bounded in both tier policies.
+
+    Root policy requires every root change to be mirrored into its template
+    counterpart, so a one-file Tier 0 bound would push a typo fix into a full
+    plan. The exception counts one exact mirrored pair as one file, which only
+    stays safe while its eligibility conditions and its exclusions both hold.
+    Marker presence alone would accept an inverted or qualified restatement, and
+    pinned prose alone would accept a widening sentence placed after it, so the
+    whole section is digest-bound and Tier 0 mentions are budgeted. The named
+    markers stay because they report which condition or exclusion was lost.
+
+    A paraphrase that never writes "Tier 0" is outside what any text check can
+    decide; the budget bounds literal restatements, not prose in general.
+    """
+
+    for relative in TIER_ZERO_PAIR_SPECS:
+        raw = implementation_tiers_section(relative)
+        section = raw.lower()
+        if section.count(TIER_ZERO_BASE_CONDITIONS) != 1:
+            fail(f"{relative} lost the unchanged Tier 0 base conditions")
+        for marker in TIER_ZERO_PAIR_MARKERS:
+            if section.count(marker) != 1:
+                fail(f"{relative} missing Tier 0 mirrored-pair condition: {marker}")
+        for marker in TIER_ZERO_PAIR_EXCLUSION_MARKERS:
+            if section.count(marker) != 1:
+                fail(f"{relative} missing Tier 0 mirrored-pair exclusion: {marker}")
+        if section.count(TIER_ZERO_PAIR_BLOCK) != 1:
+            fail(f"{relative} must state the Tier 0 mirrored-pair exception exactly")
+        mentions = section.count("tier 0")
+        if mentions != TIER_ZERO_SECTION_MENTIONS:
+            fail(
+                f"{relative} states {mentions} Tier 0 rules in its tier policy, "
+                f"not the reviewed {TIER_ZERO_SECTION_MENTIONS}"
+            )
+        file_mentions = read(relative).lower().count("tier 0")
+        if file_mentions != TIER_ZERO_FILE_MENTIONS:
+            fail(
+                f"{relative} states {file_mentions} Tier 0 rules in total, "
+                f"not the reviewed {TIER_ZERO_FILE_MENTIONS}"
+            )
+        digest = "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if digest != TIER_ZERO_SECTION_DIGEST:
+            fail(f"{relative} tier policy changed without re-reviewing the Tier 0 pair")
 
 
 def check_agent_model_profiles() -> None:
@@ -3333,6 +3472,7 @@ def main() -> int:
     check_agents_rules()
     check_validation_witness_migration_policy()
     check_validation_witness_map_policy()
+    check_tier_zero_pair_policy()
     check_agent_model_profiles()
     check_sandboxed_worker_fallback()
     check_reusable_skill_parity()

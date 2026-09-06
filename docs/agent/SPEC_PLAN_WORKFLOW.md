@@ -82,6 +82,13 @@ Classify every change into exactly one tier before creating plan artifacts. Plan
 - Tier 1: bounded multi-file change whose security boundary, validation authority, and external-effect authority are unchanged. Use a short active plan carrying `primary_invariant`, `write_scope`, `validation`, and exactly one `acceptance` item.
 - Tier 2: security-boundary change, irreversible effect, external write authority, lifecycle or validation-authority change, or a write scope that cannot be enumerated as exact paths. Use the full manifest contract, review gates, and restructuring contract.
 
+Count one exact mirrored pair as one Tier 0 file. A single mechanical edit and the same edit in that file's established counterpart, such as a source document and its generated copy, stay Tier 0 together when every remaining Tier 0 condition holds for both files.
+
+- Admit the pair only on a counterpart relation that already exists and is already checked mechanically. A correspondence asserted for this change, or a human claim that two files are the same, is not evidence.
+- Require both files to stay covered by an existing validation command, with an unchanged security boundary, unchanged validation authority, and unchanged meaning. A typo fix, a comment fix, and a formatting fix that leaves meaning unchanged are the qualifying examples.
+- Exclude a behavior change, two independent edits carried in one change, an edit that reaches only one side or differs in shape between the sides, a change to a counterpart-only branch, a change to a validation definition, and a change to what a rule means.
+- Escalate every excluded case to the tier it already takes. The pair exception widens no other Tier 0 condition and lowers no review, validation, or security requirement.
+
 - Escalate a tier as soon as new evidence crosses its boundary, and treat the escalation as a plan update rather than a stop.
 - Never lower a recorded tier without explicit user authorization.
 - Do not route Tier 0 or Tier 1 work through the restructuring contract. Use the bounded descope transition or stop them instead.
