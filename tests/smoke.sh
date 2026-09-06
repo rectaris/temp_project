@@ -12,7 +12,7 @@ render_source=$root
 create_admitted_plan() {
   .project-agent-workflow/scripts/create-plan.sh "$@" \
     --purpose implementation \
-    --write-scope src/smoke-target.ts \
+    --write-scope "${SMOKE_WRITE_SCOPE:-src/smoke-target.ts}" \
     --feasibility 'existing_mechanism:The generated project already ships this workflow command.' \
     --completion 'Keep the generated smoke target behaviour unchanged.' \
     --witness 'npm run lint'
@@ -1701,9 +1701,14 @@ mkdir -p "$group_project/docs/plan/execution-groups"
   --summary "Exercise the parallel execution group gate." \
   --summary-ja "並行実行グループの門を検証する。" >/dev/null)
 group_alpha=$(cd "$group_project" && ls docs/plan/active/*-group-alpha.md | head -n 1)
+# The two members must declare disjoint write scope, so the partner plan
+# claims a different generated module than the shared smoke target.
+SMOKE_WRITE_SCOPE=src/smoke-partner.ts
+export SMOKE_WRITE_SCOPE
 (cd "$group_project" && create_admitted_plan active group-beta \
   --summary "Exercise the parallel execution group partner." \
   --summary-ja "並行実行グループの相手側を検証する。" >/dev/null)
+unset SMOKE_WRITE_SCOPE
 group_beta=$(cd "$group_project" && ls docs/plan/active/*-group-beta.md | head -n 1)
 python3 - "$group_project" "$group_alpha" "$group_beta" <<'SMOKE_GROUP_EOF'
 import hashlib
