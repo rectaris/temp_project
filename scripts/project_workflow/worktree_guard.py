@@ -1284,8 +1284,13 @@ def main(argv: list[str] | None = None) -> int:
             # asking it what it owes must answer "nothing" rather than fail.
             # The completion gate treats a failure as a refusal, and refusing
             # here would block every turn of a project that this guard has
-            # deliberately left outside enforcement.
-            governed, reason = enforcement_scope(repository_root())
+            # deliberately left outside enforcement. A directory that is not a
+            # Git worktree at all is the same case: `copier copy` produces one
+            # before the project runs `git init`.
+            try:
+                governed, reason = enforcement_scope(repository_root())
+            except (OSError, UnicodeError, WorktreeError) as exc:
+                governed, reason = False, f"not a Git worktree: {exc}"
             if not governed:
                 print(
                     json.dumps(

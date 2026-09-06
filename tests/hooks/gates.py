@@ -218,6 +218,28 @@ class TaskWorktreeGateTest(unittest.TestCase):
         self.assertEqual(output["decision"], "block")
         self.assertIn("nonexistent_module_for_gate_test", output["reason"])
 
+    def test_stop_gate_allows_a_directory_that_is_not_a_git_worktree(self) -> None:
+        """A generated project is not a Git repository until it runs `git init`.
+
+        `copier copy` produces exactly this directory, so a completion check
+        that failed here would block every turn of a project from the moment it
+        was generated, naming commands that cannot run there either.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = Path(tmp) / "generated"
+            package = plain / "scripts/project_workflow"
+            package.mkdir(parents=True)
+            (plain / "scripts/check-agent-completion.sh").write_text(
+                "#!/bin/sh\nexit 0\n", encoding="utf-8"
+            )
+            shutil.copy2(
+                ROOT / "scripts/project_workflow/worktree_guard.py",
+                package / "worktree_guard.py",
+            )
+            output = run_hook(ROOT_STOP_REVIEW, {}, cwd=plain)
+        self.assertEqual(output, {})
+
     def test_stop_gate_allows_a_repository_no_binding_can_name(self) -> None:
         """A repository outside enforcement owes no retirement and must not block.
 

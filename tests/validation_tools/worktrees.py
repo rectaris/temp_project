@@ -1434,6 +1434,69 @@ class TaskPublicationTest(unittest.TestCase):
         self.assertEqual(acknowledged.returncode, 0, acknowledged.stderr)
         self.assertFalse(self.paths["record"].exists())
 
+    def test_publication_clears_a_resume_journal_it_leaves_behind(self) -> None:
+        """Publication is the one command that runs with a resume journal.
+
+        A crash inside `resume` between writing the record and unlinking its
+        journal leaves one behind. Publication removed the record but not that
+        journal, so the next task with this identity refused on bound facts
+        that no longer described anything, and no command could clear it.
+        """
+
+        worktree = self.prepare()
+        self.commit_task_work(worktree)
+        self.paths["journal"].write_bytes(self.paths["record"].read_bytes())
+        result = self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.paths["record"].exists())
+        self.assertFalse(self.paths["journal"].exists())
+        self.assertEqual(
+            self.run_command(
+                "prepare",
+                self.plan,
+                "--allowed-root",
+                str(self.allowed_root),
+                "--owner-id",
+                "owner-a",
+            ).returncode,
+            0,
+        )
+
+    def test_recovery_reaches_a_stranded_record_that_kept_a_resume_journal(self) -> None:
+        """Both interruptions are ordinary, so their combination must recover too.
+
+        The completion gate names `retire` for a record whose worktree is gone.
+        Refusing on the resume journal before the stranded case was considered
+        made that instruction impossible to follow.
+        """
+
+        worktree = self.prepare()
+        accepted = self.commit_task_work(worktree)
+        self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        worktree_again = self.prepare()
+        self.paths["journal"].write_bytes(self.paths["record"].read_bytes())
+        shutil.rmtree(worktree_again)
+
+        result = self.run_command("retire", self.plan, "--owner-id", "owner-a")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.paths["record"].exists())
+        self.assertFalse(self.paths["journal"].exists())
+        self.assertEqual(
+            git(self.repository, "rev-parse", "refs/heads/dev").stdout.strip(), accepted
+        )
+
+    def test_retire_still_refuses_a_resume_journal_for_a_live_worktree(self) -> None:
+        """Admitting the journal must not weaken retirement of a present worktree."""
+
+        worktree = self.prepare()
+        self.commit_task_work(worktree)
+        self.paths["journal"].write_bytes(self.paths["record"].read_bytes())
+        result = self.run_command("retire", self.plan, "--owner-id", "owner-a")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("interrupted resume journal", result.stderr)
+        self.assertTrue(worktree.exists())
+        self.assertTrue(self.paths["record"].exists())
+
     def test_publication_fast_forwards_and_retires_the_exact_task(self) -> None:
         worktree = self.prepare()
         evidence = worktree / ".agent-logs"

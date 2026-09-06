@@ -1180,6 +1180,11 @@ def publish(args: argparse.Namespace) -> None:
             repository, target, branch_ref, branch_short, anchor=checkout, published=True
         )
         journal_path.unlink(missing_ok=True)
+        # `publish` is the one command that runs with a resume journal present,
+        # so it is also the one that can leave a journal behind with no record
+        # to explain it. Nothing then clears it, and the next task with this
+        # identity refuses on bound facts that no longer describe anything.
+        paths["journal"].unlink(missing_ok=True)
         paths["record"].unlink(missing_ok=True)
     print(
         json.dumps(
@@ -1267,7 +1272,14 @@ def retire(args: argparse.Namespace) -> None:
     """
 
     repository = repository_root()
-    allowed_root, record, paths = load_bound_record(repository, args)
+    # A stranded record may also carry a leftover resume journal, and both are
+    # ordinary interruptions. Refusing on the journal before the stranded case
+    # is even considered would keep the exact lockout this recovery exists to
+    # clear, so the journal is admitted here and re-refused below for every
+    # task whose worktree is still present.
+    allowed_root, record, paths = load_bound_record(
+        repository, args, allow_resume_journal=True
+    )
     with locked_file(paths["lock"]):
         record = read_task_record(paths)
         validate_lease(record["owner"], args.owner_id, int(time.time()))
@@ -1276,6 +1288,8 @@ def retire(args: argparse.Namespace) -> None:
         if record["allowed_root"] != str(allowed_root):
             raise WorktreeError("ownership record allowed root changed or mismatched")
         stranded = not Path(record["worktree_path"]).exists()
+        if not stranded and paths["journal"].exists():
+            raise WorktreeError("managed worktree has an interrupted resume journal")
         if stranded:
             recover_stranded_record(
                 repository, allowed_root, record, paths, stopped=args.stopped
