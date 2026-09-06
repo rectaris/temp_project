@@ -167,16 +167,16 @@ checked_summary_ja: 独立した二つのプランの実行権限を親が管理
 
 ## Tasks
 
-- [ ] Add exact-shape group-description and runtime-record fixtures, including default serial behavior, duplicate/foreign members, dirty or replaced policy inputs, unresolved predecessors and known scope overlap.
-- [ ] Implement bounded member enrollment, one upstream claim, exclusive member permits, canonical repository identity and one publication lease with lock order and crash recovery.
-- [ ] Implement and test the single-slot parent-adjustment transition, mutual exclusion with worker correction, failure/crash retention and unchanged review counters.
-- [ ] Implement an atomic baseline-transfer record that consumes the prior member authority and preserves counters, frozen requirements, registry proof and terminal states.
-- [ ] Add direct legacy runner and root/generated completion refusal fixtures for an enrolled member, including completed checkboxes and forged or missing group permits.
-- [ ] Extend root/generated manifest parsing and static checks for the explicit optional group-description reference while leaving ungrouped selection strict.
-- [ ] Reject self-containing commit claims, changed or uncommitted group/member bytes, and source HEAD drift after admission; prove both member checkouts use the recorded containing commit.
-- [ ] Test fork/replay/cross-clone/cross-worktree races, old-epoch use, event budget exhaustion, per-member review accounting, stopped transfer and exact recovery after each persistence boundary.
-- [ ] Update aligned policies and Copier inventory/parity and test project-owned group-description preservation without manufacturing any live execution group in this repository.
-- [ ] Run focused validation and independent review, then the authoritative suite; leave parallel runner invocation unavailable until plan 280 is checked.
+- [x] Add exact-shape group-description and runtime-record fixtures, including default serial behavior, duplicate/foreign members, dirty or replaced policy inputs, unresolved predecessors and known scope overlap.
+- [x] Implement bounded member enrollment, one upstream claim, exclusive member permits, canonical repository identity and one publication lease with lock order and crash recovery.
+- [x] Implement and test the single-slot parent-adjustment transition, mutual exclusion with worker correction, failure/crash retention and unchanged review counters.
+- [x] Implement an atomic baseline-transfer record that consumes the prior member authority and preserves counters, frozen requirements, registry proof and terminal states.
+- [x] Add direct legacy runner and root/generated completion refusal fixtures for an enrolled member, including completed checkboxes and forged or missing group permits.
+- [x] Extend root/generated manifest parsing and static checks for the explicit optional group-description reference while leaving ungrouped selection strict.
+- [x] Reject self-containing commit claims, changed or uncommitted group/member bytes, and source HEAD drift after admission; prove both member checkouts use the recorded containing commit.
+- [x] Test fork/replay/cross-clone/cross-worktree races, old-epoch use, event budget exhaustion, per-member review accounting, stopped transfer and exact recovery after each persistence boundary.
+- [x] Update aligned policies and Copier inventory/parity and test project-owned group-description preservation without manufacturing any live execution group in this repository.
+- [x] Run focused validation and independent review, then the authoritative suite; leave parallel runner invocation unavailable until plan 280 is checked.
 
 ## Validation Notes
 
@@ -194,3 +194,14 @@ checked_summary_ja: 独立した二つのプランの実行権限を親が管理
 - No measured speedup or resource saving is claimed. Root plan files describe this repository's implementation work and are not copied as product-specific plans into the reusable template.
 
 - Reconstruction authorization: 「継続して開発せよ。」 The predecessor paths now name the schema-4 successors; acceptance, validation authority and implementation order are unchanged.
+
+### Implementation Results
+
+- Implementation baseline: activation commit `584d81f` in `temp_project`, taken from planning baseline `56dd79a2461acd9880f27cf7c75f62a1dad877a5`. The plan was activated through `scripts/restructure-plan.py` before any product change.
+- The authority is `scripts/parallel-plan-state.py` with its byte-identical generated twin. Committed group descriptions live under `docs/plan/execution-groups/`; the runtime record stays outside the repository at mode 0600 under `flock`, with bounded hash-chained events verified on every read.
+- Every legacy serial entrypoint now fails closed for an enrolled member: the ledger `init`/`continue`/`start`/`check` operations, the sandboxed runner `run`/`correct` operations, and the root and generated `complete-plan.sh` and `finalize-active-plan.sh`. A missing authority module aborts instead of proceeding.
+- `GROUPED_ADAPTER_VERSION` is `None`, so a fully verified permit is still refused. Parallel execution stays unavailable until plan 285 installs the grouped adapter, as this plan requires.
+- Enrollment resolves from HEAD unioned with the index and description-shaped worktree files, so plain removal, staged removal, rename, relocation, `git rm --cached` and truncation all fail closed, while a committed removal genuinely un-enrols. Stray non-description files beside a description do not affect ungrouped plans.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` (125), `python3 tests/test-validation-tools.py` (127), `python3 tests/test-sandboxed-plan-worker.py` (100), `bash tests/root-plan-lifecycle.sh`, `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `python3 scripts/restructure-plan.py --verify` and `git diff --check`. Root and template copies of all three mirrored scripts are byte-identical.
+- Independent review used two rounds within this execution epoch. Round one reported three High and five Medium findings; round two confirmed those closed and reported one further High and one further Medium. All ten were accepted, remediated and covered by regression tests, and each exploit was reproduced against a disposable fixture before and after its fix. The review budget for this epoch is now exhausted.
+- Helpers were used. One read-only `code-review` helper supplied bounded review evidence with no write scope and no authority over lifecycle or validation. The parent owned scope admission, remediation, validation acceptance, the commit and this report.

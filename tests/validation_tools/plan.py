@@ -13,6 +13,207 @@ from .support import PLANLIB, PLAN_COMMAND_MODULES, ROOT, load_module
 
 
 class PlanValidationCommandsTest(unittest.TestCase):
+    ROOT_POLICY = ROOT / "scripts/check-root-agent-policy.py"
+    GROUP_AUTHORITY = ROOT / "scripts/parallel-plan-state.py"
+
+    @staticmethod
+    def group_digest(value) -> str:
+        data = value if isinstance(value, bytes) else str(value).encode("utf-8")
+        return "sha256:" + hashlib.sha256(data).hexdigest()
+
+    def build_group_fixture(self, directory: Path, *, statuses=("in_progress", "in_progress")):
+        """Create a minimal repository with one valid two-member execution group."""
+
+        (directory / "docs/plan/active").mkdir(parents=True)
+        (directory / "docs/plan/execution-groups").mkdir(parents=True)
+        (directory / "scripts").mkdir(parents=True)
+        (directory / "scripts/parallel-plan-state.py").write_bytes(
+            self.GROUP_AUTHORITY.read_bytes()
+        )
+        subprocess.run(["git", "init", "-q", "-b", "main", str(directory)], check=True)
+        subprocess.run(["git", "-C", str(directory), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(directory), "config", "user.email", "test@example.invalid"],
+            check=True,
+        )
+        members = []
+        rows = []
+        for index, (plan_id, slug, scope) in enumerate(
+            (("284", "alpha", "src/alpha.py"), ("285", "beta", "src/beta.py"))
+        ):
+            relative = f"docs/plan/active/{plan_id}-{slug}.md"
+            body = (
+                f"# Plan {plan_id}\n\n"
+                f"status: {statuses[index]}\n"
+                "plan_purpose: implementation\n"
+                f"primary_invariant: invariant {plan_id}\n"
+                "execution_group: docs/plan/execution-groups/alpha-beta.json\n"
+                f"write_scope:\n  - {scope}\n"
+                "context_files:\n  - AGENTS.md\n"
+                "\n## Tasks\n\n- [ ] implement\n"
+            )
+            (directory / relative).write_text(body, encoding="utf-8")
+            members.append(
+                {
+                    "plan_id": plan_id,
+                    "plan_path": relative,
+                    "plan_digest": self.group_digest(body.encode("utf-8")),
+                    "write_scope_digest": self.group_digest(
+                        json.dumps([scope], sort_keys=True, separators=(",", ":"))
+                    ),
+                }
+            )
+            rows.append(f"{plan_id}\t{relative}\t{statuses[index]}")
+        description = {
+            "schema_version": 1,
+            "group_id": "alpha-beta",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint modules with no shared interface",
+            "members": members,
+        }
+        (directory / "docs/plan/execution-groups/alpha-beta.json").write_text(
+            json.dumps(description, indent=2) + "\n", encoding="utf-8"
+        )
+        (directory / "docs/plan/plan.md").write_text(
+            "# Active Plan\n\nid\tpath\tstatus\n" + "\n".join(rows) + "\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "-C", str(directory), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(directory), "commit", "-qm", "fixture"], check=True)
+        return description
+
+    def load_root_policy(self, directory: Path):
+        module = load_module(self.ROOT_POLICY, f"root_policy_{directory.name}")
+        module.ROOT = directory
+        return module
+
+    def rewrite_group(self, directory: Path, description) -> None:
+        (directory / "docs/plan/execution-groups/alpha-beta.json").write_text(
+            json.dumps(description, indent=2) + "\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "-C", str(directory), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(directory), "commit", "-qm", "update"], check=True)
+
+    def test_root_policy_accepts_a_valid_execution_group(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "repo"
+            directory.mkdir()
+            self.build_group_fixture(directory)
+            module = self.load_root_policy(directory)
+            module.check_execution_groups()
+            self.assertEqual(
+                sorted(module.execution_group_members()),
+                [
+                    "docs/plan/active/284-alpha.md",
+                    "docs/plan/active/285-beta.md",
+                ],
+            )
+
+    def test_root_policy_rejects_a_manifest_group_reference_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "repo"
+            directory.mkdir()
+            description = self.build_group_fixture(directory)
+            plan = directory / "docs/plan/active/284-alpha.md"
+            text = plan.read_text(encoding="utf-8").replace(
+                "execution_group: docs/plan/execution-groups/alpha-beta.json",
+                "execution_group: docs/plan/execution-groups/absent.json",
+            )
+            plan.write_text(text, encoding="utf-8")
+            description["members"][0]["plan_digest"] = self.group_digest(
+                text.encode("utf-8")
+            )
+            self.rewrite_group(directory, description)
+            module = self.load_root_policy(directory)
+            with self.assertRaises(SystemExit):
+                module.check_execution_groups()
+
+    def test_root_policy_rejects_non_description_files_in_the_group_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "repo"
+            directory.mkdir()
+            self.build_group_fixture(directory)
+            (directory / "docs/plan/execution-groups/notes.md").write_text(
+                "notes\n", encoding="utf-8"
+            )
+            module = self.load_root_policy(directory)
+            with self.assertRaises(SystemExit):
+                module.check_execution_groups()
+
+    def test_root_policy_rejects_an_invalid_group_description(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "repo"
+            directory.mkdir()
+            description = self.build_group_fixture(directory)
+            description["members"][1]["write_scope_digest"] = self.group_digest("wrong")
+            self.rewrite_group(directory, description)
+            module = self.load_root_policy(directory)
+            with self.assertRaises(SystemExit):
+                module.check_execution_groups()
+
+    def test_multiple_runnable_rows_need_exact_group_membership(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "repo"
+            directory.mkdir()
+            self.build_group_fixture(directory)
+            module = self.load_root_policy(directory)
+            module.check_active_plans()
+
+    def test_multiple_runnable_rows_stay_ambiguous_without_a_group(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "repo"
+            directory.mkdir()
+            self.build_group_fixture(directory)
+            for path in (directory / "docs/plan/execution-groups").iterdir():
+                path.unlink()
+            for plan_id, slug in (("284", "alpha"), ("285", "beta")):
+                plan = directory / f"docs/plan/active/{plan_id}-{slug}.md"
+                plan.write_text(
+                    plan.read_text(encoding="utf-8").replace(
+                        "execution_group: docs/plan/execution-groups/alpha-beta.json\n",
+                        "",
+                    ),
+                    encoding="utf-8",
+                )
+            subprocess.run(["git", "-C", str(directory), "add", "-A"], check=True)
+            subprocess.run(
+                ["git", "-C", str(directory), "commit", "-qm", "ungrouped"], check=True
+            )
+            module = self.load_root_policy(directory)
+            with self.assertRaises(SystemExit):
+                module.check_active_plans()
+
+    def test_runnable_rows_must_cover_every_group_member(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "repo"
+            directory.mkdir()
+            self.build_group_fixture(directory)
+            index = directory / "docs/plan/plan.md"
+            plan = directory / "docs/plan/active/290-solo.md"
+            plan.write_text(
+                "# Plan 290\n\nstatus: in_progress\n"
+                "plan_purpose: implementation\n"
+                "primary_invariant: invariant 290\n"
+                "write_scope:\n  - src/solo.py\n"
+                "context_files:\n  - AGENTS.md\n"
+                "\n## Tasks\n\n- [ ] implement\n",
+                encoding="utf-8",
+            )
+            index.write_text(
+                index.read_text(encoding="utf-8")
+                + "290\tdocs/plan/active/290-solo.md\tin_progress\n",
+                encoding="utf-8",
+            )
+            module = self.load_root_policy(directory)
+            with self.assertRaises(SystemExit):
+                module.check_active_plans()
+
+    def test_execution_group_is_a_recognized_manifest_scalar(self) -> None:
+        root_policy = load_module(self.ROOT_POLICY, "root_policy_scalars")
+        self.assertIn("execution_group", root_policy.ADMISSION_SCALAR_KEYS)
+        planlib = load_module(PLANLIB, "planlib_group_scalar")
+        self.assertIn("execution_group", planlib.SCALAR_KEYS)
+
     def test_root_semantic_test_commands_accept_only_fixed_invocations(self) -> None:
         module = load_module(ROOT / "scripts/plan_validation_commands.py", "root_semantic_commands")
         for script in ("tests/test-referent-contract.py", "tests/test-hooks.py"):
@@ -2322,7 +2523,7 @@ class PlanValidationCommandsTest(unittest.TestCase):
 
         install = repo / str(variant["install"])
         install.mkdir(parents=True, exist_ok=True)
-        names = ["check-agent-completion.sh", "complete-plan.sh"]
+        names = ["check-agent-completion.sh", "complete-plan.sh", "parallel-plan-state.py"]
         if variant["linted"]:
             names += ["lint-plan-docs.py", "planlib.py", "plan_validation_commands.py"]
         for name in names:
@@ -2339,6 +2540,17 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 "    summary: Plan documents.\n"
                 f"    required:\n      - {self.COMPLETION_SPEC}\n",
                 encoding="utf-8",
+            )
+        # The completion gate consults the parallel group authority, which
+        # resolves enrolment from the repository, so the fixture is a Git repo.
+        if not (repo / ".git").exists():
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
+                check=True,
             )
         if plan_present:
             plan = repo / self.COMPLETION_PLAN

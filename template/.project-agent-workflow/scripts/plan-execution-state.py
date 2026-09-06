@@ -307,6 +307,7 @@ class StateError(ValueError):
 
 
 _SANDBOXED_WORKER_MODULE: ModuleType | None = None
+_PARALLEL_PLAN_MODULE: ModuleType | None = None
 
 
 def sanitized_git_environment() -> dict[str, str]:
@@ -347,6 +348,30 @@ def load_sandboxed_worker_module() -> ModuleType:
     spec.loader.exec_module(module)
     _SANDBOXED_WORKER_MODULE = module
     return module
+
+
+def load_parallel_plan_module() -> ModuleType:
+    global _PARALLEL_PLAN_MODULE
+    if _PARALLEL_PLAN_MODULE is not None:
+        return _PARALLEL_PLAN_MODULE
+    path = Path(__file__).with_name("parallel-plan-state.py")
+    spec = importlib.util.spec_from_file_location("plan_execution_state_group", path)
+    if spec is None or spec.loader is None:
+        raise StateError("could not load the parallel plan group authority")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _PARALLEL_PLAN_MODULE = module
+    return module
+
+
+def require_group_execution_permit(plan_path: str, operation: str) -> None:
+    """Refuse a grouped member on the legacy serial path before any effect."""
+
+    module = load_parallel_plan_module()
+    try:
+        module.require_group_permit(repository_root(), plan_path, operation)
+    except module.GroupError as exc:
+        raise StateError(str(exc)) from exc
 
 
 def lifecycle_identity_digest(run_id: str, lifecycle_path: Path) -> str:
@@ -3264,6 +3289,7 @@ def init_state(args: argparse.Namespace) -> None:
     lifecycle_path = Path(args.lifecycle_state)
     require_outside_repository(path, "execution state")
     require_outside_repository(lifecycle_path, "candidate lifecycle state")
+    require_group_execution_permit(args.plan, "execution")
     if path.exists() or path.is_symlink():
         raise StateError("execution state already exists")
     plan = Path(args.plan)
@@ -3461,6 +3487,7 @@ def continue_state(args: argparse.Namespace) -> None:
         (registry_path, "continuation registry"),
     ):
         require_outside_repository(external, label)
+    require_group_execution_permit(args.plan, "execution")
     if not ID_RE.fullmatch(args.run_id):
         raise StateError("invalid run_id")
     with with_lock(predecessor_path) as predecessor_lock:
@@ -4836,6 +4863,7 @@ def require_lifecycle_identity(state: dict[str, Any], run_id: str, lifecycle_pat
 def record_writable_attempt_start(args: argparse.Namespace) -> None:
     path = Path(args.state)
     lifecycle_path = Path(args.lifecycle_state)
+    require_group_execution_permit(args.plan, "execution")
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
@@ -5239,6 +5267,8 @@ def check_gate(args: argparse.Namespace) -> None:
     state = read_state(Path(args.state))
     if state["run_id"] != args.run_id:
         raise StateError("run_id mismatch")
+    if args.operation in {"execution", "completion", "archive"}:
+        require_group_execution_permit(state["plan_path"], args.operation)
     repair_plan = args.operation == "repair_plan"
     diagnosis_read = (
         state["state"] == "diagnosis_required" and args.operation == "diagnosis_read"

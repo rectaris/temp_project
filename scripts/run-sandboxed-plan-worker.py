@@ -3564,6 +3564,25 @@ def select_attempt_artifacts(
     return worker_result
 
 
+def enforce_parallel_group_gate(plan: str, operation: str) -> None:
+    """Refuse an enrolled group member before any worker prerequisite runs."""
+
+    authority = Path(__file__).with_name("parallel-plan-state.py")
+    if not authority.is_file():
+        raise RunnerError("parallel plan group authority is unavailable")
+    spec = importlib.util.spec_from_file_location(
+        "sandboxed_worker_parallel_group", authority
+    )
+    if spec is None or spec.loader is None:
+        raise RunnerError("could not load the parallel plan group authority")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        module.require_group_permit(module.repository_root(), plan, operation)
+    except module.GroupError as exc:
+        raise RunnerError(str(exc)) from exc
+
+
 def enforce_plan_execution_gate(
     args: argparse.Namespace,
     *,
@@ -5632,6 +5651,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command in {"run", "correct"}:
+            enforce_parallel_group_gate(
+                args.plan, "run" if args.command == "run" else "correct"
+            )
             enforce_plan_execution_gate(args, plan=args.plan)
             return int(args.handler(args))
         with plan_execution_lease(args):

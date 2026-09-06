@@ -4540,6 +4540,83 @@ fs.linkSync(source, target);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def enroll_plan_in_group(
+        self, repo: Path, plan_path: str, write_scope: list[str]
+    ) -> None:
+        """Commit a valid two-member execution group enrolling the runner plan."""
+
+        (repo / "docs/plan/execution-groups").mkdir(parents=True, exist_ok=True)
+        partner_path = "docs/plan/active/002-partner.md"
+        partner_body = (
+            "# Partner\n\nstatus: in_progress\n"
+            "plan_purpose: implementation\n"
+            "primary_invariant: partner invariant\n"
+            "write_scope:\n  - partner.txt\n"
+            "context_files:\n  - AGENTS.md\n"
+            "\n## Tasks\n\n- [ ] implement\n"
+        )
+        (repo / partner_path).write_text(partner_body, encoding="utf-8")
+
+        def group_digest(value) -> str:
+            data = value if isinstance(value, bytes) else str(value).encode("utf-8")
+            return "sha256:" + hashlib.sha256(data).hexdigest()
+
+        plan_bytes = (repo / plan_path).read_bytes()
+        description = {
+            "schema_version": 1,
+            "group_id": "runner-group",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint fixture modules with no shared interface",
+            "members": [
+                {
+                    "plan_id": "001",
+                    "plan_path": plan_path,
+                    "plan_digest": group_digest(plan_bytes),
+                    "write_scope_digest": group_digest(
+                        json.dumps(write_scope, sort_keys=True, separators=(",", ":"))
+                    ),
+                },
+                {
+                    "plan_id": "002",
+                    "plan_path": partner_path,
+                    "plan_digest": group_digest(partner_body.encode("utf-8")),
+                    "write_scope_digest": group_digest(
+                        json.dumps(["partner.txt"], sort_keys=True, separators=(",", ":"))
+                    ),
+                },
+            ],
+        }
+        (repo / "docs/plan/execution-groups/runner-group.json").write_text(
+            json.dumps(description, indent=2) + "\n", encoding="utf-8"
+        )
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "enroll runner plan")
+
+    def test_enrolled_group_member_is_refused_before_worker_prerequisites(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        self.enroll_plan_in_group(repo, plan_path, ["allowed.txt"])
+        original = Path.cwd()
+        os.chdir(repo)
+        try:
+            for operation in ("run", "correct"):
+                with self.subTest(operation=operation):
+                    with self.assertRaises(RUNNER.RunnerError) as caught:
+                        RUNNER.enforce_parallel_group_gate(plan_path, operation)
+                    self.assertIn("enrolled in execution group", str(caught.exception))
+        finally:
+            os.chdir(original)
+
+    def test_ungrouped_plan_passes_the_parallel_group_gate(self) -> None:
+        temporary, repo, plan_path = self.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        original = Path.cwd()
+        os.chdir(repo)
+        try:
+            RUNNER.enforce_parallel_group_gate(plan_path, "run")
+        finally:
+            os.chdir(original)
+
     def test_directory_prefix_scope_is_rejected_before_worker_start(self) -> None:
         temporary, repo, plan_path = self.make_repo(
             ["dir/"], {"allowed.txt": "sibling\n", "dir/keep.txt": "before\n", "dir/remove.txt": "remove\n"}

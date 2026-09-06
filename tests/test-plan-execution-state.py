@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_SCRIPT = ROOT / "scripts/plan-execution-state.py"
+GROUP_SCRIPT = ROOT / "scripts/parallel-plan-state.py"
 RUNNER = ROOT / "scripts/run-sandboxed-plan-worker.py"
 SCENARIOS = ROOT / "tests/fixtures/orchestration/plan-restructuring-scenarios.json"
 HOLDOUT = ROOT / "tests/fixtures/orchestration/plan-restructuring-holdout.json"
@@ -5080,6 +5081,1254 @@ class PlanExecutionStateTest(unittest.TestCase):
 
     def source_path_for_runner(self) -> str:
         return self.plan.relative_to(self.repo).as_posix()
+
+
+class ParallelPlanGroupTest(unittest.TestCase):
+    """Group description admission and parent-owned parallel execution authority."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.repo = self.base / "repo"
+        (self.repo / "docs/plan/active").mkdir(parents=True)
+        (self.repo / "docs/plan/execution-groups").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"], cwd=self.repo, check=True
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.invalid/owner/repo.git"],
+            cwd=self.repo,
+            check=True,
+        )
+        self.alpha = self.write_plan("284", "alpha", ["src/alpha.py"])
+        self.beta = self.write_plan("285", "beta", ["src/beta.py"])
+        self.solo = self.write_plan("290", "solo", ["src/solo.py"])
+        self.alpha_path = "docs/plan/active/284-alpha.md"
+        self.beta_path = "docs/plan/active/285-beta.md"
+        self.solo_path = "docs/plan/active/290-solo.md"
+        self.description = self.repo / "docs/plan/execution-groups/alpha-beta.json"
+        self.write_description(self.group_document())
+        self.commit()
+        self.state = self.base / "group-state.json"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    # -- fixture helpers ------------------------------------------------
+
+    def write_plan(
+        self,
+        plan_id: str,
+        slug: str,
+        write_scope: list[str],
+        *,
+        extra: str = "",
+    ) -> Path:
+        body = (
+            f"# Plan {plan_id}\n\n"
+            "status: in_progress\n"
+            "plan_purpose: implementation\n"
+            f"primary_invariant: invariant {plan_id}\n"
+            "write_scope:\n"
+            + "".join(f"  - {entry}\n" for entry in write_scope)
+            + extra
+            + "context_files:\n  - AGENTS.md\n"
+            "\n## Tasks\n\n- [ ] implement\n"
+        )
+        path = self.repo / f"docs/plan/active/{plan_id}-{slug}.md"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def write_description(self, document: dict) -> None:
+        self.description.write_text(
+            json.dumps(document, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def scope_digest(self, entries: list[str]) -> str:
+        canonical = json.dumps(
+            [entry.rstrip("/") for entry in entries],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return digest(canonical)
+
+    def group_document(self) -> dict:
+        return {
+            "schema_version": 1,
+            "group_id": "alpha-beta",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint product modules with no shared interface",
+            "members": [
+                {
+                    "plan_id": "284",
+                    "plan_path": self.alpha_path,
+                    "plan_digest": digest(self.alpha.read_bytes()),
+                    "write_scope_digest": self.scope_digest(["src/alpha.py"]),
+                },
+                {
+                    "plan_id": "285",
+                    "plan_path": self.beta_path,
+                    "plan_digest": digest(self.beta.read_bytes()),
+                    "write_scope_digest": self.scope_digest(["src/beta.py"]),
+                },
+            ],
+        }
+
+    def commit(self, message: str = "fixture") -> str:
+        subprocess.run(["git", "add", "-A"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "--allow-empty", "-m", message], cwd=self.repo, check=True
+        )
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+
+    def run_group(self, *arguments: str, check: bool = False) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(GROUP_SCRIPT), *arguments],
+            cwd=self.repo,
+            check=check,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def initialize_group(self) -> str:
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        completed = self.run_group(
+            "group-init",
+            str(self.state),
+            "--group-description",
+            "docs/plan/execution-groups/alpha-beta.json",
+            "--target-ref",
+            "refs/heads/main",
+            "--start-commit",
+            head,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return head
+
+    def issue_permit(self, member: str, permit_id: str, workspace: str) -> Path:
+        output = self.base / f"{permit_id}.json"
+        completed = self.run_group(
+            "permit-issue",
+            str(self.state),
+            "--member",
+            member,
+            "--permit-id",
+            permit_id,
+            "--workspace-digest",
+            digest(workspace),
+            "--output",
+            str(output),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return output
+
+    def payload(self) -> dict:
+        return json.loads(self.state.read_text(encoding="utf-8"))
+
+    # -- committed group description admission --------------------------
+
+    def test_valid_group_description_is_admitted(self) -> None:
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("alpha-beta.json", completed.stdout)
+
+    def test_group_description_rejects_unsound_membership(self) -> None:
+        overlapping = self.write_plan("285", "beta", ["src/alpha.py/inner.py"])
+        document = self.group_document()
+        document["members"][1]["plan_digest"] = digest(overlapping.read_bytes())
+        document["members"][1]["write_scope_digest"] = self.scope_digest(
+            ["src/alpha.py/inner.py"]
+        )
+        self.write_description(document)
+        self.commit("overlap")
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("overlapping write scope", completed.stderr)
+
+    def test_group_description_rejects_validation_authority_scope(self) -> None:
+        self.write_plan("285", "beta", ["scripts/plan-execution-state.py"])
+        document = self.group_document()
+        document["members"][1]["plan_digest"] = digest(
+            (self.repo / self.beta_path).read_bytes()
+        )
+        document["members"][1]["write_scope_digest"] = self.scope_digest(
+            ["scripts/plan-execution-state.py"]
+        )
+        self.write_description(document)
+        self.commit("authority")
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("validation or specification authority", completed.stderr)
+
+    def test_group_description_rejects_member_to_member_dependency(self) -> None:
+        self.write_plan(
+            "284",
+            "alpha",
+            ["src/alpha.py"],
+            extra=f"predecessor_plans:\n  - {self.beta_path}\n",
+        )
+        document = self.group_document()
+        document["members"][0]["plan_digest"] = digest(self.alpha.read_bytes())
+        self.write_description(document)
+        self.commit("dependency")
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("member-to-member predecessor edge", completed.stderr)
+
+    def test_group_description_rejects_duplicate_and_short_membership(self) -> None:
+        duplicated = self.group_document()
+        duplicated["members"][1] = dict(duplicated["members"][0])
+        self.write_description(duplicated)
+        self.commit("duplicate")
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("duplicate member", completed.stderr)
+
+        single = self.group_document()
+        single["members"] = single["members"][:1]
+        self.write_description(single)
+        self.commit("single")
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("exactly 2 independent members", completed.stderr)
+
+    def test_group_description_cannot_contain_its_own_commit_or_digest(self) -> None:
+        embedded = self.group_document()
+        embedded["target_ref"] = "0" * 40
+        self.write_description(embedded)
+        self.commit("embedded commit")
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("exact local branch ref", completed.stderr)
+
+        self_referential = self.group_document()
+        self_referential["description_digest"] = digest("self")
+        self.write_description(self_referential)
+        self.commit("self digest")
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("unexpected keys", completed.stderr)
+
+    def test_group_description_rejects_stale_member_digests(self) -> None:
+        document = self.group_document()
+        self.write_plan("284", "alpha", ["src/alpha.py", "src/alpha-extra.py"])
+        self.write_description(document)
+        self.commit("stale")
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("plan digest does not match live bytes", completed.stderr)
+
+    def test_uncommitted_group_description_is_refused(self) -> None:
+        pending = self.group_document()
+        pending["group_id"] = "pending-group"
+        (self.repo / "docs/plan/execution-groups/pending.json").write_text(
+            json.dumps(pending, indent=2) + "\n", encoding="utf-8"
+        )
+        completed = self.run_group("validate-descriptions")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("committed", completed.stderr)
+
+    def test_invalid_description_fails_every_enrollment_gate_closed(self) -> None:
+        broken = self.group_document()
+        broken["declared_independence"] = "   "
+        self.write_description(broken)
+        self.commit("blank independence")
+        completed = self.run_group(
+            "check-enrollment", "--plan", self.solo_path, "--operation", "run"
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("declared_independence", completed.stderr)
+
+    # -- parent-owned runtime authority ---------------------------------
+
+    def test_group_state_is_private_and_bound_to_repository_identity(self) -> None:
+        self.initialize_group()
+        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o600)
+        payload = self.payload()
+        self.assertEqual(payload["group_id"], "alpha-beta")
+        self.assertEqual(payload["target_ref"], "refs/heads/main")
+        self.assertEqual(sorted(payload["members"]), [self.alpha_path, self.beta_path])
+        self.assertNotIn("example.invalid/owner/repo.git", json.dumps(payload))
+
+    def test_group_state_rejects_a_foreign_clone(self) -> None:
+        self.initialize_group()
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", "https://example.invalid/other/repo.git"],
+            cwd=self.repo,
+            check=True,
+        )
+        completed = self.run_group(
+            "permit-issue",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            "--workspace-digest",
+            digest("workspace"),
+            "--output",
+            str(self.base / "permit.json"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("repository", completed.stderr)
+
+    def test_group_state_rejects_description_drift_after_admission(self) -> None:
+        self.initialize_group()
+        drifted = self.group_document()
+        drifted["declared_independence"] = "changed rationale after admission"
+        self.write_description(drifted)
+        self.commit("drift")
+        completed = self.run_group(
+            "permit-issue",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            "--workspace-digest",
+            digest("workspace"),
+            "--output",
+            str(self.base / "permit.json"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("changed after admission", completed.stderr)
+
+    def test_member_permit_is_exclusive_and_not_replayable(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        completed = self.run_group(
+            "permit-issue",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a2",
+            "--workspace-digest",
+            digest("workspace-a"),
+            "--output",
+            str(self.base / "second.json"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("already holds an exclusive candidate permit", completed.stderr)
+
+        self.issue_permit(self.beta_path, "permit-b1", "workspace-b")
+        self.run_group(
+            "permit-release",
+            str(self.state),
+            "--member",
+            self.beta_path,
+            "--permit-id",
+            "permit-b1",
+            check=True,
+        )
+        completed = self.run_group(
+            "permit-issue",
+            str(self.state),
+            "--member",
+            self.beta_path,
+            "--permit-id",
+            "permit-b1",
+            "--workspace-digest",
+            digest("workspace-b"),
+            "--output",
+            str(self.base / "replay.json"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("replay", completed.stderr)
+
+    def test_independent_members_hold_separate_permits(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        self.issue_permit(self.beta_path, "permit-b1", "workspace-b")
+        payload = self.payload()
+        self.assertTrue(payload["members"][self.alpha_path]["permit"]["open"])
+        self.assertTrue(payload["members"][self.beta_path]["permit"]["open"])
+
+    def test_upstream_claim_is_consumed_exactly_once(self) -> None:
+        self.initialize_group()
+        self.run_group(
+            "claim-upstream", str(self.state), "--leaf-digest", digest("leaf"), check=True
+        )
+        completed = self.run_group(
+            "claim-upstream", str(self.state), "--leaf-digest", digest("other-leaf")
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("upstream accepted chain leaf", completed.stderr)
+
+    def test_publication_lease_has_one_owner_across_workspaces(self) -> None:
+        self.initialize_group()
+        self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--owner",
+            "parent-one",
+            check=True,
+        )
+        completed = self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.beta_path,
+            "--owner",
+            "parent-two",
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("publication lease", completed.stderr)
+        self.run_group(
+            "lease-release", str(self.state), "--owner", "parent-one", check=True
+        )
+        completed = self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.beta_path,
+            "--owner",
+            "parent-two",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_group_state_rejects_a_foreign_member(self) -> None:
+        self.initialize_group()
+        completed = self.run_group(
+            "permit-issue",
+            str(self.state),
+            "--member",
+            self.solo_path,
+            "--permit-id",
+            "permit-x",
+            "--workspace-digest",
+            digest("workspace"),
+            "--output",
+            str(self.base / "foreign.json"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(self.solo_path, completed.stderr)
+
+    def test_group_events_stay_bounded_and_hash_chained(self) -> None:
+        self.initialize_group()
+        payload = self.payload()
+        self.assertLessEqual(len(payload["events"]), 64)
+        self.assertTrue(payload["events"][0]["event_chain_digest"].startswith("sha256:"))
+        tampered = self.payload()
+        tampered["events"][0]["event_type"] = "forged"
+        self.state.write_text(json.dumps(tampered), encoding="utf-8")
+        completed = self.run_group("show", str(self.state))
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("event chain", completed.stderr)
+
+    # -- per-member bounded budgets -------------------------------------
+
+    def test_member_budgets_are_bounded_and_independent(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        for index in range(2):
+            completed = self.run_group(
+                "record-review",
+                str(self.state),
+                "--member",
+                self.alpha_path,
+                "--registry-path-digest",
+                digest("registry"),
+                "--registry-event-count",
+                str(index + 1),
+                "--registry-event-chain-digest",
+                digest(f"chain-{index}"),
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+        completed = self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--registry-path-digest",
+            digest("registry"),
+            "--registry-event-count",
+            "3",
+            "--registry-event-chain-digest",
+            digest("chain-3"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("exhausted its independent review budget", completed.stderr)
+
+        completed = self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.beta_path,
+            "--registry-path-digest",
+            digest("registry"),
+            "--registry-event-count",
+            "4",
+            "--registry-event-chain-digest",
+            digest("chain-4"),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_parent_adjustment_has_one_exclusive_unresolved_slot(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        self.run_group(
+            "adjust-reserve",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            "--incoming-candidate-digest",
+            digest("candidate"),
+            "--base-digest",
+            digest("base"),
+            check=True,
+        )
+        completed = self.run_group(
+            "adjust-reserve",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            "--incoming-candidate-digest",
+            digest("other-candidate"),
+            "--base-digest",
+            digest("base"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("already reserved and unresolved", completed.stderr)
+
+        completed = self.run_group(
+            "adjust-close",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            "--incoming-candidate-digest",
+            digest("other-candidate"),
+            "--patch-digest",
+            digest("patch"),
+        )
+        self.assertEqual(completed.returncode, 1)
+
+        self.run_group(
+            "adjust-close",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            "--incoming-candidate-digest",
+            digest("candidate"),
+            "--patch-digest",
+            digest("patch"),
+            check=True,
+        )
+        completed = self.run_group(
+            "adjust-reserve",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            "--incoming-candidate-digest",
+            digest("third"),
+            "--base-digest",
+            digest("base"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("single correction slot", completed.stderr)
+
+    def test_initial_generation_is_spent_once_per_logical_member(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        self.run_group(
+            "permit-release",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            check=True,
+        )
+        completed = self.run_group(
+            "permit-issue",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a2",
+            "--workspace-digest",
+            digest("workspace-a-second"),
+            "--output",
+            str(self.base / "second-generation.json"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("single initial generation", completed.stderr)
+
+    # -- baseline transfer ----------------------------------------------
+
+    def test_baseline_transfer_carries_counters_and_registry_proof(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--registry-path-digest",
+            digest("registry"),
+            "--registry-event-count",
+            "1",
+            "--registry-event-chain-digest",
+            digest("chain-1"),
+            check=True,
+        )
+        before = self.payload()["members"][self.alpha_path]
+        head = self.commit("new baseline")
+        completed = self.run_group(
+            "transfer-baseline",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--prior-permit-id",
+            "permit-a1",
+            "--new-permit-id",
+            "permit-a2",
+            "--new-base-commit",
+            head,
+            "--workspace-digest",
+            digest("workspace-a-transferred"),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        after = self.payload()["members"][self.alpha_path]
+        self.assertEqual(after["counters"], before["counters"])
+        self.assertEqual(
+            after["reviewer_registry_proof"], before["reviewer_registry_proof"]
+        )
+        self.assertEqual(after["baseline_generation"], before["baseline_generation"] + 1)
+        self.assertEqual(after["permit"]["permit_id"], "permit-a2")
+        self.assertNotEqual(
+            after["permit"]["workspace_digest"], before["permit"]["workspace_digest"]
+        )
+
+        completed = self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--registry-path-digest",
+            digest("registry"),
+            "--registry-event-count",
+            "2",
+            "--registry-event-chain-digest",
+            digest("chain-2"),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        completed = self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--registry-path-digest",
+            digest("registry"),
+            "--registry-event-count",
+            "3",
+            "--registry-event-chain-digest",
+            digest("chain-3"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("exhausted its independent review budget", completed.stderr)
+
+    def test_baseline_transfer_requires_the_exact_prior_permit(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        head = self.commit("new baseline")
+        completed = self.run_group(
+            "transfer-baseline",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--prior-permit-id",
+            "permit-unknown",
+            "--new-permit-id",
+            "permit-a2",
+            "--new-base-commit",
+            head,
+            "--workspace-digest",
+            digest("workspace"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("prior", completed.stderr)
+
+    def test_stopped_member_is_terminal_for_transfer_and_permits(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        self.run_group(
+            "member-stop",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--reason",
+            "replan_required",
+            check=True,
+        )
+        head = self.commit("new baseline")
+        completed = self.run_group(
+            "transfer-baseline",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--prior-permit-id",
+            "permit-a1",
+            "--new-permit-id",
+            "permit-a2",
+            "--new-base-commit",
+            head,
+            "--workspace-digest",
+            digest("workspace"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("terminal", completed.stderr)
+        completed = self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--registry-path-digest",
+            digest("registry"),
+            "--registry-event-count",
+            "1",
+            "--registry-event-chain-digest",
+            digest("chain"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("stopped", completed.stderr)
+
+    def test_member_stop_rejects_an_unknown_reason(self) -> None:
+        self.initialize_group()
+        completed = self.run_group(
+            "member-stop",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--reason",
+            "looks_fine",
+        )
+        self.assertEqual(completed.returncode, 1)
+
+    # -- fail-closed legacy gates ---------------------------------------
+
+    def test_every_gated_operation_refuses_an_enrolled_member(self) -> None:
+        for operation in (
+            "run",
+            "correct",
+            "validate",
+            "apply",
+            "execution",
+            "completion",
+            "finalization",
+            "archive",
+        ):
+            with self.subTest(operation=operation):
+                completed = self.run_group(
+                    "check-enrollment",
+                    "--plan",
+                    self.alpha_path,
+                    "--operation",
+                    operation,
+                )
+                self.assertEqual(completed.returncode, 1, completed.stdout)
+                self.assertIn("enrolled in execution group", completed.stderr)
+
+    def test_valid_permit_still_refuses_until_the_adapter_exists(self) -> None:
+        self.initialize_group()
+        permit = self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "run",
+            "--group-permit",
+            str(permit),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("grouped execution adapter", completed.stderr)
+
+    def test_forged_permit_is_refused_before_the_adapter_check(self) -> None:
+        self.initialize_group()
+        permit = self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        forged = json.loads(permit.read_text(encoding="utf-8"))
+        forged["group_description_digest"] = digest("forged")
+        forged_path = self.base / "forged.json"
+        forged_path.write_text(json.dumps(forged), encoding="utf-8")
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "run",
+            "--group-permit",
+            str(forged_path),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("different committed bytes", completed.stderr)
+
+    def test_ungrouped_plan_keeps_existing_behavior(self) -> None:
+        completed = self.run_group(
+            "check-enrollment", "--plan", self.solo_path, "--operation", "completion"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("ungrouped", completed.stdout)
+
+    def test_repository_without_group_directory_is_ungrouped(self) -> None:
+        shutil.rmtree(self.repo / "docs/plan/execution-groups")
+        self.commit("remove groups")
+        completed = self.run_group(
+            "check-enrollment", "--plan", self.alpha_path, "--operation", "run"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("ungrouped", completed.stdout)
+
+    def test_legacy_ledger_entrypoints_refuse_an_enrolled_member(self) -> None:
+        state = self.base / "execution.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(STATE_SCRIPT),
+                "init",
+                str(state),
+                "--run-id",
+                "run-1",
+                "--plan",
+                self.alpha_path,
+                "--plan-digest",
+                digest(self.alpha.read_text(encoding="utf-8")),
+                "--source-head",
+                subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+                ).strip(),
+                "--primary-invariant-digest",
+                digest("invariant 284"),
+                "--lifecycle-state",
+                str(self.base / "lifecycle.json"),
+                "--implementation-mode",
+                "candidate",
+            ],
+            cwd=self.repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("enrolled in execution group", completed.stderr)
+        self.assertFalse(state.exists())
+
+    def test_legacy_ledger_gate_check_refuses_an_enrolled_member(self) -> None:
+        """The gate must refuse on enrolment, not merely on a missing ledger."""
+
+        ledger = self.base / "execution.json"
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        opened = subprocess.run(
+            [
+                sys.executable,
+                str(STATE_SCRIPT),
+                "init",
+                str(ledger),
+                "--run-id",
+                "run-1",
+                "--plan",
+                self.solo_path,
+                "--plan-digest",
+                digest(self.solo.read_text(encoding="utf-8")),
+                "--source-head",
+                head,
+                "--primary-invariant-digest",
+                digest("invariant 290"),
+                "--lifecycle-state",
+                str(self.base / "lifecycle.json"),
+                "--implementation-mode",
+                "candidate",
+            ],
+            cwd=self.repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+
+        enrolling = self.group_document()
+        enrolling["group_id"] = "solo-group"
+        enrolling["members"][1] = {
+            "plan_id": "290",
+            "plan_path": self.solo_path,
+            "plan_digest": digest(self.solo.read_bytes()),
+            "write_scope_digest": self.scope_digest(["src/solo.py"]),
+        }
+        (self.repo / "docs/plan/execution-groups/solo-group.json").write_text(
+            json.dumps(enrolling, indent=2) + "\n", encoding="utf-8"
+        )
+        (self.repo / "docs/plan/execution-groups/alpha-beta.json").unlink()
+        self.commit("enroll the previously ungrouped plan")
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(STATE_SCRIPT),
+                "check",
+                str(ledger),
+                "--run-id",
+                "run-1",
+                "--plan",
+                self.solo_path,
+                "--operation",
+                "execution",
+            ],
+            cwd=self.repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("enrolled in execution group", completed.stderr)
+
+    # -- regressions from independent review ----------------------------
+
+    def test_uncommitted_worktree_deletion_does_not_unenroll_a_member(self) -> None:
+        """A tracked description removed only in the worktree must fail closed."""
+
+        self.description.unlink()
+        completed = self.run_group(
+            "check-enrollment", "--plan", self.alpha_path, "--operation", "completion"
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("tracked but missing from the working tree", completed.stderr)
+
+    def test_staged_removal_does_not_unenroll_a_member(self) -> None:
+        """A committed description keeps enrolling until its removal is committed."""
+
+        subprocess.run(
+            ["git", "rm", "-q", "docs/plan/execution-groups/alpha-beta.json"],
+            cwd=self.repo,
+            check=True,
+        )
+        completed = self.run_group(
+            "check-enrollment", "--plan", self.alpha_path, "--operation", "completion"
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("tracked but missing from the working tree", completed.stderr)
+
+        self.commit("commit the group removal")
+        completed = self.run_group(
+            "check-enrollment", "--plan", self.alpha_path, "--operation", "completion"
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("ungrouped", completed.stdout)
+
+    def test_truncated_description_fails_closed(self) -> None:
+        self.description.write_text("", encoding="utf-8")
+        completed = self.run_group(
+            "check-enrollment", "--plan", self.alpha_path, "--operation", "run"
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("differs from its committed bytes", completed.stderr)
+
+    def test_stray_files_do_not_block_ungrouped_plan_lifecycle(self) -> None:
+        """A scratch file beside a description must not brick serial execution."""
+
+        directory = self.repo / "docs/plan/execution-groups"
+        for stray in (".alpha-beta.json.swp", ".DS_Store", "notes.md", "alpha-beta.json.bak"):
+            with self.subTest(stray=stray):
+                scratch = directory / stray
+                scratch.write_text("scratch\n", encoding="utf-8")
+                try:
+                    completed = self.run_group(
+                        "check-enrollment",
+                        "--plan",
+                        self.solo_path,
+                        "--operation",
+                        "completion",
+                    )
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+                    self.assertIn("ungrouped", completed.stdout)
+                    enrolled = self.run_group(
+                        "check-enrollment",
+                        "--plan",
+                        self.alpha_path,
+                        "--operation",
+                        "completion",
+                    )
+                    self.assertEqual(enrolled.returncode, 1, enrolled.stdout)
+                    self.assertIn("enrolled in execution group", enrolled.stderr)
+                finally:
+                    scratch.unlink()
+
+    def test_worktree_rename_does_not_unenroll_a_member(self) -> None:
+        self.description.rename(self.description.with_suffix(".json.bak"))
+        completed = self.run_group(
+            "check-enrollment", "--plan", self.alpha_path, "--operation", "run"
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("tracked but missing from the working tree", completed.stderr)
+
+    def test_baseline_transfer_cannot_replenish_generation_budget(self) -> None:
+        """Transfers must advance a real baseline, not mint fresh permits."""
+
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+
+        def transfer(prior: str, new: str, commit: str) -> subprocess.CompletedProcess[str]:
+            return self.run_group(
+                "transfer-baseline",
+                str(self.state),
+                "--member",
+                self.alpha_path,
+                "--prior-permit-id",
+                prior,
+                "--new-permit-id",
+                new,
+                "--new-base-commit",
+                commit,
+                "--workspace-digest",
+                digest(new),
+            )
+
+        completed = transfer("permit-a1", "permit-a2", head)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("advance the recorded member baseline", completed.stderr)
+
+        completed = transfer("permit-a1", "permit-a2", "b" * 40)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("does not name a commit", completed.stderr)
+
+        unrelated = subprocess.check_output(
+            ["git", "commit-tree", f"{head}^{{tree}}", "-m", "unrelated"],
+            cwd=self.repo,
+            text=True,
+        ).strip()
+        completed = transfer("permit-a1", "permit-a2", unrelated)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("descendant of the recorded member baseline", completed.stderr)
+
+        advanced = self.commit("advance the baseline")
+        completed = transfer("permit-a1", "permit-a2", advanced)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        self.run_group(
+            "permit-release",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a2",
+            check=True,
+        )
+        further = self.commit("advance again")
+        completed = transfer("permit-a2", "permit-a3", further)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("exact open prior member permit", completed.stderr)
+
+    def test_terminal_stop_stays_recordable_after_event_pressure(self) -> None:
+        self.initialize_group()
+        for index in range(64):
+            acquired = self.run_group(
+                "lease-acquire",
+                str(self.state),
+                "--member",
+                self.alpha_path,
+                "--owner",
+                f"parent-{index}",
+            )
+            released = self.run_group(
+                "lease-release", str(self.state), "--owner", f"parent-{index}"
+            )
+            if acquired.returncode != 0 or released.returncode != 0:
+                break
+        completed = self.run_group(
+            "member-stop",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--reason",
+            "owner_stop",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            self.payload()["members"][self.alpha_path]["state"], "stopped"
+        )
+
+    def test_publication_lease_rejects_an_idempotent_reacquire(self) -> None:
+        self.initialize_group()
+        self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--owner",
+            "parent-one",
+            check=True,
+        )
+        completed = self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--owner",
+            "parent-one",
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("already holds the publication lease", completed.stderr)
+
+    def test_group_state_must_live_outside_the_repository(self) -> None:
+        outside = self.base / "outside"
+        outside.mkdir()
+        traversal = outside / ".." / "repo" / "state.json"
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        completed = self.run_group(
+            "group-init",
+            str(traversal),
+            "--group-description",
+            "docs/plan/execution-groups/alpha-beta.json",
+            "--target-ref",
+            "refs/heads/main",
+            "--start-commit",
+            head,
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("must be outside the repository", completed.stderr)
+        self.assertFalse((self.repo / "state.json").exists())
+
+    def test_non_canonical_write_scope_spellings_are_refused(self) -> None:
+        for spelling in ("./src/alpha.py", "src//alpha.py", "src/./alpha.py", "/src/alpha.py"):
+            with self.subTest(spelling=spelling):
+                self.write_plan("284", "alpha", [spelling])
+                document = self.group_document()
+                document["members"][0]["plan_digest"] = digest(self.alpha.read_bytes())
+                document["members"][0]["write_scope_digest"] = self.scope_digest([spelling])
+                self.write_description(document)
+                self.commit(f"scope {spelling}")
+                completed = self.run_group("validate-descriptions")
+                self.assertEqual(completed.returncode, 1, completed.stdout)
+                self.assertIn("write scope entries must", completed.stderr)
+
+    def test_reviews_must_advance_one_canonical_reviewer_registry(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--registry-path-digest",
+            digest("registry"),
+            "--registry-event-count",
+            "2",
+            "--registry-event-chain-digest",
+            digest("chain-2"),
+            check=True,
+        )
+        completed = self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--registry-path-digest",
+            digest("other-registry"),
+            "--registry-event-count",
+            "3",
+            "--registry-event-chain-digest",
+            digest("chain-3"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("one canonical reviewer registry", completed.stderr)
+
+        completed = self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--registry-path-digest",
+            digest("registry"),
+            "--registry-event-count",
+            "2",
+            "--registry-event-chain-digest",
+            digest("chain-9"),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("event count must advance", completed.stderr)
+
+    def test_released_permit_is_refused_against_the_runtime_record(self) -> None:
+        self.initialize_group()
+        permit = self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        self.run_group(
+            "permit-release",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            check=True,
+        )
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "run",
+            "--group-permit",
+            str(permit),
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("not the current open permit", completed.stderr)
+
+    def test_stopped_member_permit_is_refused_against_the_runtime_record(self) -> None:
+        self.initialize_group()
+        permit = self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        self.run_group(
+            "member-stop",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--reason",
+            "owner_stop",
+            check=True,
+        )
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "run",
+            "--group-permit",
+            str(permit),
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("stopped", completed.stderr)
+
+    def test_root_and_generated_group_authority_stay_identical(self) -> None:
+        generated = ROOT / "template/.project-agent-workflow/scripts/parallel-plan-state.py"
+        self.assertTrue(generated.exists())
+        self.assertEqual(GROUP_SCRIPT.read_bytes(), generated.read_bytes())
+        self.assertTrue(os.access(generated, os.X_OK))
 
 
 if __name__ == "__main__":

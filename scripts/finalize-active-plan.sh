@@ -5,6 +5,14 @@ set -eu
 src=$1
 case "$src" in docs/plan/active/[0-9][0-9][0-9]-*.md) ;; *) echo "expected active plan path" >&2; exit 2 ;; esac
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
+# An enrolled parallel execution group member is finalized through the grouped
+# adapter, never through this legacy serial entrypoint.
+[ -f scripts/parallel-plan-state.py ] || {
+  echo "missing parallel plan group authority: scripts/parallel-plan-state.py" >&2
+  exit 1
+}
+python3 scripts/parallel-plan-state.py check-enrollment \
+  --plan "$src" --operation finalization >/dev/null || exit 1
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
 [ "$status" = "ready_to_archive" ] || { echo "cannot finalize $src: status is $status, expected ready_to_archive" >&2; exit 1; }
 grep -q '^checked_summary_ja: .\+' "$src" || { echo "cannot finalize $src: missing non-empty checked_summary_ja" >&2; exit 1; }

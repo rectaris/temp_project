@@ -1688,4 +1688,86 @@ if (cd "$tmp/typescript" && HEADROOM_DISABLED=1 .project-agent-workflow/scripts/
 fi
 test ! -e "$tmp/typescript/.agent-logs/namespaced-policy"
 
+# The generated project installs the parallel group authority and preserves a
+# committed execution group description across its own lint and lifecycle paths.
+test -f "$tmp/typescript/.project-agent-workflow/scripts/parallel-plan-state.py"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/parallel-plan-state.py"
+grep -q 'Parallel Execution Groups' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+(cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-execution-groups >/dev/null)
+
+group_project="$tmp/typescript"
+mkdir -p "$group_project/docs/plan/execution-groups"
+(cd "$group_project" && create_admitted_plan active group-alpha \
+  --summary "Exercise the parallel execution group gate." \
+  --summary-ja "並行実行グループの門を検証する。" >/dev/null)
+group_alpha=$(cd "$group_project" && ls docs/plan/active/*-group-alpha.md | head -n 1)
+(cd "$group_project" && create_admitted_plan active group-beta \
+  --summary "Exercise the parallel execution group partner." \
+  --summary-ja "並行実行グループの相手側を検証する。" >/dev/null)
+group_beta=$(cd "$group_project" && ls docs/plan/active/*-group-beta.md | head -n 1)
+python3 - "$group_project" "$group_alpha" "$group_beta" <<'SMOKE_GROUP_EOF'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+project = Path(sys.argv[1])
+members = []
+for relative in sys.argv[2:]:
+    plan = project / relative
+    text = plan.read_text(encoding="utf-8")
+    scope = re.search(r"^write_scope:\n((?:  - .*\n)+)", text, re.MULTILINE)
+    if scope is None:
+        raise SystemExit(f"generated plan has no write scope: {relative}")
+    entries = [
+        line.strip()[2:].strip().rstrip("/") for line in scope.group(1).splitlines()
+    ]
+    members.append(
+        {
+            "plan_id": Path(relative).name.split("-", 1)[0],
+            "plan_path": relative,
+            "plan_digest": "sha256:"
+            + hashlib.sha256(plan.read_bytes()).hexdigest(),
+            "write_scope_digest": "sha256:"
+            + hashlib.sha256(
+                json.dumps(entries, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
+        }
+    )
+(project / "docs/plan/execution-groups/smoke.json").write_text(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "group_id": "smoke",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint generated modules with no shared interface",
+            "members": members,
+        },
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+SMOKE_GROUP_EOF
+git -C "$group_project" add -A
+git -C "$group_project" commit -qm "generated execution group"
+(cd "$group_project" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-execution-groups >/dev/null)
+if (cd "$group_project" && .project-agent-workflow/scripts/complete-plan.sh "$group_alpha" \
+    >/dev/null 2>"$tmp/generated-group-complete.err"); then
+  echo "generated complete-plan accepted an enrolled execution group member" >&2
+  exit 1
+fi
+grep -q 'enrolled in execution group' "$tmp/generated-group-complete.err"
+if (cd "$group_project" && .project-agent-workflow/scripts/finalize-active-plan.sh "$group_beta" \
+    >/dev/null 2>"$tmp/generated-group-finalize.err"); then
+  echo "generated finalize-active-plan accepted an enrolled execution group member" >&2
+  exit 1
+fi
+grep -q 'enrolled in execution group' "$tmp/generated-group-finalize.err"
+test -f "$group_project/docs/plan/execution-groups/smoke.json"
+git -C "$group_project" diff --quiet -- docs/plan/execution-groups/smoke.json
+
 echo "smoke test passed"

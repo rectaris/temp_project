@@ -6,7 +6,13 @@ tmp=${TMPDIR:-/tmp}/project-agent-workflow-root-plan-$$
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 mkdir -p "$tmp/scripts" "$tmp/docs/plan/active" "$tmp/docs/plan/checked"
-cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" "$tmp/scripts/"
+cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" \
+  "$root/scripts/parallel-plan-state.py" "$tmp/scripts/"
+# The lifecycle entrypoints consult the parallel group authority, which resolves
+# enrolment from the repository, so the fixture is a real Git repository.
+git -C "$tmp" init -q -b main
+git -C "$tmp" config user.email "test@example.invalid"
+git -C "$tmp" config user.name "Test"
 
 cat >"$tmp/docs/plan/active/001-sample.md" <<'EOF'
 # Sample root plan
@@ -180,5 +186,152 @@ python3 "$policy" --check-plan-admission "$durable_path" \
   >"$tmp/admission/durable.out"
 grep -q 'predates the admission boundary' "$tmp/admission/durable.out"
 grep -q '^status: [a-z_]*$' "$durable_path"
+
+# An enrolled parallel execution group member is refused by the legacy serial
+# completion and finalization entrypoints even when it is otherwise ready.
+grouped="$tmp/grouped"
+mkdir -p "$grouped/scripts" "$grouped/docs/plan/active" "$grouped/docs/plan/execution-groups"
+cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" \
+  "$root/scripts/parallel-plan-state.py" "$grouped/scripts/"
+git -C "$grouped" init -q -b main
+git -C "$grouped" config user.email "test@example.invalid"
+git -C "$grouped" config user.name "Test"
+
+write_group_member() {
+  cat >"$grouped/docs/plan/active/$1" <<GROUP_MEMBER_EOF
+# Group member $2
+
+status: $3
+plan_purpose: implementation
+primary_invariant: invariant $2
+execution_group: docs/plan/execution-groups/lifecycle.json
+write_scope:
+  - src/$2.py
+context_files:
+  - AGENTS.md
+checked_summary_ja: グループ構成員を完了する。
+
+## Tasks
+
+-  [x] finished
+
+## Validation Notes
+
+1. Fixture validation.
+GROUP_MEMBER_EOF
+}
+
+cat >"$grouped/docs/plan/checked.md" <<'GROUP_CHECKED_EOF'
+# Checked Plan Index
+
+id	path
+GROUP_CHECKED_EOF
+
+write_group_member "284-alpha.md" alpha ready_to_archive
+write_group_member "285-beta.md" beta in_progress
+cat >"$grouped/docs/plan/plan.md" <<'GROUP_INDEX_EOF'
+# Active Plan
+
+id	path	status
+284	docs/plan/active/284-alpha.md	ready_to_archive
+285	docs/plan/active/285-beta.md	in_progress
+GROUP_INDEX_EOF
+python3 - "$grouped" <<'GROUP_DESCRIPTION_EOF'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+fixture = Path(sys.argv[1])
+
+
+def group_digest(value):
+    data = value if isinstance(value, bytes) else str(value).encode("utf-8")
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+members = []
+for plan_id, slug in (("284", "alpha"), ("285", "beta")):
+    relative = f"docs/plan/active/{plan_id}-{slug}.md"
+    members.append(
+        {
+            "plan_id": plan_id,
+            "plan_path": relative,
+            "plan_digest": group_digest((fixture / relative).read_bytes()),
+            "write_scope_digest": group_digest(
+                json.dumps([f"src/{slug}.py"], sort_keys=True, separators=(",", ":"))
+            ),
+        }
+    )
+(fixture / "docs/plan/execution-groups/lifecycle.json").write_text(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "group_id": "lifecycle",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint fixture modules with no shared interface",
+            "members": members,
+        },
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+GROUP_DESCRIPTION_EOF
+git -C "$grouped" add -A
+git -C "$grouped" commit -qm "grouped fixture"
+
+if (cd "$grouped" && scripts/complete-plan.sh docs/plan/active/285-beta.md \
+    >/dev/null 2>"$tmp/grouped-complete.err"); then
+  echo "root complete-plan accepted an enrolled execution group member" >&2
+  exit 1
+fi
+grep -q 'enrolled in execution group' "$tmp/grouped-complete.err"
+grep -q '^status: in_progress$' "$grouped/docs/plan/active/285-beta.md"
+
+if (cd "$grouped" && scripts/finalize-active-plan.sh docs/plan/active/284-alpha.md \
+    >/dev/null 2>"$tmp/grouped-finalize.err"); then
+  echo "root finalize-active-plan accepted an enrolled execution group member" >&2
+  exit 1
+fi
+grep -q 'enrolled in execution group' "$tmp/grouped-finalize.err"
+grep -q '^status: ready_to_archive$' "$grouped/docs/plan/active/284-alpha.md"
+
+# A missing group authority module must fail closed, never silently skip the gate.
+mv "$grouped/scripts/parallel-plan-state.py" "$grouped/parallel-plan-state.py.away"
+if (cd "$grouped" && scripts/finalize-active-plan.sh docs/plan/active/284-alpha.md \
+    >/dev/null 2>"$tmp/grouped-missing-authority.err"); then
+  echo "root finalize-active-plan proceeded without the group authority module" >&2
+  exit 1
+fi
+grep -q 'missing parallel plan group authority' "$tmp/grouped-missing-authority.err"
+grep -q '^status: ready_to_archive$' "$grouped/docs/plan/active/284-alpha.md"
+mv "$grouped/parallel-plan-state.py.away" "$grouped/scripts/parallel-plan-state.py"
+
+# A tracked description removed only in the worktree must not un-enrol a member.
+mv "$grouped/docs/plan/execution-groups/lifecycle.json" "$tmp/lifecycle-detached.json"
+if (cd "$grouped" && scripts/complete-plan.sh docs/plan/active/285-beta.md \
+    >/dev/null 2>"$tmp/grouped-detached.err"); then
+  echo "root complete-plan accepted a member after a worktree-only group deletion" >&2
+  exit 1
+fi
+grep -q 'tracked but missing from the working tree' "$tmp/grouped-detached.err"
+grep -q '^status: in_progress$' "$grouped/docs/plan/active/285-beta.md"
+mv "$tmp/lifecycle-detached.json" "$grouped/docs/plan/execution-groups/lifecycle.json"
+
+# The same entrypoints keep working for an ungrouped plan in the same repository.
+write_group_member "290-solo.md" solo ready_to_archive
+sed -i '/^execution_group: /d' "$grouped/docs/plan/active/290-solo.md"
+printf '290\tdocs/plan/active/290-solo.md\tready_to_archive\n' >>"$grouped/docs/plan/plan.md"
+git -C "$grouped" add -A
+git -C "$grouped" commit -qm "ungrouped fixture"
+(cd "$grouped" && scripts/finalize-active-plan.sh docs/plan/active/290-solo.md >/dev/null)
+[ ! -e "$grouped/docs/plan/active/290-solo.md" ] || {
+  echo "root finalize-active-plan left an ungrouped plan in the active directory" >&2
+  exit 1
+}
+archived=$(find "$grouped/docs/plan/checked" -name '290-solo.md' | head -n 1)
+[ -n "$archived" ] || { echo "root finalize-active-plan did not archive an ungrouped plan" >&2; exit 1; }
+grep -q '^status: checked$' "$archived"
 
 echo "root plan lifecycle test passed"

@@ -73,6 +73,22 @@ Classify every change into exactly one tier before creating plan artifacts. Plan
 - Never lower a recorded tier without explicit user authorization.
 - Do not route Tier 0 or Tier 1 work through the restructuring contract. Use the bounded descope transition or stop them instead.
 
+## Parallel Execution Groups
+
+Serial execution stays the default. An explicitly admitted execution group is the only way two numbered plans may be `in_progress` at once, and it grants isolated candidate generation only; it never grants product publication by itself.
+
+- Declare membership in one committed project-owned description under `docs/plan/execution-groups/<slug>.json` with `schema_version: 1`, one `group_id`, one exact local `target_ref`, bounded `declared_independence`, and exactly two members. Each member records `plan_id`, `plan_path`, `plan_digest`, and `write_scope_digest`.
+- The description carries no runtime authority. It never contains its own containing commit or a digest of itself, and no record is trusted because of its path or origin URL.
+- Reference the description from a member plan with the optional `execution_group` manifest field. The reference must name the same validated description that enrolls that plan.
+- An enrolled member remains a numbered implementation plan and keeps its normal purpose, feasibility, completion witness, scope, approval, specification, and predecessor checks.
+- Reject known write-scope overlap between members, a member write scope that reaches validation or specification authority, member-to-member predecessor edges, and a declared dependence on unfinished member output. Distinct paths alone never prove semantic independence.
+- Commit the complete member plans and the group description first. Parent admission then captures the containing clean `HEAD` as the common executable start commit and records it only in the external runtime record.
+- Own mutable runtime authority in one parent-owned record outside the repository, created and advanced with `.project-agent-workflow/scripts/parallel-plan-state.py`. It binds repository identity, group identity, and the start commit, and it owns exclusive member permits, one upstream claim, one publication lease, per-member budgets, and per-member stop state.
+- Each logical member, not the group, owns its one initial generation, one correction, and two independent reviews. A source-baseline transfer consumes the exact prior member permit and carries the counters, stop state, and reviewer-registry proof to the new baseline identity without resetting them.
+- Reserve the single parent-adjustment slot before a substantive parent edit of assembled candidate bytes and close it against the resulting patch digest. A reserved adjustment blocks a second adjustment and a later worker correction, and an interrupted adjustment stays spent until exact same-attempt recovery or an owner stop.
+- Keep member stop states terminal for that member execution. Transfer, regrouping, or another workspace never clears them.
+- Until the grouped execution adapter is installed, every legacy run, correction, validation, apply, completion, and finalization path refuses an enrolled member before worker prerequisites, validation, apply, or lifecycle writes, with or without an otherwise valid permit. Ungrouped plans keep their existing behavior unchanged.
+
 ## Rules
 
 - Create or update an active plan before non-trivial edits, except for Tier 0 changes.

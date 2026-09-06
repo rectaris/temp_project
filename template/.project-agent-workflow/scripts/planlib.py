@@ -70,6 +70,7 @@ SCALAR_KEYS = {
     "checked_summary_ja",
     "completion_deferred_reason",
     "primary_invariant",
+    "execution_group",
     "replan_source",
     "replan_contract",
     "validation_witness_schema",

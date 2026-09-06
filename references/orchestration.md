@@ -40,6 +40,8 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 
 - Select the runnable active plan from the active-plan index (`docs/plan/plan.md`) by finding the one row whose `status` column is `in_progress` and whose plan file also declares `status: in_progress`.
 - Reject zero runnable rows (no work to do), multiple runnable rows (ambiguous selection), duplicate ids or paths, index/file status mismatch, malformed index rows, and a selected plan with unresolved predecessor inputs.
+- Admit multiple runnable rows only when they are exactly the member set of one validated committed execution group under `docs/plan/execution-groups/`. Any other multiple-runnable state stays ambiguous and is rejected, and the ungrouped selector keeps its existing single-runnable behavior.
+- Refuse an enrolled execution group member on every legacy serial run, correction, validation, apply, completion, and finalization path until the grouped execution adapter is installed. Isolated candidate generation for a member comes from its exclusive permit in the parent-owned `scripts/parallel-plan-state.py` record, never from repeated legacy predecessor proofs, and only the fully accepted group exposes one successor claim.
 - Integer prefixes are immutable identities and archive ordering only; do not use them as the runnable-plan selector. A lower-numbered deferred plan does not block the selected runnable plan.
 
 ## Delegation Rules

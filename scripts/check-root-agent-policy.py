@@ -57,7 +57,7 @@ ADMISSION_LIFECYCLE_PREFIXES = (
     ".agent-logs/",
     ".agent-artifacts/",
 )
-ADMISSION_SCALAR_KEYS = {"status", "plan_purpose"}
+ADMISSION_SCALAR_KEYS = {"status", "plan_purpose", "execution_group"}
 ADMISSION_LIST_KEYS = {
     "write_scope",
     "focused_validation",
@@ -2844,6 +2844,64 @@ def check_plan_admission_boundary() -> None:
             check_plan_admission(relative, parse_plan_manifest(path.read_text(encoding="utf-8")))
 
 
+def load_parallel_group_module():
+    """Load the shared group-description authority used by root and generated lint."""
+
+    path = ROOT / "scripts/parallel-plan-state.py"
+    if not path.is_file():
+        fail("scripts/parallel-plan-state.py is required for execution group policy")
+    spec = importlib.util.spec_from_file_location("root_parallel_group", path)
+    if spec is None or spec.loader is None:
+        fail("could not load the parallel plan group authority")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def execution_group_members() -> dict[str, str]:
+    """Return every enrolled member plan path mapped to its group description."""
+
+    module = load_parallel_group_module()
+    try:
+        groups = module.load_group_descriptions(ROOT)
+    except module.GroupError as exc:
+        fail(f"invalid execution group description: {exc}")
+    enrolled: dict[str, str] = {}
+    for label, group in groups.items():
+        for plan_path in group["members"]:
+            enrolled[plan_path] = label
+    return enrolled
+
+
+def check_execution_groups() -> None:
+    directory = ROOT / "docs/plan/execution-groups"
+    if directory.is_dir():
+        for path in sorted(directory.iterdir()):
+            if path.is_dir() or path.suffix != ".json":
+                fail(
+                    "docs/plan/execution-groups may contain only group description "
+                    f"JSON files: {path.relative_to(ROOT)}"
+                )
+    enrolled = execution_group_members()
+    active_dir = ROOT / "docs/plan/active"
+    if active_dir.is_dir():
+        for path in sorted(active_dir.glob("[0-9][0-9][0-9]-*.md")):
+            relative = str(path.relative_to(ROOT))
+            values = parse_plan_manifest(path.read_text(encoding="utf-8"))
+            declared = values.get("execution_group", "")
+            assert isinstance(declared, str)
+            if not declared:
+                continue
+            if enrolled.get(relative) != declared:
+                fail(
+                    f"{relative} declares execution_group {declared!r}, which does "
+                    "not name a validated group description enrolling this plan"
+                )
+    for plan_path in sorted(enrolled):
+        if not (ROOT / plan_path).is_file():
+            fail(f"execution group enrolls a missing plan: {plan_path}")
+
+
 def check_active_plans() -> None:
     active_dir = ROOT / "docs/plan/active"
     if not active_dir.exists():
@@ -2866,6 +2924,7 @@ def check_active_plans() -> None:
     seen_ids: set[str] = set()
     seen_paths: set[str] = set()
     runnable_rows: list[str] = []
+    runnable_paths: list[str] = []
     for line in lines[header_idx + 1:]:
         stripped = line.strip()
         if not stripped:
@@ -2893,8 +2952,22 @@ def check_active_plans() -> None:
             fail(f"active index status '{row_status}' does not match plan file status '{file_status}' for {row_path}")
         if row_status == "in_progress":
             runnable_rows.append(row_id)
+            runnable_paths.append(row_path)
     if len(runnable_rows) > 1:
-        fail(f"multiple runnable plans in active index: {', '.join(runnable_rows)}")
+        enrolled = execution_group_members()
+        groups = {enrolled.get(path) for path in runnable_paths}
+        if None in groups or len(groups) != 1:
+            fail(
+                "multiple runnable plans in active index: "
+                + ", ".join(runnable_rows)
+            )
+        label = groups.pop()
+        members = {path for path, group in enrolled.items() if group == label}
+        if set(runnable_paths) != members:
+            fail(
+                "runnable plans do not match the exact membership of "
+                f"{label}: {', '.join(runnable_rows)}"
+            )
 
 
 def self_test() -> None:
@@ -3207,6 +3280,7 @@ def main() -> int:
     check_namespaced_documentation_targets()
     check_orchestration_policy(include_holdout=args.include_holdout)
     check_plan_admission_boundary()
+    check_execution_groups()
     check_active_plans()
     print("root agent policy check passed")
     return 0

@@ -37,6 +37,15 @@ if [ "$check_only" -eq 1 ]; then
   exit 0
 fi
 
+# An enrolled parallel execution group member is completed through the grouped
+# adapter, never through this legacy serial entrypoint.
+[ -f scripts/parallel-plan-state.py ] || {
+  echo "missing parallel plan group authority: scripts/parallel-plan-state.py" >&2
+  exit 1
+}
+python3 scripts/parallel-plan-state.py check-enrollment \
+  --plan "$src" --operation completion >/dev/null || exit 1
+
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
 case "$status" in
   in_progress) ;;

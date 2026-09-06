@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -435,6 +436,65 @@ def lint_active_plan_body(path: Path) -> None:
             fail(f"{path} contains an option-analysis matrix; keep full deliberation outside active plans")
 
 
+def load_parallel_group_module():
+    """Load the shared group-description authority used by root and generated lint."""
+
+    path = Path(__file__).with_name("parallel-plan-state.py")
+    if not path.is_file():
+        fail("parallel-plan-state.py is required for execution group policy")
+    spec = importlib.util.spec_from_file_location("generated_parallel_group", path)
+    if spec is None or spec.loader is None:
+        fail("could not load the parallel plan group authority")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def execution_group_members() -> dict[str, str]:
+    """Return every enrolled member plan path mapped to its group description."""
+
+    module = load_parallel_group_module()
+    try:
+        groups = module.load_group_descriptions(ROOT)
+    except module.GroupError as exc:
+        fail(f"invalid execution group description: {exc}")
+    enrolled: dict[str, str] = {}
+    for label, group in groups.items():
+        for plan_path in group["members"]:
+            enrolled[plan_path] = label
+    return enrolled
+
+
+def lint_execution_groups() -> None:
+    directory = ROOT / "docs/plan/execution-groups"
+    if directory.is_dir():
+        for path in sorted(directory.iterdir()):
+            if path.is_dir() or path.suffix != ".json":
+                fail(
+                    "docs/plan/execution-groups may contain only group description "
+                    f"JSON files: {path.relative_to(ROOT)}"
+                )
+    enrolled = execution_group_members()
+    if planlib.ACTIVE_DIR.exists():
+        for path in sorted(planlib.ACTIVE_DIR.glob("[0-9][0-9][0-9]-*.md")):
+            relative = str(path.relative_to(ROOT))
+            try:
+                values = planlib.parse_manifest(path)
+            except planlib.PlanError as exc:
+                fail(str(exc))
+            declared = planlib.manifest_scalar(values, "execution_group")
+            if not declared:
+                continue
+            if enrolled.get(relative) != declared:
+                fail(
+                    f"{relative} declares execution_group {declared!r}, which does "
+                    "not name a validated group description enrolling this plan"
+                )
+    for plan_path in sorted(enrolled):
+        if not (ROOT / plan_path).is_file():
+            fail(f"execution group enrolls a missing plan: {plan_path}")
+
+
 def lint_manifests() -> None:
     for directory in planlib.OPEN_PLAN_DIRS:
         if not directory.exists():
@@ -542,6 +602,11 @@ def main() -> int:
     parser.add_argument("--rewrite-status", nargs=2, metavar=("PATH", "STATUS"))
     parser.add_argument("--copy-status-exclusive", nargs=3, metavar=("SOURCE", "DESTINATION", "STATUS"))
     parser.add_argument("--complete-transition", nargs=3, metavar=("ID", "PATH", "OLD_STATUS"))
+    parser.add_argument(
+        "--check-execution-groups",
+        action="store_true",
+        help="validate committed parallel execution group descriptions",
+    )
     args = parser.parse_args()
     if args.next_id:
         print(next_id())
@@ -617,10 +682,15 @@ def main() -> int:
         except planlib.PlanError as exc:
             fail(str(exc))
         return 0
+    if args.check_execution_groups:
+        lint_execution_groups()
+        print("execution group lint passed")
+        return 0
     lint_plan_index()
     lint_checked_index()
     lint_replanned_index()
     lint_manifests()
+    lint_execution_groups()
     try:
         planlib.validate_active_plan_predecessors()
     except planlib.PlanError as exc:

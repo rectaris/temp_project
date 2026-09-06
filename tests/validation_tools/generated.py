@@ -18,6 +18,168 @@ from .support import (
 
 
 class GeneratedCiTest(unittest.TestCase):
+    GENERATED_LINT = ROOT / "template/.project-agent-workflow/scripts/lint-plan-docs.py"
+    GENERATED_GROUP_AUTHORITY = (
+        ROOT / "template/.project-agent-workflow/scripts/parallel-plan-state.py"
+    )
+
+    def build_generated_group_project(self, directory: Path, *, valid: bool = True) -> None:
+        """Create a generated-layout project holding one execution group description."""
+
+        import hashlib
+        import json
+
+        workflow = directory / ".project-agent-workflow"
+        (directory / "docs/plan/active").mkdir(parents=True)
+        (directory / "docs/plan/execution-groups").mkdir(parents=True)
+        (workflow / "scripts").mkdir(parents=True)
+        for name in (
+            "parallel-plan-state.py",
+            "lint-plan-docs.py",
+            "planlib.py",
+            "plan_validation_commands.py",
+        ):
+            source = ROOT / "template/.project-agent-workflow/scripts" / name
+            (workflow / "scripts" / name).write_bytes(source.read_bytes())
+        subprocess.run(["git", "init", "-q", "-b", "main", str(directory)], check=True)
+        subprocess.run(["git", "-C", str(directory), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(directory), "config", "user.email", "test@example.invalid"],
+            check=True,
+        )
+
+        def group_digest(value) -> str:
+            data = value if isinstance(value, bytes) else str(value).encode("utf-8")
+            return "sha256:" + hashlib.sha256(data).hexdigest()
+
+        members = []
+        for plan_id, slug, scope in (("284", "alpha", "src/alpha.py"), ("285", "beta", "src/beta.py")):
+            relative = f"docs/plan/active/{plan_id}-{slug}.md"
+            body = (
+                f"# Plan {plan_id}\n\n"
+                "status: in_progress\n"
+                "plan_purpose: implementation\n"
+                f"primary_invariant: invariant {plan_id}\n"
+                "execution_group: docs/plan/execution-groups/alpha-beta.json\n"
+                f"write_scope:\n  - {scope}\n"
+                "context_files:\n  - AGENTS.md\n"
+                "\n## Tasks\n\n- [ ] implement\n"
+            )
+            (directory / relative).write_text(body, encoding="utf-8")
+            members.append(
+                {
+                    "plan_id": plan_id,
+                    "plan_path": relative,
+                    "plan_digest": group_digest(body.encode("utf-8")),
+                    "write_scope_digest": group_digest(
+                        json.dumps([scope], sort_keys=True, separators=(",", ":"))
+                    ),
+                }
+            )
+        if not valid:
+            members[1]["write_scope_digest"] = group_digest("wrong")
+        description = {
+            "schema_version": 1,
+            "group_id": "alpha-beta",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint modules with no shared interface",
+            "members": members,
+        }
+        (
+            directory / "docs/plan/execution-groups/alpha-beta.json"
+        ).write_text(json.dumps(description, indent=2) + "\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(directory), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(directory), "commit", "-qm", "fixture"], check=True)
+
+    def run_generated_group_lint(self, directory: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable,
+                ".project-agent-workflow/scripts/lint-plan-docs.py",
+                "--check-execution-groups",
+            ],
+            cwd=directory,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def test_generated_lint_accepts_a_valid_execution_group(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "project"
+            directory.mkdir()
+            self.build_generated_group_project(directory)
+            completed = self.run_generated_group_lint(directory)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_generated_lint_rejects_an_invalid_execution_group(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "project"
+            directory.mkdir()
+            self.build_generated_group_project(directory, valid=False)
+            completed = self.run_generated_group_lint(directory)
+            self.assertEqual(completed.returncode, 1)
+            self.assertIn("write scope digest", completed.stderr)
+
+    def test_generated_lint_accepts_a_project_without_execution_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "project"
+            directory.mkdir()
+            self.build_generated_group_project(directory)
+            for path in (directory / "docs/plan/execution-groups").iterdir():
+                path.unlink()
+            for plan_id, slug in (("284", "alpha"), ("285", "beta")):
+                plan = directory / f"docs/plan/active/{plan_id}-{slug}.md"
+                plan.write_text(
+                    plan.read_text(encoding="utf-8").replace(
+                        "execution_group: docs/plan/execution-groups/alpha-beta.json\n",
+                        "",
+                    ),
+                    encoding="utf-8",
+                )
+            subprocess.run(["git", "-C", str(directory), "add", "-A"], check=True)
+            subprocess.run(
+                ["git", "-C", str(directory), "commit", "-qm", "remove groups"], check=True
+            )
+            completed = self.run_generated_group_lint(directory)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_generated_lint_fails_closed_on_a_worktree_only_group_deletion(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "project"
+            directory.mkdir()
+            self.build_generated_group_project(directory)
+            (directory / "docs/plan/execution-groups/alpha-beta.json").unlink()
+            completed = self.run_generated_group_lint(directory)
+            self.assertEqual(completed.returncode, 1, completed.stdout)
+            self.assertIn("tracked but missing from the working tree", completed.stderr)
+
+    def test_generated_group_authority_matches_the_root_authority(self) -> None:
+        root_authority = ROOT / "scripts/parallel-plan-state.py"
+        self.assertEqual(
+            root_authority.read_bytes(), self.GENERATED_GROUP_AUTHORITY.read_bytes()
+        )
+        self.assertTrue(os.access(self.GENERATED_GROUP_AUTHORITY, os.X_OK))
+
+    def test_group_authority_is_registered_in_the_install_inventory(self) -> None:
+        inventory = load_module(
+            ROOT / "scripts/project_workflow/copier_inventory.py", "group_inventory"
+        )
+        self.assertIn("scripts/parallel-plan-state.py", inventory.SOURCE_REQUIRED)
+        self.assertIn(
+            "template/.project-agent-workflow/scripts/parallel-plan-state.py",
+            inventory.SOURCE_REQUIRED,
+        )
+        self.assertIn(
+            ".project-agent-workflow/scripts/parallel-plan-state.py",
+            inventory.GENERATED_REQUIRED,
+        )
+
+    def test_default_generated_lint_checks_execution_groups(self) -> None:
+        text = self.GENERATED_LINT.read_text(encoding="utf-8")
+        self.assertIn("--check-execution-groups", text)
+        self.assertIn("lint_execution_groups()", text)
+
     def test_generated_workflow_is_namespaced_and_workflow_scoped(self) -> None:
         root_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         workflow = (ROOT / "template/.github/workflows/project-agent-workflow.yml").read_text(encoding="utf-8")

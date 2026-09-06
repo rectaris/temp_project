@@ -839,6 +839,7 @@ def require_shared_human_report_boundary() -> None:
 PLAN_WORKFLOW_ALIGNED_SECTIONS = (
     "Plan Admission Contract",
     "Implementation Tiers",
+    "Parallel Execution Groups",
     "Bounded Descope",
     "Review-Finding Budgets",
     "Successor Backlog Deferral",
