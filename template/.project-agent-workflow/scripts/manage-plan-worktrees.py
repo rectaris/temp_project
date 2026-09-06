@@ -1,175 +1,107 @@
 #!/usr/bin/env python3
-"""Create, inspect, and resume parent-owned Git worktrees."""
+"""Create, inspect, prepare, resume, and retire parent-owned task worktrees.
+
+Every repository-changing task performs its writes in one exact task-bound
+linked worktree. This command owns the mutating half of that boundary. The
+read-only assertion every other supported surface shares lives in the
+worktree guard module this command imports.
+
+A task identity is exactly one of a committed numbered plan or a bounded
+direct task. The two variants never share ownership-record key material, so
+a direct task can never impersonate a plan.
+"""
 
 from __future__ import annotations
 
 import argparse
-import fcntl
-import hashlib
-import json
+import importlib.util
 import os
-import pwd
-import re
+import json
 import stat
 import subprocess
 import sys
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 
-SCHEMA_VERSION = 1
-MAX_RECORD_BYTES = 65_536
-MAX_LEASE_SECONDS = 86_400
-OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
-OID_RE = re.compile(r"[0-9a-f]{40,64}")
-DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
-BRANCH_REF_RE = re.compile(r"refs/heads/[^\x00-\x20~^:?*\\\[]+")
-RECORD_KEYS = {
-    "schema_version",
-    "repository_identity",
-    "plan",
-    "start_commit",
-    "accepted_tip",
-    "branch_ref",
-    "allowed_root",
-    "worktree_path",
-    "worktree_identity",
-    "owner",
-    "content_digest",
-}
-REPOSITORY_KEYS = {
-    "origin_identity",
-    "common_git_dir",
-    "common_git_dir_device",
-    "common_git_dir_inode",
-}
-PLAN_KEYS = {"path", "digest", "blob_oid"}
-OWNER_KEYS = {"id", "lease_expires_at"}
-WORKTREE_IDENTITY_KEYS = {"git_dir", "git_dir_device", "git_dir_inode"}
-WORKTREE_IDENTITY_KEYS |= {
-    "worktree_device",
-    "worktree_inode",
-    "worktree_owner",
-    "worktree_mode",
-}
+def load_worktree_guard():
+    """Load the shared guard from either supported layout.
+
+    The root repository keeps imported modules under a package directory and
+    a generated project keeps them beside this command. Probing both keeps
+    the root and generated copies of this command byte-identical.
+    """
+
+    base = Path(__file__).resolve().parent
+    for candidate in ("worktree_guard.py", "project_workflow/worktree_guard.py"):
+        path = base / candidate
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("worktree_guard", path)
+        if spec is None or spec.loader is None:
+            break
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["worktree_guard"] = module
+        spec.loader.exec_module(module)
+        return module
+    raise SystemExit("manage plan worktrees failed: the shared worktree guard is missing")
 
 
-class WorktreeError(ValueError):
-    """A fail-closed managed-worktree error."""
+guard = load_worktree_guard()
 
+WorktreeError = guard.WorktreeError
+GuardError = guard.GuardError
+SCHEMA_VERSION = guard.SCHEMA_VERSION
+MAX_RECORD_BYTES = guard.MAX_RECORD_BYTES
+MAX_LEASE_SECONDS = guard.MAX_LEASE_SECONDS
+OWNER_RE = guard.OWNER_RE
+OID_RE = guard.OID_RE
+DIGEST_RE = guard.DIGEST_RE
+BRANCH_REF_RE = guard.BRANCH_REF_RE
+RECORD_KEYS = guard.RECORD_KEYS
+REPOSITORY_KEYS = guard.REPOSITORY_KEYS
+TASK_KEYS = guard.TASK_KEYS
+OWNER_KEYS = guard.OWNER_KEYS
+WORKTREE_IDENTITY_KEYS = guard.WORKTREE_IDENTITY_KEYS
+PLAN_TASK = guard.PLAN_TASK
+DIRECT_TASK = guard.DIRECT_TASK
 
-def canonical_json(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
-        "utf-8"
-    )
-
-
-def digest_bytes(value: bytes) -> str:
-    return f"sha256:{hashlib.sha256(value).hexdigest()}"
-
-
-def git_environment() -> dict[str, str]:
-    environment = os.environ.copy()
-    for name in tuple(environment):
-        if name.startswith("GIT_"):
-            environment.pop(name, None)
-    environment.update(
-        {
-            "GIT_ATTR_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_NO_LAZY_FETCH": "1",
-            "GIT_NO_REPLACE_OBJECTS": "1",
-            "GIT_GRAFT_FILE": os.devnull,
-            "GIT_OPTIONAL_LOCKS": "0",
-            "LC_ALL": "C",
-        }
-    )
-    return environment
-
-
-def git(
-    repository: Path,
-    *arguments: str,
-    check: bool = True,
-    pass_fds: tuple[int, ...] = (),
-) -> subprocess.CompletedProcess[bytes]:
-    completed = subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            f"core.hooksPath={os.devnull}",
-            "-c",
-            f"core.excludesFile={os.devnull}",
-            "-C",
-            str(repository),
-            *arguments,
-        ],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=git_environment(),
-        pass_fds=pass_fds,
-    )
-    if check and completed.returncode != 0:
-        raise WorktreeError(f"Git command failed: {' '.join(arguments)}")
-    return completed
-
-
-def git_text(repository: Path, *arguments: str, check: bool = True) -> str:
-    return git(repository, *arguments, check=check).stdout.decode("utf-8", "strict").strip()
-
-
-def has_symlink_component(path: Path) -> bool:
-    absolute = path.absolute()
-    current = Path(absolute.anchor)
-    for part in absolute.parts[1:]:
-        current /= part
-        if current.is_symlink():
-            return True
-    return False
-
-
-def canonical_directory(raw: str, *, label: str) -> Path:
-    path = Path(raw)
-    if has_symlink_component(path):
-        raise WorktreeError(f"{label} contains a symlink component")
-    try:
-        resolved = path.resolve(strict=True)
-    except OSError as exc:
-        raise WorktreeError(f"{label} cannot be resolved") from exc
-    if not resolved.is_dir():
-        raise WorktreeError(f"{label} must be a directory")
-    return resolved
-
-
-def require_owned_directory(path: Path, *, label: str, private: bool = False) -> Path:
-    resolved = canonical_directory(str(path), label=label)
-    metadata = resolved.stat()
-    if metadata.st_uid != os.getuid():
-        raise WorktreeError(f"{label} must be owned by the current user")
-    forbidden_mode = 0o077 if private else 0o022
-    if stat.S_IMODE(metadata.st_mode) & forbidden_mode:
-        requirement = "mode 0700" if private else "not be group- or world-writable"
-        raise WorktreeError(f"{label} must {requirement}")
-    return resolved
-
-
-def directory_identity(path: Path) -> tuple[int, int]:
-    metadata = path.stat()
-    return metadata.st_dev, metadata.st_ino
-
-
-def path_is_strict_descendant(path: Path, parent: Path) -> bool:
-    try:
-        relative = path.relative_to(parent)
-    except ValueError:
-        return False
-    return relative != Path(".")
+canonical_json = guard.canonical_json
+digest_bytes = guard.digest_bytes
+git_environment = guard.git_environment
+git = guard.git
+git_text = guard.git_text
+has_symlink_component = guard.has_symlink_component
+canonical_directory = guard.canonical_directory
+require_owned_directory = guard.require_owned_directory
+directory_identity = guard.directory_identity
+path_is_strict_descendant = guard.path_is_strict_descendant
+account_home = guard.account_home
+normalize_plan_path = guard.normalize_plan_path
+normalize_direct_task = guard.normalize_direct_task
+plan_task = guard.plan_task
+direct_task = guard.direct_task
+task_label = guard.task_label
+task_selector = guard.task_selector
+canonical_origin = guard.canonical_origin
+repository_root = guard.repository_root
+repository_identity = guard.repository_identity
+metadata_paths = guard.metadata_paths
+ensure_metadata_directory = guard.ensure_metadata_directory
+locked_file = guard.locked_file
+add_content_digest = guard.add_content_digest
+atomic_write = guard.atomic_write
+read_record = guard.read_record
+validate_record = guard.validate_record
+parse_worktrees = guard.parse_worktrees
+registered_worktree_path = guard.registered_worktree_path
+find_registered_worktree = guard.find_registered_worktree
+primary_worktree = guard.primary_worktree
+worktree_identity = guard.worktree_identity
+target_directory_identity = guard.target_directory_identity
+exact_ref_tip = guard.exact_ref_tip
+is_ancestor = guard.is_ancestor
 
 
 def validate_allowed_root(raw: str, repository: Path) -> Path:
@@ -180,7 +112,7 @@ def validate_allowed_root(raw: str, repository: Path) -> Path:
     primary = canonical_directory(str(worktrees[0].get("worktree", "")), label="primary worktree")
     forbidden = {
         Path("/").resolve(),
-        Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(),
+        account_home().resolve(),
         primary,
     }
     if (
@@ -191,23 +123,28 @@ def validate_allowed_root(raw: str, repository: Path) -> Path:
         raise WorktreeError("allowed root is a forbidden broad or repository path")
     for record in worktrees:
         registered = registered_worktree_path(record)
-        if allowed_root == registered or path_is_strict_descendant(
-            allowed_root, registered
-        ):
+        if allowed_root == registered or path_is_strict_descendant(allowed_root, registered):
             raise WorktreeError("allowed root must not be a registered worktree or its descendant")
     return allowed_root
 
 
-def normalize_plan_path(raw: str) -> str:
-    value = PurePosixPath(raw)
-    if (
-        value.is_absolute()
-        or raw in {"", "."}
-        or any(part in {"", ".", ".."} for part in value.parts)
-        or not re.fullmatch(r"docs/plan/active/[0-9]{3}-[a-z0-9][a-z0-9-]*\.md", raw)
-    ):
-        raise WorktreeError("plan path must name one normalized active numbered plan")
-    return raw
+def ensure_default_allowed_root(repository: Path) -> Path:
+    """Create the account-home default placement root without a further prompt."""
+
+    root = guard.default_allowed_root()
+    if has_symlink_component(root):
+        raise WorktreeError("default allowed root contains a symlink component")
+    if not root.exists():
+        root.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
+    require_owned_directory(root, label="default allowed root", private=True)
+    return validate_allowed_root(str(root), repository)
+
+
+def resolve_allowed_root(repository: Path, raw: str | None) -> Path:
+    if raw is None:
+        return ensure_default_allowed_root(repository)
+    return validate_allowed_root(raw, repository)
 
 
 def normalize_branch(raw: str, repository: Path) -> tuple[str, str]:
@@ -223,39 +160,18 @@ def normalize_branch(raw: str, repository: Path) -> tuple[str, str]:
     return short, branch_ref
 
 
-def canonical_origin(repository: Path) -> str:
-    origin = git_text(repository, "remote", "get-url", "origin")
-    if re.fullmatch(r"[^/@:\s]+@[^/:\s]+:[^:\s]+", origin):
-        _, host_path = origin.split("@", 1)
-        host, path = host_path.split(":", 1)
-        return f"ssh://{host.lower()}/{path.removesuffix('.git')}"
-    parsed = urlsplit(origin)
-    if parsed.scheme not in {"https", "ssh", "git"} or not parsed.hostname:
-        raise WorktreeError("remote.origin.url must be a canonical network URL")
-    port = f":{parsed.port}" if parsed.port is not None else ""
-    path = parsed.path.removesuffix(".git")
-    if not path or path == "/":
-        raise WorktreeError("remote.origin.url does not identify a repository")
-    return urlunsplit((parsed.scheme, f"{parsed.hostname.lower()}{port}", path, "", ""))
+def current_source_ref(repository: Path, raw: str | None) -> str:
+    """Resolve the exact local branch a finished task publishes to."""
 
-
-def repository_root() -> Path:
-    root = git_text(Path.cwd(), "rev-parse", "--show-toplevel")
-    return canonical_directory(root, label="Git worktree root")
-
-
-def repository_identity(repository: Path) -> dict[str, Any]:
-    common = canonical_directory(
-        git_text(repository, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-        label="common Git directory",
-    )
-    metadata = common.stat()
-    return {
-        "origin_identity": digest_bytes(canonical_origin(repository).encode("utf-8")),
-        "common_git_dir": str(common),
-        "common_git_dir_device": metadata.st_dev,
-        "common_git_dir_inode": metadata.st_ino,
-    }
+    if raw is not None:
+        return normalize_branch(raw, repository)[1]
+    primary = primary_worktree(repository)
+    head = git_text(primary, "symbolic-ref", "--quiet", "HEAD", check=False)
+    if not head or BRANCH_REF_RE.fullmatch(head) is None:
+        raise WorktreeError(
+            "the pre-existing checkout is not on a branch; pass --source-ref explicitly"
+        )
+    return head
 
 
 def committed_plan(repository: Path, raw_plan: str, start_commit: str) -> dict[str, str]:
@@ -269,9 +185,7 @@ def committed_plan(repository: Path, raw_plan: str, start_commit: str) -> dict[s
     return committed
 
 
-def plan_identity_at_commit(
-    repository: Path, plan: str, start_commit: str
-) -> dict[str, str]:
+def plan_identity_at_commit(repository: Path, plan: str, start_commit: str) -> dict[str, str]:
     blob_oid = git_text(repository, "rev-parse", f"{start_commit}:{plan}")
     if not OID_RE.fullmatch(blob_oid):
         raise WorktreeError("committed plan blob is unavailable")
@@ -281,6 +195,37 @@ def plan_identity_at_commit(
         "digest": digest_bytes(blob),
         "blob_oid": blob_oid,
     }
+
+
+def resolve_task(repository: Path, args: argparse.Namespace, start_commit: str) -> dict[str, Any]:
+    """Accept exactly one of a committed plan or a bounded direct task."""
+
+    plan_selected = getattr(args, "plan", None)
+    direct_selected = getattr(args, "direct_task", None)
+    if bool(plan_selected) == bool(direct_selected):
+        raise WorktreeError(
+            "select exactly one of a committed active plan or --direct-task <id>"
+        )
+    if plan_selected:
+        return plan_task(committed_plan(repository, plan_selected, start_commit))
+    purpose = getattr(args, "purpose", None) or "bounded direct task"
+    return direct_task(direct_selected, purpose)
+
+
+def task_at_commit(repository: Path, task: dict[str, Any], start_commit: str) -> dict[str, Any]:
+    if task["kind"] != PLAN_TASK:
+        return task
+    return plan_task(plan_identity_at_commit(repository, task["identity"]["path"], start_commit))
+
+
+def default_placement(task: dict[str, Any], allowed_root: Path) -> tuple[Path, str]:
+    """Derive one stable directory and branch name from the task identity."""
+
+    if task["kind"] == PLAN_TASK:
+        slug = PurePosixPath(task["identity"]["path"]).stem
+        return allowed_root / slug, f"plan/{slug}"
+    identifier = task["identity"]["id"]
+    return allowed_root / f"direct-{identifier}", f"task/{identifier}"
 
 
 def validate_target(
@@ -318,203 +263,7 @@ def validate_target(
     return target
 
 
-def metadata_paths(identity: dict[str, Any], plan_path: str) -> dict[str, Path]:
-    key = hashlib.sha256(
-        canonical_json(
-            {
-                "common_git_dir": identity["common_git_dir"],
-                "common_git_dir_device": identity["common_git_dir_device"],
-                "common_git_dir_inode": identity["common_git_dir_inode"],
-                "plan": plan_path,
-            }
-        )
-    ).hexdigest()
-    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    directory = account_home / ".local/state/project-agent-workflow/parent-worktrees"
-    return {
-        "directory": directory,
-        "record": directory / f"{key}.json",
-        "journal": directory / f"{key}.journal.json",
-        "lock": directory / f"{key}.lock",
-    }
-
-
-def ensure_metadata_directory(path: Path) -> None:
-    if has_symlink_component(path):
-        raise WorktreeError("ownership-record directory contains a symlink component")
-    if path.exists():
-        canonical = require_owned_directory(
-            path, label="ownership-record directory", private=True
-        )
-        if canonical != path:
-            raise WorktreeError("ownership-record directory is not canonical")
-    else:
-        path.mkdir(mode=0o700, parents=True)
-    path.chmod(0o700)
-    require_owned_directory(path, label="ownership-record directory", private=True)
-
-
-def locked_file(path: Path):
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    os.fchmod(descriptor, 0o600)
-    fcntl.flock(descriptor, fcntl.LOCK_EX)
-    return os.fdopen(descriptor, "r+", encoding="utf-8")
-
-
-def add_content_digest(record: dict[str, Any]) -> dict[str, Any]:
-    unsigned = dict(record)
-    unsigned.pop("content_digest", None)
-    return {**unsigned, "content_digest": digest_bytes(canonical_json(unsigned))}
-
-
-def atomic_write(path: Path, value: dict[str, Any]) -> None:
-    data = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        path.chmod(0o600)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise WorktreeError(f"ownership record contains a duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
-def read_record(path: Path) -> dict[str, Any]:
-    if has_symlink_component(path) or path.is_symlink() or not path.is_file():
-        raise WorktreeError("ownership record must be a regular non-symlink file")
-    metadata = path.stat()
-    if stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1:
-        raise WorktreeError("ownership record must be single-linked mode 0600")
-    data = path.read_bytes()
-    if len(data) > MAX_RECORD_BYTES:
-        raise WorktreeError("ownership record exceeds the size limit")
-    try:
-        value = json.loads(data.decode("utf-8"), object_pairs_hook=reject_duplicate_json_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise WorktreeError("ownership record is not valid UTF-8 JSON") from exc
-    validate_record(value, allow_pending=path.name.endswith(".journal.json"))
-    return value
-
-
-def validate_record(value: Any, *, allow_pending: bool = False) -> None:
-    if not isinstance(value, dict) or set(value) != RECORD_KEYS:
-        raise WorktreeError("ownership record schema is invalid")
-    if value["schema_version"] != SCHEMA_VERSION:
-        raise WorktreeError("ownership record version is unsupported")
-    if not isinstance(value["repository_identity"], dict) or set(
-        value["repository_identity"]
-    ) != REPOSITORY_KEYS:
-        raise WorktreeError("ownership record repository identity is invalid")
-    if not isinstance(value["plan"], dict) or set(value["plan"]) != PLAN_KEYS:
-        raise WorktreeError("ownership record plan identity is invalid")
-    if not isinstance(value["owner"], dict) or set(value["owner"]) != OWNER_KEYS:
-        raise WorktreeError("ownership record owner lease is invalid")
-    worktree_identity = value["worktree_identity"]
-    if not isinstance(worktree_identity, dict) or set(worktree_identity) != WORKTREE_IDENTITY_KEYS:
-        raise WorktreeError("ownership record worktree identity is invalid")
-    identity_values = tuple(worktree_identity.values())
-    empty_identity = all(item is None for item in identity_values)
-    target_identity = (
-        type(worktree_identity["worktree_device"]) is int
-        and type(worktree_identity["worktree_inode"]) is int
-        and type(worktree_identity["worktree_owner"]) is int
-        and type(worktree_identity["worktree_mode"]) is int
-    )
-    pending_identity = (
-        all(
-            worktree_identity[key] is None
-            for key in ("git_dir", "git_dir_device", "git_dir_inode")
-        )
-        and target_identity
-    )
-    complete_identity = (
-        isinstance(worktree_identity["git_dir"], str)
-        and Path(worktree_identity["git_dir"]).is_absolute()
-        and type(worktree_identity["git_dir_device"]) is int
-        and type(worktree_identity["git_dir_inode"]) is int
-        and target_identity
-    )
-    if not (
-        complete_identity
-        or (allow_pending and (empty_identity or pending_identity))
-    ):
-        raise WorktreeError("ownership record worktree identity values are invalid")
-    if (
-        not isinstance(value["owner"]["id"], str)
-        or OWNER_RE.fullmatch(value["owner"]["id"]) is None
-    ):
-        raise WorktreeError("ownership record owner id is invalid")
-    if type(value["owner"]["lease_expires_at"]) is not int:
-        raise WorktreeError("ownership record lease expiry is invalid")
-    for key in ("start_commit", "accepted_tip"):
-        if not isinstance(value[key], str) or OID_RE.fullmatch(value[key]) is None:
-            raise WorktreeError(f"ownership record {key} is invalid")
-    if not isinstance(value["branch_ref"], str) or BRANCH_REF_RE.fullmatch(
-        value["branch_ref"]
-    ) is None:
-        raise WorktreeError("ownership record branch is invalid")
-    for key in ("allowed_root", "worktree_path"):
-        if not isinstance(value[key], str) or not Path(value[key]).is_absolute():
-            raise WorktreeError(f"ownership record {key} is invalid")
-    if not isinstance(value["content_digest"], str) or DIGEST_RE.fullmatch(
-        value["content_digest"]
-    ) is None:
-        raise WorktreeError("ownership record digest is invalid")
-    unsigned = dict(value)
-    observed = unsigned.pop("content_digest")
-    if observed != digest_bytes(canonical_json(unsigned)):
-        raise WorktreeError("ownership record digest does not match its content")
-
-
-def parse_worktrees(repository: Path) -> list[dict[str, Any]]:
-    payload = git(repository, "worktree", "list", "--porcelain", "-z").stdout
-    records: list[dict[str, Any]] = []
-    for raw_record in payload.split(b"\0\0"):
-        if not raw_record:
-            continue
-        record: dict[str, Any] = {}
-        for raw_field in raw_record.split(b"\0"):
-            if not raw_field:
-                continue
-            field = raw_field.decode("utf-8", "strict")
-            key, separator, item = field.partition(" ")
-            if key in record:
-                raise WorktreeError(f"duplicate Git worktree field: {key}")
-            record[key] = item if separator else True
-        records.append(record)
-    return records
-
-
-def exact_ref_tip(repository: Path, branch_ref: str) -> str | None:
-    completed = git(repository, "rev-parse", "--verify", f"{branch_ref}^{{commit}}", check=False)
-    if completed.returncode != 0:
-        return None
-    value = completed.stdout.decode("ascii", "strict").strip()
-    return value if OID_RE.fullmatch(value) else None
-
-
-def is_ancestor(repository: Path, ancestor: str, descendant: str) -> bool:
-    return (
-        git(repository, "merge-base", "--is-ancestor", ancestor, descendant, check=False).returncode
-        == 0
-    )
-
-
-def reject_registered_worktree_ancestry(
-    records: list[dict[str, Any]], target: Path
-) -> None:
+def reject_registered_worktree_ancestry(records: list[dict[str, Any]], target: Path) -> None:
     for record in records:
         registered = registered_worktree_path(record)
         if target == registered or path_is_strict_descendant(target, registered):
@@ -523,58 +272,11 @@ def reject_registered_worktree_ancestry(
             )
 
 
-def registered_worktree_path(record: dict[str, Any]) -> Path:
-    raw = str(record.get("worktree", ""))
-    path = Path(raw)
-    if not path.is_absolute() or Path(os.path.normpath(raw)) != path:
-        raise WorktreeError("Git reported an invalid worktree path")
-    if path.exists() or path.is_symlink():
-        return canonical_directory(raw, label="registered worktree")
-    return path
-
-
-def find_registered_worktree(
-    records: list[dict[str, Any]], target: Path
-) -> dict[str, Any] | None:
-    matches = [
-        record
-        for record in records
-        if Path(str(record.get("worktree", ""))).absolute() == target
-    ]
-    if len(matches) > 1:
-        raise WorktreeError("Git reported duplicate worktree registrations")
-    return matches[0] if matches else None
-
-
 def status_digest(worktree: Path) -> str:
     index_path = Path(
         git_text(worktree, "rev-parse", "--path-format=absolute", "--git-path", "index")
     )
     return digest_bytes(index_path.read_bytes() + b"\0" + raw_worktree_digest(worktree))
-
-
-def worktree_identity(worktree: Path) -> dict[str, Any]:
-    git_dir = canonical_directory(
-        git_text(worktree, "rev-parse", "--path-format=absolute", "--git-dir"),
-        label="worktree Git directory",
-    )
-    metadata = git_dir.stat()
-    return {
-        "git_dir": str(git_dir),
-        "git_dir_device": metadata.st_dev,
-        "git_dir_inode": metadata.st_ino,
-        **target_directory_identity(worktree),
-    }
-
-
-def target_directory_identity(worktree: Path) -> dict[str, int]:
-    metadata = worktree.stat()
-    return {
-        "worktree_device": metadata.st_dev,
-        "worktree_inode": metadata.st_ino,
-        "worktree_owner": metadata.st_uid,
-        "worktree_mode": stat.S_IMODE(metadata.st_mode),
-    }
 
 
 def reject_checkout_filters(repository: Path, start_commit: str) -> None:
@@ -619,9 +321,7 @@ def reject_checkout_filters(repository: Path, start_commit: str) -> None:
 
 
 def verify_history(repository: Path, start: str, accepted: str, tip: str) -> None:
-    if not is_ancestor(repository, start, accepted) or not is_ancestor(
-        repository, accepted, tip
-    ):
+    if not is_ancestor(repository, start, accepted) or not is_ancestor(repository, accepted, tip):
         raise WorktreeError("managed branch history no longer contains the bound commits")
     payload = git_text(repository, "rev-list", "--parents", f"{accepted}..{tip}")
     for line in payload.splitlines():
@@ -667,8 +367,9 @@ def create_record(
     repository: Path,
     allowed_root: Path,
     target: Path,
-    plan: dict[str, str],
+    task: dict[str, Any],
     branch_ref: str,
+    source_ref: str,
     start_commit: str,
     owner_id: str,
     lease_seconds: int,
@@ -678,9 +379,10 @@ def create_record(
         {
             "schema_version": SCHEMA_VERSION,
             "repository_identity": repository_identity(repository),
-            "plan": plan,
+            "task": task,
             "start_commit": start_commit,
             "accepted_tip": start_commit,
+            "source_ref": source_ref,
             "branch_ref": branch_ref,
             "allowed_root": str(allowed_root),
             "worktree_path": str(target),
@@ -694,6 +396,8 @@ def create_record(
 
 
 def raw_path_digest(path: Path) -> bytes:
+    import hashlib
+
     metadata = path.lstat()
     hasher = hashlib.sha256()
     hasher.update(str(stat.S_IFMT(metadata.st_mode)).encode("ascii"))
@@ -721,6 +425,8 @@ def raw_path_digest(path: Path) -> bytes:
 
 
 def raw_worktree_digest(repository: Path) -> bytes:
+    import hashlib
+
     payload = git(
         repository,
         "ls-files",
@@ -751,294 +457,435 @@ def snapshot_source(repository: Path) -> tuple[bytes, bytes]:
         git_text(repository, "rev-parse", "--path-format=absolute", "--git-path", "index")
     )
     index_digest = digest_bytes(index_path.read_bytes()).encode("ascii")
-    return (
-        index_digest,
-        raw_worktree_digest(repository),
-    )
+    return (index_digest, raw_worktree_digest(repository))
 
 
-def create(args: argparse.Namespace) -> None:
-    repository = repository_root()
-    allowed_root = validate_allowed_root(args.allowed_root, repository)
-    target = validate_target(
-        args.worktree,
-        allowed_root,
-        must_exist=False,
-        allow_existing=True,
-    )
-    start_commit = git_text(repository, "rev-parse", "--verify", "HEAD^{commit}")
-    plan = committed_plan(repository, args.plan, start_commit)
-    reject_checkout_filters(repository, start_commit)
-    branch_short, branch_ref = normalize_branch(args.branch, repository)
-    identity = repository_identity(repository)
-    paths = metadata_paths(identity, plan["path"])
-    ensure_metadata_directory(paths["directory"])
+def create_worktree(
+    repository: Path,
+    allowed_root: Path,
+    target: Path,
+    task: dict[str, Any],
+    branch_short: str,
+    branch_ref: str,
+    source_ref: str,
+    start_commit: str,
+    owner_id: str,
+    lease_seconds: int,
+    paths: dict[str, Path],
+    identity: dict[str, Any],
+) -> dict[str, Any]:
+    """Create one linked checkout under an exclusive ownership lock."""
+
     allowed_identity = directory_identity(allowed_root)
     parent_identity = directory_identity(target.parent)
-    with locked_file(paths["lock"]):
-        if paths["record"].exists():
-            raise WorktreeError("an ownership record already exists for this plan")
-        journal = add_content_digest(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "repository_identity": identity,
-                "plan": plan,
-                "start_commit": start_commit,
-                "accepted_tip": start_commit,
-                "branch_ref": branch_ref,
-                "allowed_root": str(allowed_root),
-                "worktree_path": str(target),
-                "worktree_identity": {
-                    "git_dir": None,
-                    "git_dir_device": None,
-                    "git_dir_inode": None,
-                    "worktree_device": None,
-                    "worktree_inode": None,
-                    "worktree_owner": None,
-                    "worktree_mode": None,
-                },
-                "owner": {
-                    "id": args.owner_id,
-                    "lease_expires_at": int(time.time()) + args.lease_seconds,
-                },
-            }
-        )
-        existing_journal: dict[str, Any] | None = None
-        if paths["journal"].exists():
-            existing_journal = read_record(paths["journal"])
-            old_target = Path(existing_journal["worktree_path"])
-            old_registered = find_registered_worktree(
-                parse_worktrees(repository), old_target
-            )
-            if (
-                existing_journal["owner"]["lease_expires_at"] <= int(time.time())
-                and all(
-                    value is None
-                    for value in existing_journal["worktree_identity"].values()
-                )
-                and not old_target.exists()
-                and not old_target.is_symlink()
-                and old_registered is None
-            ):
-                paths["journal"].unlink()
-                existing_journal = None
-        if existing_journal is not None:
-            immutable_fields = (
-                "schema_version",
-                "repository_identity",
-                "plan",
-                "start_commit",
-                "accepted_tip",
-                "branch_ref",
-                "allowed_root",
-                "worktree_path",
-            )
-            if (
-                any(
-                    existing_journal[field] != journal[field]
-                    for field in immutable_fields
-                )
-                or existing_journal["owner"]["id"] != args.owner_id
-            ):
-                raise WorktreeError("an interrupted create journal has different bound facts")
-        else:
-            if target.exists() or target.is_symlink():
-                raise WorktreeError("new worktree path already exists")
-            existing_journal = journal
-        records = parse_worktrees(repository)
-        registered = find_registered_worktree(records, target)
-        existing_identity = existing_journal["worktree_identity"]
-        target_already_bound = target.exists() or target.is_symlink()
-        bind_existing_target = False
-        if target_already_bound:
-            target = require_owned_directory(
-                target, label="interrupted worktree", private=True
-            )
-            if all(value is None for value in existing_identity.values()):
-                if any(target.iterdir()):
-                    raise WorktreeError(
-                        "interrupted create journal does not bind the nonempty worktree"
-                    )
-                bind_existing_target = True
-            elif any(
-                existing_identity[key] != value
-                for key, value in target_directory_identity(target).items()
-            ):
-                raise WorktreeError("interrupted worktree identity changed")
-        elif any(value is not None for value in existing_identity.values()):
-            raise WorktreeError("interrupted worktree disappeared")
-        if registered is not None:
-            recovered_identity = worktree_identity(target)
-            reject_registered_worktree_ancestry(
-                [
-                    item
-                    for item in records
-                    if registered_worktree_path(item) != target
-                ],
-                target,
-            )
-            if (
-                not target_already_bound
-                or registered.get("branch") != branch_ref
-                or registered.get("HEAD") != start_commit
-                or exact_ref_tip(repository, branch_ref) != start_commit
-                or (
-                    existing_identity["git_dir"] is not None
-                    and recovered_identity != existing_identity
-                )
-            ):
-                raise WorktreeError("interrupted worktree registration is inconsistent")
-            record = create_record(
-                repository,
-                allowed_root,
-                target,
-                plan,
-                branch_ref,
-                start_commit,
-                args.owner_id,
-                args.lease_seconds,
-                recovered_identity,
-            )
-            atomic_write(paths["record"], record)
-            paths["journal"].unlink()
-            print(
-                json.dumps(
-                    {"operation": "create", "record": str(paths["record"]), **record},
-                    sort_keys=True,
-                )
-            )
-            return
-        if existing_identity["git_dir"] is not None:
-            raise WorktreeError("interrupted worktree registration disappeared")
-        if exact_ref_tip(repository, branch_ref) is not None:
-            raise WorktreeError("requested branch already exists")
-        reject_registered_worktree_ancestry(records, target)
-        if (
-            directory_identity(allowed_root) != allowed_identity
-            or directory_identity(target.parent) != parent_identity
-            or has_symlink_component(target)
-        ):
-            raise WorktreeError("allowed root or worktree parent changed before creation")
-        if not paths["journal"].exists():
-            atomic_write(paths["journal"], existing_journal)
-        parent_descriptor = os.open(
-            target.parent,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-        )
-        target_descriptor = -1
-        try:
-            parent_metadata = os.fstat(parent_descriptor)
-            if (parent_metadata.st_dev, parent_metadata.st_ino) != parent_identity:
-                raise WorktreeError("worktree parent changed before creation")
-            if not target_already_bound:
-                os.mkdir(target.name, mode=0o700, dir_fd=parent_descriptor)
-            target_descriptor = os.open(
-                target.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-                dir_fd=parent_descriptor,
-            )
-            os.fchmod(target_descriptor, 0o700)
-            target_metadata = os.fstat(target_descriptor)
-            if (
-                target_metadata.st_uid != os.getuid()
-                or stat.S_IMODE(target_metadata.st_mode) != 0o700
-            ):
-                raise WorktreeError("new worktree must be an owner-private directory")
-            target_identity = (target_metadata.st_dev, target_metadata.st_ino)
-            bound_identity = {
+    if paths["record"].exists():
+        raise WorktreeError("an ownership record already exists for this task")
+    journal = add_content_digest(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "repository_identity": identity,
+            "task": task,
+            "start_commit": start_commit,
+            "accepted_tip": start_commit,
+            "source_ref": source_ref,
+            "branch_ref": branch_ref,
+            "allowed_root": str(allowed_root),
+            "worktree_path": str(target),
+            "worktree_identity": {
                 "git_dir": None,
                 "git_dir_device": None,
                 "git_dir_inode": None,
-                "worktree_device": target_metadata.st_dev,
-                "worktree_inode": target_metadata.st_ino,
-                "worktree_owner": target_metadata.st_uid,
-                "worktree_mode": stat.S_IMODE(target_metadata.st_mode),
-            }
-            if not target_already_bound or bind_existing_target:
-                journal["worktree_identity"] = bound_identity
-                journal = add_content_digest(journal)
-                atomic_write(paths["journal"], journal)
-            before = snapshot_source(repository)
-            git(
-                repository,
-                "worktree",
-                "add",
-                "-b",
-                branch_short,
-                f"/proc/self/fd/{target_descriptor}",
-                start_commit,
-                pass_fds=(target_descriptor,),
-            )
-        finally:
-            if target_descriptor >= 0:
-                os.close(target_descriptor)
-            os.close(parent_descriptor)
-        if snapshot_source(repository) != before:
-            raise WorktreeError("ordinary checkout state changed during worktree creation")
+                "worktree_device": None,
+                "worktree_inode": None,
+                "worktree_owner": None,
+                "worktree_mode": None,
+            },
+            "owner": {
+                "id": owner_id,
+                "lease_expires_at": int(time.time()) + lease_seconds,
+            },
+        }
+    )
+    existing_journal: dict[str, Any] | None = None
+    if paths["journal"].exists():
+        existing_journal = read_record(paths["journal"])
+        old_target = Path(existing_journal["worktree_path"])
+        old_registered = find_registered_worktree(parse_worktrees(repository), old_target)
         if (
-            directory_identity(allowed_root) != allowed_identity
-            or directory_identity(target.parent) != parent_identity
-            or directory_identity(target) != target_identity
-            or has_symlink_component(target)
+            existing_journal["owner"]["lease_expires_at"] <= int(time.time())
+            and all(value is None for value in existing_journal["worktree_identity"].values())
+            and not old_target.exists()
+            and not old_target.is_symlink()
+            and old_registered is None
         ):
-            raise WorktreeError("allowed root, worktree parent or target changed during creation")
+            paths["journal"].unlink()
+            existing_journal = None
+    if existing_journal is not None:
+        immutable_fields = (
+            "schema_version",
+            "repository_identity",
+            "task",
+            "start_commit",
+            "accepted_tip",
+            "source_ref",
+            "branch_ref",
+            "allowed_root",
+            "worktree_path",
+        )
+        if (
+            any(existing_journal[field] != journal[field] for field in immutable_fields)
+            or existing_journal["owner"]["id"] != owner_id
+        ):
+            raise WorktreeError("an interrupted create journal has different bound facts")
+    else:
+        if target.exists() or target.is_symlink():
+            raise WorktreeError("new worktree path already exists")
+        existing_journal = journal
+    records = parse_worktrees(repository)
+    registered = find_registered_worktree(records, target)
+    existing_identity = existing_journal["worktree_identity"]
+    target_already_bound = target.exists() or target.is_symlink()
+    bind_existing_target = False
+    if target_already_bound:
+        target = require_owned_directory(target, label="interrupted worktree", private=True)
+        if all(value is None for value in existing_identity.values()):
+            if any(target.iterdir()):
+                raise WorktreeError(
+                    "interrupted create journal does not bind the nonempty worktree"
+                )
+            bind_existing_target = True
+        elif any(
+            existing_identity[key] != value
+            for key, value in target_directory_identity(target).items()
+        ):
+            raise WorktreeError("interrupted worktree identity changed")
+    elif any(value is not None for value in existing_identity.values()):
+        raise WorktreeError("interrupted worktree disappeared")
+    if registered is not None:
+        recovered_identity = worktree_identity(target)
         reject_registered_worktree_ancestry(
-            [
-                record
-                for record in parse_worktrees(repository)
-                if Path(str(record.get("worktree", ""))).absolute() != target
-            ],
+            [item for item in records if registered_worktree_path(item) != target],
             target,
         )
+        if (
+            not target_already_bound
+            or registered.get("branch") != branch_ref
+            or registered.get("HEAD") != start_commit
+            or exact_ref_tip(repository, branch_ref) != start_commit
+            or (
+                existing_identity["git_dir"] is not None
+                and recovered_identity != existing_identity
+            )
+        ):
+            raise WorktreeError("interrupted worktree registration is inconsistent")
         record = create_record(
             repository,
             allowed_root,
             target,
-            plan,
+            task,
             branch_ref,
+            source_ref,
             start_commit,
-            args.owner_id,
-            args.lease_seconds,
-            worktree_identity(target),
+            owner_id,
+            lease_seconds,
+            recovered_identity,
         )
         atomic_write(paths["record"], record)
         paths["journal"].unlink()
-    print(json.dumps({"operation": "create", "record": str(paths["record"]), **record}, sort_keys=True))
+        return record
+    if existing_identity["git_dir"] is not None:
+        raise WorktreeError("interrupted worktree registration disappeared")
+    if exact_ref_tip(repository, branch_ref) is not None:
+        raise WorktreeError("requested branch already exists")
+    reject_registered_worktree_ancestry(records, target)
+    if (
+        directory_identity(allowed_root) != allowed_identity
+        or directory_identity(target.parent) != parent_identity
+        or has_symlink_component(target)
+    ):
+        raise WorktreeError("allowed root or worktree parent changed before creation")
+    if not paths["journal"].exists():
+        atomic_write(paths["journal"], existing_journal)
+    parent_descriptor = os.open(
+        target.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    target_descriptor = -1
+    try:
+        parent_metadata = os.fstat(parent_descriptor)
+        if (parent_metadata.st_dev, parent_metadata.st_ino) != parent_identity:
+            raise WorktreeError("worktree parent changed before creation")
+        if not target_already_bound:
+            os.mkdir(target.name, mode=0o700, dir_fd=parent_descriptor)
+        target_descriptor = os.open(
+            target.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+        os.fchmod(target_descriptor, 0o700)
+        target_metadata = os.fstat(target_descriptor)
+        if (
+            target_metadata.st_uid != os.getuid()
+            or stat.S_IMODE(target_metadata.st_mode) != 0o700
+        ):
+            raise WorktreeError("new worktree must be an owner-private directory")
+        target_identity = (target_metadata.st_dev, target_metadata.st_ino)
+        bound_identity = {
+            "git_dir": None,
+            "git_dir_device": None,
+            "git_dir_inode": None,
+            "worktree_device": target_metadata.st_dev,
+            "worktree_inode": target_metadata.st_ino,
+            "worktree_owner": target_metadata.st_uid,
+            "worktree_mode": stat.S_IMODE(target_metadata.st_mode),
+        }
+        if not target_already_bound or bind_existing_target:
+            journal["worktree_identity"] = bound_identity
+            journal = add_content_digest(journal)
+            atomic_write(paths["journal"], journal)
+        before = snapshot_source(repository)
+        git(
+            repository,
+            "worktree",
+            "add",
+            "-b",
+            branch_short,
+            f"/proc/self/fd/{target_descriptor}",
+            start_commit,
+            pass_fds=(target_descriptor,),
+        )
+    finally:
+        if target_descriptor >= 0:
+            os.close(target_descriptor)
+        os.close(parent_descriptor)
+    if snapshot_source(repository) != before:
+        raise WorktreeError("ordinary checkout state changed during worktree creation")
+    if (
+        directory_identity(allowed_root) != allowed_identity
+        or directory_identity(target.parent) != parent_identity
+        or directory_identity(target) != target_identity
+        or has_symlink_component(target)
+    ):
+        raise WorktreeError("allowed root, worktree parent or target changed during creation")
+    reject_registered_worktree_ancestry(
+        [
+            record
+            for record in parse_worktrees(repository)
+            if Path(str(record.get("worktree", ""))).absolute() != target
+        ],
+        target,
+    )
+    record = create_record(
+        repository,
+        allowed_root,
+        target,
+        task,
+        branch_ref,
+        source_ref,
+        start_commit,
+        owner_id,
+        lease_seconds,
+        worktree_identity(target),
+    )
+    atomic_write(paths["record"], record)
+    paths["journal"].unlink()
+    return record
+
+
+def create(args: argparse.Namespace) -> None:
+    repository = repository_root()
+    allowed_root = resolve_allowed_root(repository, args.allowed_root)
+    target = validate_target(args.worktree, allowed_root, must_exist=False, allow_existing=True)
+    start_commit = git_text(repository, "rev-parse", "--verify", "HEAD^{commit}")
+    task = resolve_task(repository, args, start_commit)
+    source_ref = current_source_ref(repository, args.source_ref)
+    reject_checkout_filters(repository, start_commit)
+    branch_short, branch_ref = normalize_branch(args.branch, repository)
+    if branch_ref == source_ref:
+        raise WorktreeError("task branch must differ from the source ref")
+    identity = repository_identity(repository)
+    paths = metadata_paths(identity, task)
+    ensure_metadata_directory(paths["directory"])
+    with locked_file(paths["lock"]):
+        record = create_worktree(
+            repository,
+            allowed_root,
+            target,
+            task,
+            branch_short,
+            branch_ref,
+            source_ref,
+            start_commit,
+            args.owner_id,
+            args.lease_seconds,
+            paths,
+            identity,
+        )
+    print(
+        json.dumps(
+            {"operation": "create", "record": str(paths["record"]), **record},
+            sort_keys=True,
+        )
+    )
+
+
+def refresh_lease(
+    repository: Path,
+    allowed_root: Path,
+    record: dict[str, Any],
+    paths: dict[str, Path],
+    owner_id: str,
+    lease_seconds: int,
+) -> tuple[dict[str, Any], Path, str]:
+    """Rebind an existing task worktree to the requesting owner."""
+
+    now = int(time.time())
+    if paths["journal"].exists():
+        pending = read_record(paths["journal"])
+        immutable_keys = RECORD_KEYS - {"accepted_tip", "owner", "content_digest"}
+        if any(pending[key] != record[key] for key in immutable_keys):
+            raise WorktreeError("interrupted resume journal has different bound facts")
+        if pending["owner"]["id"] != owner_id and record["owner"]["lease_expires_at"] > now:
+            raise WorktreeError("interrupted resume belongs to a different owner")
+        paths["journal"].unlink()
+    validate_lease(record["owner"], owner_id, now)
+    target, tip = verify_record_context(repository, allowed_root, record)
+    verify_history(repository, record["start_commit"], record["accepted_tip"], tip)
+    bound_task = task_at_commit(repository, record["task"], record["start_commit"])
+    if bound_task != record["task"]:
+        raise WorktreeError("bound task identity changed or mismatched")
+    updated = dict(record)
+    updated["accepted_tip"] = tip
+    updated["owner"] = {"id": owner_id, "lease_expires_at": now + lease_seconds}
+    updated = add_content_digest(updated)
+    atomic_write(paths["journal"], updated)
+    atomic_write(paths["record"], updated)
+    paths["journal"].unlink()
+    return updated, target, tip
+
+
+def prepare(args: argparse.Namespace) -> None:
+    """Create or resume the task worktree without another owner prompt."""
+
+    repository = repository_root()
+    allowed_root = resolve_allowed_root(repository, args.allowed_root)
+    start_commit = git_text(repository, "rev-parse", "--verify", "HEAD^{commit}")
+    task = resolve_task(repository, args, start_commit)
+    source_ref = current_source_ref(repository, args.source_ref)
+    identity = repository_identity(repository)
+    paths = metadata_paths(identity, task)
+    ensure_metadata_directory(paths["directory"])
+    with locked_file(paths["lock"]):
+        if paths["record"].exists():
+            record = read_record(paths["record"])
+            updated, target, tip = refresh_lease(
+                repository,
+                canonical_directory(record["allowed_root"], label="allowed root"),
+                record,
+                paths,
+                args.owner_id,
+                args.lease_seconds,
+            )
+            print(
+                json.dumps(
+                    {
+                        "operation": "prepare",
+                        "outcome": "resumed",
+                        "record": str(paths["record"]),
+                        "worktree": updated["worktree_path"],
+                        "branch_ref": updated["branch_ref"],
+                        "source_ref": updated["source_ref"],
+                        "task": task_label(updated["task"]),
+                        "accepted_tip": tip,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return
+        default_target, default_branch = default_placement(task, allowed_root)
+        target = validate_target(
+            args.worktree or str(default_target),
+            allowed_root,
+            must_exist=False,
+            allow_existing=True,
+        )
+        branch_short, branch_ref = normalize_branch(args.branch or default_branch, repository)
+        if branch_ref == source_ref:
+            raise WorktreeError("task branch must differ from the source ref")
+        reject_checkout_filters(repository, start_commit)
+        record = create_worktree(
+            repository,
+            allowed_root,
+            target,
+            task,
+            branch_short,
+            branch_ref,
+            source_ref,
+            start_commit,
+            args.owner_id,
+            args.lease_seconds,
+            paths,
+            identity,
+        )
+    print(
+        json.dumps(
+            {
+                "operation": "prepare",
+                "outcome": "created",
+                "record": str(paths["record"]),
+                "worktree": record["worktree_path"],
+                "branch_ref": record["branch_ref"],
+                "source_ref": record["source_ref"],
+                "task": task_label(record["task"]),
+                "accepted_tip": record["accepted_tip"],
+            },
+            sort_keys=True,
+        )
+    )
 
 
 def load_bound_record(
     repository: Path,
-    raw_allowed_root: str,
-    raw_plan: str,
+    args: argparse.Namespace,
     *,
     allow_resume_journal: bool = False,
 ) -> tuple[Path, dict[str, Any], dict[str, Path]]:
-    allowed_root = validate_allowed_root(raw_allowed_root, repository)
-    plan_path = normalize_plan_path(raw_plan)
     identity = repository_identity(repository)
-    paths = metadata_paths(identity, plan_path)
+    plan_selected = getattr(args, "plan", None)
+    direct_selected = getattr(args, "direct_task", None)
+    if bool(plan_selected) == bool(direct_selected):
+        raise WorktreeError(
+            "select exactly one of a committed active plan or --direct-task <id>"
+        )
+    if plan_selected:
+        selector_task = {
+            "kind": PLAN_TASK,
+            "identity": {"path": normalize_plan_path(plan_selected)},
+        }
+    else:
+        selector_task = {
+            "kind": DIRECT_TASK,
+            "identity": {"id": normalize_direct_task(direct_selected)},
+        }
+    paths = metadata_paths(identity, selector_task)
     if paths["journal"].exists():
         if not paths["record"].exists():
             raise WorktreeError("managed worktree has an interrupted create journal")
         if not allow_resume_journal:
             raise WorktreeError("managed worktree has an interrupted resume journal")
     record = read_record(paths["record"])
-    if record["plan"]["path"] != plan_path:
-        raise WorktreeError("ownership record plan path changed or mismatched")
-    if record["plan"] != plan_identity_at_commit(
-        repository, plan_path, record["start_commit"]
-    ):
-        raise WorktreeError("ownership record plan identity changed or mismatched")
+    if task_selector(record["task"]) != task_selector(selector_task):
+        raise WorktreeError("ownership record task identity changed or mismatched")
+    if task_at_commit(repository, record["task"], record["start_commit"]) != record["task"]:
+        raise WorktreeError("ownership record task identity changed or mismatched")
+    allowed_root = resolve_allowed_root(repository, args.allowed_root or record["allowed_root"])
     return allowed_root, record, paths
 
 
 def inspect_record(args: argparse.Namespace) -> None:
     repository = repository_root()
     allowed_root, record, paths = load_bound_record(
-        repository,
-        args.allowed_root,
-        args.plan,
-        allow_resume_journal=True,
+        repository, args, allow_resume_journal=True
     )
     target, tip = verify_record_context(repository, allowed_root, record)
     verify_history(repository, record["start_commit"], record["accepted_tip"], tip)
@@ -1066,43 +913,13 @@ def inspect_record(args: argparse.Namespace) -> None:
 def resume(args: argparse.Namespace) -> None:
     repository = repository_root()
     allowed_root, record, paths = load_bound_record(
-        repository,
-        args.allowed_root,
-        args.plan,
-        allow_resume_journal=True,
+        repository, args, allow_resume_journal=True
     )
     with locked_file(paths["lock"]):
         record = read_record(paths["record"])
-        now = int(time.time())
-        if paths["journal"].exists():
-            pending = read_record(paths["journal"])
-            immutable_keys = RECORD_KEYS - {"accepted_tip", "owner", "content_digest"}
-            if any(pending[key] != record[key] for key in immutable_keys):
-                raise WorktreeError("interrupted resume journal has different bound facts")
-            if pending["owner"]["id"] != args.owner_id:
-                if record["owner"]["lease_expires_at"] > now:
-                    raise WorktreeError("interrupted resume belongs to a different owner")
-                paths["journal"].unlink()
-            else:
-                paths["journal"].unlink()
-        validate_lease(record["owner"], args.owner_id, now)
-        target, tip = verify_record_context(repository, allowed_root, record)
-        verify_history(repository, record["start_commit"], record["accepted_tip"], tip)
-        plan_at_start = plan_identity_at_commit(
-            repository, record["plan"]["path"], record["start_commit"]
+        updated, target, tip = refresh_lease(
+            repository, allowed_root, record, paths, args.owner_id, args.lease_seconds
         )
-        if plan_at_start != record["plan"]:
-            raise WorktreeError("bound plan identity changed or mismatched")
-        updated = dict(record)
-        updated["accepted_tip"] = tip
-        updated["owner"] = {
-            "id": args.owner_id,
-            "lease_expires_at": now + args.lease_seconds,
-        }
-        updated = add_content_digest(updated)
-        atomic_write(paths["journal"], updated)
-        atomic_write(paths["record"], updated)
-        paths["journal"].unlink()
     print(
         json.dumps(
             {
@@ -1110,6 +927,7 @@ def resume(args: argparse.Namespace) -> None:
                 "record": str(paths["record"]),
                 "worktree": str(target),
                 "branch_ref": updated["branch_ref"],
+                "source_ref": updated["source_ref"],
                 "accepted_tip": tip,
                 "status_digest": status_digest(target),
             },
@@ -1118,9 +936,10 @@ def resume(args: argparse.Namespace) -> None:
     )
 
 
-def add_common_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("plan")
-    parser.add_argument("--allowed-root", required=True)
+def add_task_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("plan", nargs="?")
+    parser.add_argument("--direct-task")
+    parser.add_argument("--allowed-root")
 
 
 def add_owner_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1131,24 +950,39 @@ def add_owner_arguments(parser: argparse.ArgumentParser) -> None:
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser()
     sub = root.add_subparsers(dest="command", required=True)
+
     create_parser = sub.add_parser("create")
-    add_common_arguments(create_parser)
+    add_task_arguments(create_parser)
     add_owner_arguments(create_parser)
+    create_parser.add_argument("--purpose")
+    create_parser.add_argument("--source-ref")
     create_parser.add_argument("--worktree", required=True)
     create_parser.add_argument("--branch", required=True)
     create_parser.set_defaults(handler=create)
+
+    prepare_parser = sub.add_parser("prepare")
+    add_task_arguments(prepare_parser)
+    prepare_parser.add_argument("--owner-id", default="parent")
+    prepare_parser.add_argument("--lease-seconds", type=int, default=14_400)
+    prepare_parser.add_argument("--purpose")
+    prepare_parser.add_argument("--source-ref")
+    prepare_parser.add_argument("--worktree")
+    prepare_parser.add_argument("--branch")
+    prepare_parser.set_defaults(handler=prepare)
+
     inspect_parser = sub.add_parser("inspect")
-    add_common_arguments(inspect_parser)
+    add_task_arguments(inspect_parser)
     inspect_parser.set_defaults(handler=inspect_record)
+
     resume_parser = sub.add_parser("resume")
-    add_common_arguments(resume_parser)
+    add_task_arguments(resume_parser)
     add_owner_arguments(resume_parser)
     resume_parser.set_defaults(handler=resume)
     return root
 
 
 def validate_arguments(args: argparse.Namespace) -> None:
-    if hasattr(args, "owner_id") and OWNER_RE.fullmatch(args.owner_id) is None:
+    if getattr(args, "owner_id", None) is not None and OWNER_RE.fullmatch(args.owner_id) is None:
         raise WorktreeError("owner id is invalid")
     if hasattr(args, "lease_seconds") and not 60 <= args.lease_seconds <= MAX_LEASE_SECONDS:
         raise WorktreeError(f"lease seconds must be between 60 and {MAX_LEASE_SECONDS}")

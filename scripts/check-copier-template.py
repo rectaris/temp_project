@@ -771,15 +771,38 @@ def require_parent_worktree_alignment() -> None:
         fail("root and generated parent-worktree CLI modes differ")
     if root_cli.stat().st_mode & 0o111 == 0:
         fail("parent-worktree CLIs must be executable")
+    root_guard = ROOT / "scripts/project_workflow/worktree_guard.py"
+    template_guard = ROOT / "template/.project-agent-workflow/scripts/worktree_guard.py"
+    if root_guard.read_bytes() != template_guard.read_bytes():
+        fail("root and generated task-worktree guards differ")
+    if (root_guard.stat().st_mode & 0o777) != (template_guard.stat().st_mode & 0o777):
+        fail("root and generated task-worktree guard modes differ")
+    for marker in (
+        "interrupted create journal",
+        '"requested branch already exists"',
+        "def prepare",
+        "select exactly one of a committed active plan or --direct-task",
+    ):
+        if marker not in read("scripts/manage-plan-worktrees.py"):
+            fail(f"parent-worktree CLI missing safety marker: {marker}")
+    guard_text = read("scripts/project_workflow/worktree_guard.py")
     for marker in (
         '"common_git_dir_device"',
         '"common_git_dir_inode"',
         '"lease_expires_at"',
-        "interrupted create journal",
-        '"requested branch already exists"',
+        "def assert_task_worktree",
+        "def find_binding",
+        "def account_home",
+        "must not run in the pre-existing checkout",
+        "task worktree owner lease expired",
+        "must not imitate a numbered plan identity",
     ):
-        if marker not in read("scripts/manage-plan-worktrees.py"):
-            fail(f"parent-worktree CLI missing safety marker: {marker}")
+        if marker not in guard_text:
+            fail(f"task-worktree guard missing safety marker: {marker}")
+    if "Path.home()" in guard_text or 'environ["HOME"]' in guard_text or 'environ.get("HOME"' in guard_text:
+        fail("task-worktree guard must not read a caller-controlled HOME")
+    if "pwd.getpwuid(os.getuid()).pw_dir" not in guard_text:
+        fail("task-worktree guard must resolve the operating-system account home")
     root_guidance = read("references/orchestration.md")
     generated_guidance = read(
         "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"

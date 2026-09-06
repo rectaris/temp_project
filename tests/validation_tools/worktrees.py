@@ -32,6 +32,14 @@ def load_worktree_module():
 
 
 WORKTREE_MODULE = load_worktree_module()
+GUARD_MODULE = WORKTREE_MODULE.guard
+SOURCE_REF = "refs/heads/dev"
+
+
+def plan_selector(plan_path: str) -> dict:
+    """Name one plan task the way the ownership records key it."""
+
+    return {"kind": GUARD_MODULE.PLAN_TASK, "identity": {"path": plan_path}}
 
 
 def git(repository: Path, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -55,7 +63,7 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
         self.allowed_root.mkdir(mode=0o700)
         self.allowed_root.chmod(0o700)
         self.home.mkdir(mode=0o700)
-        git(self.repository, "init", "-q")
+        git(self.repository, "init", "-q", "-b", "dev")
         git(self.repository, "config", "user.name", "Worktree Test")
         git(self.repository, "config", "user.email", "worktree@example.invalid")
         git(self.repository, "remote", "add", "origin", "git@github.com:example/project.git")
@@ -72,7 +80,7 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
         self.target = self.allowed_root / "plan-278"
         self.metadata_paths = WORKTREE_MODULE.metadata_paths(
             WORKTREE_MODULE.repository_identity(self.repository),
-            self.plan,
+            plan_selector(self.plan),
         )
 
     def tearDown(self) -> None:
@@ -630,6 +638,9 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
 
         args = SimpleNamespace(
             plan=self.plan,
+            direct_task=None,
+            purpose=None,
+            source_ref=None,
             allowed_root=str(self.allowed_root),
             worktree=str(target),
             branch="plan/278",
@@ -671,6 +682,9 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
 
         args = SimpleNamespace(
             plan=self.plan,
+            direct_task=None,
+            purpose=None,
+            source_ref=None,
             allowed_root=str(self.allowed_root),
             worktree=str(self.target),
             branch="plan/278",
@@ -716,16 +730,17 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
         _, branch_ref = WORKTREE_MODULE.normalize_branch(
             "plan/278", self.repository
         )
-        paths = WORKTREE_MODULE.metadata_paths(identity, self.plan)
+        paths = WORKTREE_MODULE.metadata_paths(identity, plan_selector(self.plan))
         WORKTREE_MODULE.ensure_metadata_directory(paths["directory"])
         journal = WORKTREE_MODULE.add_content_digest(
             {
                 "schema_version": WORKTREE_MODULE.SCHEMA_VERSION,
                 "repository_identity": identity,
-                "plan": plan,
+                "task": WORKTREE_MODULE.plan_task(plan),
                 "start_commit": start,
                 "accepted_tip": start,
                 "branch_ref": branch_ref,
+                "source_ref": SOURCE_REF,
                 "allowed_root": str(self.allowed_root),
                 "worktree_path": str(self.target),
                 "worktree_identity": {
@@ -756,16 +771,17 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
         plan = WORKTREE_MODULE.plan_identity_at_commit(
             self.repository, self.plan, start
         )
-        paths = WORKTREE_MODULE.metadata_paths(identity, self.plan)
+        paths = WORKTREE_MODULE.metadata_paths(identity, plan_selector(self.plan))
         WORKTREE_MODULE.ensure_metadata_directory(paths["directory"])
         journal = WORKTREE_MODULE.add_content_digest(
             {
                 "schema_version": WORKTREE_MODULE.SCHEMA_VERSION,
                 "repository_identity": identity,
-                "plan": plan,
+                "task": WORKTREE_MODULE.plan_task(plan),
                 "start_commit": start,
                 "accepted_tip": start,
                 "branch_ref": "refs/heads/plan/278",
+                "source_ref": SOURCE_REF,
                 "allowed_root": str(self.allowed_root),
                 "worktree_path": str(self.target),
                 "worktree_identity": {
@@ -804,6 +820,9 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
 
         args = SimpleNamespace(
             plan=self.plan,
+            direct_task=None,
+            purpose=None,
+            source_ref=None,
             allowed_root=str(self.allowed_root),
             worktree=str(self.target),
             branch="plan/278",
@@ -842,17 +861,18 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
         plan = WORKTREE_MODULE.plan_identity_at_commit(
             self.repository, self.plan, start
         )
-        paths = WORKTREE_MODULE.metadata_paths(identity, self.plan)
+        paths = WORKTREE_MODULE.metadata_paths(identity, plan_selector(self.plan))
         WORKTREE_MODULE.ensure_metadata_directory(paths["directory"])
         stale_target = self.allowed_root / "stale-target"
         journal = WORKTREE_MODULE.add_content_digest(
             {
                 "schema_version": WORKTREE_MODULE.SCHEMA_VERSION,
                 "repository_identity": identity,
-                "plan": plan,
+                "task": WORKTREE_MODULE.plan_task(plan),
                 "start_commit": start,
                 "accepted_tip": start,
                 "branch_ref": "refs/heads/plan/stale",
+                "source_ref": SOURCE_REF,
                 "allowed_root": str(self.allowed_root),
                 "worktree_path": str(stale_target),
                 "worktree_identity": {
@@ -1022,3 +1042,224 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("bound commits", result.stderr)
+
+
+class TaskWorktreeGuardTest(unittest.TestCase):
+    """Disposable-repository tests for the shared task-worktree assertion."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.repository = self.base / "repository"
+        self.allowed_root = self.base / "managed"
+        self.home = self.base / "home"
+        self.repository.mkdir()
+        self.allowed_root.mkdir(mode=0o700)
+        self.allowed_root.chmod(0o700)
+        self.home.mkdir(mode=0o700)
+        git(self.repository, "init", "-q", "-b", "dev")
+        git(self.repository, "config", "user.name", "Guard Test")
+        git(self.repository, "config", "user.email", "guard@example.invalid")
+        git(self.repository, "remote", "add", "origin", "git@github.com:example/guard.git")
+        self.plan = "docs/plan/active/301-guarded.md"
+        plan = self.repository / self.plan
+        plan.parent.mkdir(parents=True)
+        plan.write_text("status: in_progress\n", encoding="utf-8")
+        (self.repository / "file.txt").write_text("baseline\n", encoding="utf-8")
+        git(self.repository, "add", ".")
+        git(self.repository, "commit", "-qm", "baseline")
+        self.identity = WORKTREE_MODULE.repository_identity(self.repository)
+        self.created: list[dict] = []
+
+    def tearDown(self) -> None:
+        for paths in self.created:
+            for key in ("record", "journal", "lock"):
+                paths[key].unlink(missing_ok=True)
+        self.temp.cleanup()
+
+    def track(self, task: dict) -> dict:
+        paths = WORKTREE_MODULE.metadata_paths(self.identity, task)
+        self.created.append(paths)
+        return paths
+
+    def run_command(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *arguments],
+            cwd=self.repository,
+            env={**os.environ, "HOME": str(self.home)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def prepare_plan(self, owner: str = "owner-a") -> dict:
+        self.track(plan_selector(self.plan))
+        result = self.run_command(
+            "prepare",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            owner,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def prepare_direct(self, task_id: str = "author-plan", owner: str = "owner-a") -> dict:
+        self.track({"kind": GUARD_MODULE.DIRECT_TASK, "identity": {"id": task_id}})
+        result = self.run_command(
+            "prepare",
+            "--direct-task",
+            task_id,
+            "--purpose",
+            "author one plan before an identifier exists",
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            owner,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_prepare_places_a_plan_worktree_without_another_prompt(self) -> None:
+        created = self.prepare_plan()
+        self.assertEqual(created["outcome"], "created")
+        self.assertEqual(created["worktree"], str(self.allowed_root / "301-guarded"))
+        self.assertEqual(created["branch_ref"], "refs/heads/plan/301-guarded")
+        self.assertEqual(created["source_ref"], "refs/heads/dev")
+
+    def test_prepare_is_idempotent_for_the_same_task(self) -> None:
+        first = self.prepare_plan()
+        second = self.prepare_plan()
+        self.assertEqual(second["outcome"], "resumed")
+        self.assertEqual(second["worktree"], first["worktree"])
+        self.assertEqual(second["branch_ref"], first["branch_ref"])
+
+    def test_guard_binds_the_prepared_worktree(self) -> None:
+        created = self.prepare_plan()
+        binding = GUARD_MODULE.assert_task_worktree(Path(created["worktree"]))
+        self.assertEqual(binding.kind, GUARD_MODULE.PLAN_TASK)
+        self.assertEqual(binding.label, self.plan)
+        self.assertEqual(binding.source_ref, "refs/heads/dev")
+
+    def test_guard_rejects_the_pre_existing_checkout(self) -> None:
+        self.prepare_plan()
+        with self.assertRaises(GUARD_MODULE.GuardError) as caught:
+            GUARD_MODULE.assert_task_worktree(self.repository)
+        self.assertIn("pre-existing checkout", str(caught.exception))
+        self.assertIn("prepare", str(caught.exception))
+
+    def test_guard_reports_the_exact_preparation_command(self) -> None:
+        self.prepare_plan()
+        with self.assertRaises(GUARD_MODULE.GuardError) as caught:
+            GUARD_MODULE.assert_task_worktree(self.repository, plan=self.plan)
+        self.assertIn("manage-plan-worktrees.py prepare " + self.plan, str(caught.exception))
+
+    def test_guard_rejects_an_expired_owner_lease(self) -> None:
+        created = self.prepare_plan()
+        expiry = json.loads(
+            self.run_command(
+                "inspect", self.plan, "--allowed-root", str(self.allowed_root)
+            ).stdout
+        )["record"]["owner"]["lease_expires_at"]
+        with self.assertRaises(GUARD_MODULE.GuardError) as caught:
+            GUARD_MODULE.assert_task_worktree(
+                Path(created["worktree"]), now=expiry + 1
+            )
+        self.assertIn("lease expired", str(caught.exception))
+
+    def test_guard_rejects_a_worktree_whose_branch_moved_away(self) -> None:
+        created = self.prepare_plan()
+        worktree = Path(created["worktree"])
+        git(worktree, "checkout", "-q", "--detach")
+        with self.assertRaises(GUARD_MODULE.GuardError) as caught:
+            GUARD_MODULE.assert_task_worktree(worktree)
+        self.assertIn("branch changed or became detached", str(caught.exception))
+
+    def test_direct_task_is_disjoint_from_every_plan_task(self) -> None:
+        plan_created = self.prepare_plan()
+        direct_created = self.prepare_direct()
+        self.assertNotEqual(direct_created["worktree"], plan_created["worktree"])
+        self.assertEqual(direct_created["task"], "direct:author-plan")
+        self.assertEqual(direct_created["branch_ref"], "refs/heads/task/author-plan")
+        binding = GUARD_MODULE.assert_task_worktree(Path(direct_created["worktree"]))
+        self.assertEqual(binding.kind, GUARD_MODULE.DIRECT_TASK)
+
+    def test_direct_task_cannot_acquire_plan_implementation_authority(self) -> None:
+        self.prepare_plan()
+        direct_created = self.prepare_direct()
+        with self.assertRaises(GUARD_MODULE.GuardError) as caught:
+            GUARD_MODULE.assert_task_worktree(
+                Path(direct_created["worktree"]), plan=self.plan
+            )
+        self.assertIn("bound to direct:author-plan", str(caught.exception))
+
+    def test_plan_worktree_is_not_accepted_as_a_direct_task(self) -> None:
+        created = self.prepare_plan()
+        with self.assertRaises(GUARD_MODULE.GuardError):
+            GUARD_MODULE.assert_task_worktree(
+                Path(created["worktree"]), kind=GUARD_MODULE.DIRECT_TASK
+            )
+
+    def test_direct_task_id_must_not_imitate_a_numbered_plan(self) -> None:
+        for candidate in ("301", "301-guarded"):
+            with self.assertRaises(GUARD_MODULE.WorktreeError):
+                GUARD_MODULE.normalize_direct_task(candidate)
+
+    def test_prepare_requires_exactly_one_task_selector(self) -> None:
+        neither = self.run_command(
+            "prepare", "--allowed-root", str(self.allowed_root), "--owner-id", "owner-a"
+        )
+        self.assertNotEqual(neither.returncode, 0)
+        self.assertIn("exactly one", neither.stderr)
+        both = self.run_command(
+            "prepare",
+            self.plan,
+            "--direct-task",
+            "author-plan",
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertNotEqual(both.returncode, 0)
+        self.assertIn("exactly one", both.stderr)
+
+    def test_guard_finds_no_binding_without_a_prepared_worktree(self) -> None:
+        self.assertIsNone(GUARD_MODULE.find_binding(self.repository))
+        with self.assertRaises(GUARD_MODULE.GuardError):
+            GUARD_MODULE.assert_task_worktree(self.repository)
+
+    def test_guard_ignores_a_binding_from_another_clone(self) -> None:
+        created = self.prepare_plan()
+        other = self.base / "other"
+        git(self.base, "clone", "-q", str(self.repository), str(other))
+        git(other, "remote", "set-url", "origin", "git@github.com:example/guard.git")
+        self.assertIsNone(GUARD_MODULE.find_binding(other))
+        self.assertIsNotNone(GUARD_MODULE.find_binding(Path(created["worktree"])))
+
+    def test_guard_resolves_the_account_home_rather_than_caller_home(self) -> None:
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            self.assertEqual(
+                GUARD_MODULE.state_directory(),
+                GUARD_MODULE.account_home() / GUARD_MODULE.STATE_RELATIVE_DIRECTORY,
+            )
+            self.assertFalse(
+                str(GUARD_MODULE.state_directory()).startswith(str(self.home))
+            )
+
+    def test_task_branch_must_differ_from_the_source_ref(self) -> None:
+        self.track(plan_selector(self.plan))
+        result = self.run_command(
+            "prepare",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+            "--branch",
+            "dev",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must differ from the source ref", result.stderr)
