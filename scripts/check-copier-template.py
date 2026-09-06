@@ -848,12 +848,16 @@ PLAN_WORKFLOW_ALIGNED_SECTIONS = (
 
 PLAN_ADMISSION_CONSTANT_SOURCES = (
     "template/.project-agent-workflow/scripts/planlib.py",
+    "template/.project-agent-workflow/scripts/plan_authoring.py",
+    "scripts/project_workflow/plan_authoring.py",
     "scripts/check-root-agent-policy.py",
     "scripts/restructure-plan.py",
 )
 
 ACTIVE_INDEX_GRAMMAR_SOURCES = (
     "template/.project-agent-workflow/scripts/planlib.py",
+    "template/.project-agent-workflow/scripts/plan_authoring.py",
+    "scripts/project_workflow/plan_authoring.py",
     "template/.project-agent-workflow/scripts/restructure-plan.py",
     "scripts/check-root-agent-policy.py",
     "scripts/restructure-plan.py",
@@ -1043,6 +1047,32 @@ def require_sandboxed_plan_worker_alignment() -> None:
         fail("plan restructuring root/template scripts differ")
     if (root_restructure.stat().st_mode & 0o777) != (template_restructure.stat().st_mode & 0o777):
         fail("plan restructuring root/template script modes differ")
+    root_authoring = ROOT / "scripts/project_workflow/plan_authoring.py"
+    template_authoring = ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py"
+    if root_authoring.read_bytes() != template_authoring.read_bytes():
+        fail("plan authoring root/template libraries differ")
+    if (root_authoring.stat().st_mode & 0o777) != (template_authoring.stat().st_mode & 0o777):
+        fail("plan authoring root/template library modes differ")
+    authoring_text = root_authoring.read_text(encoding="utf-8")
+    for marker in (
+        "def check_authoring_input", "def write_authoring_input",
+        "def legacy_input_document", '"--expect-input-sha256"',
+        '"--print-digest"', "repository-writes-performed: 0",
+        "semantic-review-required:", "LEGACY_INTERFACE = \"legacy_arguments\"",
+    ):
+        if marker not in authoring_text:
+            fail(f"plan authoring library missing marker: {marker}")
+    root_plan_entry = read("scripts/create-root-plan.py")
+    for marker in ("plan_authoring", "PROFILE_ROOT"):
+        if marker not in root_plan_entry:
+            fail(f"root plan authoring command missing marker: {marker}")
+    create_plan = read("template/.project-agent-workflow/scripts/create-plan.sh")
+    for marker in (
+        "plan_authoring.py", "--expect-input-sha256", "--print-digest",
+        "legacy-input", "--check-admission",
+    ):
+        if marker not in create_plan:
+            fail(f"generated plan creation must route through the checked input: {marker}")
     root_execution_state = ROOT / "scripts/plan-execution-state.py"
     template_execution_state = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
     if root_execution_state.read_bytes() != template_execution_state.read_bytes():

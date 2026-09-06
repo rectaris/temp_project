@@ -85,6 +85,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/create-plan.sh \
+    template/.project-agent-workflow/scripts/plan_authoring.py \
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/promote-plan.sh \
     template/.project-agent-workflow/scripts/restructure-plan.py \
@@ -146,6 +147,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
     template/.project-agent-workflow/scripts/create-plan.sh \
+    template/.project-agent-workflow/scripts/plan_authoring.py \
     template/.project-agent-workflow/scripts/planlib.py \
     template/.project-agent-workflow/scripts/promote-plan.sh \
     template/.project-agent-workflow/scripts/restructure-plan.py \
@@ -1680,6 +1682,71 @@ grep -q 'Decision Audit Preflight' "$tmp/typescript/.project-agent-workflow/docs
 grep -q 'Run decision audit before creating or materially updating active plans' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Full decision-audit output does not belong in `docs/plan/active`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_DECISION_AUDIT.md"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/plan_validation_commands.py"
+test -f "$tmp/typescript/.project-agent-workflow/scripts/plan_authoring.py"
+grep -q 'Checked Authoring Input' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+authoring_input="$tmp/typescript-authoring-input.json"
+cat > "$authoring_input" <<'JSON'
+{
+  "schema_version": 1,
+  "profile": "generated",
+  "lifecycle": "backlog",
+  "slug": "reject-negative-retry-count",
+  "summary": "Reject a negative retry count",
+  "summary_ja": "負の再試行回数を拒否する。",
+  "plan_purpose": "implementation",
+  "task_types": ["environment_data_flow"],
+  "review_class": "B",
+  "human_design_required": "no",
+  "human_approval_status": "not_required",
+  "feasibility_evidence": [
+    {"kind": "reproduced_defect", "evidence": "The loader accepts a configuration whose retry count is negative."}
+  ],
+  "witnesses": [
+    {"id": "w-loader", "command": "npm run lint", "claim": "Asserts that the loader rejects a negative retry count."}
+  ],
+  "write_paths": [
+    {"id": "wp-loader", "path": "src/loader.ts"},
+    {"id": "wp-test", "path": "tests/loader.test.ts"}
+  ],
+  "completion_conditions": [
+    {"id": "cc-reject", "text": "The loader rejects a negative retry count.", "witness": "w-loader"},
+    {"id": "cc-name", "text": "The rejection report names the offending field.", "witness": "w-loader"}
+  ],
+  "acceptance_items": [
+    {"id": "ac-reject", "text": "A negative retry count is rejected before the loader returns.", "witness": "w-loader", "stage": "focused"},
+    {"id": "ac-name", "text": "The rejection report names the offending field.", "witness": "w-loader", "stage": "focused"}
+  ],
+  "requirements": [
+    {"id": "req-reject", "text": "Reject malformed loader configuration before use.", "write_paths": ["wp-loader", "wp-test"], "completion_conditions": ["cc-reject", "cc-name"], "acceptance_items": ["ac-reject", "ac-name"]}
+  ],
+  "context_files": [".project-agent-workflow/docs/agent/SPEC_VALIDATION.md"],
+  "target_json": ["config/loader.json"],
+  "required_specs": [".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"],
+  "validation": ["git diff --check"],
+  "acceptance_focus": ["Negative retry counts."],
+  "problem": ["The loader accepts a configuration whose retry count is negative."],
+  "goal": ["Reject that configuration and name the offending field."],
+  "implementation_instructions": ["Validate the retry count in the loader.", "Add one regression test."],
+  "decisions": ["Reject at load time rather than at first use."],
+  "tasks": ["Add the validation.", "Add the regression test."]
+}
+JSON
+(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh --check --input "$authoring_input" > "$tmp/authoring-check.txt")
+grep -q 'repository-writes-performed: 0' "$tmp/authoring-check.txt"
+grep -q 'semantic-review-required:' "$tmp/authoring-check.txt"
+grep -q 'requirement 1 \[req-reject\]' "$tmp/authoring-check.txt"
+authoring_plan=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh --input "$authoring_input")
+test -f "$tmp/typescript/$authoring_plan"
+grep -q 'validation_witness_schema: 1' "$tmp/typescript/$authoring_plan"
+grep -q '^status: backlog$' "$tmp/typescript/$authoring_plan"
+(cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-admission "$authoring_plan")
+authoring_digest=$(cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_authoring.py check --profile generated --input "$authoring_input" --print-digest)
+sed -i 's/"summary": "Reject a negative retry count"/"summary": "Reject a negative retry count everywhere"/' "$authoring_input"
+if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_authoring.py write --profile generated --input "$authoring_input" --expect-input-sha256 "$authoring_digest" >/dev/null 2>"$tmp/authoring-write.err"); then
+  echo "plan authoring rendered a plan from an input that changed after it was checked" >&2
+  exit 1
+fi
+grep -q 'changed since it was checked' "$tmp/authoring-write.err"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/check-codex-toml.py"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/sync-plan-to-linear.sh"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_validation_commands.py --self-test)

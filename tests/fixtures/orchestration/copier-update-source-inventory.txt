@@ -15,6 +15,7 @@ template/.project-agent-workflow/scripts/validate-copier-update.py
 template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md
 template/.project-agent-workflow/scripts/check-external-service-policy.py
 template/.project-agent-workflow/scripts/sync-plan-to-linear.sh
+template/.project-agent-workflow/scripts/plan_authoring.py
 template/.project-agent-workflow/scripts/plan_validation_commands.py
 template/.project-agent-workflow/scripts/validate-changes.py
 template/.agents/skills/browser-ops/SKILL.md

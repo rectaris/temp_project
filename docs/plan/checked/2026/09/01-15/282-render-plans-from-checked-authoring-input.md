@@ -1,6 +1,6 @@
 # Render plans from checked structured input
 
-status: in_progress
+status: checked
 primary_invariant: One bounded structured input is checked before writing, exposes the exact correspondence from each accepted requirement through write paths and completion predicates to claimed witness behavior and command, and byte-binds the plan and lifecycle-index update rendered from it.
 task_types:
   - planning_docs
@@ -109,12 +109,12 @@ checked_summary_ja: 要件・変更先・完了条件・検査内容の対応を
 
 ## Tasks
 
-- [ ] Freeze bounded input, preview, and write fixtures before implementation, including the separately identified holdout.
-- [ ] Add shared validation and mapping code, the root entrypoint, and the generated entrypoint compatibility path.
-- [ ] Implement exact-byte digest binding, safe target allocation, canonical rendering, and atomic plan/index writes after all checks pass.
-- [ ] Add fixed scenario tests that distinguish structural rejection from semantic review and preserve every observed result field without invented measurements.
-- [ ] Register new installable files and root/generated parity, update operational policy, and exercise both entrypoints in smoke fixtures.
-- [ ] Run focused validation, obtain independent review of the ordinary and holdout outputs, and run the unchanged authoritative suites once for an acceptable candidate.
+- [x] Freeze bounded input, preview, and write fixtures before implementation, including the separately identified holdout.
+- [x] Add shared validation and mapping code, the root entrypoint, and the generated entrypoint compatibility path.
+- [x] Implement exact-byte digest binding, safe target allocation, canonical rendering, and atomic plan/index writes after all checks pass.
+- [x] Add fixed scenario tests that distinguish structural rejection from semantic review and preserve every observed result field without invented measurements.
+- [x] Register new installable files and root/generated parity, update operational policy, and exercise both entrypoints in smoke fixtures.
+- [x] Run focused validation, obtain independent review of the ordinary and holdout outputs, and run the unchanged authoritative suites once for an acceptable candidate.
 
 ## Validation Notes
 
@@ -126,3 +126,25 @@ checked_summary_ja: 要件・変更先・完了条件・検査内容の対応を
 - No speed, token, retry, or human-effort improvement is claimed without a matching observation.
 - Plan-authoring validation passed: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` exited 0. Smoke exercised generated-project cases; its optional GitHub Actions lint was skipped because `actionlint` was unavailable.
 - Root admission, witness-digest, validation-command, context-path, and whitespace checks passed. These results validate this backlog document and the existing repository, not the future renderer or scenario outcomes.
+- Implementation baseline: `b35ba58` in `temp_project`, which activated this plan and its index row as a separate commit.
+- Owner direction for implementation: 「docs/plan/backlog/282-render-plans-from-checked-authoring-input.md について実装作業をせよ。」
+- The shared library `plan_authoring.py` is installed byte-identically at `scripts/project_workflow/plan_authoring.py` and `template/.project-agent-workflow/scripts/plan_authoring.py`, and `scripts/check-copier-template.py` now enforces that identity together with the shared active-index grammar and admission constants.
+- The legacy generated interface is a conversion, not a second renderer. The rendered plan file and index bytes were compared against the pre-change `create-plan.sh` for the same arguments and were identical.
+- Command-grammar checking applies to the declared `validation` list only. Witness commands stay caller text, so the legacy interface keeps accepting the project-specific witnesses it always accepted.
+- The holdout fixture predicted the correct decision for every case on first run. One case predicted the wrong rejection wording; the observed message was recorded in `observed_outcomes` and the recorded substring was corrected, and the checker was not changed to fit the prediction.
+- Deterministic checking never infers semantics: a test asserts that two inputs differing only in claim wording produce the same structural report, and the report states that boundary in every run.
+- Declared `write_scope` was incomplete for two mechanically entailed registrations, and both were changed: `tests/validation_tools/support.py` holds the module-path constants that every validation-tool domain imports from, and `tests/fixtures/orchestration/copier-update-source-inventory.txt` is the single inventory the Copier update fixture copies and stages from, so a new installable file that is absent from it is not part of the update the fixture proves. Neither change alters product behavior, and no other path outside the declared scope was written.
+- Independent review (read-only helper, no write scope) reported four Medium findings against the first candidate, and one parent-direct remediation round cleared all of them. Acceptance stayed with the main session.
+  - The authoring interface was a caller-supplied input field, so a hand-written input could declare `legacy_arguments` and unlock the placeholder relaxations. The field was removed from the input schema and the interface became a parameter of the conversion (`--authoring-interface`), refused for the root profile.
+  - Declared `write_scope`, `context_files`, and `target_json` paths were not symlink-checked, so a declared path and the written path could differ. They are now refused at both check and write time.
+  - The conversion narrowed three previously accepted argument invocations. The plan title is now stripped and bounded at 400 bytes instead of rejected, and the two remaining narrowings (absolute or repeated `--write-scope` values) are kept as defect fixes and recorded in both `SPEC_PLAN_WORKFLOW.md` files.
+  - A failing plan-file write left a truncated file behind, because only the index write had a rollback. The plan file is now removed when its own write fails.
+  - Two smaller items were also fixed: a JSON surrogate escape raised an uncaught `UnicodeEncodeError` instead of an authoring error, and no test covered the plan's multi-plan scenario. Both now have tests.
+- The rereview of the remediated candidate reported one Medium and one Low finding, and a second parent-direct round cleared both. The reviewer then confirmed both closed with no new defect.
+  - The legacy title relaxation had been applied to `summary` but not to `summary_ja`, which rejected Japanese titles the argument interface used to accept. Both titles now share one `title()` helper, so no asymmetry remains.
+  - The root entrypoint only defaulted its profile, so it still accepted `--profile generated --authoring-interface legacy_arguments`. An entrypoint that declares a profile is now bound to it, and the root entrypoint carries no interface option at all.
+- Legacy byte compatibility was re-verified after each remediation round: the plan file and index bytes for the same arguments remain identical to the pre-change `create-plan.sh`, including for the Japanese-title invocations that the first remediation had regressed.
+- The digest binds the input bytes and not the interface, so `check` and `write` can be given different interfaces for the same bytes. This is not an escalation: every interface effect is a relaxation whose rendering coincides on the accepted intersection, a legacy-only input has no successful structured report to display, and the digest was never an authorization token. The report discloses the interface it used.
+- Implementation validation passed once for the accepted candidate: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` both exited 0. Smoke's optional GitHub Actions lint was skipped again because `actionlint` was unavailable.
+- Helper usage: one read-only `code-review` helper with no write scope produced the review, rereview, and confirmation. Its output was advisory; every change, the validation acceptance, and this record were made by the main session.
+- No speed, token, retry, or human-effort improvement is claimed; no such measurement was taken.

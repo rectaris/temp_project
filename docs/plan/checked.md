@@ -214,3 +214,4 @@ id	path
 288	docs/plan/checked/2026/09/01-15/288-enforce-plan-completion-gate-across-agents.md
 285	docs/plan/checked/2026/09/01-15/285-integrate-parallel-plan-candidates-in-order.md
 281	docs/plan/checked/2026/09/01-15/281-reject-malformed-active-plan-index.md
+282	docs/plan/checked/2026/09/01-15/282-render-plans-from-checked-authoring-input.md
