@@ -327,3 +327,105 @@ class PlanAuthoringTest(unittest.TestCase):
                     rendered = (root / path).read_text(encoding="utf-8")
                     for line in rendered.splitlines():
                         self.assertEqual(line, line.rstrip(), line)
+
+
+class PlanAuthoringInRepositoryTest(unittest.TestCase):
+    """Authoring inside a real repository, where the shared lifecycle lock applies."""
+
+    @staticmethod
+    def module():
+        return load_module(PLAN_AUTHORING_MODULES[0], "plan_authoring_in_repository")
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name) / "repository"
+        (self.root / "docs/plan/active").mkdir(parents=True)
+        (self.root / "docs/plan/backlog").mkdir(parents=True)
+        (self.root / "docs/plan/plan.md").write_text(
+            "# Active Plan\n\nNo active development items.\n", encoding="utf-8"
+        )
+        self.git("init", "-q", "-b", "dev")
+        self.git("config", "user.name", "Authoring Test")
+        self.git("config", "user.email", "authoring@example.invalid")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "baseline")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def git(self, *arguments: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(self.root), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def accepted_input(self) -> dict:
+        cases = json.loads((FIXTURES / "cases.json").read_text(encoding="utf-8"))["cases"]
+        for case in cases:
+            if case["expect"] == "accept" and case["input"]["profile"] == "root":
+                return case["input"]
+        raise AssertionError("no accepted root case")
+
+    def run_command(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(ROOT_COMMAND), "--root", str(self.root), *args],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    def test_check_and_write_complete_inside_a_repository(self) -> None:
+        source = self.root / "input.json"
+        source.write_text(
+            json.dumps(self.accepted_input(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        checked = self.run_command("check", "--input", str(source), "--print-digest")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        digest = checked.stdout.strip()
+        written = self.run_command(
+            "write", "--input", str(source), "--expect-input-sha256", digest
+        )
+        self.assertEqual(written.returncode, 0, written.stderr)
+        created = sorted(path.name for path in (self.root / "docs/plan/active").iterdir())
+        self.assertEqual(len(created), 1, created)
+        self.assertTrue(created[0].startswith("001-"), created)
+
+    def test_rechecking_a_written_input_moves_past_the_plan_it_created(self) -> None:
+        module = self.module()
+        source = self.root / "input.json"
+        source.write_text(
+            json.dumps(self.accepted_input(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        digest, _ = module.check_authoring_input(self.root, source, profile="root")
+        first = module.write_authoring_input(self.root, source, digest, profile="root")
+        self.assertTrue(first.startswith("docs/plan/active/001-"), first)
+        _, report = module.check_authoring_input(self.root, source, profile="root")
+        self.assertIn("next-plan-id: 002", report)
+
+    def test_a_written_identifier_stays_reserved_until_publication(self) -> None:
+        module = self.module()
+        guard = module.locate_worktree_guard()
+        source = self.root / "input.json"
+        source.write_text(
+            json.dumps(self.accepted_input(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        digest, _ = module.check_authoring_input(self.root, source, profile="root")
+        module.write_authoring_input(self.root, source, digest, profile="root")
+        self.assertEqual(guard.reserved_plan_ids(self.root), {1})
+
+    def test_the_reported_identifier_is_the_written_identifier(self) -> None:
+        module = self.module()
+        source = self.root / "input.json"
+        document = self.accepted_input()
+        source.write_text(
+            json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        digest, report = module.check_authoring_input(self.root, source, profile="root")
+        reported = [line for line in report.splitlines() if line.startswith("next-plan-id: ")]
+        relative = module.write_authoring_input(self.root, source, digest, profile="root")
+        self.assertEqual(reported, [f"next-plan-id: {relative[len('docs/plan/active/'):][:3]}"])

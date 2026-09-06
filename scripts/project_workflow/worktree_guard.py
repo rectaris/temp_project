@@ -809,6 +809,7 @@ RESERVATION_KEYS = {
     "owner",
     "reserved_at",
     "lease_expires_at",
+    "written",
 }
 PLAN_ID_PREFIX_RE = re.compile(r"[0-9]{3}")
 PLAN_FILE_RE = re.compile(r"docs/plan/(active|backlog|shelved)/([0-9]{3})-[^/]*\.md")
@@ -837,7 +838,39 @@ def shared_lifecycle_directory(repository: Path) -> Path:
     return directory
 
 
+PLAN_LOCK_WAIT_SECONDS = 120
+PLAN_LOCK_POLL_SECONDS = 0.05
+
 _HELD_PLAN_LOCKS: dict[str, list[Any]] = {}
+
+
+def acquire_plan_lock(path: Path, *, wait_seconds: int = PLAN_LOCK_WAIT_SECONDS):
+    """Take the shared lock within a bounded wait instead of blocking forever.
+
+    This lock is now shared by every linked worktree, so an unbounded wait would
+    let one stuck checkout hang plan authoring everywhere with no explanation.
+    A bounded wait reports which lock is held instead.
+    """
+
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise WorktreeError(
+                        f"the shared plan lifecycle lock stayed held for {wait_seconds}s: {path}. "
+                        "Another checkout of this repository is still holding it."
+                    ) from None
+                time.sleep(PLAN_LOCK_POLL_SECONDS)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return os.fdopen(descriptor, "r+", encoding="utf-8")
 
 
 @contextlib.contextmanager
@@ -860,7 +893,7 @@ def plan_lifecycle_lock(repository: Path):
         finally:
             held[0] -= 1
         return
-    handle = locked_file(Path(key))
+    handle = acquire_plan_lock(Path(key))
     _HELD_PLAN_LOCKS[key] = [1, handle]
     try:
         yield
@@ -957,6 +990,8 @@ def read_reservations(path: Path) -> list[dict[str, Any]]:
             entry["lease_expires_at"], int
         ):
             raise WorktreeError("plan-id reservation entry carries a malformed lease")
+        if not isinstance(entry["written"], bool):
+            raise WorktreeError("plan-id reservation entry carries a malformed written flag")
     return entries
 
 
@@ -1035,7 +1070,9 @@ def reserve_plan_id(
         mine = [
             entry
             for entry in entries
-            if entry["input_digest"] == input_digest and entry["worktree_path"] == holder
+            if entry["input_digest"] == input_digest
+            and entry["worktree_path"] == holder
+            and not entry["written"]
         ]
         if mine:
             reservation = dict(mine[0])
@@ -1051,6 +1088,7 @@ def reserve_plan_id(
                 "owner": owner or f"pid:{os.getpid()}",
                 "reserved_at": moment,
                 "lease_expires_at": moment + lease_seconds,
+                "written": False,
             }
         reservation["relative_path"] = (
             reservation_relative_path(reservation["plan_id"], lifecycle, slug)
@@ -1061,6 +1099,38 @@ def reserve_plan_id(
             raise WorktreeError("plan-id reservation ledger is full")
         write_reservations(ledger, sorted(entries, key=lambda entry: entry["plan_id"]))
     return reservation
+
+
+def mark_plan_id_written(
+    repository: Path, *, input_digest: str, plan_id: str, now: int | None = None
+) -> None:
+    """Record that a reservation produced its plan file in the working tree.
+
+    The identifier stays reserved so no other linked worktree can take it before
+    publication, but it stops answering for its authoring input: a later check of
+    the same input must allocate a new identifier rather than name the plan that
+    already exists.
+    """
+
+    moment = int(time.time()) if now is None else now
+    ledger = reservation_ledger_path(repository)
+    with plan_lifecycle_lock(repository):
+        commit = published_source_commit(repository)
+        published = plan_ids_in_commit(repository, commit) if commit is not None else set()
+        entries = live_reservations(repository, read_reservations(ledger), published, moment)
+        holder = str(repository)
+        changed = False
+        for entry in entries:
+            if (
+                entry["input_digest"] == input_digest
+                and entry["worktree_path"] == holder
+                and entry["plan_id"] == plan_id
+                and not entry["written"]
+            ):
+                entry["written"] = True
+                changed = True
+        if changed:
+            write_reservations(ledger, sorted(entries, key=lambda item: item["plan_id"]))
 
 
 def reserved_plan_ids(repository: Path, *, now: int | None = None) -> set[int]:

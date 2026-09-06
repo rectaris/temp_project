@@ -99,6 +99,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/validate-changes.py \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py \
+    template/.project-agent-workflow/scripts/worktree_guard.py \
     template/.agents/skills/browser-ops/SKILL.md \
     template/.agents/skills/verify-copier-update/SKILL.md \
     template/.project-agent-workflow/AGENTS.md.jinja \
@@ -161,6 +162,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/validate-changes.py \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py \
+    template/.project-agent-workflow/scripts/worktree_guard.py \
     template/.agents/skills/browser-ops/SKILL.md \
     template/.agents/skills/verify-copier-update/SKILL.md \
     template/.project-agent-workflow/AGENTS.md.jinja \

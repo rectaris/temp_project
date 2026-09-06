@@ -235,13 +235,26 @@ class AuthoringError(ValueError):
     """Raised when a bounded authoring input or its target cannot be accepted."""
 
 
-def locate_worktree_guard() -> Any:
-    """Load the shared worktree guard shipped beside this module."""
+WORKTREE_GUARD_MODULE_NAME = "worktree_guard"
 
+
+def locate_worktree_guard() -> Any:
+    """Load the shared worktree guard shipped beside this module, once per process.
+
+    The guard tracks which shared lifecycle lock this process already holds, and
+    `flock` does not nest across two open file descriptions. Re-executing the
+    module would therefore hand a lifecycle command a second, empty view of that
+    state and let it block against its own lock, so the loaded instance is
+    reused.
+    """
+
+    cached = sys.modules.get(WORKTREE_GUARD_MODULE_NAME)
+    if cached is not None:
+        return cached
     candidate = Path(__file__).resolve().with_name("worktree_guard.py")
     if not candidate.is_file():
         raise AuthoringError("could not locate worktree_guard.py beside this module")
-    spec = importlib.util.spec_from_file_location("plan_authoring_worktree_guard", candidate)
+    spec = importlib.util.spec_from_file_location(WORKTREE_GUARD_MODULE_NAME, candidate)
     if spec is None or spec.loader is None:
         raise AuthoringError("could not load worktree_guard.py beside this module")
     module = importlib.util.module_from_spec(spec)
@@ -1250,6 +1263,17 @@ def next_plan_id(root: Path) -> str:
     return f"{value:03d}"
 
 
+def release_reserved_identifier(root: Path, digest: str, plan_id: str) -> None:
+    """Record that this reservation produced its plan file, if one is held."""
+
+    try:
+        locate_worktree_guard().mark_plan_id_written(
+            root, input_digest=digest, plan_id=plan_id
+        )
+    except Exception:  # noqa: BLE001 - a checkout without shared state holds no reservation
+        return
+
+
 def reserve_plan_identifier(root: Path, document: dict[str, Any], digest: str) -> str:
     """Reserve the smallest identifier free in the published state for these bytes.
 
@@ -1392,6 +1416,7 @@ def write_authoring_input(
             except OSError as exc:
                 target.unlink(missing_ok=True)
                 raise AuthoringError(f"active plan index write failed: {exc}") from exc
+        release_reserved_identifier(root, digest, plan_id)
     return relative
 
 

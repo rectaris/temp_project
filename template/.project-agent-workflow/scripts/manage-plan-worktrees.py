@@ -33,6 +33,9 @@ def load_worktree_guard():
     the root and generated copies of this command byte-identical.
     """
 
+    cached = sys.modules.get("worktree_guard")
+    if cached is not None:
+        return cached
     base = Path(__file__).resolve().parent
     for candidate in ("worktree_guard.py", "project_workflow/worktree_guard.py"):
         path = base / candidate

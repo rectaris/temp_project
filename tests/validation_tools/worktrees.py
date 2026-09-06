@@ -1588,6 +1588,34 @@ class PlanIdentifierReservationTest(unittest.TestCase):
         tracked = git(self.repository, "ls-files", "--", str(shared), check=False)
         self.assertEqual(tracked.stdout.strip(), "")
 
+    def test_a_lock_held_by_another_process_fails_within_the_bounded_wait(self) -> None:
+        lock = GUARD_MODULE.shared_lifecycle_directory(self.repository) / GUARD_MODULE.PLAN_LOCK_NAME
+        holder = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import fcntl,os,sys,time\n"
+                "fd=os.open(sys.argv[1], os.O_RDWR|os.O_CREAT, 0o600)\n"
+                "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+                "sys.stdout.write('held\\n'); sys.stdout.flush()\n"
+                "time.sleep(30)\n",
+                str(lock),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            started = time.monotonic()
+            with self.assertRaises(GUARD_MODULE.WorktreeError) as caught:
+                GUARD_MODULE.acquire_plan_lock(lock, wait_seconds=1)
+            self.assertLess(time.monotonic() - started, 10)
+            self.assertIn("stayed held", str(caught.exception))
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
+
     def test_the_shared_lock_nests_within_one_process(self) -> None:
         with GUARD_MODULE.plan_lifecycle_lock(self.repository):
             with GUARD_MODULE.plan_lifecycle_lock(self.repository):

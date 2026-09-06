@@ -221,16 +221,29 @@ def has_pre_v1_adoption_provenance() -> bool:
     )
 
 
+WORKTREE_GUARD_MODULE_NAME = "worktree_guard"
+
+
 def locate_worktree_guard() -> Any:
-    """Load the shared worktree guard shipped beside this module."""
+    """Load the shared worktree guard shipped beside this module, once per process.
+
+    The guard tracks which shared lifecycle lock this process already holds, and
+    `flock` does not nest across two open file descriptions. Re-executing the
+    module would therefore hand a lifecycle command a second, empty view of that
+    state and let it block against its own lock, so the loaded instance is
+    reused.
+    """
 
     import importlib.util
     import sys
 
+    cached = sys.modules.get(WORKTREE_GUARD_MODULE_NAME)
+    if cached is not None:
+        return cached
     candidate = Path(__file__).resolve().with_name("worktree_guard.py")
     if not candidate.is_file():
         raise PlanError("could not locate worktree_guard.py beside this module")
-    spec = importlib.util.spec_from_file_location("planlib_worktree_guard", candidate)
+    spec = importlib.util.spec_from_file_location(WORKTREE_GUARD_MODULE_NAME, candidate)
     if spec is None or spec.loader is None:
         raise PlanError("could not load worktree_guard.py beside this module")
     module = importlib.util.module_from_spec(spec)
