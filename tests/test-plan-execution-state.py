@@ -5267,6 +5267,41 @@ class ParallelPlanGroupTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         self.assertIn("validation or specification authority", completed.stderr)
 
+    def test_group_description_rejects_grouped_adapter_scope(self) -> None:
+        for adapter in (
+            "scripts/run-parallel-plans.py",
+            ".project-agent-workflow/scripts/run-parallel-plans.py",
+        ):
+            with self.subTest(adapter=adapter):
+                self.write_plan("285", "beta", [adapter])
+                document = self.group_document()
+                document["members"][1]["plan_digest"] = digest(
+                    (self.repo / self.beta_path).read_bytes()
+                )
+                document["members"][1]["write_scope_digest"] = self.scope_digest([adapter])
+                self.write_description(document)
+                self.commit("adapter authority")
+                completed = self.run_group("validate-descriptions")
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("validation or specification authority", completed.stderr)
+
+    def test_group_target_ref_stays_pinned_to_the_committed_description(self) -> None:
+        self.initialize_group()
+        document = json.loads(self.state.read_text(encoding="utf-8"))
+        document["target_ref"] = "refs/heads/attacker"
+        self.state.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "completion",
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("target ref changed after admission", completed.stderr)
+
     def test_group_description_rejects_member_to_member_dependency(self) -> None:
         self.write_plan(
             "284",
@@ -5542,6 +5577,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
                 str(index + 1),
                 "--registry-event-chain-digest",
                 digest(f"chain-{index}"),
+                "--assembly-record-digest",
+                digest("assembly"),
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
         completed = self.run_group(
@@ -5555,6 +5592,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "3",
             "--registry-event-chain-digest",
             digest("chain-3"),
+            "--assembly-record-digest",
+            digest("assembly"),
         )
         self.assertEqual(completed.returncode, 1)
         self.assertIn("exhausted its independent review budget", completed.stderr)
@@ -5570,6 +5609,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "4",
             "--registry-event-chain-digest",
             digest("chain-4"),
+            "--assembly-record-digest",
+            digest("assembly"),
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
@@ -5689,6 +5730,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "1",
             "--registry-event-chain-digest",
             digest("chain-1"),
+            "--assembly-record-digest",
+            digest("assembly"),
             check=True,
         )
         before = self.payload()["members"][self.alpha_path]
@@ -5730,6 +5773,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "2",
             "--registry-event-chain-digest",
             digest("chain-2"),
+            "--assembly-record-digest",
+            digest("assembly"),
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         completed = self.run_group(
@@ -5743,6 +5788,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "3",
             "--registry-event-chain-digest",
             digest("chain-3"),
+            "--assembly-record-digest",
+            digest("assembly"),
         )
         self.assertEqual(completed.returncode, 1)
         self.assertIn("exhausted its independent review budget", completed.stderr)
@@ -5808,6 +5855,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "1",
             "--registry-event-chain-digest",
             digest("chain"),
+            "--assembly-record-digest",
+            digest("assembly"),
         )
         self.assertEqual(completed.returncode, 1)
         self.assertIn("stopped", completed.stderr)
@@ -5848,7 +5897,24 @@ class ParallelPlanGroupTest(unittest.TestCase):
                 self.assertEqual(completed.returncode, 1, completed.stdout)
                 self.assertIn("enrolled in execution group", completed.stderr)
 
-    def test_valid_permit_still_refuses_until_the_adapter_exists(self) -> None:
+    def test_valid_permit_is_admitted_once_the_adapter_is_installed(self) -> None:
+        self.initialize_group()
+        permit = self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "run",
+            "--group-permit",
+            str(permit),
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("permitted", completed.stdout)
+
+    def test_permit_without_the_live_state_record_is_refused(self) -> None:
         self.initialize_group()
         permit = self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
         completed = self.run_group(
@@ -5861,7 +5927,276 @@ class ParallelPlanGroupTest(unittest.TestCase):
             str(permit),
         )
         self.assertEqual(completed.returncode, 1)
+        self.assertIn("live group execution state", completed.stderr)
+
+    def test_missing_adapter_keeps_every_enrolled_member_refused(self) -> None:
+        self.initialize_group()
+        permit = self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        detached = self.base / "no-adapter"
+        detached.mkdir()
+        shutil.copy2(GROUP_SCRIPT, detached / GROUP_SCRIPT.name)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(detached / GROUP_SCRIPT.name),
+                "check-enrollment",
+                "--plan",
+                self.alpha_path,
+                "--operation",
+                "run",
+                "--group-permit",
+                str(permit),
+                "--group-state",
+                str(self.state),
+            ],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(completed.returncode, 1)
         self.assertIn("grouped execution adapter", completed.stderr)
+
+    def test_lifecycle_operations_require_a_verified_publication(self) -> None:
+        self.initialize_group()
+        for operation in ("completion", "finalization", "archive"):
+            with self.subTest(operation=operation):
+                completed = self.run_group(
+                    "check-enrollment",
+                    "--plan",
+                    self.alpha_path,
+                    "--operation",
+                    operation,
+                    "--group-state",
+                    str(self.state),
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("has not published a verified result", completed.stderr)
+
+    def test_published_member_reaches_the_lifecycle_paths(self) -> None:
+        self.initialize_group()
+        permit_id = "permit-a1"
+        self.issue_permit(self.alpha_path, permit_id, "workspace-a")
+        head = self.commit("published product change")
+        lease = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.alpha_path, "--owner", "parent-1"
+        )
+        self.assertEqual(lease.returncode, 0, lease.stderr)
+        recorded = self.run_group(
+            "publication-record",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            permit_id,
+            "--commit",
+            head,
+            "--assembly-digest",
+            digest("assembly"),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        for operation in ("completion", "finalization", "archive"):
+            with self.subTest(operation=operation):
+                completed = self.run_group(
+                    "check-enrollment",
+                    "--plan",
+                    self.alpha_path,
+                    "--operation",
+                    operation,
+                    "--group-state",
+                    str(self.state),
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+        incomplete = self.run_group("group-complete", str(self.state))
+        self.assertEqual(incomplete.returncode, 1)
+        self.assertIn(self.beta_path, incomplete.stderr)
+
+    def publish_alpha(self) -> str:
+        """Publish member alpha's result and return the published commit."""
+
+        permit_id = "permit-a1"
+        self.issue_permit(self.alpha_path, permit_id, "workspace-a")
+        head = self.commit("published product change")
+        self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--owner",
+            "parent-1",
+            check=True,
+        )
+        self.run_group(
+            "publication-record",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            permit_id,
+            "--commit",
+            head,
+            "--assembly-digest",
+            digest("assembly"),
+            check=True,
+        )
+        return head
+
+    def test_published_member_may_take_its_own_lifecycle_edits(self) -> None:
+        self.initialize_group()
+        self.publish_alpha()
+        self.alpha.write_text(
+            self.alpha.read_text(encoding="utf-8").replace(
+                "status: in_progress", "status: ready_to_archive"
+            )
+            + "\n## Validation Notes\n\n1. Published.\n",
+            encoding="utf-8",
+        )
+        self.commit("published member completion")
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "finalization",
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_unpublished_partner_plan_bytes_stay_pinned(self) -> None:
+        self.initialize_group()
+        self.publish_alpha()
+        self.beta.write_text(
+            self.beta.read_text(encoding="utf-8") + "\nunreviewed drift\n",
+            encoding="utf-8",
+        )
+        self.commit("partner drift")
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "finalization",
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("does not match live bytes", completed.stderr)
+
+    def test_archived_member_plan_does_not_block_the_remaining_member(self) -> None:
+        self.initialize_group()
+        self.publish_alpha()
+        beta_bytes = self.beta.read_bytes()
+        self.beta.unlink()
+        detached = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.alpha_path,
+            "--operation",
+            "finalization",
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(detached.returncode, 1)
+        self.assertIn("tracked but missing from the working tree", detached.stderr)
+        self.beta.write_bytes(beta_bytes)
+        self.alpha.unlink()
+        self.commit("archive the published member")
+        completed = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.beta_path,
+            "--operation",
+            "completion",
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("has not published a verified result", completed.stderr)
+        ungrouped = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.solo_path,
+            "--operation",
+            "completion",
+        )
+        self.assertEqual(ungrouped.returncode, 0, ungrouped.stderr)
+        self.assertEqual(ungrouped.stdout.strip(), "ungrouped")
+
+    def test_publication_requires_the_lease_and_the_exact_open_permit(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        head = self.commit("product change")
+        without_lease = self.run_group(
+            "publication-record",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a1",
+            "--commit",
+            head,
+            "--assembly-digest",
+            digest("assembly"),
+        )
+        self.assertEqual(without_lease.returncode, 1)
+        self.assertIn("publication lease", without_lease.stderr)
+        self.run_group(
+            "lease-acquire", str(self.state), "--member", self.alpha_path, "--owner", "parent-1",
+            check=True,
+        )
+        wrong_permit = self.run_group(
+            "publication-record",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--permit-id",
+            "permit-a9",
+            "--commit",
+            head,
+            "--assembly-digest",
+            digest("assembly"),
+        )
+        self.assertEqual(wrong_permit.returncode, 1)
+        self.assertIn("exact open member permit", wrong_permit.stderr)
+
+    def test_one_member_keeps_a_single_baseline_transfer(self) -> None:
+        self.initialize_group()
+        self.issue_permit(self.alpha_path, "permit-a1", "workspace-a")
+        first = self.commit("first target move")
+        transferred = self.run_group(
+            "transfer-baseline",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--prior-permit-id",
+            "permit-a1",
+            "--new-permit-id",
+            "permit-a2",
+            "--new-base-commit",
+            first,
+            "--workspace-digest",
+            digest("workspace-a2"),
+        )
+        self.assertEqual(transferred.returncode, 0, transferred.stderr)
+        second = self.commit("second target move")
+        again = self.run_group(
+            "transfer-baseline",
+            str(self.state),
+            "--member",
+            self.alpha_path,
+            "--prior-permit-id",
+            "permit-a2",
+            "--new-permit-id",
+            "permit-a3",
+            "--new-base-commit",
+            second,
+            "--workspace-digest",
+            digest("workspace-a3"),
+        )
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("single baseline transfer", again.stderr)
 
     def test_forged_permit_is_refused_before_the_adapter_check(self) -> None:
         self.initialize_group()
@@ -6240,6 +6575,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "2",
             "--registry-event-chain-digest",
             digest("chain-2"),
+            "--assembly-record-digest",
+            digest("assembly"),
             check=True,
         )
         completed = self.run_group(
@@ -6253,6 +6590,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "3",
             "--registry-event-chain-digest",
             digest("chain-3"),
+            "--assembly-record-digest",
+            digest("assembly"),
         )
         self.assertEqual(completed.returncode, 1)
         self.assertIn("one canonical reviewer registry", completed.stderr)
@@ -6268,6 +6607,8 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "2",
             "--registry-event-chain-digest",
             digest("chain-9"),
+            "--assembly-record-digest",
+            digest("assembly"),
         )
         self.assertEqual(completed.returncode, 1)
         self.assertIn("event count must advance", completed.stderr)

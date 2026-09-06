@@ -5145,5 +5145,972 @@ def evaluate_selected_worker_contract_fixture(
     )
 
 
+
+ADAPTER_SCRIPT = ROOT / "scripts/run-parallel-plans.py"
+GROUP_AUTHORITY_SCRIPT = ROOT / "scripts/parallel-plan-state.py"
+TEMPLATE_ADAPTER_SCRIPT = (
+    ROOT / "template/.project-agent-workflow/scripts/run-parallel-plans.py"
+)
+
+
+def adapter_digest(value) -> str:
+    data = value if isinstance(value, bytes) else str(value).encode("utf-8")
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+class GroupedExecutionAdapterTests(unittest.TestCase):
+    """Ordered integration of independent member candidates by the parent.
+
+    Every scenario uses mocked bounded candidate manifests and isolated local
+    Git repositories. No live external agent, network, or credential is used.
+    """
+
+    ALPHA = "docs/plan/active/284-alpha.md"
+    BETA = "docs/plan/active/285-beta.md"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.addCleanup(self.temporary.cleanup)
+        self.repo = self.base / "repo"
+        (self.repo / "docs/plan/active").mkdir(parents=True)
+        (self.repo / "docs/plan/execution-groups").mkdir(parents=True)
+        (self.repo / "src").mkdir(parents=True)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.invalid")
+        self.git("remote", "add", "origin", "https://example.invalid/owner/repo.git")
+        (self.repo / "AGENTS.md").write_text("fixture\n", encoding="utf-8")
+        (self.repo / "src/alpha.py").write_text(
+            "def alpha(value):\n    return value\n", encoding="utf-8"
+        )
+        (self.repo / "src/beta.py").write_text(
+            "from src.alpha import alpha\n\n\ndef beta():\n    return alpha(1)\n",
+            encoding="utf-8",
+        )
+        self.write_plan("284", "alpha", ["src/alpha.py", "src/alpha_extra.py"])
+        self.write_plan("285", "beta", ["src/beta.py"])
+        self.write_description()
+        self.start_commit = self.commit("baseline")
+        self.state = self.base / "group-state.json"
+        self.initialize_group()
+
+    # -- fixture helpers ------------------------------------------------
+
+    def git(self, *arguments: str, cwd: Path | None = None) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd or self.repo), *arguments],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return completed.stdout.strip()
+
+    def write_plan(self, plan_id: str, slug: str, write_scope: list[str]) -> Path:
+        body = (
+            f"# Plan {plan_id}\n\n"
+            "status: in_progress\n"
+            "plan_purpose: implementation\n"
+            f"primary_invariant: invariant {plan_id}\n"
+            "write_scope:\n"
+            + "".join(f"  - {entry}\n" for entry in write_scope)
+            + "context_files:\n  - AGENTS.md\n"
+            "\n## Tasks\n\n- [ ] implement\n"
+        )
+        path = self.repo / f"docs/plan/active/{plan_id}-{slug}.md"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def scope_digest(self, entries: list[str]) -> str:
+        return adapter_digest(
+            json.dumps(entries, sort_keys=True, separators=(",", ":"))
+        )
+
+    def write_description(self) -> None:
+        document = {
+            "schema_version": 1,
+            "group_id": "alpha-beta",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint product modules with no shared interface",
+            "members": [
+                {
+                    "plan_id": "284",
+                    "plan_path": self.ALPHA,
+                    "plan_digest": adapter_digest(
+                        (self.repo / self.ALPHA).read_bytes()
+                    ),
+                    "write_scope_digest": self.scope_digest(
+                        ["src/alpha.py", "src/alpha_extra.py"]
+                    ),
+                },
+                {
+                    "plan_id": "285",
+                    "plan_path": self.BETA,
+                    "plan_digest": adapter_digest((self.repo / self.BETA).read_bytes()),
+                    "write_scope_digest": self.scope_digest(["src/beta.py"]),
+                },
+            ],
+        }
+        (self.repo / "docs/plan/execution-groups/alpha-beta.json").write_text(
+            json.dumps(document, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def run_group(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(GROUP_AUTHORITY_SCRIPT), *arguments],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def run_adapter(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(ADAPTER_SCRIPT), *arguments],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def initialize_group(self) -> None:
+        completed = self.run_group(
+            "group-init",
+            str(self.state),
+            "--group-description",
+            "docs/plan/execution-groups/alpha-beta.json",
+            "--target-ref",
+            "refs/heads/main",
+            "--start-commit",
+            self.start_commit,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def issue_permit(self, member: str, permit_id: str) -> Path:
+        output = self.base / f"{permit_id}.json"
+        completed = self.run_group(
+            "permit-issue",
+            str(self.state),
+            "--member",
+            member,
+            "--permit-id",
+            permit_id,
+            "--workspace-digest",
+            adapter_digest(permit_id),
+            "--output",
+            str(output),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return output
+
+    def transfer_permit(
+        self, member: str, prior: str, permit_id: str, base_commit: str
+    ) -> Path:
+        completed = self.run_group(
+            "transfer-baseline",
+            str(self.state),
+            "--member",
+            member,
+            "--prior-permit-id",
+            prior,
+            "--new-permit-id",
+            permit_id,
+            "--new-base-commit",
+            base_commit,
+            "--workspace-digest",
+            adapter_digest(permit_id),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return self.reissue_permit_document(member, permit_id)
+
+    def reissue_permit_document(self, member: str, permit_id: str) -> Path:
+        """Materialize the permit document the authority bound to the member."""
+
+        state = json.loads(self.state.read_text(encoding="utf-8"))
+        member_state = state["members"][member]
+        permit = {
+            "schema_version": 1,
+            "group_id": state["group_id"],
+            "group_description_digest": state["group_description_digest"],
+            "plan_path": member,
+            "permit_id": permit_id,
+            "baseline_generation": member_state["baseline_generation"],
+            "base_commit": member_state["base_commit"],
+            "repository_identity": state["repository_identity"],
+            "state_digest": "",
+        }
+        path = self.base / f"{permit_id}.json"
+        path.write_text(json.dumps(permit, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    def candidate(
+        self, member: str, source_head: str, edits: dict[str, str], label: str
+    ) -> Path:
+        """Build one bounded mocked worker candidate against an exact baseline."""
+
+        workspace = self.base / f"candidate-{label}"
+        workspace.mkdir()
+        clone = workspace / "clone"
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--no-hardlinks",
+                "--local",
+                "--no-checkout",
+                str(self.repo),
+                str(clone),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.git("checkout", "--detach", "--force", source_head, cwd=clone)
+        for relative, content in edits.items():
+            target = clone / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        self.git("add", "--all", cwd=clone)
+        patch = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(clone),
+                "-c",
+                "core.abbrev=40",
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                source_head,
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+        patch_path = workspace / "candidate.patch"
+        patch_path.write_bytes(patch)
+        manifest = {
+            "schema_version": 1,
+            "plan_path": member,
+            "source_head": source_head,
+            "patch_path": str(patch_path),
+            "patch_digest": hashlib.sha256(patch).hexdigest(),
+            "changed_paths": sorted(edits),
+            "worker_completion_receipt_digest": hashlib.sha256(
+                label.encode("utf-8")
+            ).hexdigest(),
+        }
+        manifest_path = workspace / "candidate-manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        return manifest_path
+
+    def assemble(
+        self, member: str, permit: Path, manifest: Path, label: str, *extra: str
+    ) -> subprocess.CompletedProcess[str]:
+        return self.run_adapter(
+            "assemble",
+            "--state",
+            str(self.state),
+            "--permit",
+            str(permit),
+            "--plan",
+            member,
+            "--manifest",
+            str(manifest),
+            "--output",
+            str(self.base / f"assembly-{label}.json"),
+            *extra,
+        )
+
+    def record_review(
+        self, member: str, record: dict, *, count: str = "1", chain: str = "chain"
+    ) -> None:
+        completed = self.run_group(
+            "record-review",
+            str(self.state),
+            "--member",
+            member,
+            "--registry-path-digest",
+            adapter_digest("registry"),
+            "--registry-event-count",
+            count,
+            "--registry-event-chain-digest",
+            adapter_digest(chain),
+            "--assembly-record-digest",
+            record["record_digest"],
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def reviewed_commit(self, record: dict, branch: str) -> str:
+        """Create one descendant commit whose whole diff equals the assembly."""
+
+        patch = Path(record["assembled_patch_path"]).read_bytes()
+        self.git("checkout", "-q", "-b", branch, record["base_commit"])
+        subprocess.run(
+            ["git", "-C", str(self.repo), "apply", "--whitespace=nowarn", "-"],
+            input=patch,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", f"reviewed {branch}")
+        commit = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "main")
+        return commit
+
+    def publish(
+        self, member: str, permit: Path, label: str, commit: str, owner: str
+    ) -> subprocess.CompletedProcess[str]:
+        acquired = self.run_group(
+            "lease-acquire", str(self.state), "--member", member, "--owner", owner
+        )
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        try:
+            return self.run_adapter(
+                "publish",
+                "--state",
+                str(self.state),
+                "--permit",
+                str(permit),
+                "--plan",
+                member,
+                "--assembly",
+                str(self.base / f"assembly-{label}.json"),
+                "--commit",
+                commit,
+                "--owner",
+                owner,
+                "--journal",
+                str(self.base / f"journal-{label}.json"),
+            )
+        finally:
+            self.run_group(
+                "lease-release", str(self.state), "--owner", owner
+            )
+
+    def assembly_record(self, label: str) -> dict:
+        return json.loads(
+            (self.base / f"assembly-{label}.json").read_text(encoding="utf-8")
+        )
+
+    def integrate_alpha(self) -> tuple[dict, str]:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value, scale=1):\n    return value * scale\n"},
+            "alpha",
+        )
+        assembled = self.assemble(self.ALPHA, permit, manifest, "alpha")
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        record = self.assembly_record("alpha")
+        commit = self.reviewed_commit(record, "review-alpha")
+        self.record_review(self.ALPHA, record)
+        published = self.publish(self.ALPHA, permit, "alpha", commit, "parent-alpha")
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), commit)
+        return record, commit
+
+    def test_assembly_carries_added_files_and_scope_checks_them(self) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {
+                "src/alpha.py": "from src.alpha_extra import helper\n\n\ndef alpha(value):\n    return helper(value)\n",
+                "src/alpha_extra.py": "def helper(value):\n    return value + 1\n",
+            },
+            "alpha",
+        )
+        assembled = self.assemble(self.ALPHA, permit, manifest, "alpha")
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        record = self.assembly_record("alpha")
+        self.assertEqual(
+            record["changed_paths"], ["src/alpha.py", "src/alpha_extra.py"]
+        )
+        patch = (self.base / "assembly-alpha.json.patch").read_bytes()
+        self.assertIn(b"src/alpha_extra.py", patch)
+        commit = self.reviewed_commit(record, "review-alpha")
+        self.record_review(self.ALPHA, record)
+        published = self.publish(self.ALPHA, permit, "alpha", commit, "parent-alpha")
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertEqual(
+            (self.repo / "src/alpha_extra.py").read_text(encoding="utf-8"),
+            "def helper(value):\n    return value + 1\n",
+        )
+
+    def test_added_file_outside_the_member_scope_is_refused(self) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {
+                "src/alpha.py": "def alpha(value):\n    return value + 1\n",
+                "src/smuggled.py": "SMUGGLED = True\n",
+            },
+            "alpha",
+        )
+        assembled = self.assemble(self.ALPHA, permit, manifest, "alpha")
+        self.assertEqual(assembled.returncode, 1)
+        self.assertIn("outside the member write scope", assembled.stderr)
+        self.assertIn("src/smuggled.py", assembled.stderr)
+        self.assertFalse((self.base / "assembly-alpha.json").exists())
+
+    def test_publication_refuses_an_unreviewed_replacement_assembly(self) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        first = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 1\n"},
+            "first",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, first, "first").returncode, 0
+        )
+        reviewed = self.assembly_record("first")
+        self.record_review(self.ALPHA, reviewed)
+        second = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 2\n"},
+            "second",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, second, "second").returncode, 0
+        )
+        replacement = self.assembly_record("second")
+        self.assertNotEqual(replacement["record_digest"], reviewed["record_digest"])
+        commit = self.reviewed_commit(replacement, "review-second")
+        published = self.publish(self.ALPHA, permit, "second", commit, "parent-alpha")
+        self.assertEqual(published.returncode, 1)
+        self.assertIn("independent review", published.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.start_commit)
+        self.record_review(self.ALPHA, replacement, count="2", chain="chain-2")
+        accepted = self.publish(self.ALPHA, permit, "second", commit, "parent-alpha")
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), commit)
+
+    # -- ordered integration --------------------------------------------
+
+    def test_adapter_version_is_reported_and_mirrored_in_the_template(self) -> None:
+        completed = self.run_adapter("adapter-version")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), {"adapter_version": 1})
+        self.assertEqual(
+            ADAPTER_SCRIPT.read_bytes(), TEMPLATE_ADAPTER_SCRIPT.read_bytes()
+        )
+        self.assertEqual(
+            ADAPTER_SCRIPT.stat().st_mode & 0o777,
+            TEMPLATE_ADAPTER_SCRIPT.stat().st_mode & 0o777,
+        )
+
+    def test_first_member_publishes_and_the_later_member_reuses_the_new_target(
+        self,
+    ) -> None:
+        alpha_record, alpha_commit = self.integrate_alpha()
+        self.assertEqual(alpha_record["resolution_kind"], "unchanged_application")
+        self.assertEqual(alpha_record["result_author"], "worker")
+
+        beta_permit = self.issue_permit(self.BETA, "permit-b1")
+        beta_manifest = self.candidate(
+            self.BETA,
+            self.start_commit,
+            {
+                "src/beta.py": "from src.alpha import alpha\n\n\ndef beta():\n"
+                "    return alpha(2)\n"
+            },
+            "beta",
+        )
+        stale = self.assemble(self.BETA, beta_permit, beta_manifest, "beta-stale")
+        self.assertEqual(stale.returncode, 1)
+        self.assertIn("superseded baseline", stale.stderr)
+
+        transferred = self.transfer_permit(
+            self.BETA, "permit-b1", "permit-b2", alpha_commit
+        )
+        assembled = self.assemble(self.BETA, transferred, beta_manifest, "beta")
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        beta_record = self.assembly_record("beta")
+        self.assertEqual(beta_record["base_commit"], alpha_commit)
+        self.assertEqual(beta_record["original_source_head"], self.start_commit)
+        self.assertEqual(beta_record["changed_paths"], ["src/beta.py"])
+        self.assertEqual(
+            beta_record["original_manifest_digest"],
+            adapter_digest(beta_manifest.read_bytes()),
+        )
+
+        beta_commit = self.reviewed_commit(beta_record, "review-beta")
+        self.record_review(self.BETA, beta_record)
+        published = self.publish(
+            self.BETA, transferred, "beta", beta_commit, "parent-beta"
+        )
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), beta_commit)
+        self.assertIn(
+            "value * scale", (self.repo / "src/alpha.py").read_text(encoding="utf-8")
+        )
+        self.assertIn("alpha(2)", (self.repo / "src/beta.py").read_text(encoding="utf-8"))
+
+        complete = self.run_group("group-complete", str(self.state))
+        self.assertEqual(complete.returncode, 0, complete.stderr)
+
+    def test_textual_conflict_needs_the_reserved_parent_adjustment_slot(self) -> None:
+        beta_permit = self.issue_permit(self.BETA, "permit-b1")
+        beta_manifest = self.candidate(
+            self.BETA,
+            self.start_commit,
+            {
+                "src/beta.py": "from src.alpha import alpha\n\n\ndef beta():\n"
+                "    return alpha(2)\n"
+            },
+            "beta",
+        )
+        # One independently authorized target change rewrites the same lines.
+        (self.repo / "src/beta.py").write_text(
+            "from src.alpha import alpha\n\n\ndef beta(offset=0):\n"
+            "    return alpha(1) + offset\n",
+            encoding="utf-8",
+        )
+        moved = self.commit("independently authorized change")
+        transferred = self.transfer_permit(
+            self.BETA, "permit-b1", "permit-b2", moved
+        )
+
+        conflicted = self.assemble(self.BETA, transferred, beta_manifest, "beta")
+        self.assertEqual(conflicted.returncode, 1)
+        self.assertIn("does not apply to the current baseline", conflicted.stderr)
+
+        resolution = self.parent_resolution(
+            moved,
+            {
+                "src/beta.py": "from src.alpha import alpha\n\n\ndef beta(offset=0):\n"
+                "    return alpha(2) + offset\n"
+            },
+            "beta-resolution",
+        )
+        unreserved = self.assemble(
+            self.BETA,
+            transferred,
+            beta_manifest,
+            "beta",
+            "--resolution",
+            str(resolution),
+        )
+        self.assertEqual(unreserved.returncode, 1)
+        self.assertIn("reserved parent adjustment slot", unreserved.stderr)
+
+        reserved = self.run_group(
+            "adjust-reserve",
+            str(self.state),
+            "--member",
+            self.BETA,
+            "--permit-id",
+            "permit-b2",
+            "--incoming-candidate-digest",
+            adapter_digest(beta_manifest.read_bytes()),
+            "--base-digest",
+            adapter_digest(moved),
+        )
+        self.assertEqual(reserved.returncode, 0, reserved.stderr)
+        resolved = self.assemble(
+            self.BETA,
+            transferred,
+            beta_manifest,
+            "beta",
+            "--resolution",
+            str(resolution),
+        )
+        self.assertEqual(resolved.returncode, 0, resolved.stderr)
+        record = self.assembly_record("beta")
+        self.assertEqual(record["resolution_kind"], "parent_adjusted")
+        self.assertEqual(record["result_author"], "parent")
+
+        state = json.loads(self.state.read_text(encoding="utf-8"))
+        member = state["members"][self.BETA]
+        self.assertEqual(member["parent_adjustment"]["state"], "closed")
+        self.assertEqual(member["counters"]["corrections"], 1)
+
+        # The single slot excludes a second substantive parent edit.
+        again = self.run_group(
+            "adjust-reserve",
+            str(self.state),
+            "--member",
+            self.BETA,
+            "--permit-id",
+            "permit-b2",
+            "--incoming-candidate-digest",
+            adapter_digest(beta_manifest.read_bytes()),
+            "--base-digest",
+            adapter_digest(moved),
+        )
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("single correction slot", again.stderr)
+
+    def parent_resolution(
+        self, base_commit: str, edits: dict[str, str], label: str
+    ) -> Path:
+        manifest = self.candidate(self.BETA, base_commit, edits, label)
+        return Path(json.loads(manifest.read_text(encoding="utf-8"))["patch_path"])
+
+    def test_parent_resolution_may_not_leave_the_member_write_scope(self) -> None:
+        beta_permit = self.issue_permit(self.BETA, "permit-b1")
+        beta_manifest = self.candidate(
+            self.BETA,
+            self.start_commit,
+            {
+                "src/beta.py": "from src.alpha import alpha\n\n\ndef beta():\n"
+                "    return alpha(2)\n"
+            },
+            "beta",
+        )
+        (self.repo / "src/beta.py").write_text(
+            "from src.alpha import alpha\n\n\ndef beta(offset=0):\n"
+            "    return alpha(1) + offset\n",
+            encoding="utf-8",
+        )
+        moved = self.commit("independently authorized change")
+        transferred = self.transfer_permit(self.BETA, "permit-b1", "permit-b2", moved)
+        self.run_group(
+            "adjust-reserve",
+            str(self.state),
+            "--member",
+            self.BETA,
+            "--permit-id",
+            "permit-b2",
+            "--incoming-candidate-digest",
+            adapter_digest(beta_manifest.read_bytes()),
+            "--base-digest",
+            adapter_digest(moved),
+        )
+        resolution = self.parent_resolution(
+            moved,
+            {
+                "src/beta.py": "from src.alpha import alpha\n\n\ndef beta(offset=0):\n"
+                "    return alpha(2) + offset\n",
+                "src/alpha.py": "def alpha(value):\n    return value + 1\n",
+            },
+            "beta-drift",
+        )
+        drifted = self.assemble(
+            self.BETA,
+            transferred,
+            beta_manifest,
+            "beta",
+            "--resolution",
+            str(resolution),
+        )
+        self.assertEqual(drifted.returncode, 1)
+        self.assertIn("outside the member write scope", drifted.stderr)
+
+    def test_semantic_conflict_applies_cleanly_and_still_requires_validation(
+        self,
+    ) -> None:
+        """A disjoint contract change is not detected by patch application."""
+
+        alpha_record, alpha_commit = self.integrate_alpha()
+        self.assertEqual(alpha_record["resolution_kind"], "unchanged_application")
+        beta_permit = self.issue_permit(self.BETA, "permit-b1")
+        beta_manifest = self.candidate(
+            self.BETA,
+            self.start_commit,
+            {
+                "src/beta.py": "from src.alpha import alpha\n\n\ndef beta():\n"
+                "    return alpha()\n"
+            },
+            "beta",
+        )
+        transferred = self.transfer_permit(
+            self.BETA, "permit-b1", "permit-b2", alpha_commit
+        )
+        assembled = self.assemble(self.BETA, transferred, beta_manifest, "beta")
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        record = self.assembly_record("beta")
+        self.assertEqual(record["resolution_kind"], "unchanged_application")
+        # Mechanical applicability is not acceptance: review and validation stay
+        # required because the caller still uses the superseded contract.
+        self.assertTrue(record["review_required"])
+        self.assertTrue(record["validation_required"])
+
+    def test_publication_requires_a_review_at_the_current_baseline(self) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 1\n"},
+            "alpha",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, manifest, "alpha").returncode, 0
+        )
+        record = self.assembly_record("alpha")
+        commit = self.reviewed_commit(record, "review-alpha")
+        unreviewed = self.publish(self.ALPHA, permit, "alpha", commit, "parent-alpha")
+        self.assertEqual(unreviewed.returncode, 1)
+        self.assertIn("qualifying independent review", unreviewed.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.start_commit)
+
+    def test_publication_rejects_a_commit_that_is_not_the_admitted_patch(self) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 1\n"},
+            "alpha",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, manifest, "alpha").returncode, 0
+        )
+        self.record_review(self.ALPHA, self.assembly_record("alpha"))
+        self.git("checkout", "-q", "-b", "review-alpha", self.start_commit)
+        (self.repo / "src/alpha.py").write_text(
+            "def alpha(value):\n    return value + 99\n", encoding="utf-8"
+        )
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "different result")
+        commit = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "main")
+        published = self.publish(self.ALPHA, permit, "alpha", commit, "parent-alpha")
+        self.assertEqual(published.returncode, 1)
+        self.assertIn("differs from the admitted", published.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.start_commit)
+
+    def test_publication_refuses_a_moved_target_and_preserves_it(self) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 1\n"},
+            "alpha",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, manifest, "alpha").returncode, 0
+        )
+        record = self.assembly_record("alpha")
+        commit = self.reviewed_commit(record, "review-alpha")
+        self.record_review(self.ALPHA, record)
+        moved = self.commit("intervening target movement")
+        published = self.publish(self.ALPHA, permit, "alpha", commit, "parent-alpha")
+        self.assertEqual(published.returncode, 1)
+        self.assertIn("target moved after review", published.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), moved)
+
+    def test_publication_defers_instead_of_discarding_dirty_target_work(self) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 1\n"},
+            "alpha",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, manifest, "alpha").returncode, 0
+        )
+        record = self.assembly_record("alpha")
+        commit = self.reviewed_commit(record, "review-alpha")
+        self.record_review(self.ALPHA, record)
+        (self.repo / "AGENTS.md").write_text("user work in progress\n", encoding="utf-8")
+        published = self.publish(self.ALPHA, permit, "alpha", commit, "parent-alpha")
+        self.assertEqual(published.returncode, 1)
+        self.assertIn("uncommitted work", published.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.start_commit)
+        self.assertEqual(
+            (self.repo / "AGENTS.md").read_text(encoding="utf-8"),
+            "user work in progress\n",
+        )
+        self.assertFalse((self.base / "journal-alpha.json").exists())
+
+    def test_interrupted_publication_finalizes_only_the_planned_transition(
+        self,
+    ) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 1\n"},
+            "alpha",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, manifest, "alpha").returncode, 0
+        )
+        record = self.assembly_record("alpha")
+        commit = self.reviewed_commit(record, "review-alpha")
+        self.record_review(self.ALPHA, record)
+        journal = self.base / "journal-manual.json"
+        self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.ALPHA,
+            "--owner",
+            "parent-alpha",
+        )
+        self.addCleanup(
+            self.run_group, "lease-release", str(self.state), "--owner", "parent-alpha"
+        )
+
+        # An interruption before the ref moves aborts without source effects.
+        self.write_journal(journal, self.ALPHA, "permit-a1", commit, record)
+        aborted = self.run_adapter("publish-recover", "--journal", str(journal))
+        self.assertEqual(aborted.returncode, 0, aborted.stderr)
+        self.assertEqual(json.loads(aborted.stdout)["recovery"], "aborted")
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.start_commit)
+        state = json.loads(self.state.read_text(encoding="utf-8"))
+        self.assertFalse(state["members"][self.ALPHA]["publication"]["published"])
+
+        # An interruption after the ref moved finalizes the same transition once.
+        journal_after = self.base / "journal-after.json"
+        self.write_journal(journal_after, self.ALPHA, "permit-a1", commit, record)
+        self.git("merge", "--ff-only", commit)
+        finalized = self.run_adapter("publish-recover", "--journal", str(journal_after))
+        self.assertEqual(finalized.returncode, 0, finalized.stderr)
+        self.assertEqual(json.loads(finalized.stdout)["recovery"], "finalized")
+        state = json.loads(self.state.read_text(encoding="utf-8"))
+        self.assertTrue(state["members"][self.ALPHA]["publication"]["published"])
+        self.assertEqual(
+            state["members"][self.ALPHA]["publication"]["commit"], commit
+        )
+        replayed = self.run_adapter("publish-recover", "--journal", str(journal_after))
+        self.assertEqual(replayed.returncode, 0, replayed.stderr)
+        self.assertEqual(json.loads(replayed.stdout)["recovery"], "noop")
+
+    def test_ambiguous_crash_evidence_preserves_the_target(self) -> None:
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 1\n"},
+            "alpha",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, manifest, "alpha").returncode, 0
+        )
+        record = self.assembly_record("alpha")
+        commit = self.reviewed_commit(record, "review-alpha")
+        journal = self.base / "journal-ambiguous.json"
+        self.write_journal(journal, self.ALPHA, "permit-a1", commit, record)
+        moved = self.commit("unrelated target movement")
+        recovered = self.run_adapter("publish-recover", "--journal", str(journal))
+        self.assertEqual(recovered.returncode, 1)
+        self.assertIn("publication is not replayed", recovered.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), moved)
+
+    def write_journal(
+        self, path: Path, member: str, permit_id: str, commit: str, record: dict
+    ) -> None:
+        journal = {
+            "schema_version": 1,
+            "adapter_version": 1,
+            "state": "intended",
+            "group_id": "alpha-beta",
+            "plan_path": member,
+            "permit_id": permit_id,
+            "owner": "parent-alpha",
+            "target_ref": "refs/heads/main",
+            "expected_old_commit": record["base_commit"],
+            "new_commit": commit,
+            "assembly_record_path": str(self.base / "assembly-alpha.json"),
+            "assembled_patch_digest": record["assembled_patch_digest"],
+            "assembly_record_digest": record["record_digest"],
+            "target_checkout": str(self.repo),
+            "state_path": str(self.state),
+        }
+        journal["journal_digest"] = adapter_digest(
+            json.dumps(journal, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        )
+        path.write_text(json.dumps(journal, indent=2) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+
+    def test_stopped_member_preserves_the_published_partner(self) -> None:
+        _record, alpha_commit = self.integrate_alpha()
+        stopped = self.run_group(
+            "member-stop",
+            str(self.state),
+            "--member",
+            self.BETA,
+            "--reason",
+            "replan_required",
+        )
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), alpha_commit)
+        state = json.loads(self.state.read_text(encoding="utf-8"))
+        self.assertTrue(state["members"][self.ALPHA]["publication"]["published"])
+        incomplete = self.run_group("group-complete", str(self.state))
+        self.assertEqual(incomplete.returncode, 1)
+        self.assertIn(self.BETA, incomplete.stderr)
+        completion = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.ALPHA,
+            "--operation",
+            "completion",
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(completion.returncode, 0, completion.stderr)
+        refused = self.run_group(
+            "check-enrollment",
+            "--plan",
+            self.BETA,
+            "--operation",
+            "completion",
+            "--group-state",
+            str(self.state),
+        )
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("has not published", refused.stderr)
+
+    def test_duplicate_publication_is_refused(self) -> None:
+        _record, commit = self.integrate_alpha()
+        # Publication consumes the member permit, so a replay is refused before
+        # it can reach the target at all.
+        again = self.publish(
+            self.ALPHA, self.base / "permit-a1.json", "alpha", commit, "parent-alpha"
+        )
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("not the current open permit", again.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), commit)
+
+        acquired = self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.ALPHA,
+            "--owner",
+            "parent-alpha",
+        )
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        self.addCleanup(
+            self.run_group, "lease-release", str(self.state), "--owner", "parent-alpha"
+        )
+        duplicate = self.run_group(
+            "publication-record",
+            str(self.state),
+            "--member",
+            self.ALPHA,
+            "--permit-id",
+            "permit-a1",
+            "--commit",
+            commit,
+            "--assembly-digest",
+            adapter_digest("assembly"),
+        )
+        self.assertEqual(duplicate.returncode, 1)
+        self.assertIn("already published", duplicate.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

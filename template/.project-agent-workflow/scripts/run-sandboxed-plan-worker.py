@@ -3564,8 +3564,21 @@ def select_attempt_artifacts(
     return worker_result
 
 
-def enforce_parallel_group_gate(plan: str, operation: str) -> None:
-    """Refuse an enrolled group member before any worker prerequisite runs."""
+def enforce_parallel_group_gate(
+    plan: str,
+    operation: str,
+    *,
+    group_permit: str | None = None,
+    group_state: str | None = None,
+) -> None:
+    """Admit an enrolled group member only through verified group authority.
+
+    An ungrouped plan is unaffected. An enrolled member reaches this worker
+    only with the grouped execution adapter installed and its exact current
+    member permit bound to the live group execution record. The permit never
+    grants source-write authority: the worker still produces one isolated
+    candidate inside its disposable clone.
+    """
 
     authority = Path(__file__).with_name("parallel-plan-state.py")
     if not authority.is_file():
@@ -3578,7 +3591,13 @@ def enforce_parallel_group_gate(plan: str, operation: str) -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     try:
-        module.require_group_permit(module.repository_root(), plan, operation)
+        module.require_group_permit(
+            module.repository_root(),
+            plan,
+            operation,
+            permit=group_permit,
+            state=group_state,
+        )
     except module.GroupError as exc:
         raise RunnerError(str(exc)) from exc
 
@@ -5510,6 +5529,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="run a sandboxed worker against one active plan")
     run_parser.add_argument("plan", help="repository-relative active plan path")
+    run_parser.add_argument(
+        "--group-permit",
+        default=None,
+        help="exclusive execution group member permit issued by the group authority",
+    )
+    run_parser.add_argument(
+        "--group-state",
+        default=None,
+        help="parent-owned group execution state record that binds the member permit",
+    )
     run_parser.add_argument("--output-dir", help="directory outside the source repository for patch artifacts")
     run_parser.add_argument("--git-bin", default="git", help="git executable to use")
     run_parser.add_argument("--bwrap-bin", default="bwrap", help="Bubblewrap executable to use")
@@ -5578,6 +5607,16 @@ def build_parser() -> argparse.ArgumentParser:
         "correct", help="correct a verified candidate in a fresh isolated clone"
     )
     correction_parser.add_argument("plan", help="repository-relative active plan path")
+    correction_parser.add_argument(
+        "--group-permit",
+        default=None,
+        help="exclusive execution group member permit issued by the group authority",
+    )
+    correction_parser.add_argument(
+        "--group-state",
+        default=None,
+        help="parent-owned group execution state record that binds the member permit",
+    )
     correction_parser.add_argument("prior_manifest", help="prior candidate manifest rejected by parent review")
     correction_parser.add_argument("correction_brief", help="bounded parent-authored correction brief outside the repository")
     correction_parser.add_argument("--output-dir", help="directory outside the source repository for patch artifacts")
@@ -5652,7 +5691,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command in {"run", "correct"}:
             enforce_parallel_group_gate(
-                args.plan, "run" if args.command == "run" else "correct"
+                args.plan,
+                "run" if args.command == "run" else "correct",
+                group_permit=getattr(args, "group_permit", None),
+                group_state=getattr(args, "group_state", None),
             )
             enforce_plan_execution_gate(args, plan=args.plan)
             return int(args.handler(args))

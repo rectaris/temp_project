@@ -22,12 +22,16 @@ completion_evidence() {
 }
 
 check_only=0
-if [ "${1:-}" = "--check-completion-evidence" ]; then
-  check_only=1
-  shift
-fi
+group_state=
+while [ "$#" -gt 0 ]; do
+  case "${1:-}" in
+    --check-completion-evidence) check_only=1; shift ;;
+    --group-state) [ "$#" -ge 2 ] || { echo "--group-state requires a path" >&2; exit 2; }; group_state=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
 
-[ "$#" -eq 1 ] || { echo "Usage: $0 [--check-completion-evidence] docs/plan/active/NNN-slug.md" >&2; exit 2; }
+[ "$#" -eq 1 ] || { echo "Usage: $0 [--check-completion-evidence] [--group-state PATH] docs/plan/active/NNN-slug.md" >&2; exit 2; }
 src=$1
 case "$src" in docs/plan/active/[0-9][0-9][0-9]-*.md) ;; *) echo "expected active plan path" >&2; exit 2 ;; esac
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
@@ -43,8 +47,13 @@ fi
   echo "missing parallel plan group authority: scripts/parallel-plan-state.py" >&2
   exit 1
 }
-python3 scripts/parallel-plan-state.py check-enrollment \
-  --plan "$src" --operation completion >/dev/null || exit 1
+if [ -n "$group_state" ]; then
+  python3 scripts/parallel-plan-state.py check-enrollment \
+    --plan "$src" --operation completion --group-state "$group_state" >/dev/null || exit 1
+else
+  python3 scripts/parallel-plan-state.py check-enrollment \
+    --plan "$src" --operation completion >/dev/null || exit 1
+fi
 
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
 case "$status" in

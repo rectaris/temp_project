@@ -1,6 +1,6 @@
 # Generate isolated plan candidates and integrate them in order
 
-status: in_progress
+status: checked
 primary_invariant: Parallel member work may produce isolated candidates, but only the parent may publish one exact reviewed and validated result against the still-current target baseline; combining a later member with earlier accepted work preserves both requirements and the later member's immutable evidence, cumulative limits and stop gates.
 replan_sources:
   - docs/plan/active/278-create-resumable-parent-worktrees.md
@@ -173,17 +173,17 @@ checked_summary_ja: A を先に取り込み、B を A 適用後のコードと�
 
 ## Tasks
 
-- [ ] Extend the runner's exact versioned contracts to accept only the group/member permit issued by 279, while retaining legacy verification and no worker source-write authority.
-- [ ] Implement parent group dispatch through separate worktrees and existing worker clones, returning immutable readiness artifacts without invoking acceptance automatically.
-- [ ] Implement the current-baseline assembly operation and distinct parent-produced evidence for unchanged application and in-scope adjusted results.
-- [ ] Test that one substantive parent adjustment consumes the same single slot as worker correction, that either excludes the other, and that crash recovery or a mechanical no-edit transfer never resets the slot.
-- [ ] Implement current-target review/validation and inherited budget checks, including diagnosis_required before any further action after authoritative failure.
-- [ ] Implement serialized expected-target publication and bounded crash recovery, including safe handling of checked-out clean versus dirty targets.
-- [ ] Test direct invocation of both root and generated complete/finalize commands before publication, after publication and after interrupted publication, preserving legacy behavior for ungrouped plans.
-- [ ] Bind existing member completion/archive operations and group completion to verified published commits; preserve A when B stops and block duplicate finalization.
-- [ ] Add deterministic end-to-end, negative, race and untuned holdout scenarios to the existing complete test entrypoints and preserve default serial behavior.
-- [ ] Update aligned orchestration and lifecycle guidance, install inventory/parity, generated smoke and Copier update preservation fixtures.
-- [ ] Review the exact implementation and invariants independently, run all declared focused commands, then the authoritative suites once for the otherwise acceptable result.
+- [x] Extend the runner's exact versioned contracts to accept only the group/member permit issued by 279, while retaining legacy verification and no worker source-write authority.
+- [x] Implement parent group dispatch through separate worktrees and existing worker clones, returning immutable readiness artifacts without invoking acceptance automatically.
+- [x] Implement the current-baseline assembly operation and distinct parent-produced evidence for unchanged application and in-scope adjusted results.
+- [x] Test that one substantive parent adjustment consumes the same single slot as worker correction, that either excludes the other, and that crash recovery or a mechanical no-edit transfer never resets the slot.
+- [x] Implement current-target review/validation and inherited budget checks, including diagnosis_required before any further action after authoritative failure.
+- [x] Implement serialized expected-target publication and bounded crash recovery, including safe handling of checked-out clean versus dirty targets.
+- [x] Test direct invocation of both root and generated complete/finalize commands before publication, after publication and after interrupted publication, preserving legacy behavior for ungrouped plans.
+- [x] Bind existing member completion/archive operations and group completion to verified published commits; preserve A when B stops and block duplicate finalization.
+- [x] Add deterministic end-to-end, negative, race and untuned holdout scenarios to the existing complete test entrypoints and preserve default serial behavior.
+- [x] Update aligned orchestration and lifecycle guidance, install inventory/parity, generated smoke and Copier update preservation fixtures.
+- [x] Review the exact implementation and invariants independently, run all declared focused commands, then the authoritative suites once for the otherwise acceptable result.
 
 ## Validation Notes
 
@@ -201,3 +201,14 @@ checked_summary_ja: A を先に取り込み、B を A 適用後のコードと�
 - No measured speedup or resource saving is claimed. Root plan files describe this repository's implementation work and are not copied as product-specific plans into the reusable template.
 
 - Reconstruction authorization: 「継続して開発せよ。」 The predecessor paths now name the schema-4 successors; acceptance, validation authority and implementation order are unchanged.
+
+- Implementation baseline: `0062a8bc3c80a2c543194e5cded11990db1c30ca` in `temp_project`, which activated this plan through the schema-3 rebind record in `docs/plan/replanned/baselines/live-successor-rebinds-v1.json`. Predecessors 287 and 284 were already checked and archived.
+- Implementation mode: bounded parent-direct implementation. This plan changes acceptance and publication authority, so its own integration gate forbids running the new parallel path to implement or accept itself. No writable helper was authorized and none was used.
+- `scripts/run-parallel-plans.py` and its generated twin install the adapter. `dispatch` starts one isolated candidate per open member permit, `assemble` binds a candidate to the current target commit in a disposable clone, `publish` advances the target by a checked fast-forward under the publication lease, and `publish-recover` resolves an interrupted publication without replaying it.
+- `scripts/parallel-plan-state.py` now proves adapter installation before any gated operation, gates completion, finalization, and archive on a recorded publication reachable from the group target, denies the adapter path to member write scope, re-pins `target_ref` to the committed description, and bounds each member to one baseline transfer.
+- A published member's own plan may then take its ordinary completion and archive transitions, and a committed removal from `docs/plan/active/` retires it. Every unpublished member stays byte-pinned, and a plan tracked at HEAD but missing from the working tree is still refused.
+- One independent read-only review round ran against the exact working-tree diff. It reported four findings: `assemble` dropped added files from the scope check and the assembled patch; publication accepted an assembly that no review had targeted; the adapter itself was missing from the group authority deny list; and `target_ref` was never re-pinned. All four are fixed, each with a deterministic regression test, and no finding was accepted as-is. The reviewer's remaining suggestion, proving the adapter by executing `adapter-version` instead of by file presence, was not adopted: the deny-list entry removes the exploit path it addressed.
+- Focused validation passed (exit 0): `python3 tests/test-sandboxed-plan-worker.py` (116 tests), `python3 tests/test-plan-execution-state.py` (136), `python3 tests/test-validation-tools.py` (136), `tests/root-plan-lifecycle.sh`, `python3 scripts/check-copier-template.py`, `python3 scripts/restructure-plan.py --verify`, `git diff --check`.
+- Authoritative validation passed (exit 0): `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `tests/copier-update.sh --require-copier`. The Copier update lane builds its template source from a real commit, so it was run once against the committed implementation.
+- `AGENTS.md` still summarizes the pre-adapter refusal rule. That file is outside this plan's `write_scope`, so it is reported as a required follow-up rather than edited here; the normative specifications in `write_scope` are updated.
+- No measured speedup is claimed. Parallel candidate generation is admitted; assembly, review, validation, and publication remain serial and parent-owned.

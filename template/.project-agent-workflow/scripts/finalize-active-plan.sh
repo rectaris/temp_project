@@ -1,8 +1,15 @@
 #!/bin/sh
 set -eu
 
+group_state=
+if [ "${1:-}" = "--group-state" ]; then
+  [ "$#" -ge 2 ] || { echo "--group-state requires a path" >&2; exit 2; }
+  group_state=$2
+  shift 2
+fi
+
 if [ "$#" -ne 1 ]; then
-  echo "Usage: $0 docs/plan/active/NNN-slug.md" >&2
+  echo "Usage: $0 [--group-state PATH] docs/plan/active/NNN-slug.md" >&2
   exit 2
 fi
 
@@ -19,8 +26,13 @@ esac
   echo "missing parallel plan group authority: .project-agent-workflow/scripts/parallel-plan-state.py" >&2
   exit 1
 }
-python3 .project-agent-workflow/scripts/parallel-plan-state.py check-enrollment \
-  --plan "$src" --operation finalization >/dev/null || exit 1
+if [ -n "$group_state" ]; then
+  python3 .project-agent-workflow/scripts/parallel-plan-state.py check-enrollment \
+    --plan "$src" --operation finalization --group-state "$group_state" >/dev/null || exit 1
+else
+  python3 .project-agent-workflow/scripts/parallel-plan-state.py check-enrollment \
+    --plan "$src" --operation finalization >/dev/null || exit 1
+fi
 
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
 [ "$status" = "ready_to_archive" ] || {

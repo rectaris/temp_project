@@ -1,7 +1,13 @@
 #!/bin/sh
 set -eu
 
-[ "$#" -eq 1 ] || { echo "Usage: $0 docs/plan/active/NNN-slug.md" >&2; exit 2; }
+group_state=
+if [ "${1:-}" = "--group-state" ]; then
+  [ "$#" -ge 2 ] || { echo "--group-state requires a path" >&2; exit 2; }
+  group_state=$2
+  shift 2
+fi
+[ "$#" -eq 1 ] || { echo "Usage: $0 [--group-state PATH] docs/plan/active/NNN-slug.md" >&2; exit 2; }
 src=$1
 case "$src" in docs/plan/active/[0-9][0-9][0-9]-*.md) ;; *) echo "expected active plan path" >&2; exit 2 ;; esac
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
@@ -11,8 +17,13 @@ case "$src" in docs/plan/active/[0-9][0-9][0-9]-*.md) ;; *) echo "expected activ
   echo "missing parallel plan group authority: scripts/parallel-plan-state.py" >&2
   exit 1
 }
-python3 scripts/parallel-plan-state.py check-enrollment \
-  --plan "$src" --operation finalization >/dev/null || exit 1
+if [ -n "$group_state" ]; then
+  python3 scripts/parallel-plan-state.py check-enrollment \
+    --plan "$src" --operation finalization --group-state "$group_state" >/dev/null || exit 1
+else
+  python3 scripts/parallel-plan-state.py check-enrollment \
+    --plan "$src" --operation finalization >/dev/null || exit 1
+fi
 status=$(awk -F': ' '$1 == "status" { print $2; exit }' "$src")
 [ "$status" = "ready_to_archive" ] || { echo "cannot finalize $src: status is $status, expected ready_to_archive" >&2; exit 1; }
 grep -q '^checked_summary_ja: .\+' "$src" || { echo "cannot finalize $src: missing non-empty checked_summary_ja" >&2; exit 1; }

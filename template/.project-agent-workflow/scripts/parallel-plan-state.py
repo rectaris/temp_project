@@ -31,8 +31,11 @@ GROUP_PERMIT_SCHEMA_VERSION = 1
 
 # The grouped runner adapter is supplied by the integration plan. Until it is
 # installed no production operation may proceed for an enrolled member, with or
-# without a otherwise valid permit.
-GROUPED_ADAPTER_VERSION: int | None = None
+# without a otherwise valid permit. Installation is proved by the adapter file
+# that ships beside this authority, so an installation without the adapter keeps
+# failing closed instead of silently opening the legacy serial paths.
+GROUPED_ADAPTER_NAME = "run-parallel-plans.py"
+GROUPED_ADAPTER_EXPECTED_VERSION = 1
 
 EXECUTION_GROUP_DIR = "docs/plan/execution-groups"
 GROUP_MEMBER_COUNT = 2
@@ -40,6 +43,10 @@ MEMBER_INITIAL_GENERATION_LIMIT = 1
 MEMBER_CORRECTION_LIMIT = 1
 MEMBER_REVIEW_LIMIT = 2
 MEMBER_PARENT_ADJUSTMENT_LIMIT = 1
+# One member may move to a newer target baseline once in this release. Another
+# target movement preserves the assembled result and stops for the owner
+# instead of looping through repeated assemble/review rounds.
+MEMBER_BASELINE_TRANSFER_LIMIT = 1
 MAX_GROUP_EVENTS = 64
 TERMINAL_EVENT_RESERVE = 4
 TERMINAL_EVENT_TYPES = frozenset({"member_stopped"})
@@ -84,6 +91,7 @@ GROUP_AUTHORITY_DENY_PATHS = (
     "scripts/plan-execution-state.py",
     "scripts/parallel-plan-state.py",
     "scripts/run-sandboxed-plan-worker.py",
+    "scripts/run-parallel-plans.py",
     "tests/smoke.sh",
     ".project-agent-workflow/docs/agent/",
     ".project-agent-workflow/scripts/lint-project-workflow.sh",
@@ -91,6 +99,7 @@ GROUP_AUTHORITY_DENY_PATHS = (
     ".project-agent-workflow/scripts/plan-execution-state.py",
     ".project-agent-workflow/scripts/parallel-plan-state.py",
     ".project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
+    ".project-agent-workflow/scripts/run-parallel-plans.py",
 )
 
 GATED_OPERATIONS = (
@@ -103,6 +112,11 @@ GATED_OPERATIONS = (
     "finalization",
     "archive",
 )
+
+# Lifecycle operations follow a verified publication instead of an open
+# candidate permit: the member permit is consumed by then, and only the exact
+# published commit may become a formally accepted and archived member result.
+LIFECYCLE_OPERATIONS = frozenset({"completion", "finalization", "archive"})
 
 MEMBER_STOP_REASONS = {
     "diagnosis_required",
@@ -453,19 +467,65 @@ def validate_group_description(
     return description
 
 
+def path_exists_at_head(root: Path, path: str) -> bool:
+    """Report whether one repository path exists in the HEAD commit."""
+
+    completed = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"HEAD:{path}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=sanitized_git_environment(),
+    )
+    return completed.returncode == 0
+
+
 def resolve_group_members(
     root: Path,
     description: dict[str, Any],
     label: str,
+    published: frozenset[str] = frozenset(),
 ) -> dict[str, dict[str, Any]]:
-    """Bind each declared member to its live plan and check independence."""
+    """Bind each declared member to its live plan and check independence.
+
+    ``published`` names members whose verified result the parent already
+    published to the group target. A member plan whose removal from the declared
+    path is already committed is resolved the same way, because a completed
+    member is archived out of ``docs/plan/active/`` by design and must not break
+    every remaining plan operation in the repository. A plan still tracked at
+    HEAD but missing from the working tree stays an error. Independence, write-scope, and plan-byte
+    binding constrain candidate generation and serial assembly, and a published
+    member has already passed all of them and consumed its permit. Its own plan
+    then moves through the ordinary completion and archive transitions, so this
+    binding stops pinning its bytes or location instead of misreading an
+    authorized lifecycle edit as authority drift.
+    """
 
     resolved: dict[str, dict[str, Any]] = {}
     for member in description["members"]:
         plan_path = member["plan_path"]
         plan_file = root / plan_path
+        if plan_path in published:
+            resolved[plan_path] = {
+                "member": member,
+                "manifest": None,
+                "write_scope": None,
+                "published": True,
+            }
+            continue
         if not plan_file.is_file():
-            raise GroupError(f"{label} names a missing member plan: {plan_path}")
+            if path_exists_at_head(root, plan_path):
+                raise GroupError(
+                    f"{label} member plan is tracked but missing from the working "
+                    f"tree: {plan_path}"
+                )
+            resolved[plan_path] = {
+                "member": member,
+                "manifest": None,
+                "write_scope": None,
+                "published": True,
+            }
+            continue
         plan_bytes = read_bounded_bytes(plan_file, f"{label} member plan", MAX_BYTES * 8)
         if digest(plan_bytes) != member["plan_digest"]:
             raise GroupError(
@@ -489,16 +549,20 @@ def resolve_group_members(
             "member": member,
             "manifest": manifest,
             "write_scope": write_scope,
+            "published": False,
         }
     paths = sorted(resolved)
-    first, second = paths[0], paths[1]
-    for left in resolved[first]["write_scope"]:
-        for right in resolved[second]["write_scope"]:
-            if scopes_overlap(left, right):
-                raise GroupError(
-                    f"{label} members declare overlapping write scope: {left} / {right}"
-                )
-    for path in paths:
+    live = [path for path in paths if resolved[path]["write_scope"] is not None]
+    if len(live) == len(paths):
+        first, second = paths[0], paths[1]
+        for left in resolved[first]["write_scope"]:
+            for right in resolved[second]["write_scope"]:
+                if scopes_overlap(left, right):
+                    raise GroupError(
+                        f"{label} members declare overlapping write scope: "
+                        f"{left} / {right}"
+                    )
+    for path in live:
         manifest = resolved[path]["manifest"]
         others = [other for other in paths if other != path]
         for other in others:
@@ -601,8 +665,15 @@ def require_committed_description(root: Path, label: str, raw: bytes) -> None:
         )
 
 
-def load_group_descriptions(root: Path) -> dict[str, dict[str, Any]]:
-    """Load and validate every committed group description in the repository."""
+def load_group_descriptions(
+    root: Path,
+    published: frozenset[str] = frozenset(),
+) -> dict[str, dict[str, Any]]:
+    """Load and validate every committed group description in the repository.
+
+    ``published`` is forwarded to :func:`resolve_group_members` so an already
+    published member keeps resolving through its own lifecycle transitions.
+    """
 
     groups: dict[str, dict[str, Any]] = {}
     enrolled: dict[str, str] = {}
@@ -628,7 +699,7 @@ def load_group_descriptions(root: Path) -> dict[str, dict[str, Any]]:
         if description["group_id"] in seen_ids:
             raise GroupError(f"{label} reuses an existing group_id")
         seen_ids.add(description["group_id"])
-        resolved = resolve_group_members(root, description, label)
+        resolved = resolve_group_members(root, description, label, published)
         for plan_path in resolved:
             if plan_path in enrolled:
                 raise GroupError(
@@ -644,13 +715,61 @@ def load_group_descriptions(root: Path) -> dict[str, dict[str, Any]]:
     return groups
 
 
-def enrolled_member(root: Path, plan_path: str) -> dict[str, Any] | None:
+def grouped_adapter_version() -> int | None:
+    """Report the installed grouped execution adapter version, or None.
+
+    The adapter must ship as one regular non-symlink sibling command. A missing
+    or replaced adapter keeps every enrolled member refused on the legacy
+    serial paths.
+    """
+
+    path = Path(__file__).resolve().with_name(GROUPED_ADAPTER_NAME)
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(metadata.st_mode):
+        return None
+    return GROUPED_ADAPTER_EXPECTED_VERSION
+
+
+def published_member_paths(root: Path, state: str | None) -> frozenset[str]:
+    """Report members a group execution state already records as published.
+
+    This read is advisory and only relaxes plan-byte pinning: it never un-enrols
+    a member, never opens a permit, and never stands in for the locked
+    publication check that :func:`require_published_member` performs.
+    """
+
+    if state is None:
+        return frozenset()
+    path = Path(state)
+    if not path.is_file() or path.is_symlink():
+        return frozenset()
+    try:
+        document = read_state(path)
+    except GroupError:
+        return frozenset()
+    if document["repository_identity"] != repository_identity(root):
+        return frozenset()
+    return frozenset(
+        plan_path
+        for plan_path, member in document["members"].items()
+        if member["publication"]["published"]
+    )
+
+
+def enrolled_member(
+    root: Path,
+    plan_path: str,
+    published: frozenset[str] = frozenset(),
+) -> dict[str, Any] | None:
     """Return the group enrolment for one plan path, or None when ungrouped."""
 
     normalized = plan_path.strip()
     if normalized.startswith("./"):
         normalized = normalized[2:]
-    for label, group in load_group_descriptions(root).items():
+    for label, group in load_group_descriptions(root, published).items():
         if normalized in group["members"]:
             return {
                 "group_label": label,
@@ -678,8 +797,16 @@ def require_group_permit(
 
     if operation not in GATED_OPERATIONS:
         raise GroupError(f"unknown gated operation: {operation}")
-    enrolment = enrolled_member(root, plan_path)
+    enrolment = enrolled_member(root, plan_path, published_member_paths(root, state))
     if enrolment is None:
+        return
+    if grouped_adapter_version() is None:
+        raise GroupError(
+            f"{plan_path} requires the grouped execution adapter, which is not "
+            f"installed; the {operation} path stays closed"
+        )
+    if operation in LIFECYCLE_OPERATIONS:
+        require_published_member(root, plan_path, operation, enrolment, state)
         return
     if permit is None:
         raise GroupError(
@@ -692,13 +819,70 @@ def require_group_permit(
         raise GroupError("group member permit names a different plan")
     if verified["group_id"] != enrolment["group_id"]:
         raise GroupError("group member permit names a different execution group")
-    if state is not None:
-        require_permit_is_current(root, Path(state), verified)
-    if GROUPED_ADAPTER_VERSION is None:
+    if state is None:
         raise GroupError(
-            f"{plan_path} requires the grouped execution adapter, which is not "
-            f"installed; the {operation} path stays closed"
+            "group member permits are only honoured against the live group "
+            "execution state record"
         )
+    require_permit_is_current(root, Path(state), verified)
+
+
+def require_published_member(
+    root: Path,
+    plan_path: str,
+    operation: str,
+    enrolment: dict[str, Any],
+    state: str | None,
+) -> None:
+    """Admit a lifecycle operation only for a verified published member.
+
+    Publication is the parent-owned proof that this member's exact reviewed and
+    validated result reached the group target. Without it the member has no
+    formally accepted result to complete, finalize, or archive.
+    """
+
+    if state is None:
+        raise GroupError(
+            f"{plan_path} is enrolled in execution group "
+            f"{enrolment['group_id']}; the {operation} path requires the group "
+            "execution state that records its verified publication"
+        )
+    state_path = Path(state)
+    with with_lock(state_path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        document = read_state(state_path)
+        require_live_group(root, document, allow_lifecycle_evolution=True)
+        if document["group_id"] != enrolment["group_id"]:
+            raise GroupError("group execution state names a different execution group")
+        member = require_member(document, plan_path)
+        publication = member["publication"]
+        if not publication["published"]:
+            raise GroupError(
+                f"{plan_path} has not published a verified result; the "
+                f"{operation} path stays closed until the parent publishes its "
+                "reviewed commit to the group target"
+            )
+        require_commit(publication["commit"], "member publication commit")
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "merge-base",
+                "--is-ancestor",
+                publication["commit"],
+                document["target_ref"],
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=sanitized_git_environment(),
+        )
+        if completed.returncode != 0:
+            raise GroupError(
+                "the recorded member publication is not reachable from the group "
+                f"target ref; the {operation} path stays closed"
+            )
 
 
 def require_permit_is_current(root: Path, state_path: Path, permit: dict[str, Any]) -> None:
@@ -955,10 +1139,28 @@ def require_event_chain(state: dict[str, Any]) -> None:
         previous = expected
 
 
-def require_live_group(root: Path, state: dict[str, Any]) -> dict[str, Any]:
-    """Recheck that the committed group still matches the admitted record."""
+def require_live_group(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    allow_lifecycle_evolution: bool = False,
+) -> dict[str, Any]:
+    """Recheck that the committed group still matches the admitted record.
 
-    groups = load_group_descriptions(root)
+    Member plan bytes stay pinned while a member can still generate, adjust, or
+    publish a candidate. After a verified publication the ordinary plan
+    lifecycle rewrites that member's own status and validation notes, so those
+    authorized edits must not be misread as authority drift. Every other
+    member, the committed group description, the group identity, membership,
+    and the repository identity stay pinned in both cases.
+    """
+
+    published = frozenset(
+        plan_path
+        for plan_path, member in state["members"].items()
+        if member["publication"]["published"]
+    ) if allow_lifecycle_evolution else frozenset()
+    groups = load_group_descriptions(root, published)
     label = state["group_description_path"]
     group = groups.get(label)
     if group is None:
@@ -969,9 +1171,13 @@ def require_live_group(root: Path, state: dict[str, Any]) -> dict[str, Any]:
         raise GroupError("the committed group identity changed after admission")
     if repository_identity(root) != state["repository_identity"]:
         raise GroupError("group execution state belongs to a different repository")
+    if group["description"]["target_ref"] != state["target_ref"]:
+        raise GroupError("the committed group target ref changed after admission")
     for plan_path, member in state["members"].items():
         if plan_path not in group["members"]:
             raise GroupError("group membership changed after admission")
+        if allow_lifecycle_evolution and member["publication"]["published"]:
+            continue
         live = group["members"][plan_path]["member"]
         if live["plan_digest"] != member["plan_digest"]:
             raise GroupError(
@@ -1197,6 +1403,12 @@ def record_review(args: argparse.Namespace) -> None:
             raise GroupError(
                 f"member {args.member} exhausted its independent review budget"
             )
+        # A review is evidence about one exact assembled artifact. Recording the
+        # artifact identity is what lets publication refuse a different result
+        # that merely happens to follow a review of an earlier candidate.
+        review_target = require_digest(
+            args.assembly_record_digest, "assembly_record_digest"
+        )
         registry_path_digest = require_digest(
             args.registry_path_digest, "registry_path_digest"
         )
@@ -1230,7 +1442,11 @@ def record_review(args: argparse.Namespace) -> None:
         append_event(
             state,
             "member_review_recorded",
-            {"plan_path": args.member, "reviews": member["counters"]["reviews"]},
+            {
+                "plan_path": args.member,
+                "reviews": member["counters"]["reviews"],
+                "assembly_record_digest": review_target,
+            },
         )
         atomic_write(path, state)
     print(member["counters"]["reviews"])
@@ -1393,6 +1609,16 @@ def transfer_baseline(args: argparse.Namespace) -> None:
             raise GroupError(
                 "a baseline transfer must advance the recorded member baseline"
             )
+        if member["baseline_generation"] >= MEMBER_BASELINE_TRANSFER_LIMIT:
+            raise GroupError(
+                f"member {args.member} already spent its single baseline transfer; "
+                "the assembled result is preserved and the target movement stops "
+                "for an owner decision"
+            )
+        if member["publication"]["published"]:
+            raise GroupError(
+                f"member {args.member} already published its accepted result"
+            )
         require_descendant_baseline(root, state, member, base_commit)
         if member["parent_adjustment"]["state"] == "reserved":
             raise GroupError(
@@ -1428,6 +1654,91 @@ def transfer_baseline(args: argparse.Namespace) -> None:
     print(member["baseline_generation"])
 
 
+def publication_record(args: argparse.Namespace) -> None:
+    """Record one verified member publication under the publication lease.
+
+    Acceptance follows publication, never a worker completion claim: this call
+    requires the exclusive lease, the exact member permit, and a commit already
+    reachable from the admitted group target ref.
+    """
+
+    path = Path(args.state)
+    commit = require_commit(args.commit, "commit")
+    assembly_digest = require_digest(args.assembly_digest, "assembly_digest")
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        root = repository_root()
+        require_live_group(root, state)
+        member = require_member(state, args.member)
+        require_active_member(member)
+        if state["publication_lease"]["owner"] == "":
+            raise GroupError("recording a publication requires the publication lease")
+        if state["publication_lease"]["plan_path"] != args.member:
+            raise GroupError("the publication lease was acquired for another member")
+        if member["publication"]["published"]:
+            raise GroupError(
+                f"member {args.member} already published its accepted result"
+            )
+        if (
+            member["permit"]["permit_id"] != args.permit_id
+            or not member["permit"]["open"]
+        ):
+            raise GroupError(
+                "a publication must consume the exact open member permit"
+            )
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "merge-base",
+                "--is-ancestor",
+                commit,
+                state["target_ref"],
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=sanitized_git_environment(),
+        )
+        if completed.returncode != 0:
+            raise GroupError(
+                "the published commit is not reachable from the group target ref"
+            )
+        member["publication"] = {"published": True, "commit": commit}
+        member["permit"]["open"] = False
+        append_event(
+            state,
+            "member_published",
+            {
+                "plan_path": args.member,
+                "commit": commit,
+                "assembly_digest": assembly_digest,
+            },
+        )
+        atomic_write(path, state)
+    print(commit)
+
+
+def group_complete(args: argparse.Namespace) -> None:
+    """Report the group complete only after every member published."""
+
+    state = read_state(Path(args.state))
+    require_live_group(repository_root(), state, allow_lifecycle_evolution=True)
+    pending = sorted(
+        plan
+        for plan, member in state["members"].items()
+        if not member["publication"]["published"]
+    )
+    if pending:
+        raise GroupError(
+            "the execution group is incomplete; these members have not published "
+            f"a verified result: {', '.join(pending)}"
+        )
+    print("complete")
+
+
 def check_enrollment(args: argparse.Namespace) -> None:
     root = repository_root(Path(args.repository) if args.repository else None)
     require_group_permit(
@@ -1437,7 +1748,12 @@ def check_enrollment(args: argparse.Namespace) -> None:
         permit=args.group_permit,
         state=args.group_state,
     )
-    print("ungrouped" if enrolled_member(root, args.plan) is None else "permitted")
+    published = published_member_paths(root, args.group_state)
+    print(
+        "ungrouped"
+        if enrolled_member(root, args.plan, published) is None
+        else "permitted"
+    )
 
 
 def show_state(args: argparse.Namespace) -> None:
@@ -1505,6 +1821,7 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("--registry-path-digest", required=True)
     review.add_argument("--registry-event-count", type=int, required=True)
     review.add_argument("--registry-event-chain-digest", required=True)
+    review.add_argument("--assembly-record-digest", required=True)
     review.set_defaults(handler=record_review)
 
     reserve = sub.add_parser("adjust-reserve")
@@ -1537,6 +1854,18 @@ def parser() -> argparse.ArgumentParser:
     transfer.add_argument("--new-base-commit", required=True)
     transfer.add_argument("--workspace-digest", required=True)
     transfer.set_defaults(handler=transfer_baseline)
+
+    publication = sub.add_parser("publication-record")
+    publication.add_argument("state")
+    publication.add_argument("--member", required=True)
+    publication.add_argument("--permit-id", required=True)
+    publication.add_argument("--commit", required=True)
+    publication.add_argument("--assembly-digest", required=True)
+    publication.set_defaults(handler=publication_record)
+
+    complete = sub.add_parser("group-complete")
+    complete.add_argument("state")
+    complete.set_defaults(handler=group_complete)
 
     gate = sub.add_parser("check-enrollment")
     gate.add_argument("--repository")

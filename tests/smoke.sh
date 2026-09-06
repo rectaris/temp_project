@@ -92,6 +92,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-copier-update.sh \
+    template/.project-agent-workflow/scripts/run-parallel-plans.py \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
@@ -152,6 +153,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-copier-update.sh \
+    template/.project-agent-workflow/scripts/run-parallel-plans.py \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \

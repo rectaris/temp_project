@@ -364,12 +364,25 @@ def load_parallel_plan_module() -> ModuleType:
     return module
 
 
-def require_group_execution_permit(plan_path: str, operation: str) -> None:
-    """Refuse a grouped member on the legacy serial path before any effect."""
+def require_group_execution_permit(
+    plan_path: str,
+    operation: str,
+    args: argparse.Namespace | None = None,
+) -> None:
+    """Admit a grouped member only through verified group authority.
+
+    An ungrouped plan is unaffected. An enrolled member passes only with the
+    grouped execution adapter installed and either its exact current member
+    permit or, for lifecycle operations, its recorded verified publication.
+    """
 
     module = load_parallel_plan_module()
+    permit = getattr(args, "group_permit", None) if args is not None else None
+    state = getattr(args, "group_state", None) if args is not None else None
     try:
-        module.require_group_permit(repository_root(), plan_path, operation)
+        module.require_group_permit(
+            repository_root(), plan_path, operation, permit=permit, state=state
+        )
     except module.GroupError as exc:
         raise StateError(str(exc)) from exc
 
@@ -3289,7 +3302,7 @@ def init_state(args: argparse.Namespace) -> None:
     lifecycle_path = Path(args.lifecycle_state)
     require_outside_repository(path, "execution state")
     require_outside_repository(lifecycle_path, "candidate lifecycle state")
-    require_group_execution_permit(args.plan, "execution")
+    require_group_execution_permit(args.plan, "execution", args)
     if path.exists() or path.is_symlink():
         raise StateError("execution state already exists")
     plan = Path(args.plan)
@@ -3487,7 +3500,7 @@ def continue_state(args: argparse.Namespace) -> None:
         (registry_path, "continuation registry"),
     ):
         require_outside_repository(external, label)
-    require_group_execution_permit(args.plan, "execution")
+    require_group_execution_permit(args.plan, "execution", args)
     if not ID_RE.fullmatch(args.run_id):
         raise StateError("invalid run_id")
     with with_lock(predecessor_path) as predecessor_lock:
@@ -4863,7 +4876,7 @@ def require_lifecycle_identity(state: dict[str, Any], run_id: str, lifecycle_pat
 def record_writable_attempt_start(args: argparse.Namespace) -> None:
     path = Path(args.state)
     lifecycle_path = Path(args.lifecycle_state)
-    require_group_execution_permit(args.plan, "execution")
+    require_group_execution_permit(args.plan, "execution", args)
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
@@ -5268,7 +5281,7 @@ def check_gate(args: argparse.Namespace) -> None:
     if state["run_id"] != args.run_id:
         raise StateError("run_id mismatch")
     if args.operation in {"execution", "completion", "archive"}:
-        require_group_execution_permit(state["plan_path"], args.operation)
+        require_group_execution_permit(state["plan_path"], args.operation, args)
     repair_plan = args.operation == "repair_plan"
     diagnosis_read = (
         state["state"] == "diagnosis_required" and args.operation == "diagnosis_read"
@@ -5325,6 +5338,8 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("state")
     init.add_argument("--run-id", required=True)
     init.add_argument("--plan", required=True)
+    init.add_argument("--group-permit")
+    init.add_argument("--group-state")
     init.add_argument("--plan-digest", required=True)
     init.add_argument("--source-head", required=True)
     init.add_argument("--primary-invariant-digest", required=True)
@@ -5344,6 +5359,8 @@ def parser() -> argparse.ArgumentParser:
     continuation.add_argument("--authorization", required=True)
     continuation.add_argument("--run-id", required=True)
     continuation.add_argument("--plan", required=True)
+    continuation.add_argument("--group-permit")
+    continuation.add_argument("--group-state")
     continuation.add_argument("--lifecycle-state", required=True)
     continuation.add_argument(
         "--implementation-mode", choices=sorted(MODES), required=True
@@ -5370,6 +5387,8 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("state")
     start.add_argument("--run-id", required=True)
     start.add_argument("--plan", required=True)
+    start.add_argument("--group-permit")
+    start.add_argument("--group-state")
     start.add_argument("--attempt-id", required=True)
     start.add_argument("--attempt-kind", choices=sorted(ATTEMPT_KINDS), required=True)
     start.add_argument("--predecessor-state")
@@ -5400,6 +5419,8 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("state")
     check.add_argument("--run-id", required=True)
     check.add_argument("--plan")
+    check.add_argument("--group-permit")
+    check.add_argument("--group-state")
     check.add_argument("--lifecycle-state")
     check.add_argument("--open-attempt-id")
     check.add_argument(

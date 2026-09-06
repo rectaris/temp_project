@@ -192,10 +192,12 @@ grep -q '^status: [a-z_]*$' "$durable_path"
 grouped="$tmp/grouped"
 mkdir -p "$grouped/scripts" "$grouped/docs/plan/active" "$grouped/docs/plan/execution-groups"
 cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" \
-  "$root/scripts/parallel-plan-state.py" "$grouped/scripts/"
+  "$root/scripts/parallel-plan-state.py" "$root/scripts/run-parallel-plans.py" \
+  "$grouped/scripts/"
 git -C "$grouped" init -q -b main
 git -C "$grouped" config user.email "test@example.invalid"
 git -C "$grouped" config user.name "Test"
+git -C "$grouped" remote add origin "https://example.invalid/owner/lifecycle.git"
 
 write_group_member() {
   cat >"$grouped/docs/plan/active/$1" <<GROUP_MEMBER_EOF
@@ -297,6 +299,68 @@ fi
 grep -q 'enrolled in execution group' "$tmp/grouped-finalize.err"
 grep -q '^status: ready_to_archive$' "$grouped/docs/plan/active/284-alpha.md"
 
+# Supplying the group execution state does not weaken the gate before the parent
+# publishes that member's exact reviewed result.
+group_state="$tmp/group-state.json"
+grouped_head=$(git -C "$grouped" rev-parse HEAD)
+(cd "$grouped" && python3 scripts/parallel-plan-state.py group-init "$group_state" \
+  --group-description docs/plan/execution-groups/lifecycle.json \
+  --target-ref refs/heads/main --start-commit "$grouped_head" >/dev/null)
+if (cd "$grouped" && scripts/complete-plan.sh --group-state "$group_state" \
+    docs/plan/active/285-beta.md >/dev/null 2>"$tmp/grouped-unpublished.err"); then
+  echo "root complete-plan accepted an unpublished execution group member" >&2
+  exit 1
+fi
+grep -q 'has not published a verified result' "$tmp/grouped-unpublished.err"
+grep -q '^status: in_progress$' "$grouped/docs/plan/active/285-beta.md"
+
+# A missing grouped execution adapter must fail closed even with a valid state.
+mv "$grouped/scripts/run-parallel-plans.py" "$tmp/adapter-away.py"
+if (cd "$grouped" && scripts/complete-plan.sh --group-state "$group_state" \
+    docs/plan/active/285-beta.md >/dev/null 2>"$tmp/grouped-no-adapter.err"); then
+  echo "root complete-plan proceeded without the grouped execution adapter" >&2
+  exit 1
+fi
+grep -q 'grouped execution adapter' "$tmp/grouped-no-adapter.err"
+grep -q '^status: in_progress$' "$grouped/docs/plan/active/285-beta.md"
+mv "$tmp/adapter-away.py" "$grouped/scripts/run-parallel-plans.py"
+
+# After the parent publishes that member's verified result, the same serial
+# entrypoints complete and archive it, while its unpublished partner stays shut.
+permit_id="lifecycle-beta-permit"
+(cd "$grouped" && python3 scripts/parallel-plan-state.py permit-issue "$group_state" \
+  --member docs/plan/active/285-beta.md --permit-id "$permit_id" \
+  --workspace-digest "sha256:$(printf 'lifecycle workspace' | sha256sum | cut -d' ' -f1)" \
+  --output "$tmp/beta-permit.json" >/dev/null)
+(cd "$grouped" && python3 scripts/parallel-plan-state.py lease-acquire "$group_state" \
+  --member docs/plan/active/285-beta.md --owner lifecycle-parent >/dev/null)
+(cd "$grouped" && python3 scripts/parallel-plan-state.py publication-record \
+  "$group_state" --member docs/plan/active/285-beta.md --permit-id "$permit_id" \
+  --commit "$grouped_head" \
+  --assembly-digest "sha256:$(printf 'lifecycle assembly' | sha256sum | cut -d' ' -f1)" \
+  >/dev/null)
+(cd "$grouped" && scripts/complete-plan.sh --group-state "$group_state" \
+  docs/plan/active/285-beta.md >/dev/null)
+grep -q '^status: ready_to_archive$' "$grouped/docs/plan/active/285-beta.md"
+git -C "$grouped" add -A
+git -C "$grouped" commit -qm "published member completion"
+(cd "$grouped" && scripts/finalize-active-plan.sh --group-state "$group_state" \
+  docs/plan/active/285-beta.md >/dev/null)
+published_archive=$(find "$grouped/docs/plan/checked" -name '285-beta.md' | head -n 1)
+[ -n "$published_archive" ] || {
+  echo "root finalize-active-plan did not archive a published group member" >&2
+  exit 1
+}
+if (cd "$grouped" && scripts/finalize-active-plan.sh --group-state "$group_state" \
+    docs/plan/active/284-alpha.md >/dev/null 2>"$tmp/grouped-partner.err"); then
+  echo "root finalize-active-plan accepted an unpublished partner member" >&2
+  exit 1
+fi
+grep -q 'has not published a verified result' "$tmp/grouped-partner.err"
+grep -q '^status: ready_to_archive$' "$grouped/docs/plan/active/284-alpha.md"
+git -C "$grouped" add -A
+git -C "$grouped" commit -qm "published member archive"
+
 # A missing group authority module must fail closed, never silently skip the gate.
 mv "$grouped/scripts/parallel-plan-state.py" "$grouped/parallel-plan-state.py.away"
 if (cd "$grouped" && scripts/finalize-active-plan.sh docs/plan/active/284-alpha.md \
@@ -310,13 +374,13 @@ mv "$grouped/parallel-plan-state.py.away" "$grouped/scripts/parallel-plan-state.
 
 # A tracked description removed only in the worktree must not un-enrol a member.
 mv "$grouped/docs/plan/execution-groups/lifecycle.json" "$tmp/lifecycle-detached.json"
-if (cd "$grouped" && scripts/complete-plan.sh docs/plan/active/285-beta.md \
+if (cd "$grouped" && scripts/complete-plan.sh docs/plan/active/284-alpha.md \
     >/dev/null 2>"$tmp/grouped-detached.err"); then
   echo "root complete-plan accepted a member after a worktree-only group deletion" >&2
   exit 1
 fi
 grep -q 'tracked but missing from the working tree' "$tmp/grouped-detached.err"
-grep -q '^status: in_progress$' "$grouped/docs/plan/active/285-beta.md"
+grep -q '^status: ready_to_archive$' "$grouped/docs/plan/active/284-alpha.md"
 mv "$tmp/lifecycle-detached.json" "$grouped/docs/plan/execution-groups/lifecycle.json"
 
 # The same entrypoints keep working for an ungrouped plan in the same repository.
