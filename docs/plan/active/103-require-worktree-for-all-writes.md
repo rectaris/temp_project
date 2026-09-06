@@ -1,7 +1,7 @@
 # Require a task worktree before every repository write
 
 status: in_progress
-primary_invariant: Every repository-changing task performs its edits, staging, validation, commit, and plan lifecycle writes in one exact task-bound linked worktree prepared before the first write; the pre-existing checkout is never the implementation workspace.
+primary_invariant: Every repository-changing task performs its writes in one exact task-bound linked worktree; a success response requires its accepted commit published to the exact source branch and its task worktree and temporary local branch absent.
 task_types:
   - planning_docs
   - template_workflow
@@ -19,24 +19,26 @@ feasibility_evidence:
   - {"evidence":"manage-plan-worktrees.py already creates, inspects, and resumes plan-bound linked checkouts with repository, branch, start-commit, directory-identity, owner-lease, and retained-state verification.","kind":"existing_mechanism"}
   - {"evidence":"The Codex PreToolUse gate, Stop adapter, staged-tree pre-commit hook, lifecycle commands, and generated copies already provide deterministic supported-workflow boundaries where one shared worktree assertion can fail closed.","kind":"existing_mechanism"}
   - {"evidence":"run-parallel-plans.py already binds each member dispatch to an exact worktree and journals checked fast-forward publication, while run-sandboxed-plan-worker.py already resolves linked parent checkouts and retains disposable no-hardlinks clones.","kind":"existing_mechanism"}
+  - {"evidence":"Plan 103 is committed on its task branch but absent from dev, and the prior completion report left that authoring worktree registered instead of publishing and retiring it.","kind":"reproduced_defect"}
+  - {"evidence":"plan_authoring.py scans active, backlog, shelved, recursive checked and replanned files plus checked.md, but its lifecycle lock is worktree-local and cannot serialize allocations across linked checkouts.","kind":"existing_mechanism"}
 completion_conditions:
-  - One idempotent prepare-or-resume operation creates a task-bound linked checkout before the first repository write for either one committed numbered plan or one disjoint bounded direct-task identity.
-  - The binding fixes repository, common Git directory, task kind and identity, start commit, target ref, branch, worktree directory identity, and owner lease while preserving every pre-existing checkout byte and index entry.
-  - Supported agent pre-tool and completion hook boundaries reject an original, missing, foreign, stale, expired, or replaced task-worktree binding before their governed repository effect.
-  - Plan authoring, activation, completion, finalization, shelving, restructuring, and generated equivalents, together with supported staging and commit boundaries, mutate only from the verified task worktree and preserve their existing atomicity, lineage, and validation authority.
-  - Parent-only publication advances only the exact reviewed and validated task commit by a journalled expected-target fast-forward and stops without discarding state when the target ref or checkout is dirty, missing, or changed.
+  - One idempotent prepare-or-resume operation creates a task-bound linked checkout before the first write for either one committed numbered plan or a disjoint direct task, including plan authoring before a plan identifier exists.
+  - The binding fixes repository, common Git directory, task identity, start commit, source ref and checkout, task branch, directory identity, and owner lease while preserving every pre-existing checkout byte and index entry.
+  - Supported pre-tool and completion hooks reject an original, missing, foreign, stale, expired, or replaced binding before writes and reject success while publication or exact task-worktree and temporary-branch retirement remains incomplete.
+  - Plan authoring reserves the smallest identifier against the published lifecycle files and live cross-worktree reservations; lifecycle writes stay in the task worktree, and only a source-reachable committed active plan may authorize implementation.
+  - A recoverable parent-only transaction fast-forwards the clean expected source checkout to the exact accepted commit, preserves local evidence, removes the exact task worktree and temporary branch, and only then permits a success response.
   - A single-plan implementation automatically creates or resumes its plan-bound parent worktree and keeps sandboxed candidate generation and validation in separate no-hardlinks clones without applying into the original checkout.
   - Each simultaneously writable execution-group member uses a distinct live plan-bound worktree, and grouped candidate generation retains current member permits, budgets, serial review, validation, and publication ownership.
-  - Root and generated policy, security boundaries, skills, hooks, commands, modes, tests, and Copier inventory stay aligned; completion never removes a worktree or local branch outside the explicit retirement workflow.
+  - Root and generated policy, security boundaries, skills, hooks, commands, modes, tests, and Copier inventory stay aligned; exact successful-task retirement is automatic while unrelated and stopped-task retirement remains explicit.
 completion_witness_map:
-  - {"condition_sha256":"sha256:52f0a038ad51a696b358ab88eac4f7a302c15008e3d7a95407710274d399f160","witness":"python3 tests/test-validation-tools.py"}
-  - {"condition_sha256":"sha256:eabdc2f040fee404941d8ff12ba1cb46ee23d654d01eee74d01f4ef9a7bfd4e4","witness":"python3 tests/test-validation-tools.py"}
-  - {"condition_sha256":"sha256:a978285a61d66f173b6d4af284818c2de99b5b242a7bc8f7230efef105ccc91e","witness":"python3 tests/test-hooks.py"}
-  - {"condition_sha256":"sha256:1ed7def98800d15a81ebc653d9fa27431ef61a96168ea5fb15ab4984fb22f6cf","witness":"tests/root-plan-lifecycle.sh"}
-  - {"condition_sha256":"sha256:05ebaebcb84356cb26e741767b742cba558d4a0bf2c3016053ab48abcf645dc0","witness":"tests/root-plan-lifecycle.sh"}
+  - {"condition_sha256":"sha256:abd73b8cb40002cb7fb2f8f486fe56ec6eb7c52e8bbd9dfae4aaa7cbc1b974b8","witness":"python3 tests/test-validation-tools.py"}
+  - {"condition_sha256":"sha256:0520d6fe4a526d0a885168004964f5f8d3beb68e0001bb5dae0bb05197f008bb","witness":"python3 tests/test-validation-tools.py"}
+  - {"condition_sha256":"sha256:601fe8a517f60ca30c9a73ef3cf28ab60547e831190ebd6c624e7f4e9587f284","witness":"python3 tests/test-hooks.py"}
+  - {"condition_sha256":"sha256:d08e6d9638f3f79b2e0b5f31f2e561dbbe60a52d17d4298c2372d30e48f102fa","witness":"tests/root-plan-lifecycle.sh"}
+  - {"condition_sha256":"sha256:dfaa2bdb9539da5900a8b14a6457627378fee9e9decb281c4a41e78ea3dea1cd","witness":"tests/root-plan-lifecycle.sh"}
   - {"condition_sha256":"sha256:8b8d0d88825413f78a852756b96a2ba6f7420ac94ede6c3dce50e51db3d7ec69","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"condition_sha256":"sha256:de1ab10c92f0f72e67d6139e556e20ef7a7cf7486d190b0e10526c20f028ab6e","witness":"python3 tests/test-sandboxed-plan-worker.py"}
-  - {"condition_sha256":"sha256:ba3d940ebf2a92512d9a7ce3575e5ec2f60683a4d3e9632cfeab52bb538dbe4e","witness":"python3 scripts/check-copier-template.py"}
+  - {"condition_sha256":"sha256:ba2511d002a2fdc361424290b156ee0d941972f19e11948067145446455528bf","witness":"python3 scripts/check-copier-template.py"}
 write_scope:
   - scripts/project_workflow/worktree_guard.py
   - template/.project-agent-workflow/scripts/worktree_guard.py
@@ -45,6 +47,9 @@ write_scope:
   - tests/validation_tools/worktrees.py
   - scripts/project_workflow/plan_authoring.py
   - template/.project-agent-workflow/scripts/plan_authoring.py
+  - tests/validation_tools/plan_authoring.py
+  - tests/fixtures/plan-authoring/cases.json
+  - tests/fixtures/plan-authoring/holdout.json
   - template/.project-agent-workflow/scripts/create-plan.sh
   - template/.project-agent-workflow/scripts/planlib.py
   - scripts/complete-plan.sh
@@ -79,6 +84,8 @@ write_scope:
   - template/.project-agent-workflow/AGENTS.md.jinja
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md
+  - docs/agent/SPEC_GIT_RETIREMENT.md
+  - template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/SPEC_SECURITY.md
   - template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md
   - references/orchestration.md
@@ -93,7 +100,6 @@ preservation_scope:
 context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/SPEC_SKILL_AUTHORING.md
-  - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/git-retirement.yaml
   - docs/agent/SPEC_DECISION_AUDIT.md
   - docs/agent/SPEC_REFERENT_FIRST.md
@@ -123,31 +129,38 @@ validation:
   - tests/smoke.sh
   - tests/copier-update.sh --require-copier
 acceptance:
-  - Prepare or resume one separate linked worktree without another owner prompt before any supported repository-changing task, including Tier 0, plan authoring, one numbered plan, and grouped numbered plans.
+  - Prepare or resume one separate linked worktree without another owner prompt before Tier 0, plan authoring, single-plan, or grouped-plan writes, and allocate a plan identifier without treating another worktree's unintegrated draft as active.
   - Keep the pre-existing checkout outside hook-controlled task editing and completion effects, and fail closed on missing or invalid task bindings without claiming protection against an unrestricted same-user bypass.
-  - Publish only an exact accepted commit through a checked recoverable fast-forward, preserve dirty or drifted target state, and require verified publication before plan completion or archival.
+  - Publish only the exact accepted commit through a checked recoverable fast-forward, preserve dirty or drifted source state, retain blocked work, and withhold success until the task worktree and temporary local branch are absent.
   - Run a single numbered plan from its managed parent worktree while retaining exact worker-clone isolation, candidate admission, review, validation, apply, and execution-ledger limits.
   - Run each concurrently writable group member from a distinct managed worktree without weakening membership, permit, baseline-transfer, review-budget, serial-integration, or stop-state rules.
-  - Keep root and installable generated worktree policy, skills, scripts, hooks, tests, modes, and explicit retirement behavior mechanically aligned.
+  - Keep root and generated worktree policy, skills, scripts, hooks, tests, modes, shared plan-id allocation, automatic successful-task retirement, and explicit unrelated-retirement behavior mechanically aligned.
   - Preserve project-owned product code, policy, configuration, plan history, validation behavior, and task worktree controls through one real non-destructive Copier update.
 validation_witness_schema: 1
 validation_witness_map:
-  - {"acceptance_sha256":"sha256:8d3336a8dd4fd90fdd63ecf2cd65c2b6b6157ff751185f875863edbf52c1405d","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
+  - {"acceptance_sha256":"sha256:d34fdbe3615acca0aa21a52801499f1e8a6a6ab8b1ce1deff6d1e24309b3e75d","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:d5271055a3f89a674ab9c11318a753826dd8305082cd8fca73c985926361985e","stage":"focused","witness":"python3 tests/test-hooks.py"}
-  - {"acceptance_sha256":"sha256:f9087b092b34bc8663b7c1be9e87e4804d62380e9dc778adc1d83e2c146abd02","stage":"focused","witness":"tests/root-plan-lifecycle.sh"}
+  - {"acceptance_sha256":"sha256:a858d6be9ce93ceb61431ec35c227cbb5e7038148f80a913471cc8231b9d421c","stage":"focused","witness":"tests/root-plan-lifecycle.sh"}
   - {"acceptance_sha256":"sha256:76b46f0cbf5279f1147fdab6d3f1713f6dd8cf999a1ac166269462663a0a702f","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:e639b11ebb94be98a69614a50e9c5bba677e88df259a01c5a098011749cf6bcc","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
-  - {"acceptance_sha256":"sha256:7dc63b7f45d31bf345b10043168170bfb0b73fc8559c2e5a981a063414ad2907","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+  - {"acceptance_sha256":"sha256:28b46d4c371ad962b66ae82cd1e743ef070b05e2a64d56b70f63b511f82ebb1f","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
   - {"acceptance_sha256":"sha256:96b39fe5a3b8d0aa786e1f6eec094569ae1448c1b143c767ffb6204571cdfb08","authoritative_only_reason":"Only the real isolated Copier transaction executes before-update migration, template application, conflict checks, and after-update preservation together.","stage":"authoritative","witness":"tests/copier-update.sh --require-copier"}
 integration_gates:
   - Implement this Tier 2 validation- and lifecycle-authority change through bounded parent-direct work in the dedicated linked checkout created for this plan; do not run a writable worker against protected policy, hook, runner, or validation paths.
-  - The planning checkout was created manually from clean commit f5ab608 before the first repository write because the current manager requires an already committed active plan. Treat that bootstrap as defect evidence, not as a future exemption.
+  - The planning checkout was created manually from clean commit f5ab608 before Plan 103 existed because the current manager requires an already committed active plan. Treat this direct-task bootstrap and the plan's current absence from dev as defect evidence, not as a future exemption or implementation authority.
   - Use the operating-system account home rather than caller-controlled HOME for automatic worktree placement and external records; reject symlinked, registered, replaced, shared, or unsafe path ancestry before Git mutation.
-  - Keep plan and direct-task identities as exact disjoint variants. A direct task may create a plan, but it never acquires that plan's lifecycle or execution authority without a new plan-bound preparation.
+  - The plan files and active index reachable from the exact source-branch commit selected for publication.
+  - A plan file and active-index update that exist only in the direct-task branch and linked checkout before publication.
+  - The condition that the plan file and matching active-index row are committed and reachable from the exact source branch.
+  - An external record bound to the common Git directory, source commit, direct-task identity, chosen three-digit identifier, owner lease, and allocation state.
+  - The condition that the exact accepted commit is reachable from the source branch, its registered checkout reflects that commit, and the task worktree registration, directory, and temporary local branch are absent.
+  - The relation in which a direct-task worktree authors and publishes a plan before a separate plan-bound worktree may implement it.
+  - Keep plan and direct-task identities as exact disjoint variants. A direct task may create and publish a plan, but it never acquires that plan's implementation authority without a new plan-bound preparation from the published source commit.
   - Do not infer that a worker clone or alternate current working directory is a valid task worktree. Reproduce the live external record, common Git directory, registration, branch, start ancestry, directory identity, and owner lease at each governed boundary.
   - Preserve the current explicit execution-group admission rules. This plan binds member worktrees but does not authorize automatic independence inference, automatic group creation, or a wider concurrent member count.
   - Keep deterministic claims within supported agent and repository entrypoints. State the git commit --no-verify and unrestricted same-user process boundaries instead of weakening the required default workflow.
-  - Do not remove or prune any worktree, branch, ownership record, retained edit, or ignored local file during preparation, publication, completion, Copier update, or recovery.
+  - Never scan another worktree's uncommitted plan file to allocate an id, hold a repository-wide lock for an entire authoring session, or make an unintegrated plan executable; reserve briefly, recheck at publication, and stop for a conflicting unsupported write.
+  - Do not report success until publication and exact successful-task retirement are both reproduced. A stopped task remains non-successful and retains recoverable state unless the owner separately authorizes its retirement.
 checked_summary_ja: すべての書き込み作業を専用 worktree 上で実行する。
 
 ## Decisions
@@ -156,35 +169,32 @@ checked_summary_ja: すべての書き込み作業を専用 worktree 上で実�
 - Accept exactly one of a committed numbered-plan identity or a bounded parent-created direct-task identity. Keep their schemas and external ownership records disjoint so a direct task cannot impersonate a plan.
 - Bind one worktree and local branch to one task identity. Never share a writable checkout between concurrent plans or carry retained task bytes into an unrelated task.
 - Make prepare-or-resume idempotent and automatic before the first supported write. A documented optional command, a disposable worker clone, or a clean original checkout does not satisfy the boundary.
+- Keep plan authoring and plan implementation as separate tasks unless the owner requests both; author a plan under a direct-task identity, publish it first, and create a new plan-bound worktree only from the committed active plan on the source branch.
+- Allocate the smallest unused three-digit plan identifier under a common-Git-directory lock after scanning active, backlog, checked, replanned, shelved, and checked.md in the exact source commit plus live external reservations; never scan arbitrary worktree drafts as authority.
 - Enforce the boundary in supported agent hooks, lifecycle and runner commands, staging, completion, and publication without claiming to intercept an unrestricted same-user process that bypasses every entrypoint.
-- Publish only a reviewed and validated task commit through a parent-owned journalled expected-target fast-forward. Stop on target drift or dirty state and never reset, stash, or discard it.
-- Keep worktree and local-branch removal exclusively in the existing explicit Git retirement workflow; completion and publication perform no automatic cleanup.
-
-## Operational referents
-
-- The registered checkout that existed before the task-specific linked checkout was created.
-- The first operation in a task that changes repository files, the index, plan lifecycle files, or a task commit.
-- A linked Git checkout outside the original checkout, bound to the repository, task identity, branch, starting commit, owner lease, and retained state.
-- The disposable no-hardlinks clone created by the sandboxed worker for candidate generation or validation.
-- The predicate that the current checkout is the live task-bound linked checkout for the exact repository, task identity, branch, starting commit, and owner.
-- The relation in which each simultaneously executing numbered plan owns a distinct task-specific linked checkout.
+- Publish only a reviewed and validated task commit through a parent-owned journalled expected-target fast-forward. Reproduce the updated source checkout, relocate required ignored evidence, then remove the exact clean task worktree and temporary branch before a success response.
+- Authorize automatic retirement only for the exact successfully published task owned by the current completion transaction. Keep unrelated, ambiguous, dirty, drifted, and stopped-task retirement in the existing explicit workflow without reset, stash, force removal, or data loss.
 
 ## Tasks
 
-- [ ] Add disposable direct-task, single-plan, grouped-plan, stale-binding, original-checkout, dirty-target, recovery, bypass-boundary, and explicit-retirement fixtures before changing production behavior.
+- [ ] Add disposable plan-authoring, direct-task, single-plan, grouped-plan, allocation-race, stale-binding, original-checkout, dirty-target, publication-recovery, successful-retirement, stopped-retention, and bypass-boundary fixtures before changing production behavior.
 - [ ] Extract one aligned worktree assertion module and extend the manager with automatic default placement, mutually exclusive plan/direct task identities, idempotent prepare-or-resume, inspection, and bounded ownership records.
-- [ ] Gate plan authoring and every governed root/generated lifecycle mutation before its first repository effect, and make pre-tool, pre-commit, and Stop surfaces report the exact worktree action needed.
+- [ ] Move plan-id allocation under one common-Git-directory-bound lock and lease record that scans only the exact published source state and live reservations, binds the checked authoring input to its reserved id, and consumes it only after publication.
+- [ ] Gate plan authoring and every governed root/generated lifecycle mutation before its first repository effect, keep an unintegrated plan non-executable, and make pre-tool, pre-commit, and Stop surfaces report the exact worktree or publication action needed.
 - [ ] Require the sequential orchestrator and sandboxed runner to start from the bound plan worktree while retaining disposable clone isolation, exact candidate review, focused validation, authoritative validation, apply, and ledger rules.
 - [ ] Bind every grouped member to its own managed worktree and preserve existing group membership, permits, baseline transfer, counters, stop states, serial integration, and publication authority.
-- [ ] Implement or reuse one checked publication transaction for direct and sequential work that journals intent, rechecks the expected target and clean checkout, advances only the exact accepted commit, and recovers without replay.
-- [ ] Update root/generated policies, skills, metadata, hooks, inventory, and Copier preservation coverage without enabling automatic worktree deletion or automatic multi-plan selection.
+- [ ] Implement one checked completion transaction for direct and plan work that journals intent, rechecks the source ref and clean registered checkout, fast-forwards only to the accepted commit, relocates required ignored evidence, retires only its exact task worktree and temporary branch, and recovers without replay.
+- [ ] Update root/generated plan, retirement, security, orchestration, skill, hook, inventory, and Copier policy while retaining explicit retirement for every worktree not proven to be the exact successfully published current task.
 - [ ] Run referent-contract checks, exact-target adversarial preflight, independent review within the execution epoch, every focused command, and the authoritative validation suite once for the otherwise acceptable implementation.
 
 ## Validation Notes
 
 - Owner requirement: 「こちらで明示してワークツリーの使用を求めなくても、１つのプラン実装であっても２つ以上のプラン実装であってもワークツリー上で作業を行ってほしい」.
 - Owner authorization: 「提案の方針でプランを作成せよ。」 This authorizes this implementation plan and its accepted worktree boundary; it does not authorize implementation in this planning turn.
-- Decision audit selected all-repository-write coverage, disjoint direct/plan identities, one worktree per task, supported-entrypoint enforcement, checked publication, and explicit-only retirement. The full comparison remains outside docs/plan.
+- Owner completion requirement: 「AIエージェントが作業を終了してこちらにボールを渡したとき、ワークツリーは統合されて存在していないようにしたい」. This plan interprets that as the successful completion boundary and never uses it to publish or discard blocked work.
+- Owner clarification: Plan 103 currently exists on its authoring branch but not on dev; the plan must explain that worktree-local authoring is provisional until publication and that plan implementation starts later from the published active plan.
+- Owner update instruction: 「これらの説明もドキュメントに含めるようにプランを更新せよ。」
+- Decision audit selected all-write coverage, separate direct-authoring and plan-implementation identities, shared plan-id reservation, checked source publication, automatic exact successful-task retirement, and explicit unrelated or stopped-task retirement. The full comparison remains outside docs/plan.
 - Planning baseline is f5ab608 in temp_project. The allocator selected Plan 103; its dedicated branch is plan/103-require-worktree-for-all-writes and its linked checkout is outside the pre-existing checkout.
 - Feasibility evidence is bounded source inspection and the reproduced absence of a task worktree for Plan 272. It is not a claim that the future implementation or completion witnesses already pass.
 - The parent owns design interpretation, scope admission, independent-review acceptance, validation, lifecycle transitions, publication, commit, and final reporting. No helper is authorized by this planning turn.
