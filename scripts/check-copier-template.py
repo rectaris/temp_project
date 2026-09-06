@@ -731,6 +731,9 @@ def require_git_retirement_alignment() -> None:
     expected_template_spec = root_spec.replace(
         "`scripts/retire-merged-worktrees.py",
         "`.project-agent-workflow/scripts/retire-merged-worktrees.py",
+    ).replace(
+        "`scripts/manage-plan-worktrees.py",
+        "`.project-agent-workflow/scripts/manage-plan-worktrees.py",
     )
     if template_spec != expected_template_spec:
         fail("root and generated Git-retirement specifications differ beyond command paths")

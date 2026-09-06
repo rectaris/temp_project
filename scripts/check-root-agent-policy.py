@@ -1246,6 +1246,9 @@ def check_git_retirement_policy() -> None:
     normalized_generated_spec = generated_spec.replace(
         "`.project-agent-workflow/scripts/retire-merged-worktrees.py",
         "`scripts/retire-merged-worktrees.py",
+    ).replace(
+        "`.project-agent-workflow/scripts/manage-plan-worktrees.py",
+        "`scripts/manage-plan-worktrees.py",
     )
     if root_spec != normalized_generated_spec:
         fail("root/generated Git-retirement specifications differ beyond the command path")

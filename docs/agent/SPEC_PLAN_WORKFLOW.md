@@ -151,6 +151,20 @@ Serial execution stays the default. An explicitly admitted execution group is th
 - Treat `status: checked` as the terminal state written by finalization.
 - Enforce the numbered-plan admission contract for every root active or backlog plan whose identifier is 264 or higher through `scripts/check-root-agent-policy.py`. Lower-numbered durable plans stay readable unchanged.
 
+## Task Worktree Boundary
+
+Every repository-changing task performs its writes in one exact task-bound linked worktree. A success response requires that task's accepted commit published to its exact source branch, with the task worktree and its temporary local branch absent.
+
+- Prepare the bound checkout with `scripts/manage-plan-worktrees.py prepare`. It creates or resumes the same checkout for one task identity without a second owner prompt, derives the directory and branch from that identity, and places a new checkout below the operating-system account home rather than inside the pre-existing checkout.
+- Select exactly one task identity. A committed active plan names a plan task. `--direct-task <id>` names a bounded direct task for work that has no plan identifier yet, such as authoring a plan. The two identities never share ownership-record key material, so a direct task never acquires a plan's implementation authority.
+- Publish an authored plan before implementing it. Plan bytes written in a direct-task worktree are provisional until publication, and plan implementation starts from the published active plan.
+- Finish a successful task with `scripts/manage-plan-worktrees.py publish`. It journals its intent, refuses a dirty task worktree, refuses a dirty or drifted source checkout and preserves that state unchanged, fast-forwards the expected source checkout to the exact accepted commit, relocates ignored local evidence, and only then removes that exact task worktree and its temporary branch. Retirement runs from the pre-existing checkout, never from the directory it deletes.
+- Allocate plan identifiers under the lock every linked worktree of one repository shares. Allocation reads the exact published source state plus live reservations, binds the checked authoring input to its reserved identifier, and consumes that reservation only when the plan is written, so two checkouts never allocate the same number and an unpublished plan does not lose its identifier to a later allocation.
+- Governed surfaces refuse a write outside its bound worktree before the first repository effect: plan authoring, the governed lifecycle commands, `scripts/restructure-plan.py`, the sandboxed runner, grouped dispatch, the pre-tool hook, the `.githooks/pre-commit` hook, and the Stop adapter. Each names the exact preparation or publication command needed.
+- Read-only modes stay outside the gate, including `scripts/create-plan.sh --check`, `scripts/complete-plan.sh --check-completion-evidence`, and `scripts/restructure-plan.py --verify`.
+- A repository that cannot be named by a canonical `remote.origin.url` can never hold an ownership record, so it stays outside enforcement. `PROJECT_AGENT_WORKFLOW_REQUIRE_TASK_WORKTREE=1` raises enforcement there; no variable lowers it.
+- A repository that ships no guard keeps its previous behavior. A shipped guard that refuses or fails blocks the write.
+
 ## Completion Gate Boundaries
 
 `scripts/check-agent-completion.sh --plans-only` is the only plan-completion judgment. Every layer runs that same command against the tree its own boundary owns and adds no predicate of its own.

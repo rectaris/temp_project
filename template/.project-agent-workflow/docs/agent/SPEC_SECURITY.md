@@ -15,6 +15,13 @@ This repository keeps security controls explicit and fail-closed at write bounda
 - An explicitly selected task-scoped external-access profile may authorize ordinary writes required by the current user request, but it does not override credential denials or exact-confirmation requirements for consequential effects.
 - Validate generated patches against protected paths and required checks before any automated write.
 
+## Task Worktree Boundary
+
+- Perform every repository-changing task in its bound task worktree, so an accepted change reaches the pre-existing checkout only through one checked publication that fast-forwards the expected source ref to the exact accepted commit.
+- Bind an ownership record to the repository's credential-free origin identity and its canonical common Git directory, and store it under the operating-system account home rather than a caller-controlled `HOME`.
+- Treat a repository that ships the guard as fail-closed: a guard that refuses or fails blocks the write. A repository that ships no guard, or that no canonical `remote.origin.url` can name, stays outside enforcement rather than refusing every write.
+- Treat `git commit --no-verify`, a changed `core.hooksPath`, and any other bypass of every supported entrypoint as outside this boundary. It governs the supported paths; it is not a sandbox against an unrestricted local process.
+
 ## Dependencies And External Code
 
 - Treat pull-request code, dependency installers, external skills, and downloaded scripts as untrusted until reviewed.

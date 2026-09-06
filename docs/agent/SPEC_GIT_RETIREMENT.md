@@ -25,6 +25,16 @@ The template-development repository intentionally enables the workflow, selects 
 
 Reusable policy and configuration must not contain a host-specific absolute worktree root.
 
+## Task Worktree Retirement
+
+A worktree prepared by `scripts/manage-plan-worktrees.py` for the current task is retired by that manager, not by this workflow.
+
+`scripts/manage-plan-worktrees.py publish` automatically removes the exact successfully published current task worktree and its temporary local branch as the final step of one checked publication transaction. It runs those removals from the pre-existing checkout, so the transaction never depends on the directory it deletes.
+
+`scripts/manage-plan-worktrees.py retire` removes a task worktree this transaction did not publish. It refuses unpublished commits, and `--stopped` removes only an effect-free stopped checkout.
+
+Every other worktree stays under this specification: retirement remains an explicit operator action for any worktree not proven to be the exact successfully published current task.
+
 ## Command Boundary
 
 `scripts/retire-merged-worktrees.py scan` is read-only and `scripts/retire-merged-worktrees.py apply-local` is an explicit local effect.

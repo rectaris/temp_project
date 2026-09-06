@@ -50,6 +50,16 @@ task_types:
       - docs/agent/SPEC_SECURITY.md
     conditional: []
 
+  task_worktrees:
+    summary: Preparing, resuming, publishing, or gating the task-bound linked worktree that every repository-changing task writes in.
+    required:
+      - docs/agent/SPEC_PLAN_WORKFLOW.md
+      - docs/agent/SPEC_GIT_RETIREMENT.md
+      - docs/agent/SPEC_SECURITY.md
+    conditional:
+      - path: references/orchestration.md
+        when: delegated implementation, worker clones, or grouped member dispatch are in scope.
+
   external_services:
     summary: MCP, Linear, graph memory, GitHub, external issue sync, or external write policy.
     required:
