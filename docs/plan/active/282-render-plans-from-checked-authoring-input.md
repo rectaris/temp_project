@@ -1,6 +1,6 @@
 # Render plans from checked structured input
 
-status: backlog
+status: in_progress
 primary_invariant: One bounded structured input is checked before writing, exposes the exact correspondence from each accepted requirement through write paths and completion predicates to claimed witness behavior and command, and byte-binds the plan and lifecycle-index update rendered from it.
 task_types:
   - planning_docs
