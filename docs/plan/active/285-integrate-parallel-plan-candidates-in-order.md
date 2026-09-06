@@ -91,7 +91,7 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/plan/checked/2026/09/01-15/287-complete-resumable-parent-worktrees.md
-  - docs/plan/active/284-bind-parallel-plan-execution-to-shared-authority.md
+  - docs/plan/checked/2026/09/01-15/284-bind-parallel-plan-execution-to-shared-authority.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - docs/agent/SPEC_AGENT_LOGGING.md
   - scripts/restructure-plan.py

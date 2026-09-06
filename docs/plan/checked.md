@@ -210,3 +210,4 @@ id	path
 268	docs/plan/checked/2026/09/01-15/268-restore-large-test-baseline-and-ci.md
 286	docs/plan/checked/2026/09/01-15/286-install-same-plan-continuation-epochs.md
 287	docs/plan/checked/2026/09/01-15/287-complete-resumable-parent-worktrees.md
+284	docs/plan/checked/2026/09/01-15/284-bind-parallel-plan-execution-to-shared-authority.md

@@ -1,6 +1,6 @@
 # Bind independent parallel plan execution to parent-owned authority
 
-status: in_progress
+status: checked
 primary_invariant: An explicitly admitted set of independent plans may receive isolated candidate-generation permits, while one parent-owned authority preserves exact membership, each logical plan's cumulative budgets and stop state, and exclusive claims on predecessor and publication state across all worktrees and baseline changes.
 replan_sources:
   - docs/plan/active/278-create-resumable-parent-worktrees.md
