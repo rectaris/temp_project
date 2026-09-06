@@ -1586,12 +1586,44 @@ class PlanIdentifierReservationTest(unittest.TestCase):
         GUARD_MODULE.write_reservations(ledger, entries)
         self.assertEqual(GUARD_MODULE.reserved_plan_ids(self.repository, now=moment + 61), set())
 
-    def test_an_expired_reservation_with_a_live_worktree_is_retained(self) -> None:
+    def test_an_expired_written_reservation_with_a_live_worktree_is_retained(self) -> None:
+        """A written plan keeps its identifier while its holding worktree lives.
+
+        The plan file exists but is not published yet, so releasing its number
+        would let a later allocation hand the same one to another checkout.
+        """
+
         moment = int(time.time())
-        GUARD_MODULE.reserve_plan_id(
+        reserved = GUARD_MODULE.reserve_plan_id(
             self.repository, input_digest=self.digest("a"), now=moment, lease_seconds=60
         )
+        GUARD_MODULE.mark_plan_id_written(
+            self.repository, input_digest=self.digest("a"), plan_id=reserved["plan_id"]
+        )
         self.assertEqual(GUARD_MODULE.reserved_plan_ids(self.repository, now=moment + 61), {7})
+
+    def test_an_expired_unwritten_reservation_is_released_in_a_live_worktree(self) -> None:
+        """A reservation that never became a plan file expires with its lease.
+
+        The pre-existing checkout is always registered, so retaining unwritten
+        reservations by registration alone would let repeated read-only checks
+        leak identifiers permanently and eventually fill the ledger.
+        """
+
+        moment = int(time.time())
+        for marker in ("a", "b", "c"):
+            GUARD_MODULE.reserve_plan_id(
+                self.repository,
+                input_digest=self.digest(marker),
+                now=moment,
+                lease_seconds=60,
+            )
+        self.assertEqual(
+            GUARD_MODULE.reserved_plan_ids(self.repository, now=moment), {7, 8, 9}
+        )
+        self.assertEqual(
+            GUARD_MODULE.reserved_plan_ids(self.repository, now=moment + 61), set()
+        )
 
     def test_a_malformed_reservation_ledger_is_refused(self) -> None:
         ledger = GUARD_MODULE.reservation_ledger_path(self.repository)

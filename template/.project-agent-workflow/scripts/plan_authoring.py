@@ -263,6 +263,27 @@ def locate_worktree_guard() -> Any:
     return module
 
 
+def shared_lifecycle_state_available(root: Path) -> bool:
+    """Report whether this directory can hold state shared across linked worktrees.
+
+    Only the absence of that possibility justifies worktree-local locking and
+    scanning. A lock-wait timeout, a corrupt ledger, or a full ledger are the
+    exact situations the shared mechanism exists for, so those failures must
+    reach the caller instead of silently restoring the behaviour that let two
+    checkouts allocate the same identifier.
+    """
+
+    try:
+        guard = locate_worktree_guard()
+    except AuthoringError:
+        return False
+    try:
+        guard.common_git_directory(root)
+    except (OSError, UnicodeError, guard.WorktreeError):
+        return False
+    return True
+
+
 @contextlib.contextmanager
 def lifecycle_lock(root: Path):
     """Hold the exclusive plan lifecycle lock every linked worktree shares.
@@ -276,12 +297,10 @@ def lifecycle_lock(root: Path):
     """
 
     shared = None
-    try:
+    if shared_lifecycle_state_available(root):
         candidate = locate_worktree_guard().plan_lifecycle_lock(root)
         candidate.__enter__()
         shared = candidate
-    except Exception:  # noqa: BLE001 - any guard failure falls back to the local lock
-        shared = None
     if shared is not None:
         try:
             yield
@@ -1266,12 +1285,9 @@ def next_plan_id(root: Path) -> str:
 def release_reserved_identifier(root: Path, digest: str, plan_id: str) -> None:
     """Record that this reservation produced its plan file, if one is held."""
 
-    try:
-        locate_worktree_guard().mark_plan_id_written(
-            root, input_digest=digest, plan_id=plan_id
-        )
-    except Exception:  # noqa: BLE001 - a checkout without shared state holds no reservation
+    if not shared_lifecycle_state_available(root):
         return
+    locate_worktree_guard().mark_plan_id_written(root, input_digest=digest, plan_id=plan_id)
 
 
 def reserve_plan_identifier(root: Path, document: dict[str, Any], digest: str) -> str:
@@ -1284,18 +1300,14 @@ def reserve_plan_identifier(root: Path, document: dict[str, Any], digest: str) -
     identifier its own write consumes, and publication is what releases it.
     """
 
-    try:
-        guard = locate_worktree_guard()
-        reservation = guard.reserve_plan_id(
-            root,
-            input_digest=digest,
-            lifecycle=document["lifecycle"],
-            slug=document["slug"],
-        )
-    except AuthoringError:
-        raise
-    except Exception:  # noqa: BLE001 - a directory outside a repository keeps local scanning
+    if not shared_lifecycle_state_available(root):
         return next_plan_id(root)
+    reservation = locate_worktree_guard().reserve_plan_id(
+        root,
+        input_digest=digest,
+        lifecycle=document["lifecycle"],
+        slug=document["slug"],
+    )
     plan_id = reservation["plan_id"]
     if PLAN_ID_RE.fullmatch(plan_id) is None:
         raise AuthoringError(f"reserved plan identifier is malformed: {plan_id!r}")

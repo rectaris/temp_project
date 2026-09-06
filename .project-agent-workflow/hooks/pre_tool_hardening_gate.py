@@ -37,6 +37,10 @@ WRITE_COMMANDS = (
 )
 
 
+class GuardUnavailable(RuntimeError):
+    """A shipped task-worktree guard could not be loaded."""
+
+
 def guard_module():
     """Load the shared task-worktree guard, or return None when unavailable."""
 
@@ -63,9 +67,12 @@ def guard_module():
         path = root / candidate
         if not path.is_file():
             continue
+        # The guard is shipped here, so a load failure is a broken boundary
+        # rather than an ungoverned repository. Raise it to the caller, which
+        # blocks, instead of reporting the same None as "ships no guard".
         spec = importlib.util.spec_from_file_location("worktree_guard", path)
         if spec is None or spec.loader is None:
-            return None
+            raise GuardUnavailable(f"{candidate} could not be loaded")
         module = importlib.util.module_from_spec(spec)
         sys.modules["worktree_guard"] = module
         spec.loader.exec_module(module)
@@ -83,10 +90,10 @@ def worktree_refusal(command: str) -> str | None:
 
     if not any(pattern.search(command) for pattern in WRITE_COMMANDS):
         return None
-    guard = guard_module()
-    if guard is None:
-        return None
     try:
+        guard = guard_module()
+        if guard is None:
+            return None
         guard.require_task_worktree(action="this repository write")
     except Exception as error:
         return f"{error}"

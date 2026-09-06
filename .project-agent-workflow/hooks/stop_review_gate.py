@@ -63,30 +63,48 @@ def unretired_task(repo: Path) -> str | None:
     if guard is None:
         return None
     result = subprocess.run(
-        ["python3", str(guard), "describe"],
+        ["python3", str(guard), "outstanding"],
         cwd=repo,
         text=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         check=False,
     )
-    if result.returncode != 0:
-        return None
-    try:
-        summary = json.loads(result.stdout or "{}")
-    except ValueError:
-        return None
-    if not summary.get("bound"):
-        return None
     manager = ".project-agent-workflow/scripts/manage-plan-worktrees.py"
     if not (repo / manager).is_file():
         manager = "scripts/manage-plan-worktrees.py"
+    if result.returncode != 0:
+        # A shipped guard that cannot answer leaves retained state unknown, and
+        # an unknown answer is not evidence of a retired task.
+        detail = (result.stderr or "").strip().splitlines()
+        return (
+            "The task-worktree guard could not report retained state"
+            + (f": {detail[-1]}" if detail else ".")
+            + " A success response requires no task worktree to remain. Resolve the "
+            f"guard failure, then run `python3 {manager} publish` for a completed task."
+        )
+    try:
+        entries = json.loads(result.stdout or "{}").get("outstanding")
+    except ValueError:
+        entries = None
+    if not isinstance(entries, list):
+        return (
+            "The task-worktree guard returned no readable retained-state report. A "
+            "success response requires no task worktree to remain."
+        )
+    if not entries:
+        return None
+    first = entries[0]
+    remainder = (
+        f" {len(entries) - 1} further task worktree(s) also remain." if len(entries) > 1 else ""
+    )
     return (
-        f"This turn still owns the task worktree for {summary.get('task')} at "
-        f"{summary.get('worktree')}. A success response requires its accepted commit "
-        f"on {summary.get('source_ref')} and this worktree and its temporary branch "
+        f"This repository still owns the task worktree for {first.get('task')} at "
+        f"{first.get('worktree_path')}. A success response requires its accepted commit "
+        f"on {first.get('source_ref')} and this worktree and its temporary branch "
         f"absent. Run `python3 {manager} publish` to publish and retire the completed "
-        "task, or report the exact retained state and blocker if the work is not complete."
+        "task, or report the exact retained state and blocker if the work is not "
+        "complete." + remainder
     )
 
 

@@ -337,6 +337,12 @@ def metadata_paths(identity: dict[str, Any], task: dict[str, Any]) -> dict[str, 
         "directory": directory,
         "record": directory / f"{key}.json",
         "journal": directory / f"{key}.journal.json",
+        # The publication transaction keeps its own journal. Sharing the create
+        # and resume journal path let one interrupted publication make every
+        # supported command refuse the task, because each side validates the
+        # other's schema. The name still ends in `.journal.json`, so ownership
+        # record enumeration continues to skip it.
+        "publication": directory / f"{key}.publish.journal.json",
         "lock": directory / f"{key}.lock",
     }
 
@@ -744,6 +750,45 @@ def find_binding(
     return None
 
 
+def outstanding_tasks(cwd: Path | None = None, *, now: int | None = None) -> list[dict[str, Any]]:
+    """Report every live task binding this repository still owes retirement for.
+
+    A binding is owed by the repository, not by the directory the caller happens
+    to stand in. `find_binding` answers only for the current worktree, so a
+    completion check asked from the pre-existing checkout would see nothing
+    while a task worktree and its temporary branch were still present. This
+    enumerates by repository identity instead, and reports a record whose lease
+    has expired too: an expired lease retires nothing.
+    """
+
+    repository = repository_root(cwd)
+    identity = repository_identity(repository)
+    outstanding: list[dict[str, Any]] = []
+    for path in candidate_record_paths():
+        try:
+            record = read_record(path)
+        except (OSError, WorktreeError):
+            # An unreadable record cannot be attributed to this repository, so
+            # it is left to the manager's own actionable diagnostics.
+            continue
+        if record["repository_identity"] != identity:
+            continue
+        outstanding.append(
+            {
+                "task": task_label(record["task"]),
+                "worktree_path": record["worktree_path"],
+                "branch_ref": record["branch_ref"],
+                "source_ref": record["source_ref"],
+                "worktree_present": Path(record["worktree_path"]).exists(),
+                "lease_expired": record["owner"]["lease_expires_at"] <= (
+                    int(time.time()) if now is None else now
+                ),
+            }
+        )
+    outstanding.sort(key=lambda entry: entry["worktree_path"])
+    return outstanding
+
+
 def assert_task_worktree(
     cwd: Path | None = None,
     *,
@@ -1005,7 +1050,16 @@ def write_reservations(path: Path, entries: list[dict[str, Any]]) -> None:
 def live_reservations(
     repository: Path, entries: list[dict[str, Any]], published: set[int], now: int
 ) -> list[dict[str, Any]]:
-    """Drop reservations that publication consumed or that no live worktree owns."""
+    """Drop reservations that publication consumed or that no live holder owns.
+
+    A written but unpublished plan keeps its identifier while its holding
+    worktree is still registered, because the plan file exists and would
+    otherwise lose its number to a later allocation. A reservation that never
+    became a plan file is kept only for its lease: the pre-existing checkout is
+    always registered, so retaining unwritten reservations by registration alone
+    would let a read-only re-check leak an identifier permanently and eventually
+    fill the ledger.
+    """
 
     registered = {
         str(registered_worktree_path(record)) for record in parse_worktrees(repository)
@@ -1014,7 +1068,10 @@ def live_reservations(
     for entry in entries:
         if int(entry["plan_id"]) in published:
             continue
-        if entry["worktree_path"] in registered or entry["lease_expires_at"] > now:
+        if entry["lease_expires_at"] > now:
+            retained.append(entry)
+            continue
+        if entry["written"] and entry["worktree_path"] in registered:
             retained.append(entry)
     return retained
 
@@ -1200,9 +1257,10 @@ def require_task_worktree(
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     command = arguments[0] if arguments else "check"
-    if command not in {"check", "describe", "require"}:
+    if command not in {"check", "describe", "require", "outstanding"}:
         print(
-            "usage: worktree_guard.py [check|describe|require] [--plan PATH] [--action TEXT]",
+            "usage: worktree_guard.py [check|describe|require|outstanding] "
+            "[--plan PATH] [--action TEXT]",
             file=sys.stderr,
         )
         return 2
@@ -1221,6 +1279,10 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         plan = arguments[index + 1]
     try:
+        if command == "outstanding":
+            entries = outstanding_tasks()
+            print(json.dumps({"outstanding": entries}, sort_keys=True))
+            return 0
         if command == "describe":
             binding = find_binding()
             print(json.dumps({"bound": binding is not None} | (binding.summary() if binding else {}), sort_keys=True))

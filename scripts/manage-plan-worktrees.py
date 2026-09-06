@@ -1058,6 +1058,9 @@ def retire_worktree(
     target: Path,
     branch_ref: str,
     branch_short: str,
+    *,
+    anchor: Path | None = None,
+    published: bool = False,
 ) -> None:
     """Remove the exact task worktree and its temporary local branch.
 
@@ -1065,9 +1068,16 @@ def retire_worktree(
     from the worktree being deleted leaves the transaction unable to prune its
     own registration or delete its branch, which strands the ownership record
     and blocks the next preparation for the same task.
+
+    A publication passes the source checkout it already verified and sets
+    ``published``. `git branch -d` measures merge status against the anchor's
+    own HEAD, so a source branch checked out anywhere other than the anchor
+    would refuse a branch this transaction proved reachable from the published
+    source ref. That proof is the stronger fact, so publication deletes by
+    reachability rather than by the anchor's HEAD.
     """
 
-    anchor = guard.primary_worktree(repository)
+    anchor = guard.primary_worktree(repository) if anchor is None else anchor
     if anchor == target:
         raise WorktreeError("refusing to retire the pre-existing checkout")
     if target.exists():
@@ -1080,7 +1090,7 @@ def retire_worktree(
     if find_registered_worktree(parse_worktrees(anchor), target) is not None:
         raise WorktreeError("task worktree registration remains after removal")
     if exact_ref_tip(anchor, branch_ref) is not None:
-        git(anchor, "branch", "-d", branch_short)
+        git(anchor, "branch", "-D" if published else "-d", branch_short)
     if exact_ref_tip(anchor, branch_ref) is not None:
         raise WorktreeError("temporary task branch remains after deletion")
 
@@ -1118,7 +1128,7 @@ def publish(args: argparse.Namespace) -> None:
         source_tip = exact_ref_tip(repository, source_ref)
         if source_tip is None:
             raise WorktreeError(f"source ref {source_ref} is unavailable")
-        journal_path = paths["journal"]
+        journal_path = paths["publication"]
         resumed = None
         if journal_path.exists():
             resumed = read_publication_journal(journal_path)
@@ -1161,7 +1171,9 @@ def publish(args: argparse.Namespace) -> None:
         relocated = relocate_evidence(
             target, checkout, PurePosixPath(record["worktree_path"]).name
         )
-        retire_worktree(repository, target, branch_ref, branch_short)
+        retire_worktree(
+            repository, target, branch_ref, branch_short, anchor=checkout, published=True
+        )
         journal_path.unlink(missing_ok=True)
         paths["record"].unlink(missing_ok=True)
     print(

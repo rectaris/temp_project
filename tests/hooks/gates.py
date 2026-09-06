@@ -174,6 +174,50 @@ class TaskWorktreeGateTest(unittest.TestCase):
                     self.assertIn(action, result.stderr)
                     self.assertIn("pre-existing checkout", result.stderr)
 
+    def test_stop_gate_blocks_from_the_pre_existing_checkout(self) -> None:
+        """Retained state belongs to the repository, not to the current directory.
+
+        A session usually ends in the pre-existing checkout. A completion check
+        that asked only about that directory reported no binding and allowed a
+        success response while the task worktree and its temporary branch were
+        both still present.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_guarded_repository(base / "repository")
+            worktree, records = bind_direct_task_worktree(repo, base / "managed")
+            try:
+                output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
+            finally:
+                for record in records:
+                    record.unlink(missing_ok=True)
+        self.assertEqual(output["decision"], "block")
+        self.assertIn(str(worktree), output["reason"])
+        self.assertIn("publish", output["reason"])
+
+    def test_stop_gate_blocks_when_the_shipped_guard_cannot_answer(self) -> None:
+        """An unknown answer is not evidence that the task was retired."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            guard = repo / "scripts/project_workflow/worktree_guard.py"
+            guard.write_text("raise SystemExit(3)\n", encoding="utf-8")
+            output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("retained state", output["reason"])
+
+    def test_pre_tool_gate_blocks_when_a_shipped_guard_cannot_load(self) -> None:
+        """A shipped guard that fails to import is a broken boundary, not an absent one."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            guard = repo / "scripts/project_workflow/worktree_guard.py"
+            guard.write_text("import nonexistent_module_for_gate_test\n", encoding="utf-8")
+            output = run_hook(ROOT_PRE_TOOL, {"cmd": "git commit -m x"}, cwd=repo)
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("nonexistent_module_for_gate_test", output["reason"])
+
     def test_stop_gate_allows_success_once_no_task_worktree_is_bound(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = init_guarded_repository(Path(tmp))
