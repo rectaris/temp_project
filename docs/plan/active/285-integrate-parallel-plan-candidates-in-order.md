@@ -1,7 +1,6 @@
 # Generate isolated plan candidates and integrate them in order
 
-status: deferred
-completion_deferred_reason: Complete and archive the declared predecessors before starting this implementation.
+status: in_progress
 primary_invariant: Parallel member work may produce isolated candidates, but only the parent may publish one exact reviewed and validated result against the still-current target baseline; combining a later member with earlier accepted work preserves both requirements and the later member's immutable evidence, cumulative limits and stop gates.
 replan_sources:
   - docs/plan/active/278-create-resumable-parent-worktrees.md
@@ -106,8 +105,8 @@ required_specs:
   - docs/agent/SPEC_AGENT_LOGGING.md
   - docs/agent/SPEC_GIT_RETIREMENT.md
 predecessor_plans:
-  - docs/plan/active/287-complete-resumable-parent-worktrees.md
-  - docs/plan/active/284-bind-parallel-plan-execution-to-shared-authority.md
+  - docs/plan/checked/2026/09/01-15/287-complete-resumable-parent-worktrees.md
+  - docs/plan/checked/2026/09/01-15/284-bind-parallel-plan-execution-to-shared-authority.md
 focused_validation:
   - python3 tests/test-sandboxed-plan-worker.py
   - python3 tests/test-plan-execution-state.py
