@@ -1226,11 +1226,14 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"bound": binding is not None} | (binding.summary() if binding else {}), sort_keys=True))
             return 0
         if command == "require":
-            governed, reason = enforcement_scope(repository_root())
-            if not governed:
+            binding = require_task_worktree(action=action, plan=plan)
+            if binding is None:
+                try:
+                    _, reason = enforcement_scope(repository_root())
+                except (OSError, UnicodeError, WorktreeError) as exc:
+                    reason = f"not a Git worktree: {exc}"
                 print(json.dumps({"enforced": False, "reason": reason}, sort_keys=True))
                 return 0
-            binding = assert_task_worktree(plan=plan, action=action)
             print(json.dumps({"enforced": True} | binding.summary(), sort_keys=True))
             return 0
         binding = assert_task_worktree(plan=plan, action=action)

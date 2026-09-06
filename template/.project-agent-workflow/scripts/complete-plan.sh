@@ -10,7 +10,7 @@ require_task_worktree() {
     .project-agent-workflow/scripts/worktree_guard.py \
     scripts/project_workflow/worktree_guard.py; do
     if [ -f "$_top/$_candidate" ]; then
-      if ! _refusal=$(python3 "$_top/$_candidate" require --action "$1" 2>&1); then
+      if ! _refusal=$(cd "$_top" && python3 "$_candidate" require --action "$1" 2>&1); then
         echo "$_refusal" >&2
         exit 1
       fi
@@ -18,7 +18,6 @@ require_task_worktree() {
     fi
   done
 }
-require_task_worktree "completing this plan"
 
 # 0: completion evidence is present, 1: unchecked tasks remain,
 # 2: Validation Notes are empty or pending.
@@ -70,6 +69,10 @@ if [ "$check_only" -eq 1 ]; then
   completion_evidence "$src" || exit 1
   exit 0
 fi
+
+# --check-completion-evidence above reports state and writes nothing, so the
+# boundary applies only from here, where completion starts changing the plan.
+require_task_worktree "completing this plan"
 
 # An enrolled parallel execution group member is completed through the grouped
 # adapter, never through this legacy serial entrypoint.

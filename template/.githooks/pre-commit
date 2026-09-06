@@ -22,7 +22,7 @@ for candidate in \
   fi
 done
 if [ -n "$guard" ]; then
-  if ! refusal=$(python3 "$top/$guard" require --action "this commit" 2>&1); then
+  if ! refusal=$(cd "$top" && python3 "$guard" require --action "this commit" 2>&1); then
     echo "pre-commit: $refusal" >&2
     echo "Next: commit inside the task worktree above, then publish it. Bypass this local check with git commit --no-verify." >&2
     exit 1

@@ -10,7 +10,7 @@ require_task_worktree() {
     .project-agent-workflow/scripts/worktree_guard.py \
     scripts/project_workflow/worktree_guard.py; do
     if [ -f "$_top/$_candidate" ]; then
-      if ! _refusal=$(python3 "$_top/$_candidate" require --action "$1" 2>&1); then
+      if ! _refusal=$(cd "$_top" && python3 "$_candidate" require --action "$1" 2>&1); then
         echo "$_refusal" >&2
         exit 1
       fi
