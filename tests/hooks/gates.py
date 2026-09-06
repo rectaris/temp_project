@@ -156,6 +156,9 @@ class TaskWorktreeGateTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             repo = init_guarded_repository(Path(tmp))
+            plan = repo / "docs/plan/active/001-x.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text("status: in_progress\n", encoding="utf-8")
             for relative, action in commands.items():
                 shutil.copy2(ROOT / relative, repo / Path(relative).name)
                 with self.subTest(command=relative):
