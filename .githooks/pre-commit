@@ -7,6 +7,28 @@
 set -eu
 
 top=$(git rev-parse --show-toplevel)
+
+# Every repository-changing task commits from its own task worktree. The guard
+# reports its own scope, so a repository that cannot carry a binding — one with
+# no canonical origin, or one that ships no guard — keeps its previous behavior
+# instead of refusing every commit.
+guard=
+for candidate in \
+  .project-agent-workflow/scripts/worktree_guard.py \
+  scripts/project_workflow/worktree_guard.py; do
+  if [ -f "$top/$candidate" ]; then
+    guard=$candidate
+    break
+  fi
+done
+if [ -n "$guard" ]; then
+  if ! refusal=$(python3 "$top/$guard" require --action "this commit" 2>&1); then
+    echo "pre-commit: $refusal" >&2
+    echo "Next: commit inside the task worktree above, then publish it. Bypass this local check with git commit --no-verify." >&2
+    exit 1
+  fi
+fi
+
 snapshot=$(mktemp -d "${TMPDIR:-/tmp}/project-agent-workflow-precommit.XXXXXX")
 trap 'rm -rf "$snapshot"' EXIT HUP INT TERM
 snapshot=$(CDPATH= cd -- "$snapshot" && pwd -P)

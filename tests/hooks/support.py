@@ -23,6 +23,10 @@ ROOT_MANIFEST_CHECKER = ROOT / "scripts/check-agent-log-manifest.py"
 ROOT_CONTEXT_COMPRESS = ROOT / "scripts/context-compress.sh"
 PRE_TOOL = ROOT / "template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py"
 ROOT_PRE_TOOL = ROOT / ".project-agent-workflow/hooks/pre_tool_hardening_gate.py"
+ROOT_GUARD = ROOT / "scripts/project_workflow/worktree_guard.py"
+ROOT_WORKTREE_MANAGER = ROOT / "scripts/manage-plan-worktrees.py"
+PRE_COMMIT = ROOT / ".githooks/pre-commit"
+TEMPLATE_PRE_COMMIT = ROOT / "template/.githooks/pre-commit"
 STOP_REVIEW = ROOT / "template/.project-agent-workflow/hooks/stop_review_gate.py"
 ROOT_STOP_REVIEW = ROOT / ".project-agent-workflow/hooks/stop_review_gate.py"
 LEGACY_STOP_BRIDGE = ROOT / "template/.codex/hooks/stop_review_gate.py"
@@ -45,6 +49,77 @@ def init_gate_repository(repo: Path, gate: str | None = "#!/bin/sh\nexit 0\n") -
         scripts.mkdir(exist_ok=True)
         (scripts / "check-agent-completion.sh").write_text(gate, encoding="utf-8")
     return repo
+
+
+def init_guarded_repository(
+    repo: Path,
+    *,
+    origin: str | None = "git@github.com:example/gate.git",
+    gate: str | None = "#!/bin/sh\nexit 0\n",
+) -> Path:
+    """Create a Git repository that ships the shared task-worktree guard.
+
+    Passing ``origin=None`` leaves the repository without a canonical remote,
+    which is the case a task binding can never name and therefore never governs.
+    """
+
+    repo.mkdir(parents=True, exist_ok=True)
+    init_gate_repository(repo, gate)
+    subprocess.run(["git", "config", "user.name", "Gate Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "gate@example.invalid"], cwd=repo, check=True
+    )
+    if origin is not None:
+        subprocess.run(["git", "remote", "add", "origin", origin], cwd=repo, check=True)
+    package = repo / "scripts/project_workflow"
+    package.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_GUARD, package / "worktree_guard.py")
+    shutil.copy2(ROOT_WORKTREE_MANAGER, repo / "scripts/manage-plan-worktrees.py")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "baseline", "--no-verify"], cwd=repo, check=True
+    )
+    return repo
+
+
+def bind_direct_task_worktree(
+    repo: Path, allowed_root: Path, task_id: str = "gate-task"
+) -> tuple[Path, list[Path]]:
+    """Prepare one direct-task worktree and report it with its record paths."""
+
+    allowed_root.mkdir(parents=True, exist_ok=True)
+    allowed_root.chmod(0o700)
+    result = subprocess.run(
+        [
+            "python3",
+            str(repo / "scripts/manage-plan-worktrees.py"),
+            "prepare",
+            "--direct-task",
+            task_id,
+            "--purpose",
+            "exercise the completion boundary",
+            "--allowed-root",
+            str(allowed_root),
+            "--owner-id",
+            "gate-owner",
+        ],
+        cwd=repo,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    created = json.loads(result.stdout)
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gate_worktree_guard", ROOT_GUARD)
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    paths = guard.metadata_paths(
+        guard.repository_identity(repo),
+        {"kind": guard.DIRECT_TASK, "identity": {"id": task_id}},
+    )
+    return Path(created["worktree"]), [paths[key] for key in ("record", "journal", "lock")]
 
 
 def run_hook(

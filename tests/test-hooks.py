@@ -6,7 +6,11 @@ from __future__ import annotations
 import unittest
 
 from hooks.context import ContextCompressionBoundaryTest
-from hooks.gates import PreToolHardeningGateTest, StopReviewGateTest
+from hooks.gates import (
+    PreToolHardeningGateTest,
+    StopReviewGateTest,
+    TaskWorktreeGateTest,
+)
 from hooks.logging import (
     AgentLogEventTest,
     CodexTranscriptImportTest,

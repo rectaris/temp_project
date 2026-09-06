@@ -1144,12 +1144,70 @@ def reserved_plan_ids(repository: Path, *, now: int | None = None) -> set[int]:
     return {int(entry["plan_id"]) for entry in entries}
 
 
+# --- enforcement scope ---
+#
+# A binding names a repository by its canonical remote.origin.url, so a
+# repository without one can neither carry an ownership record nor ever satisfy
+# the boundary. Enforcing there would refuse every write unconditionally rather
+# than govern the repository, which is why an unidentifiable repository reports
+# itself ungoverned instead of failing closed. That is a property of the binding
+# mechanism, not a convenience switch: the environment can only raise
+# enforcement, never lower it, and a repository that does have an identity is
+# always governed.
+
+REQUIRE_TASK_WORKTREE_VARIABLE = "PROJECT_AGENT_WORKFLOW_REQUIRE_TASK_WORKTREE"
+
+
+def enforcement_scope(repository: Path) -> tuple[bool, str]:
+    """Report whether this repository can be governed by a task binding."""
+
+    try:
+        repository_identity(repository)
+    except (OSError, UnicodeError, WorktreeError) as exc:
+        if os.environ.get(REQUIRE_TASK_WORKTREE_VARIABLE) == "1":
+            return True, f"{REQUIRE_TASK_WORKTREE_VARIABLE}=1 requires enforcement"
+        return False, f"repository cannot carry a task binding: {exc}"
+    return True, "repository identity is resolvable"
+
+
+def require_task_worktree(
+    cwd: Path | None = None,
+    *,
+    kind: str | None = None,
+    plan: str | None = None,
+    now: int | None = None,
+    action: str = "this repository write",
+) -> TaskBinding | None:
+    """Assert the task-worktree boundary wherever the repository is governed.
+
+    Returns the verified binding, or ``None`` when the repository is outside
+    enforcement scope. Callers that must distinguish the two report the reason
+    from :func:`enforcement_scope` rather than treating ``None`` as success.
+    """
+
+    repository = repository_root(cwd)
+    governed, _ = enforcement_scope(repository)
+    if not governed:
+        return None
+    return assert_task_worktree(repository, kind=kind, plan=plan, now=now, action=action)
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     command = arguments[0] if arguments else "check"
-    if command not in {"check", "describe"}:
-        print("usage: worktree_guard.py [check|describe] [--plan PATH]", file=sys.stderr)
+    if command not in {"check", "describe", "require"}:
+        print(
+            "usage: worktree_guard.py [check|describe|require] [--plan PATH] [--action TEXT]",
+            file=sys.stderr,
+        )
         return 2
+    action = "this repository write"
+    if "--action" in arguments:
+        index = arguments.index("--action")
+        if index + 1 >= len(arguments):
+            print("worktree guard failed: --action needs a value", file=sys.stderr)
+            return 2
+        action = arguments[index + 1]
     plan = None
     if "--plan" in arguments:
         index = arguments.index("--plan")
@@ -1162,7 +1220,15 @@ def main(argv: list[str] | None = None) -> int:
             binding = find_binding()
             print(json.dumps({"bound": binding is not None} | (binding.summary() if binding else {}), sort_keys=True))
             return 0
-        binding = assert_task_worktree(plan=plan)
+        if command == "require":
+            governed, reason = enforcement_scope(repository_root())
+            if not governed:
+                print(json.dumps({"enforced": False, "reason": reason}, sort_keys=True))
+                return 0
+            binding = assert_task_worktree(plan=plan, action=action)
+            print(json.dumps({"enforced": True} | binding.summary(), sort_keys=True))
+            return 0
+        binding = assert_task_worktree(plan=plan, action=action)
     except (OSError, UnicodeError, WorktreeError) as exc:
         print(f"worktree guard failed: {exc}", file=sys.stderr)
         return 1

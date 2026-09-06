@@ -10,12 +10,16 @@ from .support import (
     CODEX_HOOK_CONFIG,
     COPILOT_HOOK_CONFIG,
     LEGACY_STOP_BRIDGE,
+    PRE_COMMIT,
     PRE_TOOL,
     ROOT_PRE_TOOL,
     ROOT_STOP_REVIEW,
     STOP_REVIEW,
     TEMPLATE_COPILOT_HOOK_CONFIG,
+    TEMPLATE_PRE_COMMIT,
+    bind_direct_task_worktree,
     init_gate_repository,
+    init_guarded_repository,
     run_hook,
 )
 
@@ -55,6 +59,97 @@ class PreToolHardeningGateTest(unittest.TestCase):
 
     def test_allows_routine_read_only_command(self) -> None:
         output = run_hook(PRE_TOOL, {"cmd": "git status --short"})
+        self.assertEqual(output, {})
+
+
+class TaskWorktreeGateTest(unittest.TestCase):
+    """Every supported surface refuses a governed write outside its worktree."""
+
+    def test_pre_tool_blocks_a_commit_outside_a_task_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            output = run_hook(ROOT_PRE_TOOL, {"cmd": "git commit -m x"}, cwd=repo)
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("pre-existing checkout", output["reason"])
+        self.assertIn("prepare", output["reason"])
+
+    def test_pre_tool_blocks_a_lifecycle_command_outside_a_task_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            output = run_hook(
+                ROOT_PRE_TOOL,
+                {"tool_input": {"cmd": "bash scripts/create-plan.sh add-a-thing"}},
+                cwd=repo,
+            )
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("task worktree", output["reason"])
+
+    def test_pre_tool_allows_inspection_in_a_guarded_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            for command in ("git status", "git log --oneline", "git branch --list"):
+                with self.subTest(command=command):
+                    self.assertEqual(run_hook(ROOT_PRE_TOOL, {"cmd": command}, cwd=repo), {})
+
+    def test_pre_tool_allows_a_repository_no_binding_can_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp), origin=None)
+            output = run_hook(ROOT_PRE_TOOL, {"cmd": "git commit -m x"}, cwd=repo)
+        self.assertEqual(output, {})
+
+    def test_pre_commit_refuses_a_governed_commit_outside_a_task_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            (repo / "file.txt").write_text("change\n", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+            result = subprocess.run(
+                ["sh", str(PRE_COMMIT)],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("pre-existing checkout", result.stderr)
+        self.assertIn("--no-verify", result.stderr)
+
+    def test_pre_commit_leaves_an_unnameable_repository_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp), origin=None)
+            (repo / "file.txt").write_text("change\n", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+            result = subprocess.run(
+                ["sh", str(PRE_COMMIT)],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_root_and_template_pre_commit_hooks_are_identical(self) -> None:
+        self.assertEqual(PRE_COMMIT.read_bytes(), TEMPLATE_PRE_COMMIT.read_bytes())
+
+    def test_stop_gate_withholds_success_while_a_task_worktree_remains(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_guarded_repository(base / "repository")
+            worktree, records = bind_direct_task_worktree(repo, base / "managed")
+            try:
+                output = run_hook(ROOT_STOP_REVIEW, {}, cwd=worktree)
+            finally:
+                for record in records:
+                    record.unlink(missing_ok=True)
+        self.assertEqual(output["decision"], "block")
+        self.assertIn(str(worktree), output["reason"])
+        self.assertIn("publish", output["reason"])
+
+    def test_stop_gate_allows_success_once_no_task_worktree_is_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
         self.assertEqual(output, {})
 
 

@@ -32,11 +32,62 @@ FALLBACK_REASON = (
     "the reported plan lifecycle state, and report the result."
 )
 
+GUARD_CANDIDATES = (
+    ".project-agent-workflow/scripts/worktree_guard.py",
+    "scripts/project_workflow/worktree_guard.py",
+)
+
 
 def block(reason: str) -> int:
     json.dump({"decision": "block", "reason": reason}, sys.stdout)
     sys.stdout.write("\n")
     return 0
+
+
+def unretired_task(repo: Path) -> str | None:
+    """Report the task worktree that still owes publication and retirement.
+
+    A success response requires the accepted commit on its source branch and
+    the task worktree and temporary branch gone. While a live binding remains,
+    the task is unfinished, so this reports the exact remaining action. A
+    stopped task is still not a success: the agent reports its retained state
+    on the forced continuation rather than retiring anything here.
+    """
+
+    guard = None
+    for candidate in GUARD_CANDIDATES:
+        resolved = repo / candidate
+        if resolved.is_file():
+            guard = resolved
+            break
+    if guard is None:
+        return None
+    result = subprocess.run(
+        ["python3", str(guard), "describe"],
+        cwd=repo,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        summary = json.loads(result.stdout or "{}")
+    except ValueError:
+        return None
+    if not summary.get("bound"):
+        return None
+    manager = ".project-agent-workflow/scripts/manage-plan-worktrees.py"
+    if not (repo / manager).is_file():
+        manager = "scripts/manage-plan-worktrees.py"
+    return (
+        f"This turn still owns the task worktree for {summary.get('task')} at "
+        f"{summary.get('worktree')}. A success response requires its accepted commit "
+        f"on {summary.get('source_ref')} and this worktree and its temporary branch "
+        f"absent. Run `python3 {manager} publish` to publish and retire the completed "
+        "task, or report the exact retained state and blocker if the work is not complete."
+    )
 
 
 def repo_root() -> Path:
@@ -81,6 +132,9 @@ def main() -> int:
     )
     if completion.returncode != 0:
         return block(completion.stderr.strip() or FALLBACK_REASON)
+    pending = unretired_task(repo)
+    if pending is not None:
+        return block(pending)
     print("{}")
     return 0
 

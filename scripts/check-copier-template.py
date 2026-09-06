@@ -796,9 +796,12 @@ def require_parent_worktree_alignment() -> None:
         "must not run in the pre-existing checkout",
         "task worktree owner lease expired",
         "must not imitate a numbered plan identity",
+        "def enforcement_scope",
+        "def require_task_worktree",
     ):
         if marker not in guard_text:
             fail(f"task-worktree guard missing safety marker: {marker}")
+    require_worktree_gate_alignment()
     if "Path.home()" in guard_text or 'environ["HOME"]' in guard_text or 'environ.get("HOME"' in guard_text:
         fail("task-worktree guard must not read a caller-controlled HOME")
     if "pwd.getpwuid(os.getuid()).pw_dir" not in guard_text:
@@ -821,6 +824,48 @@ def require_parent_worktree_alignment() -> None:
     ):
         if marker not in root_guidance or marker not in generated_guidance:
             fail(f"parent-worktree guidance missing marker: {marker}")
+
+
+def require_worktree_gate_alignment() -> None:
+    """Keep every supported gate surface aligned and still wired to the guard."""
+
+    for label, root_path, template_path in (
+        (
+            "pre-commit hook",
+            ".githooks/pre-commit",
+            "template/.githooks/pre-commit",
+        ),
+        (
+            "Stop adapter",
+            ".project-agent-workflow/hooks/stop_review_gate.py",
+            "template/.project-agent-workflow/hooks/stop_review_gate.py",
+        ),
+    ):
+        if (ROOT / root_path).read_bytes() != (ROOT / template_path).read_bytes():
+            fail(f"root and generated {label} differ")
+
+    pre_commit = read(".githooks/pre-commit")
+    for marker in ("worktree_guard.py", "require --action", "--no-verify"):
+        if marker not in pre_commit:
+            fail(f"pre-commit hook missing task-worktree marker: {marker}")
+
+    stop_gate = read(".project-agent-workflow/hooks/stop_review_gate.py")
+    for marker in ("def unretired_task", "publish", "worktree_guard.py"):
+        if marker not in stop_gate:
+            fail(f"Stop adapter missing task-worktree marker: {marker}")
+
+    # The two pre-tool copies differ only in how each locates its script
+    # directory, so compare everything after that bootstrap.
+    root_gate = read(".project-agent-workflow/hooks/pre_tool_hardening_gate.py")
+    generated_gate = read("template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py")
+    anchor = "import security_rules"
+    if anchor not in root_gate or anchor not in generated_gate:
+        fail("pre-tool gates must share the security-rule import")
+    if root_gate.split(anchor, 1)[1] != generated_gate.split(anchor, 1)[1]:
+        fail("root and generated pre-tool gates differ after their bootstrap")
+    for marker in ("WRITE_COMMANDS", "def worktree_refusal", "def guard_module"):
+        if marker not in root_gate:
+            fail(f"pre-tool gate missing task-worktree marker: {marker}")
 
 
 SHARED_HUMAN_REPORT_ROOT = "docs/human-report/"

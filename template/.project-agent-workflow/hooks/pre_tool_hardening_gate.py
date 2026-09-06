@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,6 +27,75 @@ RULES = (
     (security_rules.REMOTE_SCRIPT_PIPE, "remote script piped to shell"),
     (re.compile(r"\b(cat|less|more|head|tail|grep|rg|awk|sed)\b.*(\.env|id_rsa|id_ed25519|\.pem|\.key)", re.I), "secret-bearing file read"),
 )
+
+# Commands whose first repository effect is a write. The authoritative
+# fail-closed surfaces are the lifecycle commands and the pre-commit hook; this
+# gate reports the required worktree action before the effect happens rather
+# than trying to classify every possible shell string.
+WRITE_COMMANDS = (
+    re.compile(r"^\s*git\s+(?:-[cC]\s+\S+\s+)*(?:commit|merge|rebase|cherry-pick|revert|am|apply|stash|update-ref|mv|rm|restore|switch|checkout)\b"),
+    re.compile(r"^\s*git\s+(?:-[cC]\s+\S+\s+)*add\b"),
+    re.compile(r"^\s*git\s+(?:-[cC]\s+\S+\s+)*(?:branch|tag)\s+(?!-{0,2}(?:l|list|show-current|contains)\b)"),
+    re.compile(r"\b(?:create|complete|finalize|shelve|promote)-plan\.(?:sh|py)\b"),
+    re.compile(r"\brestructure-plan\.py\b"),
+    re.compile(r"\bplan_authoring\.py\s+write\b"),
+)
+
+
+def guard_module():
+    """Load the shared task-worktree guard, or return None when unavailable."""
+
+    import importlib.util
+
+    if "worktree_guard" in sys.modules:
+        return sys.modules["worktree_guard"]
+    try:
+        root = Path(
+            subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            ).stdout.strip()
+        )
+    except Exception:
+        return None
+    for candidate in (
+        ".project-agent-workflow/scripts/worktree_guard.py",
+        "scripts/project_workflow/worktree_guard.py",
+    ):
+        path = root / candidate
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("worktree_guard", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["worktree_guard"] = module
+        spec.loader.exec_module(module)
+        return module
+    return None
+
+
+def worktree_refusal(command: str) -> str | None:
+    """Report why this write must move into a task worktree, if it must.
+
+    A repository that ships no guard keeps its previous behavior. A shipped
+    guard that refuses or fails blocks the write, so a broken boundary never
+    silently allows one.
+    """
+
+    if not any(pattern.search(command) for pattern in WRITE_COMMANDS):
+        return None
+    guard = guard_module()
+    if guard is None:
+        return None
+    try:
+        guard.require_task_worktree(action="this repository write")
+    except Exception as error:
+        return f"{error}"
+    return None
 
 
 def load_payload() -> dict:
@@ -55,12 +125,19 @@ def candidate_commands(payload: dict) -> list[str]:
 
 def main() -> int:
     payload = load_payload()
-    for command in candidate_commands(payload):
+    commands = candidate_commands(payload)
+    for command in commands:
         for pattern, reason in RULES:
             if pattern.search(command):
                 json.dump({"decision": "block", "reason": reason}, sys.stdout)
                 sys.stdout.write("\n")
                 return 0
+    for command in commands:
+        reason = worktree_refusal(command)
+        if reason is not None:
+            json.dump({"decision": "block", "reason": reason}, sys.stdout)
+            sys.stdout.write("\n")
+            return 0
     json.dump({}, sys.stdout)
     sys.stdout.write("\n")
     return 0
