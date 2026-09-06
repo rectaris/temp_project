@@ -1,6 +1,6 @@
 # Count exact mirrored mechanical edits as Tier 0
 
-status: backlog
+status: in_progress
 primary_invariant: A single mechanical edit and its exact root/template counterpart may use Tier 0 only when existing validation, authority, reversibility, and semantic scope remain unchanged.
 task_types:
   - template_workflow
