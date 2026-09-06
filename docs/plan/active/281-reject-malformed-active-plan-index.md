@@ -1,6 +1,6 @@
 # Reject malformed active-plan indexes before lifecycle work
 
-status: backlog
+status: in_progress
 primary_invariant: Every root and generated-project check or lifecycle mutation treats the active-plan index as either one exact empty representation or one exact TSV representation, rejects every other nonempty form before mutation, and every writer emits only those representations.
 task_types:
   - planning_docs
