@@ -6112,5 +6112,116 @@ class GroupedExecutionAdapterTests(unittest.TestCase):
         self.assertIn("already published", duplicate.stderr)
 
 
+ROOT_GUARD = ROOT / "scripts/project_workflow/worktree_guard.py"
+ROOT_WORKTREE_MANAGER = ROOT / "scripts/manage-plan-worktrees.py"
+
+
+class RunnerTaskWorktreeBoundaryTests(unittest.TestCase):
+    """The runner and the grouped adapter must start from their bound worktree.
+
+    Both tools write where they were started, so a check that runs after the
+    first repository effect would report a boundary that was already crossed.
+    """
+
+    PLAN = "docs/plan/active/001-sandboxed.md"
+    OTHER = "docs/plan/active/002-other.md"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.home = self.base / "home"
+        self.home.mkdir()
+        home_patch = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
+        self.allowed_root = self.base / "worktrees"
+        self.allowed_root.mkdir(mode=0o700)
+        self.repo = self.base / "repo"
+        (self.repo / "docs/plan/active").mkdir(parents=True)
+        git(self.repo, "init", "-q", "-b", "dev")
+        git(self.repo, "config", "user.name", "Test")
+        git(self.repo, "config", "user.email", "test@example.invalid")
+        git(self.repo, "remote", "add", "origin", "https://example.invalid/owner/repo.git")
+        for selector in (self.PLAN, self.OTHER):
+            (self.repo / selector).write_text("# fixture\n", encoding="utf-8")
+        (self.repo / "AGENTS.md").write_text("fixture\n", encoding="utf-8")
+
+    def ship_guard(self) -> None:
+        package = self.repo / "scripts/project_workflow"
+        package.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_GUARD, package / "worktree_guard.py")
+        shutil.copy2(ROOT_WORKTREE_MANAGER, self.repo / "scripts/manage-plan-worktrees.py")
+
+    def commit(self) -> None:
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "baseline", "--no-verify")
+
+    def prepare(self, selector: str) -> Path:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(self.repo / "scripts/manage-plan-worktrees.py"),
+                "prepare",
+                selector,
+                "--allowed-root",
+                str(self.allowed_root),
+                "--owner-id",
+                "boundary-test",
+            ],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return Path(json.loads(result.stdout)["worktree"])
+
+    def test_repository_without_the_guard_keeps_previous_behaviour(self) -> None:
+        self.commit()
+        RUNNER.require_plan_worktree(self.repo, self.PLAN, "running a sandboxed plan worker")
+
+    def test_pre_existing_checkout_is_refused(self) -> None:
+        self.ship_guard()
+        self.commit()
+        with self.assertRaises(RUNNER.RunnerError) as raised:
+            RUNNER.require_plan_worktree(self.repo, self.PLAN, "running a sandboxed plan worker")
+        self.assertIn("must not run in the pre-existing checkout", str(raised.exception))
+        self.assertIn("manage-plan-worktrees.py", str(raised.exception))
+
+    def test_bound_plan_worktree_is_accepted(self) -> None:
+        self.ship_guard()
+        self.commit()
+        worktree = self.prepare(self.PLAN)
+        RUNNER.require_plan_worktree(worktree, self.PLAN, "running a sandboxed plan worker")
+
+    def test_another_members_worktree_is_refused(self) -> None:
+        self.ship_guard()
+        self.commit()
+        worktree = self.prepare(self.PLAN)
+        with self.assertRaises(RUNNER.RunnerError) as raised:
+            RUNNER.require_plan_worktree(worktree, self.OTHER, "running a sandboxed plan worker")
+        self.assertIn(self.OTHER, str(raised.exception))
+
+    def test_grouped_dispatch_refuses_an_unbound_member_checkout(self) -> None:
+        self.ship_guard()
+        self.commit()
+        adapter = load_adapter_module()
+        with self.assertRaises(adapter.AdapterError) as raised:
+            adapter.require_member_worktree(self.repo, self.PLAN)
+        self.assertIn("must not run in the pre-existing checkout", str(raised.exception))
+        worktree = self.prepare(self.PLAN)
+        adapter.require_member_worktree(worktree, self.PLAN)
+
+
+def load_adapter_module():
+    spec = importlib.util.spec_from_file_location(
+        "grouped_execution_adapter_under_test", ADAPTER_SCRIPT
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 if __name__ == "__main__":
     unittest.main()

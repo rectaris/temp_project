@@ -382,6 +382,63 @@ def ref_checkout(root: Path, target_ref: str) -> Path | None:
     return None
 
 
+WORKTREE_GUARD_MODULE_NAME = "worktree_guard"
+WORKTREE_GUARD_CANDIDATES = (
+    "scripts/project_workflow/worktree_guard.py",
+    ".project-agent-workflow/scripts/worktree_guard.py",
+)
+
+
+def load_worktree_guard(repository: Path) -> ModuleType | None:
+    """Load the worktree guard this member repository ships, once per process.
+
+    The cache is keyed by the resolved guard path so one member repository's
+    guard never governs another that ships none.
+    """
+
+    resolved = None
+    for relative in WORKTREE_GUARD_CANDIDATES:
+        candidate = repository / relative
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            break
+    if resolved is None:
+        return None
+    cached = sys.modules.get(WORKTREE_GUARD_MODULE_NAME)
+    if cached is not None and Path(getattr(cached, "__file__", "") or "/").resolve() == resolved:
+        return cached
+    spec = importlib.util.spec_from_file_location(WORKTREE_GUARD_MODULE_NAME, resolved)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def require_member_worktree(worktree: Path, plan: str) -> None:
+    """Require this member to run in the managed worktree bound to its own plan.
+
+    Two members of one group must not share a checkout, and neither may be the
+    pre-existing checkout, because the dispatched worker writes where it starts.
+    The binding names its exact plan, so a permit for one member cannot dispatch
+    work into another member's worktree.
+    """
+
+    guard = load_worktree_guard(worktree)
+    if guard is None:
+        return
+    try:
+        guard.require_task_worktree(
+            worktree,
+            kind=guard.PLAN_TASK,
+            plan=plan,
+            action=f"dispatching group member {plan}",
+        )
+    except guard.GuardError as exc:
+        raise AdapterError(str(exc)) from exc
+
+
 def require_clean_checkout(worktree: Path) -> None:
     status = git_text(worktree, "status", "--porcelain")
     if status:
@@ -421,6 +478,7 @@ def command_dispatch(args: argparse.Namespace) -> None:
             "member worktree HEAD does not match the permitted member baseline"
         )
     require_clean_checkout(worktree)
+    require_member_worktree(worktree, args.plan)
 
     worker = Path(args.worker_bin) if args.worker_bin else Path(__file__).resolve().with_name(
         "run-sandboxed-plan-worker.py"

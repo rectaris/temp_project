@@ -1002,6 +1002,63 @@ def load_planlib() -> ModuleType:
     raise RunnerError("could not locate managed planlib.py")
 
 
+WORKTREE_GUARD_MODULE_NAME = "worktree_guard"
+WORKTREE_GUARD_CANDIDATES = (
+    "scripts/project_workflow/worktree_guard.py",
+    ".project-agent-workflow/scripts/worktree_guard.py",
+)
+
+
+def load_worktree_guard(repo_root: Path) -> ModuleType | None:
+    """Load the worktree guard this repository ships, once per process.
+
+    A repository that ships no guard is left with its previous behaviour. The
+    loaded instance is reused because the guard holds process-local lock state
+    that a second execution would silently duplicate, but only when it came from
+    this repository: a cache keyed by name alone would let one repository's
+    guard govern another that ships none.
+    """
+
+    resolved = None
+    for relative in WORKTREE_GUARD_CANDIDATES:
+        candidate = repo_root / relative
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            break
+    if resolved is None:
+        return None
+    cached = sys.modules.get(WORKTREE_GUARD_MODULE_NAME)
+    if cached is not None and Path(getattr(cached, "__file__", "") or "/").resolve() == resolved:
+        return cached
+    spec = importlib.util.spec_from_file_location(WORKTREE_GUARD_MODULE_NAME, resolved)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def require_plan_worktree(repo_root: Path, plan_rel: str | None, action: str) -> None:
+    """Require this runner operation to start from its bound plan worktree.
+
+    The runner clones the source repository for isolation, so its writes land in
+    the checkout it was started from. Starting it in the pre-existing checkout
+    would therefore apply an accepted candidate there, which is the boundary
+    this check keeps closed before any repository effect.
+    """
+
+    guard = load_worktree_guard(repo_root)
+    if guard is None:
+        return
+    try:
+        guard.require_task_worktree(
+            repo_root, kind=guard.PLAN_TASK, plan=plan_rel, action=action
+        )
+    except guard.GuardError as exc:
+        raise RunnerError(str(exc)) from exc
+
+
 def load_plan_validation_commands() -> ModuleType:
     script_dir = Path(__file__).resolve().parent
     candidates = (
@@ -3724,6 +3781,7 @@ def run_worker(args: argparse.Namespace) -> int:
     planlib = load_planlib()
     ensure_clean_worktree(repo_root, git_bin)
     plan_path, plan_rel, values, normalized_scope = load_plan(planlib, repo_root, args.plan)
+    require_plan_worktree(repo_root, plan_rel, "running a sandboxed plan worker")
     implementation_risk = implementation_classification(values, "implementation_risk")
     implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
     selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
@@ -4470,6 +4528,7 @@ def validate_candidate(args: argparse.Namespace) -> int:
         planlib=planlib,
         manifest_path=manifest_path,
     )
+    require_plan_worktree(repo_root, verified["plan_rel"], "validating a sandboxed worker candidate")
     enforce_plan_execution_gate(
         args,
         plan=verified["plan_rel"],
@@ -4806,6 +4865,7 @@ def correct_worker(args: argparse.Namespace) -> int:
     planlib = load_planlib()
     ensure_clean_worktree(repo_root, git_bin)
     plan_rel = normalize_manifest_path(repo_root, args.plan)
+    require_plan_worktree(repo_root, plan_rel, "requesting a sandboxed worker correction")
     prior_manifest_path = Path(args.prior_manifest).expanduser()
     if not prior_manifest_path.is_absolute():
         prior_manifest_path = (Path.cwd() / prior_manifest_path).absolute()
@@ -5165,6 +5225,7 @@ def apply_worker_result(args: argparse.Namespace) -> int:
         planlib=planlib,
         manifest_path=manifest_path,
     )
+    require_plan_worktree(repo_root, verified["plan_rel"], "applying a sandboxed worker candidate")
     enforce_plan_execution_gate(
         args,
         plan=verified["plan_rel"],
@@ -5222,6 +5283,7 @@ def finalize_apply(args: argparse.Namespace) -> int:
         require_clean=False,
         allow_applied_symlink_targets=True,
     )
+    require_plan_worktree(repo_root, verified["plan_rel"], "finalizing a sandboxed worker apply")
     enforce_plan_execution_gate(
         args,
         plan=verified["plan_rel"],
