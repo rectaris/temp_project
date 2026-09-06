@@ -598,6 +598,7 @@ def create_worktree(
             lease_seconds,
             recovered_identity,
         )
+        atomic_write(paths["journal"], record)
         atomic_write(paths["record"], record)
         paths["journal"].unlink()
         return record
@@ -695,6 +696,13 @@ def create_worktree(
         lease_seconds,
         worktree_identity(target),
     )
+    # The journal is rewritten from the final record before the record itself,
+    # as `refresh_lease` already does. The journal was first written with a
+    # pending worktree identity, so a crash between the record write and this
+    # unlink would otherwise leave a journal that can never match its own
+    # record on an immutable field, which every command refuses and only a
+    # publication can clear.
+    atomic_write(paths["journal"], record)
     atomic_write(paths["record"], record)
     paths["journal"].unlink()
     return record

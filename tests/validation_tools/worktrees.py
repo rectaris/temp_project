@@ -1434,6 +1434,87 @@ class TaskPublicationTest(unittest.TestCase):
         self.assertEqual(acknowledged.returncode, 0, acknowledged.stderr)
         self.assertFalse(self.paths["record"].exists())
 
+    def test_a_create_interrupted_before_its_journal_is_cleared_still_settles(self) -> None:
+        """An interrupted create must not need a publication to clear it.
+
+        The create journal is first written with a pending worktree identity,
+        which the record then supplies. Writing the record without rewriting
+        that journal left the two differing on an immutable field, so every
+        command refused and the only escape was to commit work and publish it.
+        An investigation task that crashed here could never be abandoned.
+        """
+
+        crash = self.base / "crash.py"
+        crash.write_text(
+            "import importlib.util, sys\n"
+            "spec = importlib.util.spec_from_file_location('m', sys.argv[1])\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "record_path, original = sys.argv[2], module.atomic_write\n"
+            "def crashing(path, payload):\n"
+            "    original(path, payload)\n"
+            "    if str(path) == record_path:\n"
+            "        raise SystemExit(9)\n"
+            "module.atomic_write = crashing\n"
+            "sys.argv = ['manage-plan-worktrees.py'] + sys.argv[3:]\n"
+            "raise SystemExit(module.main())\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(crash),
+                str(SCRIPT),
+                str(self.paths["record"]),
+                "prepare",
+                self.plan,
+                "--allowed-root",
+                str(self.allowed_root),
+                "--owner-id",
+                "owner-a",
+            ],
+            cwd=self.repository,
+            env={**os.environ, "HOME": str(self.home)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 9, result.stderr)
+        self.assertTrue(self.paths["record"].exists())
+        self.assertTrue(self.paths["journal"].exists(), "the crash window must be real")
+
+        # The journal now agrees with its record on every immutable field, so
+        # the ordinary resume recovery accepts and clears it.
+        resumed = self.run_command(
+            "prepare",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertFalse(self.paths["journal"].exists())
+
+        # Abandoning the task is now possible without publishing anything.
+        settled = self.run_command(
+            "retire", self.plan, "--owner-id", "owner-a", "--stopped"
+        )
+        self.assertEqual(settled.returncode, 0, settled.stderr)
+        self.assertFalse(self.paths["record"].exists())
+        self.assertEqual(
+            self.run_command(
+                "prepare",
+                self.plan,
+                "--allowed-root",
+                str(self.allowed_root),
+                "--owner-id",
+                "owner-a",
+            ).returncode,
+            0,
+        )
+
     def test_publication_clears_a_resume_journal_it_leaves_behind(self) -> None:
         """Publication is the one command that runs with a resume journal.
 
