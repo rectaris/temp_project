@@ -354,13 +354,16 @@ class GeneratedCiTest(unittest.TestCase):
         for name in ("check-agent-completion.sh", "complete-plan.sh"):
             (directory / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
         (directory / "docs/plan/active").mkdir(parents=True)
-        rows = ["# Active Plan", "", "id\tpath\tstatus"]
+        rows = ["# Active Plan", ""]
         if plan:
             (directory / "docs/plan/active/001-fixture.md").write_text(
                 GATE_PLAN_BODY.format(lifecycle=lifecycle, task=task, notes=notes),
                 encoding="utf-8",
             )
+            rows.append("id\tpath\tstatus")
             rows.append(f"001\tdocs/plan/active/001-fixture.md\t{indexed}")
+        else:
+            rows.append("No active development items.")
         (directory / "docs/plan/plan.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     def run_gate(self, directory: Path) -> subprocess.CompletedProcess:

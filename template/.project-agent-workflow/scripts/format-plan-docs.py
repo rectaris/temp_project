@@ -15,7 +15,13 @@ def plan_files() -> list[Path]:
     base = ROOT / "docs/plan"
     if not base.exists():
         return []
-    return sorted(path for path in base.rglob("*.md") if path.is_file())
+    # The active plan index owns one exact grammar and one canonical writer, so
+    # normalizing it here would silently repair a document that every lifecycle
+    # command must reject.
+    index = base / "plan.md"
+    return sorted(
+        path for path in base.rglob("*.md") if path.is_file() and path != index
+    )
 
 
 def normalize(text: str) -> str:

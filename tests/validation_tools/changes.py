@@ -155,6 +155,96 @@ class ValidateChangesTest(unittest.TestCase):
                     any(any(part.endswith("format-plan-docs.py") for part in command) for command in managed_commands)
                 )
 
+    def test_malformed_managed_plan_index_fails_instead_of_deselecting(self) -> None:
+        malformed = {
+            "escaped separators": "# Active Plan\n\nid\\tpath\\tstatus\n281\\tdocs/plan/active/281-a.md\\tin_progress\n",
+            "header without rows": "# Active Plan\n\nid\tpath\tstatus\n",
+            "rows without header": "# Active Plan\n\n281\tdocs/plan/active/281-a.md\tin_progress\n",
+            "empty marker with a row": (
+                "# Active Plan\n\nNo active development items.\n"
+                "281\tdocs/plan/active/281-a.md\tin_progress\n"
+            ),
+            "carriage returns": "# Active Plan\r\n\r\nNo active development items.\r\n",
+            "content before the title": (
+                "<<<<<<< HEAD\n# Active Plan\n\nNo active development items.\n"
+            ),
+            "blank document": "",
+            "newline only": "\n",
+        }
+        for index, (plan_path, validate_path) in enumerate(
+            zip(PLAN_COMMAND_MODULES, VALIDATE_CHANGE_MODULES, strict=True)
+        ):
+            dependency = load_module(plan_path, "plan_validation_commands")
+            sys.modules["plan_validation_commands"] = dependency
+            module = load_module(validate_path, f"validate_changes_malformed_index_{index}")
+            for case, text in malformed.items():
+                with self.subTest(module=validate_path, rejected=case), tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    plan_index = repo / "docs/plan/plan.md"
+                    (repo / "docs/plan/active").mkdir(parents=True)
+                    plan_index.write_bytes(text.encode("utf-8"))
+                    module.ROOT = repo
+                    self.assertTrue(module.uses_managed_plan_format())
+                    fault = module.active_plan_index_fault()
+                    self.assertIsNotNone(fault)
+                    self.assertIn("active plan index", str(fault))
+
+            with self.subTest(module=validate_path, accepted="canonical"), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                plan_index = repo / "docs/plan/plan.md"
+                plan_index.parent.mkdir(parents=True)
+                module.ROOT = repo
+                plan_index.write_text(
+                    "# Active Plan\n\nNo active development items.\n", encoding="utf-8"
+                )
+                self.assertIsNone(module.active_plan_index_fault())
+                plan_index.write_text(
+                    "# Active Plan\n\nid\tpath\tstatus\n281\tdocs/plan/active/281-a.md\tin_progress\n",
+                    encoding="utf-8",
+                )
+                self.assertIsNone(module.active_plan_index_fault())
+
+            with self.subTest(module=validate_path, skipped="unmanaged index"), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                plan_index = repo / "docs/plan/plan.md"
+                plan_index.parent.mkdir(parents=True)
+                plan_index.write_text("# アクティブプラン\n\n既存プロジェクト形式\n", encoding="utf-8")
+                module.ROOT = repo
+                self.assertFalse(module.uses_managed_plan_format())
+                self.assertIsNone(module.active_plan_index_fault())
+
+    def test_the_plan_formatter_never_repairs_a_malformed_active_index(self) -> None:
+        formatter = ROOT / "template/.project-agent-workflow/scripts/format-plan-docs.py"
+        malformed = {
+            "trailing blank line": "# Active Plan\n\nNo active development items.\n\n",
+            "missing trailing newline": "# Active Plan\n\nNo active development items.",
+            "four columns": (
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                "281\tdocs/plan/active/281-a.md\tin_progress\t\n"
+            ),
+        }
+        for case, index_text in malformed.items():
+            with self.subTest(preserved=case), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                plan_index = repo / "docs/plan/plan.md"
+                (repo / "docs/plan/active").mkdir(parents=True)
+                plan_index.write_text(index_text, encoding="utf-8")
+                other = repo / "docs/plan/active/281-a.md"
+                other.write_text("# Plan   \n\nstatus: in_progress   \n", encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, "-B", str(formatter)],
+                    cwd=repo,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(plan_index.read_text(encoding="utf-8"), index_text)
+                self.assertEqual(
+                    other.read_text(encoding="utf-8"), "# Plan\n\nstatus: in_progress\n"
+                )
+
     def test_template_selects_external_service_policy_check(self) -> None:
         dependency = load_module(PLAN_COMMAND_MODULES[1], "plan_validation_commands")
         sys.modules["plan_validation_commands"] = dependency

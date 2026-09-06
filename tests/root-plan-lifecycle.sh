@@ -95,6 +95,67 @@ if grep -q '^001	' "$tmp/docs/plan/plan.md"; then
   exit 1
 fi
 
+expected_empty="# Active Plan
+
+No active development items.
+"
+if [ "$(cat "$tmp/docs/plan/plan.md")" != "$(printf '%s' "$expected_empty")" ]; then
+  echo "root finalizer did not leave the canonical empty active index" >&2
+  exit 1
+fi
+
+# A tab-less index is one malformed representation, so both lifecycle commands
+# must refuse it before they touch any plan record.
+cat >"$tmp/docs/plan/active/004-malformed.md" <<'EOF'
+# Malformed index root plan
+
+status: in_progress
+checked_summary_ja: 壊れた索引を拒否する。
+
+## Tasks
+
+- [x] finished
+
+## Validation Notes
+
+- root lifecycle validation passed.
+EOF
+printf '# Active Plan\n\nid\\tpath\\tstatus\n004\\tdocs/plan/active/004-malformed.md\\tin_progress\n' \
+  >"$tmp/docs/plan/plan.md"
+malformed_before=$(cat "$tmp/docs/plan/plan.md")
+checked_before=$(cat "$tmp/docs/plan/checked.md")
+if (cd "$tmp" && scripts/complete-plan.sh docs/plan/active/004-malformed.md >/dev/null 2>"$tmp/complete-malformed.err"); then
+  echo "root complete-plan accepted a malformed active index" >&2
+  exit 1
+fi
+grep -q 'active plan index' "$tmp/complete-malformed.err"
+grep -q '^status: in_progress$' "$tmp/docs/plan/active/004-malformed.md"
+[ "$(cat "$tmp/docs/plan/plan.md")" = "$malformed_before" ] || {
+  echo "root complete-plan rewrote a malformed active index" >&2
+  exit 1
+}
+
+sed -i 's/^status: in_progress$/status: ready_to_archive/' "$tmp/docs/plan/active/004-malformed.md"
+if (cd "$tmp" && scripts/finalize-active-plan.sh docs/plan/active/004-malformed.md >/dev/null 2>"$tmp/finalize-malformed.err"); then
+  echo "root finalizer accepted a malformed active index" >&2
+  exit 1
+fi
+grep -q 'active plan index' "$tmp/finalize-malformed.err"
+[ -f "$tmp/docs/plan/active/004-malformed.md" ] || {
+  echo "root finalizer archived a plan through a malformed active index" >&2
+  exit 1
+}
+[ "$(cat "$tmp/docs/plan/plan.md")" = "$malformed_before" ] || {
+  echo "root finalizer rewrote a malformed active index" >&2
+  exit 1
+}
+[ "$(cat "$tmp/docs/plan/checked.md")" = "$checked_before" ] || {
+  echo "root finalizer wrote a checked index row through a malformed active index" >&2
+  exit 1
+}
+rm "$tmp/docs/plan/active/004-malformed.md"
+printf '%s' "$expected_empty" >"$tmp/docs/plan/plan.md"
+
 mkdir -p "$tmp/admission"
 policy="$root/scripts/check-root-agent-policy.py"
 

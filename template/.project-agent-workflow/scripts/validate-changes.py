@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -60,17 +61,119 @@ def existing(path: str) -> bool:
     return (ROOT / path).exists()
 
 
-def uses_managed_plan_format() -> bool:
+# --- active plan index grammar: keep byte-identical across enforcing commands ---
+ACTIVE_INDEX_TITLE = "# Active Plan"
+ACTIVE_INDEX_EMPTY_BODY = "No active development items."
+ACTIVE_INDEX_HEADER = "id\tpath\tstatus"
+ACTIVE_INDEX_STATUSES = ("in_progress", "ready_to_archive", "deferred", "replan_required")
+ACTIVE_INDEX_ID_RE = re.compile(r"[0-9]{3}")
+ACTIVE_INDEX_ROW_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
+
+
+class ActiveIndexError(ValueError):
+    """Raised when the active plan index is not one accepted representation."""
+
+
+def read_active_index(path: Path) -> str:
+    """Read one active plan index without newline translation."""
+
     try:
-        text = (ROOT / "docs/plan/plan.md").read_text(encoding="utf-8")
-    except OSError:
-        return False
-    lines = [line for line in text.splitlines() if line]
-    return bool(
-        lines
-        and lines[0] == "# Active Plan"
-        and (lines[1:] == ["No active development items."] or lines[1:2] == ["id\tpath\tstatus"])
-    )
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ActiveIndexError(f"active plan index is not UTF-8 text: {exc}") from exc
+
+
+def parse_active_index(text: str) -> list[tuple[str, str, str]]:
+    """Return the rows of one exact accepted active plan index document.
+
+    The empty representation is the title, one blank line, and the empty
+    marker. The populated representation is the title, one blank line, the
+    actual-tab header, and one or more actual-tab rows. Every other nonempty
+    document is rejected whole instead of being partially parsed.
+    """
+
+    if "\r" in text or not text.endswith("\n") or text.endswith("\n\n"):
+        raise ActiveIndexError("active plan index must end with exactly one trailing newline")
+    lines = text.split("\n")[:-1]
+    if lines[:2] != [ACTIVE_INDEX_TITLE, ""]:
+        raise ActiveIndexError("active plan index must start with its title and one blank line")
+    body = lines[2:]
+    if not body:
+        raise ActiveIndexError("active plan index must hold the empty marker or the header")
+    if body[0] == ACTIVE_INDEX_EMPTY_BODY:
+        if len(body) > 1:
+            raise ActiveIndexError("empty active plan index must hold no other content")
+        return []
+    if body[0] != ACTIVE_INDEX_HEADER:
+        raise ActiveIndexError(f"active plan index needs the exact tab header: {body[0]!r}")
+    if len(body) == 1:
+        raise ActiveIndexError("active plan index header must be followed by at least one row")
+    rows: list[tuple[str, str, str]] = []
+    for line in body[1:]:
+        columns = line.split("\t")
+        if len(columns) != 3:
+            raise ActiveIndexError(f"active plan index row needs three tab columns: {line!r}")
+        plan_id, path, status = columns
+        if ACTIVE_INDEX_ID_RE.fullmatch(plan_id) is None:
+            raise ActiveIndexError(f"active plan index row needs a three-digit id: {line!r}")
+        match = ACTIVE_INDEX_ROW_PATH_RE.fullmatch(path)
+        if match is None:
+            raise ActiveIndexError(f"active plan index row needs a normalized path: {line!r}")
+        if match.group(1) != plan_id:
+            raise ActiveIndexError(f"active plan index row id does not match its file: {line!r}")
+        if status not in ACTIVE_INDEX_STATUSES:
+            raise ActiveIndexError(f"active plan index row status is not allowed: {line!r}")
+        if any(plan_id == row[0] for row in rows):
+            raise ActiveIndexError(f"duplicate active plan index id: {plan_id}")
+        if any(path == row[1] for row in rows):
+            raise ActiveIndexError(f"duplicate active plan index path: {path}")
+        rows.append((plan_id, path, status))
+    return rows
+
+
+def render_active_index(rows: list[tuple[str, str, str]]) -> str:
+    """Serialize fully parsed rows as the single canonical representation."""
+
+    if rows:
+        body = "\n".join("\t".join(row) for row in rows)
+        text = f"{ACTIVE_INDEX_TITLE}\n\n{ACTIVE_INDEX_HEADER}\n{body}\n"
+    else:
+        text = f"{ACTIVE_INDEX_TITLE}\n\n{ACTIVE_INDEX_EMPTY_BODY}\n"
+    if parse_active_index(text) != rows:
+        raise ActiveIndexError("canonical active plan index serialization failed")
+    return text
+# --- end active plan index grammar ---
+
+def managed_plan_index() -> Path | None:
+    """Return the active plan index when this project manages plan documents."""
+
+    path = ROOT / "docs/plan/plan.md"
+    if not path.is_file():
+        return None
+    if (ROOT / "docs/plan/active").is_dir():
+        return path
+    try:
+        text = read_active_index(path)
+    except ActiveIndexError:
+        return path
+    return path if ACTIVE_INDEX_TITLE in text.splitlines() else None
+
+
+def active_plan_index_fault() -> str | None:
+    """Report one fault when a managed active plan index is not canonical."""
+
+    path = managed_plan_index()
+    if path is None:
+        return None
+    try:
+        parse_active_index(read_active_index(path))
+    except ActiveIndexError as exc:
+        return str(exc)
+    return None
+
+
+def uses_managed_plan_format() -> bool:
+    return managed_plan_index() is not None
 
 
 def uses_managed_external_service_format() -> bool:
@@ -168,6 +271,14 @@ def main(argv: list[str]) -> int:
         parser.error("--all and --staged are mutually exclusive")
 
     mode = "staged" if args.staged else "all" if args.all else "auto"
+    fault = active_plan_index_fault()
+    if fault is not None:
+        if args.json:
+            print_json({"changed_files": [], "commands": [], "error": fault, "status": "invalid_active_plan_index"})
+        else:
+            print(f"validate-changes: {fault}", file=sys.stderr)
+        return 1
+
     try:
         paths, diff_mode = changed_files(mode)
     except GitQueryError as error:

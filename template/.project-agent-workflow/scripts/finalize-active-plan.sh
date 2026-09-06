@@ -99,6 +99,8 @@ def rebind(text: str) -> str | None:
 
 
 def live_plans() -> list[Path]:
+    # Finalization already parsed the whole active index before its first
+    # mutation, so these rows come from a validated document.
     plans = []
     index = Path("docs/plan/plan.md")
     if index.is_file():

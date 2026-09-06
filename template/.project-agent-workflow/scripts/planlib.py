@@ -233,6 +233,90 @@ def lifecycle_lock():
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+# --- active plan index grammar: keep byte-identical across enforcing commands ---
+ACTIVE_INDEX_TITLE = "# Active Plan"
+ACTIVE_INDEX_EMPTY_BODY = "No active development items."
+ACTIVE_INDEX_HEADER = "id\tpath\tstatus"
+ACTIVE_INDEX_STATUSES = ("in_progress", "ready_to_archive", "deferred", "replan_required")
+ACTIVE_INDEX_ID_RE = re.compile(r"[0-9]{3}")
+ACTIVE_INDEX_ROW_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
+
+
+class ActiveIndexError(ValueError):
+    """Raised when the active plan index is not one accepted representation."""
+
+
+def read_active_index(path: Path) -> str:
+    """Read one active plan index without newline translation."""
+
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ActiveIndexError(f"active plan index is not UTF-8 text: {exc}") from exc
+
+
+def parse_active_index(text: str) -> list[tuple[str, str, str]]:
+    """Return the rows of one exact accepted active plan index document.
+
+    The empty representation is the title, one blank line, and the empty
+    marker. The populated representation is the title, one blank line, the
+    actual-tab header, and one or more actual-tab rows. Every other nonempty
+    document is rejected whole instead of being partially parsed.
+    """
+
+    if "\r" in text or not text.endswith("\n") or text.endswith("\n\n"):
+        raise ActiveIndexError("active plan index must end with exactly one trailing newline")
+    lines = text.split("\n")[:-1]
+    if lines[:2] != [ACTIVE_INDEX_TITLE, ""]:
+        raise ActiveIndexError("active plan index must start with its title and one blank line")
+    body = lines[2:]
+    if not body:
+        raise ActiveIndexError("active plan index must hold the empty marker or the header")
+    if body[0] == ACTIVE_INDEX_EMPTY_BODY:
+        if len(body) > 1:
+            raise ActiveIndexError("empty active plan index must hold no other content")
+        return []
+    if body[0] != ACTIVE_INDEX_HEADER:
+        raise ActiveIndexError(f"active plan index needs the exact tab header: {body[0]!r}")
+    if len(body) == 1:
+        raise ActiveIndexError("active plan index header must be followed by at least one row")
+    rows: list[tuple[str, str, str]] = []
+    for line in body[1:]:
+        columns = line.split("\t")
+        if len(columns) != 3:
+            raise ActiveIndexError(f"active plan index row needs three tab columns: {line!r}")
+        plan_id, path, status = columns
+        if ACTIVE_INDEX_ID_RE.fullmatch(plan_id) is None:
+            raise ActiveIndexError(f"active plan index row needs a three-digit id: {line!r}")
+        match = ACTIVE_INDEX_ROW_PATH_RE.fullmatch(path)
+        if match is None:
+            raise ActiveIndexError(f"active plan index row needs a normalized path: {line!r}")
+        if match.group(1) != plan_id:
+            raise ActiveIndexError(f"active plan index row id does not match its file: {line!r}")
+        if status not in ACTIVE_INDEX_STATUSES:
+            raise ActiveIndexError(f"active plan index row status is not allowed: {line!r}")
+        if any(plan_id == row[0] for row in rows):
+            raise ActiveIndexError(f"duplicate active plan index id: {plan_id}")
+        if any(path == row[1] for row in rows):
+            raise ActiveIndexError(f"duplicate active plan index path: {path}")
+        rows.append((plan_id, path, status))
+    return rows
+
+
+def render_active_index(rows: list[tuple[str, str, str]]) -> str:
+    """Serialize fully parsed rows as the single canonical representation."""
+
+    if rows:
+        body = "\n".join("\t".join(row) for row in rows)
+        text = f"{ACTIVE_INDEX_TITLE}\n\n{ACTIVE_INDEX_HEADER}\n{body}\n"
+    else:
+        text = f"{ACTIVE_INDEX_TITLE}\n\n{ACTIVE_INDEX_EMPTY_BODY}\n"
+    if parse_active_index(text) != rows:
+        raise ActiveIndexError("canonical active plan index serialization failed")
+    return text
+# --- end active plan index grammar ---
+
+
 def atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -1775,22 +1859,18 @@ def next_id() -> str:
 def read_active_rows() -> list[tuple[str, str, str]]:
     if not PLAN.exists():
         return []
-    rows: list[tuple[str, str, str]] = []
-    for line in PLAN.read_text(encoding="utf-8").splitlines():
-        if not re.match(r"^\d{3}\t", line):
-            continue
-        parts = line.split("\t")
-        if len(parts) == 3:
-            rows.append((parts[0], parts[1], parts[2]))
-    return rows
+    try:
+        return parse_active_index(read_active_index(PLAN))
+    except ActiveIndexError as exc:
+        raise PlanError(str(exc)) from exc
 
 
 def write_active_rows(rows: list[tuple[str, str, str]]) -> None:
-    if not rows:
-        PLAN.write_text("# Active Plan\n\nNo active development items.\n", encoding="utf-8")
-        return
-    body = "\n".join("\t".join(row) for row in rows)
-    PLAN.write_text(f"# Active Plan\n\nid\tpath\tstatus\n{body}\n", encoding="utf-8")
+    try:
+        content = render_active_index(rows)
+    except ActiveIndexError as exc:
+        raise PlanError(str(exc)) from exc
+    atomic_write_text(PLAN, content)
 
 
 def add_active(plan_id: str, path: str, status: str = "in_progress") -> None:
@@ -1833,14 +1913,19 @@ def complete_transition(plan_id: str, path: str, old_status: str) -> None:
     with lifecycle_lock():
         check_active_mapping(plan_id, path, old_status)
         original_plan = target.read_text(encoding="utf-8")
-        original_index = PLAN.read_text(encoding="utf-8")
+        rows = read_active_rows()
         updated_plan = status_text(original_plan, "ready_to_archive")
-        expected = f"{plan_id}\t{path}\t{old_status}"
-        replacement = f"{plan_id}\t{path}\tready_to_archive"
-        lines = original_index.splitlines()
-        if lines.count(expected) != 1:
+        if [row for row in rows if row[0] == plan_id] != [(plan_id, path, old_status)]:
             raise PlanError(f"active index must contain exactly one row for {plan_id}")
-        updated_index = "\n".join(replacement if line == expected else line for line in lines).rstrip() + "\n"
+        try:
+            updated_index = render_active_index(
+                [
+                    (row[0], row[1], "ready_to_archive") if row[0] == plan_id else row
+                    for row in rows
+                ]
+            )
+        except ActiveIndexError as exc:
+            raise PlanError(str(exc)) from exc
         atomic_write_text(target, updated_plan)
         try:
             atomic_write_text(PLAN, updated_index)

@@ -74,39 +74,22 @@ def next_id() -> str:
 def lint_plan_index() -> None:
     if not PLAN.is_file():
         fail("missing docs/plan/plan.md")
-    text = PLAN.read_text(encoding="utf-8")
-    if not text.startswith("# Active Plan\n"):
-        fail("docs/plan/plan.md must start with '# Active Plan'")
-    if "No active development items." in text:
-        return
-    if "id\tpath\tstatus" not in text:
-        fail("active plan index must contain TSV header: id path status")
-    seen_ids: set[str] = set()
-    seen_paths: set[str] = set()
-    for line in text.splitlines():
-        if re.match(r"^\d{3}\t", line):
-            parts = line.split("\t")
-            if len(parts) != 3:
-                fail(f"bad active index row: {line}")
-            if parts[0] in seen_ids:
-                fail(f"duplicate active index id: {parts[0]}")
-            if parts[1] in seen_paths:
-                fail(f"duplicate active index path: {parts[1]}")
-            seen_ids.add(parts[0])
-            seen_paths.add(parts[1])
-            if not Path(parts[1]).name.startswith(parts[0] + "-"):
-                fail(f"active index id does not match filename: {line}")
-            indexed_path = ROOT / parts[1]
-            if indexed_path.parent != planlib.ACTIVE_DIR:
-                fail(f"active index path is outside active plan directory: {parts[1]}")
-            if not indexed_path.is_file():
-                fail(f"active index points to missing file: {parts[1]}")
-            try:
-                values = planlib.parse_manifest(indexed_path)
-            except planlib.PlanError as exc:
-                fail(str(exc))
-            if planlib.manifest_scalar(values, "status") != parts[2]:
-                fail(f"active index status does not match manifest: {parts[1]}")
+    try:
+        rows = planlib.parse_active_index(planlib.read_active_index(PLAN))
+    except planlib.ActiveIndexError as exc:
+        fail(str(exc))
+    for plan_id, path, status in rows:
+        indexed_path = ROOT / path
+        if indexed_path.parent != planlib.ACTIVE_DIR:
+            fail(f"active index path is outside active plan directory: {path}")
+        if not indexed_path.is_file():
+            fail(f"active index points to missing file: {path}")
+        try:
+            values = planlib.parse_manifest(indexed_path)
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        if planlib.manifest_scalar(values, "status") != status:
+            fail(f"active index status does not match manifest: {path}")
 
 
 def lint_checked_index() -> None:
@@ -595,6 +578,11 @@ def main() -> int:
     parser.add_argument("--add-active", nargs=2, metavar=("ID", "PATH"), help="add or replace an active index row")
     parser.add_argument("--remove-active", metavar="ID", help="remove an active index row")
     parser.add_argument("--append-checked", nargs=2, metavar=("ID", "PATH"), help="append a checked index row")
+    parser.add_argument(
+        "--check-active-index",
+        action="store_true",
+        help="validate the whole active plan index document",
+    )
     parser.add_argument("--check-active-mapping", nargs=3, metavar=("ID", "PATH", "STATUS"))
     parser.add_argument("--set-active-status", nargs=4, metavar=("ID", "PATH", "OLD", "NEW"))
     parser.add_argument("--check-promotion", nargs=3, metavar=("ID", "SOURCE", "DESTINATION"))
@@ -628,14 +616,26 @@ def main() -> int:
             return 1
         return 0
     if args.add_active:
-        planlib.add_active(args.add_active[0], args.add_active[1])
+        try:
+            planlib.add_active(args.add_active[0], args.add_active[1])
+        except planlib.PlanError as exc:
+            fail(str(exc))
         return 0
     if args.remove_active:
-        planlib.remove_active(args.remove_active)
+        try:
+            planlib.remove_active(args.remove_active)
+        except planlib.PlanError as exc:
+            fail(str(exc))
         return 0
     if args.append_checked:
         try:
             planlib.append_checked(args.append_checked[0], args.append_checked[1])
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.check_active_index:
+        try:
+            planlib.read_active_rows()
         except planlib.PlanError as exc:
             fail(str(exc))
         return 0

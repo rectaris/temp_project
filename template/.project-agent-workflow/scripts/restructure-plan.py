@@ -1048,22 +1048,102 @@ def validate_projection(
         raise RestructureError(f"{label} validation projection mismatch")
 
 
-def active_rows(text: str) -> list[tuple[str, str, str]]:
+# --- active plan index grammar: keep byte-identical across enforcing commands ---
+ACTIVE_INDEX_TITLE = "# Active Plan"
+ACTIVE_INDEX_EMPTY_BODY = "No active development items."
+ACTIVE_INDEX_HEADER = "id\tpath\tstatus"
+ACTIVE_INDEX_STATUSES = ("in_progress", "ready_to_archive", "deferred", "replan_required")
+ACTIVE_INDEX_ID_RE = re.compile(r"[0-9]{3}")
+ACTIVE_INDEX_ROW_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
+
+
+class ActiveIndexError(ValueError):
+    """Raised when the active plan index is not one accepted representation."""
+
+
+def read_active_index(path: Path) -> str:
+    """Read one active plan index without newline translation."""
+
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ActiveIndexError(f"active plan index is not UTF-8 text: {exc}") from exc
+
+
+def parse_active_index(text: str) -> list[tuple[str, str, str]]:
+    """Return the rows of one exact accepted active plan index document.
+
+    The empty representation is the title, one blank line, and the empty
+    marker. The populated representation is the title, one blank line, the
+    actual-tab header, and one or more actual-tab rows. Every other nonempty
+    document is rejected whole instead of being partially parsed.
+    """
+
+    if "\r" in text or not text.endswith("\n") or text.endswith("\n\n"):
+        raise ActiveIndexError("active plan index must end with exactly one trailing newline")
+    lines = text.split("\n")[:-1]
+    if lines[:2] != [ACTIVE_INDEX_TITLE, ""]:
+        raise ActiveIndexError("active plan index must start with its title and one blank line")
+    body = lines[2:]
+    if not body:
+        raise ActiveIndexError("active plan index must hold the empty marker or the header")
+    if body[0] == ACTIVE_INDEX_EMPTY_BODY:
+        if len(body) > 1:
+            raise ActiveIndexError("empty active plan index must hold no other content")
+        return []
+    if body[0] != ACTIVE_INDEX_HEADER:
+        raise ActiveIndexError(f"active plan index needs the exact tab header: {body[0]!r}")
+    if len(body) == 1:
+        raise ActiveIndexError("active plan index header must be followed by at least one row")
     rows: list[tuple[str, str, str]] = []
-    for line in text.splitlines():
-        if re.match(r"^[0-9]{3}\t", line):
-            parts = line.split("\t")
-            if len(parts) != 3:
-                raise RestructureError(f"malformed active index row: {line}")
-            rows.append((parts[0], parts[1], parts[2]))
+    for line in body[1:]:
+        columns = line.split("\t")
+        if len(columns) != 3:
+            raise ActiveIndexError(f"active plan index row needs three tab columns: {line!r}")
+        plan_id, path, status = columns
+        if ACTIVE_INDEX_ID_RE.fullmatch(plan_id) is None:
+            raise ActiveIndexError(f"active plan index row needs a three-digit id: {line!r}")
+        match = ACTIVE_INDEX_ROW_PATH_RE.fullmatch(path)
+        if match is None:
+            raise ActiveIndexError(f"active plan index row needs a normalized path: {line!r}")
+        if match.group(1) != plan_id:
+            raise ActiveIndexError(f"active plan index row id does not match its file: {line!r}")
+        if status not in ACTIVE_INDEX_STATUSES:
+            raise ActiveIndexError(f"active plan index row status is not allowed: {line!r}")
+        if any(plan_id == row[0] for row in rows):
+            raise ActiveIndexError(f"duplicate active plan index id: {plan_id}")
+        if any(path == row[1] for row in rows):
+            raise ActiveIndexError(f"duplicate active plan index path: {path}")
+        rows.append((plan_id, path, status))
     return rows
 
 
+def render_active_index(rows: list[tuple[str, str, str]]) -> str:
+    """Serialize fully parsed rows as the single canonical representation."""
+
+    if rows:
+        body = "\n".join("\t".join(row) for row in rows)
+        text = f"{ACTIVE_INDEX_TITLE}\n\n{ACTIVE_INDEX_HEADER}\n{body}\n"
+    else:
+        text = f"{ACTIVE_INDEX_TITLE}\n\n{ACTIVE_INDEX_EMPTY_BODY}\n"
+    if parse_active_index(text) != rows:
+        raise ActiveIndexError("canonical active plan index serialization failed")
+    return text
+# --- end active plan index grammar ---
+
+
+def active_rows(text: str) -> list[tuple[str, str, str]]:
+    try:
+        return parse_active_index(text)
+    except ActiveIndexError as exc:
+        raise RestructureError(str(exc)) from exc
+
+
 def render_active(rows: list[tuple[str, str, str]]) -> str:
-    if not rows:
-        return "# Active Plan\n\nNo active development items.\n"
-    body = "\n".join("\t".join(row) for row in rows)
-    return f"# Active Plan\n\nid\tpath\tstatus\n{body}\n"
+    try:
+        return render_active_index(rows)
+    except ActiveIndexError as exc:
+        raise RestructureError(str(exc)) from exc
 
 
 def replanned_rows(text: str) -> list[tuple[str, str, str]]:
@@ -1242,7 +1322,7 @@ def active_records_for_successor(plan_id: str, expected_path: str) -> list[tuple
         return []
     related = [
         row
-        for row in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8"))
+        for row in active_rows(read_active_index(ACTIVE_INDEX))
         if row[0] == plan_id or row[1] == expected_path
     ]
     if len(related) > 1:
@@ -2755,7 +2835,7 @@ def validate_single_source_spec(spec: dict[str, Any]) -> dict[str, Any]:
     reject_preservation_write_overlap(
         preserved_paths, successor_scopes, "successor plans"
     )
-    active_text = ACTIVE_INDEX.read_text(encoding="utf-8")
+    active_text = read_active_index(ACTIVE_INDEX)
     rows = active_rows(active_text)
     if rows.count((source_id, source_path, "replan_required")) != 1:
         raise RestructureError("active index does not exactly map the stopped source plan")
@@ -2958,7 +3038,7 @@ def current_active_records() -> tuple[
     list[tuple[str, str, str]],
     dict[str, tuple[str, dict[str, str | list[str]]]],
 ]:
-    active_text = ACTIVE_INDEX.read_text(encoding="utf-8")
+    active_text = read_active_index(ACTIVE_INDEX)
     rows = active_rows(active_text)
     records: dict[str, tuple[str, dict[str, str | list[str]]]] = {}
     for plan_id, path, status in rows:
@@ -4771,6 +4851,10 @@ def build_transaction_operations(state: dict[str, Any]) -> tuple[list[dict[str, 
             "rebind_baseline",
             state["baseline_original"],
         )
+    # The transaction never mutates an active index whose current bytes are
+    # malformed, and never stages a replacement the grammar rejects.
+    active_rows(state["active_text"])
+    active_rows(state["active_new"])
     if state["active_new"] != state["active_text"]:
         add("docs/plan/plan.md", state["active_new"], "active_index", state["active_text"])
     if state["replanned_new"] != state["replanned_text"]:
@@ -5908,7 +5992,7 @@ def live_plan_records() -> list[tuple[str, str, dict[str, str | list[str]]]]:
     records: list[tuple[str, str, dict[str, str | list[str]]]] = []
     if ACTIVE_INDEX.is_file():
         for plan_id, path, _status in active_rows(
-            ACTIVE_INDEX.read_text(encoding="utf-8")
+            read_active_index(ACTIVE_INDEX)
         ):
             target = ROOT / path
             if not target.is_file():
@@ -6051,7 +6135,7 @@ def validate_prospective_plan_context_files(
 def validate_active_plan_context_files() -> None:
     if not ACTIVE_INDEX.is_file():
         return
-    for _plan_id, path, _status in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8")):
+    for _plan_id, path, _status in active_rows(read_active_index(ACTIVE_INDEX)):
         target = ROOT / path
         if not target.is_file():
             raise RestructureError(f"missing active plan: {path}")
@@ -6320,7 +6404,7 @@ def verify_no_surviving_archived_context_references(
 def validate_repository_active_predecessors() -> None:
     active_records: dict[str, tuple[str, dict[str, str | list[str]]]] = {}
     if ACTIVE_INDEX.is_file():
-        for plan_id, path, status in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8")):
+        for plan_id, path, status in active_rows(read_active_index(ACTIVE_INDEX)):
             match = PLAN_PATH_RE.fullmatch(path)
             if match is None or match.group(1) != plan_id:
                 raise RestructureError(f"active plan identity mismatch: {path}")
@@ -8086,7 +8170,7 @@ def companion_absence_allowed() -> bool:
     if companion_publication_recorded() or not ACTIVE_INDEX.is_file():
         return False
     publisher_records = [
-        row for row in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8"))
+        row for row in active_rows(read_active_index(ACTIVE_INDEX))
         if row[0] == "190" or row[1] == COMPANION_PLAN_PATH
     ]
     if len(publisher_records) != 1:
@@ -8106,7 +8190,7 @@ def companion_absence_allowed() -> bool:
         or COMPANION_PATH not in items(publisher_manifest, "write_scope")
     ):
         return False
-    for row_id, row_path, _ in active_rows(ACTIVE_INDEX.read_text(encoding="utf-8")):
+    for row_id, row_path, _ in active_rows(read_active_index(ACTIVE_INDEX)):
         target = ROOT / row_path
         if not target.is_file():
             return False

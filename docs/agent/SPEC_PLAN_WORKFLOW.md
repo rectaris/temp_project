@@ -12,6 +12,14 @@ This repository root is a template development repository. It is not a Copier-ge
 - `docs/plan/replanned/YYYY/MM/01-15/*.md` and `16-31/*.md`: historical records of plans replaced by an accepted restructuring contract; these records are not completion evidence.
 - `docs/plan/replanned/contracts/*.json`: exact requirement-preservation and successor-mapping contracts for restructured plans.
 
+## Active Plan Index
+
+- Write `docs/plan/plan.md` in exactly one of two representations. The empty index is the `# Active Plan` title, one blank line, and `No active development items.`, closed by one trailing newline. The populated index is the same title, one blank line, the actual-tab `id path status` header, and one or more actual-tab rows, closed by one trailing newline.
+- Treat every other nonempty document as invalid. Literal backslash-t text, a blank file, a header without rows, rows without the header, content before or after the selected representation, repeated empty markers, and an empty marker mixed with a header or a row are rejected, never read as an empty index.
+- Validate each row for a three-digit id, a normalized active plan path, an id that matches its file name, an allowed status, and unique ids and paths. A reader that resolves the repository also requires the referenced plan file and a manifest status equal to the row status.
+- Parse the complete index before the first repository mutation of a create, promotion, status-change, completion, finalization, or restructuring operation. Report the first concrete fault and leave plan, index, archive, and checked-index bytes unchanged.
+- Never auto-repair or partially parse an invalid index. A canonical writer accepts fully parsed rows only and emits the single canonical representation of its row set.
+
 ## Agent Log Boundary
 
 - Keep `docs/plan` as the durable summary, decision, validation, and follow-up record.

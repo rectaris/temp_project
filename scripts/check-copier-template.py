@@ -837,6 +837,7 @@ def require_shared_human_report_boundary() -> None:
 
 
 PLAN_WORKFLOW_ALIGNED_SECTIONS = (
+    "Active Plan Index",
     "Plan Admission Contract",
     "Implementation Tiers",
     "Parallel Execution Groups",
@@ -850,6 +851,63 @@ PLAN_ADMISSION_CONSTANT_SOURCES = (
     "scripts/check-root-agent-policy.py",
     "scripts/restructure-plan.py",
 )
+
+ACTIVE_INDEX_GRAMMAR_SOURCES = (
+    "template/.project-agent-workflow/scripts/planlib.py",
+    "template/.project-agent-workflow/scripts/restructure-plan.py",
+    "scripts/check-root-agent-policy.py",
+    "scripts/restructure-plan.py",
+    "scripts/complete-plan.sh",
+    "scripts/finalize-active-plan.sh",
+    "scripts/check-agent-completion.sh",
+    "template/.project-agent-workflow/scripts/check-agent-completion.sh",
+    "scripts/validate-changes.py",
+    "template/.project-agent-workflow/scripts/validate-changes.py",
+)
+ACTIVE_INDEX_GRAMMAR_RE = re.compile(
+    r"^# --- active plan index grammar: keep byte-identical across enforcing commands ---\n"
+    r".*?^# --- end active plan index grammar ---\n",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def require_active_index_grammar_alignment() -> None:
+    """Every enforcing command must read and write one active-index grammar."""
+
+    blocks: set[str] = set()
+    for source in ACTIVE_INDEX_GRAMMAR_SOURCES:
+        found = ACTIVE_INDEX_GRAMMAR_RE.findall(read(source))
+        if not found:
+            fail(f"{source} must embed the shared active plan index grammar")
+        blocks.update(found)
+    if len(blocks) != 1:
+        fail("active plan index grammar differs across the enforcing commands")
+    grammar = blocks.pop()
+    for marker in (
+        'ACTIVE_INDEX_EMPTY_BODY = "No active development items."',
+        'ACTIVE_INDEX_HEADER = "id\\tpath\\tstatus"',
+        "class ActiveIndexError(ValueError):",
+        "def parse_active_index(",
+        "def render_active_index(",
+    ):
+        if marker not in grammar:
+            fail(f"active plan index grammar missing marker: {marker}")
+    lint = read("template/.project-agent-workflow/scripts/lint-plan-docs.py")
+    for marker in ("planlib.parse_active_index", "planlib.ActiveIndexError"):
+        if marker not in lint:
+            fail(f"generated plan lint must reject a malformed active index: {marker}")
+    for source in (
+        "template/.project-agent-workflow/scripts/planlib.py",
+        "scripts/check-root-agent-policy.py",
+        "scripts/complete-plan.sh",
+        "scripts/finalize-active-plan.sh",
+        "scripts/check-agent-completion.sh",
+        "template/.project-agent-workflow/scripts/check-agent-completion.sh",
+        "scripts/validate-changes.py",
+        "template/.project-agent-workflow/scripts/validate-changes.py",
+    ):
+        if "parse_active_index(" not in read(source).replace(grammar, ""):
+            fail(f"{source} must parse the active index through the shared grammar")
 
 
 def plan_workflow_section(text: str, heading: str, source: str) -> str:
@@ -2910,6 +2968,7 @@ def main() -> int:
     require_git_retirement_alignment()
     require_parent_worktree_alignment()
     require_plan_workflow_alignment()
+    require_active_index_grammar_alignment()
     require_plan_admission_alignment()
     require_sandboxed_plan_worker_alignment()
     require_hook_logging_parity()

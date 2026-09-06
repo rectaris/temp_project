@@ -2024,6 +2024,285 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 ],
             )
 
+    ACTIVE_INDEX_ROW = "281\tdocs/plan/active/281-example.md\tin_progress"
+    ACTIVE_INDEX_EMPTY = "# Active Plan\n\nNo active development items.\n"
+    ACTIVE_INDEX_POPULATED = f"# Active Plan\n\nid\tpath\tstatus\n{ACTIVE_INDEX_ROW}\n"
+    ACTIVE_INDEX_GRAMMAR_MODULES = (
+        ("planlib", PLANLIB),
+        ("root policy", ROOT / "scripts/check-root-agent-policy.py"),
+        ("restructure", ROOT / "scripts/restructure-plan.py"),
+        (
+            "generated restructure",
+            ROOT / "template/.project-agent-workflow/scripts/restructure-plan.py",
+        ),
+    )
+
+    @classmethod
+    def accepted_active_indexes(cls) -> dict[str, tuple[str, list[tuple[str, str, str]]]]:
+        second = "282\tdocs/plan/active/282-second.md\tready_to_archive"
+        return {
+            "canonical empty document": (cls.ACTIVE_INDEX_EMPTY, []),
+            "one canonical row": (
+                cls.ACTIVE_INDEX_POPULATED,
+                [("281", "docs/plan/active/281-example.md", "in_progress")],
+            ),
+            "two canonical rows": (
+                f"# Active Plan\n\nid\tpath\tstatus\n{cls.ACTIVE_INDEX_ROW}\n{second}\n",
+                [
+                    ("281", "docs/plan/active/281-example.md", "in_progress"),
+                    ("282", "docs/plan/active/282-second.md", "ready_to_archive"),
+                ],
+            ),
+        }
+
+    @classmethod
+    def rejected_active_indexes(cls) -> dict[str, str]:
+        header = "id\tpath\tstatus"
+        row = cls.ACTIVE_INDEX_ROW
+        return {
+            "literal backslash-t text": cls.ACTIVE_INDEX_POPULATED.replace("\t", "\\t"),
+            "blank file": "",
+            "newline only": "\n",
+            "title only": "# Active Plan\n",
+            "missing blank line": f"# Active Plan\n{header}\n{row}\n",
+            "header without rows": f"# Active Plan\n\n{header}\n",
+            "rows without the header": f"# Active Plan\n\n{row}\n",
+            "repeated header": f"# Active Plan\n\n{header}\n{header}\n{row}\n",
+            "content before the title": f"note\n# Active Plan\n\n{header}\n{row}\n",
+            "content after the rows": cls.ACTIVE_INDEX_POPULATED + "note\n",
+            "content after the empty marker": cls.ACTIVE_INDEX_EMPTY + "note\n",
+            "repeated empty markers": (
+                "# Active Plan\n\nNo active development items.\n"
+                "No active development items.\n"
+            ),
+            "empty marker with a row": (
+                f"# Active Plan\n\nNo active development items.\n{row}\n"
+            ),
+            "empty marker under the header": (
+                f"# Active Plan\n\n{header}\nNo active development items.\n"
+            ),
+            "two columns": (
+                "# Active Plan\n\n"
+                f"{header}\n281\tdocs/plan/active/281-example.md\n"
+            ),
+            "four columns": f"# Active Plan\n\n{header}\n{row}\textra\n",
+            "duplicate id": (
+                f"# Active Plan\n\n{header}\n{row}\n"
+                "281\tdocs/plan/active/281-other.md\tdeferred\n"
+            ),
+            "duplicate row": f"# Active Plan\n\n{header}\n{row}\n{row}\n",
+            "id that does not match its file": (
+                f"# Active Plan\n\n{header}\n"
+                "999\tdocs/plan/active/281-example.md\tin_progress\n"
+            ),
+            "two-digit id": (
+                f"# Active Plan\n\n{header}\n28\tdocs/plan/active/28-example.md\tin_progress\n"
+            ),
+            "unsupported status": (
+                f"# Active Plan\n\n{header}\n"
+                "281\tdocs/plan/active/281-example.md\tbacklog\n"
+            ),
+            "path outside the active directory": (
+                f"# Active Plan\n\n{header}\n"
+                "281\tdocs/plan/backlog/281-example.md\tin_progress\n"
+            ),
+            "unnormalized path": (
+                f"# Active Plan\n\n{header}\n"
+                "281\tdocs/plan/active/281_Example.md\tin_progress\n"
+            ),
+            "carriage returns": cls.ACTIVE_INDEX_POPULATED.replace("\n", "\r\n"),
+            "missing trailing newline": cls.ACTIVE_INDEX_POPULATED.rstrip("\n"),
+            "extra trailing newline": cls.ACTIVE_INDEX_POPULATED + "\n",
+            "leading blank line": "\n" + cls.ACTIVE_INDEX_POPULATED,
+            "indented row": f"# Active Plan\n\n{header}\n  {row}\n",
+        }
+
+    def test_every_enforcing_command_reads_one_active_index_grammar(self) -> None:
+        accepted = self.accepted_active_indexes()
+        rejected = self.rejected_active_indexes()
+        for label, path in self.ACTIVE_INDEX_GRAMMAR_MODULES:
+            module = load_module(path, f"active_index_grammar_{label.replace(' ', '_')}")
+            for case, (text, rows) in accepted.items():
+                with self.subTest(command=label, accepted=case):
+                    self.assertEqual(module.parse_active_index(text), rows)
+            for case, text in rejected.items():
+                with self.subTest(command=label, rejected=case):
+                    with self.assertRaises(module.ActiveIndexError):
+                        module.parse_active_index(text)
+
+    def test_every_canonical_writer_emits_one_active_index_form(self) -> None:
+        rows = [
+            ("281", "docs/plan/active/281-example.md", "in_progress"),
+            ("282", "docs/plan/active/282-second.md", "ready_to_archive"),
+        ]
+        for label, path in self.ACTIVE_INDEX_GRAMMAR_MODULES:
+            module = load_module(path, f"active_index_writer_{label.replace(' ', '_')}")
+            with self.subTest(command=label):
+                self.assertEqual(module.render_active_index([]), self.ACTIVE_INDEX_EMPTY)
+                self.assertEqual(
+                    module.render_active_index(rows[:1]), self.ACTIVE_INDEX_POPULATED
+                )
+                self.assertEqual(
+                    module.render_active_index(rows),
+                    "# Active Plan\n\nid\tpath\tstatus\n"
+                    "281\tdocs/plan/active/281-example.md\tin_progress\n"
+                    "282\tdocs/plan/active/282-second.md\tready_to_archive\n",
+                )
+                with self.assertRaises(module.ActiveIndexError):
+                    module.render_active_index([("28", "docs/plan/active/28-x.md", "in_progress")])
+
+    def build_generated_index_fixture(self, root: Path, index_text: str) -> Path:
+        """Install the generated plan library beside one active plan and index."""
+
+        scripts = root / ".project-agent-workflow/scripts"
+        scripts.mkdir(parents=True)
+        for name in ("planlib.py", "lint-plan-docs.py", "plan_validation_commands.py"):
+            (scripts / name).write_bytes(
+                (ROOT / "template/.project-agent-workflow/scripts" / name).read_bytes()
+            )
+        plan = root / "docs/plan/active/281-example.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text(
+            "# Example\n\nstatus: in_progress\n\n## Tasks\n\n- [ ] work\n",
+            encoding="utf-8",
+        )
+        (root / "docs/plan/plan.md").write_text(index_text, encoding="utf-8")
+        (root / "docs/plan/checked.md").write_text(
+            "# Checked Plan Index\n\nid\tpath\n", encoding="utf-8"
+        )
+        return scripts
+
+    def load_generated_plan_module(self, root: Path, scripts: Path, name: str, module: str):
+        previous_cwd = Path.cwd()
+        saved = {key: sys.modules.pop(key, None) for key in ("planlib", "plan_validation_commands")}
+        os.chdir(root)
+        sys.path.insert(0, str(scripts))
+        try:
+            return load_module(scripts / name, module)
+        finally:
+            sys.path.remove(str(scripts))
+            os.chdir(previous_cwd)
+            for key, value in saved.items():
+                if value is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+
+    def test_generated_lifecycle_stops_before_mutating_a_malformed_index(self) -> None:
+        for case, text in self.rejected_active_indexes().items():
+            if not text:
+                continue
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    scripts = self.build_generated_index_fixture(root, text)
+                    module = self.load_generated_plan_module(
+                        root, scripts, "planlib.py", "malformed_index_planlib"
+                    )
+                    plan = root / "docs/plan/active/281-example.md"
+                    before = (
+                        (root / "docs/plan/plan.md").read_bytes(),
+                        plan.read_bytes(),
+                        (root / "docs/plan/checked.md").read_bytes(),
+                    )
+                    operations = (
+                        lambda: module.read_active_rows(),
+                        lambda: module.add_active("282", "docs/plan/active/282-new.md"),
+                        lambda: module.remove_active("281"),
+                        lambda: module.set_active_status(
+                            "281",
+                            "docs/plan/active/281-example.md",
+                            "in_progress",
+                            "deferred",
+                        ),
+                        lambda: module.complete_transition(
+                            "281", "docs/plan/active/281-example.md", "in_progress"
+                        ),
+                        lambda: module.check_promotion(
+                            "282",
+                            "docs/plan/backlog/282-new.md",
+                            "docs/plan/active/282-new.md",
+                        ),
+                    )
+                    for operation in operations:
+                        with self.assertRaises(module.PlanError):
+                            operation()
+                    self.assertEqual(
+                        (
+                            (root / "docs/plan/plan.md").read_bytes(),
+                            plan.read_bytes(),
+                            (root / "docs/plan/checked.md").read_bytes(),
+                        ),
+                        before,
+                    )
+
+    def test_generated_lint_rejects_broken_index_identities(self) -> None:
+        missing_file = (
+            "# Active Plan\n\nid\tpath\tstatus\n"
+            "282\tdocs/plan/active/282-absent.md\tin_progress\n"
+        )
+        mismatched_status = (
+            "# Active Plan\n\nid\tpath\tstatus\n"
+            "281\tdocs/plan/active/281-example.md\tdeferred\n"
+        )
+        cases = {
+            "malformed document": self.ACTIVE_INDEX_POPULATED.replace("\t", "\\t"),
+            "missing plan file": missing_file,
+            "manifest status mismatch": mismatched_status,
+        }
+        for case, text in cases.items():
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    scripts = self.build_generated_index_fixture(root, text)
+                    module = self.load_generated_plan_module(
+                        root, scripts, "lint-plan-docs.py", f"index_lint_{case.replace(' ', '_')}"
+                    )
+                    with self.assertRaises(SystemExit):
+                        module.lint_plan_index()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts = self.build_generated_index_fixture(root, self.ACTIVE_INDEX_POPULATED)
+            module = self.load_generated_plan_module(
+                root, scripts, "lint-plan-docs.py", "index_lint_accepted"
+            )
+            module.lint_plan_index()
+
+    def test_root_policy_rejects_broken_active_index_identities(self) -> None:
+        cases = {
+            "malformed document": self.ACTIVE_INDEX_POPULATED.replace("\t", "\\t"),
+            "missing plan file": (
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                "282\tdocs/plan/active/282-absent.md\tin_progress\n"
+            ),
+            "plan status mismatch": (
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                "281\tdocs/plan/active/281-example.md\tdeferred\n"
+            ),
+        }
+        for case, text in cases.items():
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    self.build_generated_index_fixture(root, text)
+                    module = load_module(self.ROOT_POLICY, f"root_index_{case.replace(' ', '_')}")
+                    module.ROOT = root
+                    with self.assertRaises(SystemExit):
+                        module.check_active_plans()
+        for case, (text, _) in self.accepted_active_indexes().items():
+            with self.subTest(accepted=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    self.build_generated_index_fixture(root, text)
+                    (root / "docs/plan/active/282-second.md").write_text(
+                        "# Second\n\nstatus: ready_to_archive\n", encoding="utf-8"
+                    )
+                    module = load_module(
+                        self.ROOT_POLICY, f"root_index_ok_{case.replace(' ', '_')}"
+                    )
+                    module.ROOT = root
+                    module.check_active_plans()
+
     def test_title_does_not_hide_manifest_validation_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp) / "plan.md"
@@ -2517,6 +2796,7 @@ class PlanValidationCommandsTest(unittest.TestCase):
         index_status: str | None = None,
         plan_present: bool = True,
         index_rows: bool = True,
+        index_text: str | None = None,
         **plan_fields: object,
     ) -> None:
         """Install one completion gate with its plan lifecycle records."""
@@ -2561,12 +2841,14 @@ class PlanValidationCommandsTest(unittest.TestCase):
             )
         index = repo / "docs/plan/plan.md"
         index.parent.mkdir(parents=True, exist_ok=True)
-        row = (
-            f"900\t{self.COMPLETION_PLAN}\t{index_status or plan_status}\n"
-            if index_rows
-            else ""
-        )
-        index.write_text(f"# Active Plan\n\nid\tpath\tstatus\n{row}", encoding="utf-8")
+        if index_text is None:
+            index_text = (
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                f"900\t{self.COMPLETION_PLAN}\t{index_status or plan_status}\n"
+                if index_rows
+                else "# Active Plan\n\nNo active development items.\n"
+            )
+        index.write_text(index_text, encoding="utf-8")
         for args in (
             ("init", "-q"),
             ("config", "user.email", "test@example.invalid"),
@@ -2615,6 +2897,16 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 )
             )
         return tuple(entries)
+
+    @classmethod
+    def durable_state(cls, repo: Path) -> tuple[tuple[str, str], ...]:
+        """Repository state without the transient lifecycle lock artifacts."""
+
+        return tuple(
+            entry
+            for entry in cls.repository_state(repo)
+            if not entry[0].startswith(".agent-artifacts/")
+        )
 
     def test_completion_gate_reports_a_completed_plan_without_mutation(self) -> None:
         for variant in self.COMPLETION_GATE_VARIANTS:
@@ -2870,6 +3162,84 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     result = self.run_completion_plan(repo, variant, self.COMPLETION_PLAN)
                     self.assertEqual(result.returncode, variant["ready_returncode"])
                     self.assertIn(str(variant["ready_message"]), result.stderr)
+
+    def test_completion_gate_rejects_a_malformed_active_index(self) -> None:
+        for case, malformed in self.rejected_active_indexes().items():
+            if not malformed:
+                continue
+            for variant in self.COMPLETION_GATE_VARIANTS:
+                with self.subTest(gate=variant["name"], rejected=case):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        repo = Path(tmp)
+                        self.build_completion_repo(repo, variant, index_text=malformed)
+                        before = self.durable_state(repo)
+                        result = self.run_completion_gate(repo, variant, "--plans-only")
+                        self.assertEqual(result.returncode, 1)
+                        self.assertEqual(result.stdout, "")
+                        self.assertIn(
+                            "malformed active plan index blocks completion", result.stderr
+                        )
+                        self.assertEqual(self.durable_state(repo), before)
+
+    def test_completion_stops_on_a_malformed_active_index(self) -> None:
+        malformed = self.ACTIVE_INDEX_POPULATED.replace("\t", "\\t")
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            with self.subTest(transition=variant["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(repo, variant, index_text=malformed)
+                    before = self.durable_state(repo)
+                    result = self.run_completion_plan(repo, variant, self.COMPLETION_PLAN)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("active plan index", result.stderr)
+                    self.assertEqual(self.durable_state(repo), before)
+
+    def test_finalized_last_row_leaves_the_canonical_empty_index(self) -> None:
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            with self.subTest(finalization=variant["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(
+                        repo, variant, plan_status="ready_to_archive"
+                    )
+                    finalizer = Path(str(variant["install"])) / "finalize-active-plan.sh"
+                    (repo / finalizer).write_bytes(
+                        (ROOT / str(variant["source"]) / "finalize-active-plan.sh").read_bytes()
+                    )
+                    (repo / "docs/plan/checked.md").write_text(
+                        "# Checked Plan Index\n\nid\tpath\n", encoding="utf-8"
+                    )
+                    result = self.run_in_repo(repo, str(finalizer), self.COMPLETION_PLAN)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        (repo / "docs/plan/plan.md").read_text(encoding="utf-8"),
+                        self.ACTIVE_INDEX_EMPTY,
+                    )
+
+    def test_finalization_stops_on_a_malformed_active_index(self) -> None:
+        malformed = self.ACTIVE_INDEX_POPULATED.replace("\t", "\\t")
+        for variant in self.COMPLETION_GATE_VARIANTS:
+            with self.subTest(finalization=variant["name"]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    self.build_completion_repo(
+                        repo,
+                        variant,
+                        plan_status="ready_to_archive",
+                        index_text=malformed,
+                    )
+                    finalizer = Path(str(variant["install"])) / "finalize-active-plan.sh"
+                    (repo / finalizer).write_bytes(
+                        (ROOT / str(variant["source"]) / "finalize-active-plan.sh").read_bytes()
+                    )
+                    (repo / "docs/plan/checked.md").write_text(
+                        "# Checked Plan Index\n\nid\tpath\n", encoding="utf-8"
+                    )
+                    before = self.durable_state(repo)
+                    result = self.run_in_repo(repo, str(finalizer), self.COMPLETION_PLAN)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("active plan index", result.stderr)
+                    self.assertEqual(self.durable_state(repo), before)
 
     ROOT_PLAN_COMMAND_MODULE = ROOT / "scripts/plan_validation_commands.py"
     TEMPLATE_PLAN_COMMAND_MODULE = (

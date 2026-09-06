@@ -118,6 +118,9 @@ admission=$(
   python3 .project-agent-workflow/scripts/lint-plan-docs.py --render-admission
 )
 
+# Creation ends with an active index write, so reject a malformed index
+# before the new plan file exists.
+python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-active-index
 id=$(python3 .project-agent-workflow/scripts/lint-plan-docs.py --next-id)
 dir="docs/plan/$kind"
 path="$dir/$id-$slug.md"

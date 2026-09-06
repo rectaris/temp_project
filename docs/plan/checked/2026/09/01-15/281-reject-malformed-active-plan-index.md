@@ -1,6 +1,6 @@
 # Reject malformed active-plan indexes before lifecycle work
 
-status: in_progress
+status: checked
 primary_invariant: Every root and generated-project check or lifecycle mutation treats the active-plan index as either one exact empty representation or one exact TSV representation, rejects every other nonempty form before mutation, and every writer emits only those representations.
 task_types:
   - planning_docs
@@ -34,10 +34,16 @@ completion_witness_map:
   - {"condition_sha256":"sha256:eb7a13ba5560115583058bf1b7b7dc6256fbd6cabfc7c685223135f06765d35f","witness":"python3 tests/test-validation-tools.py"}
 write_scope:
   - scripts/check-root-agent-policy.py
+  - scripts/check-agent-completion.sh
+  - scripts/validate-changes.py
   - scripts/complete-plan.sh
   - scripts/finalize-active-plan.sh
   - template/.project-agent-workflow/scripts/planlib.py
   - template/.project-agent-workflow/scripts/lint-plan-docs.py
+  - template/.project-agent-workflow/scripts/create-plan.sh
+  - template/.project-agent-workflow/scripts/format-plan-docs.py
+  - template/.project-agent-workflow/scripts/check-agent-completion.sh
+  - template/.project-agent-workflow/scripts/validate-changes.py
   - template/.project-agent-workflow/scripts/complete-plan.sh
   - template/.project-agent-workflow/scripts/finalize-active-plan.sh
   - scripts/restructure-plan.py
@@ -46,6 +52,8 @@ write_scope:
   - template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md
   - scripts/check-copier-template.py
   - tests/validation_tools/plan.py
+  - tests/validation_tools/changes.py
+  - tests/validation_tools/generated.py
   - tests/root-plan-lifecycle.sh
   - tests/test-plan-restructure.py
   - tests/smoke.sh
@@ -107,14 +115,15 @@ checked_summary_ja: 壊れた実行中プラン一覧を空として通さず、
 - Preserve exactly one empty form and one actual-tab TSV form; reject all other nonempty text rather than recovering selected rows.
 - Keep the index as the existing lifecycle record. Do not add a second index, migration file, or compatibility representation.
 - Apply the strict parser before mutation and keep existing locks and rollback boundaries.
+- The owner authorized one write-scope widening after independent review found the same defect in the completion gate and the validation routing (owner instruction: `write_scope を広げて今回まとめて修正する（継続認可）`). The added files are the two completion gates, the two validation routers, the generated create entrypoint, the generated plan formatter, and the two test modules whose fixtures encoded the old tolerant shape.
 
 ## Tasks
 
-- [ ] Add failing root and generated fixtures for every malformed form and preservation case named in the completion conditions.
-- [ ] Implement strict whole-document parsing and canonical serialization in the existing root and generated lifecycle paths.
-- [ ] Route root completion and finalization through the same validated representation before either operation mutates a plan, index, or archive.
-- [ ] Update root/generated policy and parity assertions for the exact grammar and fail-closed behavior.
-- [ ] Run focused validation, obtain independent review, and run the unchanged authoritative suites once for an acceptable candidate.
+- [x] Add failing root and generated fixtures for every malformed form and preservation case named in the completion conditions.
+- [x] Implement strict whole-document parsing and canonical serialization in the existing root and generated lifecycle paths.
+- [x] Route root completion and finalization through the same validated representation before either operation mutates a plan, index, or archive.
+- [x] Update root/generated policy and parity assertions for the exact grammar and fail-closed behavior.
+- [x] Run focused validation, obtain independent review, and run the unchanged authoritative suites once for an acceptable candidate.
 
 ## Validation Notes
 
@@ -125,3 +134,15 @@ checked_summary_ja: 壊れた実行中プラン一覧を空として通さず、
 - No performance, retry, or time saving is claimed. The future implementation must establish only the declared correctness and preservation behavior.
 - Plan-authoring validation passed: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` exited 0. Smoke exercised generated-project cases; its optional GitHub Actions lint was skipped because `actionlint` was unavailable.
 - Root admission, witness-digest, validation-command, context-path, and whitespace checks passed. These results validate this backlog document and the existing repository, not the future parser implementation.
+
+### Implementation run
+
+- Implementation baseline: `bb510f8` in `temp_project`, which activated this plan and added its index row.
+- One shared active-index grammar block is embedded byte-identically in ten enforcing commands and is held identical by `scripts/check-copier-template.py`, which also requires each host to call the parser it embeds.
+- Readers now read the index as raw bytes. `Path.read_text` translates CRLF, so a carriage-return document would otherwise have been normalized into an accepted document before parsing.
+- Focused validation passed: `python3 tests/test-validation-tools.py` (147 tests), `tests/root-plan-lifecycle.sh`, `python3 tests/test-plan-restructure.py` (178 tests), `python3 scripts/check-copier-template.py`, `python3 scripts/plan_validation_commands.py --self-test`, `git diff --check`.
+- `tests/test-plan-restructure.py::test_finalization_rebinds_every_live_referrer_context_entry` failed on the unchanged baseline because its fixture omitted `scripts/parallel-plan-state.py`. The fixture was corrected because that command is this plan's restructuring witness.
+- Independent review ran twice on this candidate. Round one reported the same fail-open defect in the completion gate and in validation routing, plus an orphan plan file on generated create. Round two reported managed-index detection that still fell open before the title line, the plan formatter silently repairing a rejected index, and a parity check that did not require the new hosts to use the grammar. All six findings are fixed in this candidate.
+- The owner authorized one write-scope widening for those findings. No helper agent held write authority; the review agents were read-only and their output was treated as advisory until re-verified here.
+- The first authoritative `scripts/lint-project-workflow.sh` run aborted at `tests/test-human-report.py::test_shared_publication_requires_explicit_supersede_and_stops_at_conflicts`, which republishes a report and asserts byte-identical HTML. `template/.project-agent-workflow/scripts/human-report.py` embeds a wall-clock `generated_at` second in that HTML, so the assertion fails whenever the two publishes straddle a second boundary. The observed diff was exactly `07:07:57Z` against `07:07:58Z`. This candidate touches no report file, the test passed on three immediate reruns, and the fault is outside this plan's write scope, so it was not repaired here.
+- Authoritative validation passed on the completed run: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` exited 0.

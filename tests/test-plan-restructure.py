@@ -107,6 +107,21 @@ class PlanRestructureTest(unittest.TestCase):
         finally:
             os.chdir(old_cwd)
 
+    def test_restructuring_stops_on_a_malformed_active_index(self) -> None:
+        index = self.repo / "docs/plan/plan.md"
+        malformed = index.read_bytes().replace(b"\t", b"\\t")
+        index.write_bytes(malformed)
+        source_before = (self.repo / self.source_path).read_bytes()
+        result = self.run_command()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("active plan index", result.stderr)
+        self.assertEqual(index.read_bytes(), malformed)
+        self.assertEqual((self.repo / self.source_path).read_bytes(), source_before)
+        self.assertFalse((self.repo / str(self.spec["contract_path"])).exists())
+        verified = self.run_verify()
+        self.assertNotEqual(verified.returncode, 0)
+        self.assertIn("active plan index", verified.stderr)
+
     def test_empty_contract_repository_does_not_require_companion(self) -> None:
         (self.repo / "docs/plan/plan.md").write_text(
             "# Active Plan\n\nNo active development items.\n",
@@ -285,6 +300,11 @@ class PlanRestructureTest(unittest.TestCase):
     def test_finalization_rebinds_every_live_referrer_context_entry(self) -> None:
         finalizer = self.repo / "scripts/finalize-active-plan.sh"
         shutil.copy2(ROOT / "scripts/finalize-active-plan.sh", finalizer)
+        # Finalization consults the parallel group authority before it mutates.
+        shutil.copy2(
+            ROOT / "scripts/parallel-plan-state.py",
+            self.repo / "scripts/parallel-plan-state.py",
+        )
         source = "docs/plan/active/077-finalized.md"
         (self.repo / source).write_text(
             "# Finalized\n\n"
@@ -937,7 +957,8 @@ class PlanRestructureTest(unittest.TestCase):
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             with self.assertRaisesRegex(
-                module.RestructureError, "active plan identity mismatch"
+                module.RestructureError,
+                "active plan index row id does not match its file",
             ):
                 module.validate_repository_active_predecessors()
         finally:
@@ -5210,7 +5231,7 @@ class PlanRestructureTest(unittest.TestCase):
         spec["source_head"] = git(self.repo, "rev-parse", "HEAD")
         result = self.run_spec_data(spec, "duplicate-index.json")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("must appear exactly once in the active index", result.stderr)
+        self.assertIn("duplicate active plan index id: 010", result.stderr)
 
     def test_historical_schema_three_sources_verify_without_discriminant(self) -> None:
         coupled, _, _, _ = self.prepare_coupled_spec()
