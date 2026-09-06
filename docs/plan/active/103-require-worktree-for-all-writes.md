@@ -19,7 +19,7 @@ feasibility_evidence:
   - {"evidence":"manage-plan-worktrees.py already creates, inspects, and resumes plan-bound linked checkouts with repository, branch, start-commit, directory-identity, owner-lease, and retained-state verification.","kind":"existing_mechanism"}
   - {"evidence":"The Codex PreToolUse gate, Stop adapter, staged-tree pre-commit hook, lifecycle commands, and generated copies already provide deterministic supported-workflow boundaries where one shared worktree assertion can fail closed.","kind":"existing_mechanism"}
   - {"evidence":"run-parallel-plans.py already binds each member dispatch to an exact worktree and journals checked fast-forward publication, while run-sandboxed-plan-worker.py already resolves linked parent checkouts and retains disposable no-hardlinks clones.","kind":"existing_mechanism"}
-  - {"evidence":"Plan 103 is committed on its task branch but absent from dev, and the prior completion report left that authoring worktree registered instead of publishing and retiring it.","kind":"reproduced_defect"}
+  - {"evidence":"At the time of the owner's clarification, Plan 103 was committed on its task branch but absent from dev, and the prior completion report had left that authoring worktree registered instead of publishing and retiring it.","kind":"reproduced_defect"}
   - {"evidence":"plan_authoring.py scans active, backlog, shelved, recursive checked and replanned files plus checked.md, but its lifecycle lock is worktree-local and cannot serialize allocations across linked checkouts.","kind":"existing_mechanism"}
 completion_conditions:
   - One idempotent prepare-or-resume operation creates a task-bound linked checkout before the first write for either one committed numbered plan or a disjoint direct task, including plan authoring before a plan identifier exists.
@@ -192,7 +192,7 @@ checked_summary_ja: すべての書き込み作業を専用 worktree 上で実�
 - Owner requirement: 「こちらで明示してワークツリーの使用を求めなくても、１つのプラン実装であっても２つ以上のプラン実装であってもワークツリー上で作業を行ってほしい」.
 - Owner authorization: 「提案の方針でプランを作成せよ。」 This authorizes this implementation plan and its accepted worktree boundary; it does not authorize implementation in this planning turn.
 - Owner completion requirement: 「AIエージェントが作業を終了してこちらにボールを渡したとき、ワークツリーは統合されて存在していないようにしたい」. This plan interprets that as the successful completion boundary and never uses it to publish or discard blocked work.
-- Owner clarification: Plan 103 currently exists on its authoring branch but not on dev; the plan must explain that worktree-local authoring is provisional until publication and that plan implementation starts later from the published active plan.
+- Owner clarification recorded the then-current state: Plan 103 existed on its authoring branch but not on dev. The plan therefore explains that worktree-local authoring is provisional until publication and that plan implementation starts later from the published active plan.
 - Owner update instruction: 「これらの説明もドキュメントに含めるようにプランを更新せよ。」
 - Decision audit selected all-write coverage, separate direct-authoring and plan-implementation identities, shared plan-id reservation, checked source publication, automatic exact successful-task retirement, and explicit unrelated or stopped-task retirement. The full comparison remains outside docs/plan.
 - Planning baseline is f5ab608 in temp_project. The allocator selected Plan 103; its dedicated branch is plan/103-require-worktree-for-all-writes and its linked checkout is outside the pre-existing checkout.
