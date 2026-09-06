@@ -1,7 +1,6 @@
 # Bind independent parallel plan execution to parent-owned authority
 
-status: deferred
-completion_deferred_reason: Complete and archive the declared predecessors before starting this implementation.
+status: in_progress
 primary_invariant: An explicitly admitted set of independent plans may receive isolated candidate-generation permits, while one parent-owned authority preserves exact membership, each logical plan's cumulative budgets and stop state, and exclusive claims on predecessor and publication state across all worktrees and baseline changes.
 replan_sources:
   - docs/plan/active/278-create-resumable-parent-worktrees.md
@@ -106,7 +105,7 @@ required_specs:
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_AGENT_LOGGING.md
 predecessor_plans:
-  - docs/plan/active/287-complete-resumable-parent-worktrees.md
+  - docs/plan/checked/2026/09/01-15/287-complete-resumable-parent-worktrees.md
 focused_validation:
   - python3 tests/test-plan-execution-state.py
   - python3 tests/test-validation-tools.py
