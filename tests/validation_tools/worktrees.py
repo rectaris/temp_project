@@ -1263,3 +1263,188 @@ class TaskWorktreeGuardTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must differ from the source ref", result.stderr)
+
+
+class TaskPublicationTest(unittest.TestCase):
+    """Disposable-repository tests for publication and exact retirement."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.repository = self.base / "repository"
+        self.allowed_root = self.base / "managed"
+        self.home = self.base / "home"
+        self.repository.mkdir()
+        self.allowed_root.mkdir(mode=0o700)
+        self.allowed_root.chmod(0o700)
+        self.home.mkdir(mode=0o700)
+        git(self.repository, "init", "-q", "-b", "dev")
+        git(self.repository, "config", "user.name", "Publish Test")
+        git(self.repository, "config", "user.email", "publish@example.invalid")
+        git(self.repository, "remote", "add", "origin", "git@github.com:example/publish.git")
+        self.plan = "docs/plan/active/311-publish.md"
+        plan = self.repository / self.plan
+        plan.parent.mkdir(parents=True)
+        plan.write_text("status: in_progress\n", encoding="utf-8")
+        (self.repository / "file.txt").write_text("baseline\n", encoding="utf-8")
+        (self.repository / ".gitignore").write_text(
+            ".agent-logs/\n.agent-artifacts/\n", encoding="utf-8"
+        )
+        git(self.repository, "add", ".")
+        git(self.repository, "commit", "-qm", "baseline")
+        self.identity = WORKTREE_MODULE.repository_identity(self.repository)
+        self.paths = WORKTREE_MODULE.metadata_paths(self.identity, plan_selector(self.plan))
+
+    def tearDown(self) -> None:
+        for key in ("record", "journal", "lock"):
+            self.paths[key].unlink(missing_ok=True)
+        self.temp.cleanup()
+
+    def run_command(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *arguments],
+            cwd=self.repository,
+            env={**os.environ, "HOME": str(self.home)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def prepare(self) -> Path:
+        result = self.run_command(
+            "prepare",
+            self.plan,
+            "--allowed-root",
+            str(self.allowed_root),
+            "--owner-id",
+            "owner-a",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return Path(json.loads(result.stdout)["worktree"])
+
+    def commit_task_work(self, worktree: Path, name: str = "feature.txt") -> str:
+        (worktree / name).write_text("task work\n", encoding="utf-8")
+        git(worktree, "add", name)
+        git(worktree, "commit", "-qm", f"add {name}")
+        return git(worktree, "rev-parse", "HEAD").stdout.strip()
+
+    def test_publication_fast_forwards_and_retires_the_exact_task(self) -> None:
+        worktree = self.prepare()
+        evidence = worktree / ".agent-logs"
+        evidence.mkdir()
+        (evidence / "run.log").write_text("evidence\n", encoding="utf-8")
+        accepted = self.commit_task_work(worktree)
+        result = self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["published_commit"], accepted)
+        self.assertEqual(
+            git(self.repository, "rev-parse", "refs/heads/dev").stdout.strip(), accepted
+        )
+        self.assertEqual(git(self.repository, "rev-parse", "HEAD").stdout.strip(), accepted)
+        self.assertFalse(worktree.exists())
+        self.assertNotEqual(
+            git(
+                self.repository,
+                "rev-parse",
+                "--verify",
+                "refs/heads/plan/311-publish",
+                check=False,
+            ).returncode,
+            0,
+        )
+        self.assertFalse(self.paths["record"].exists())
+        self.assertTrue(
+            (self.repository / ".agent-logs/retired-tasks/311-publish/run.log").is_file()
+        )
+
+    def test_success_requires_the_worktree_and_branch_to_be_absent(self) -> None:
+        worktree = self.prepare()
+        self.commit_task_work(worktree)
+        self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        self.assertIsNone(GUARD_MODULE.find_binding(self.repository))
+        listed = git(self.repository, "worktree", "list").stdout
+        self.assertNotIn(str(worktree), listed)
+
+    def test_publication_refuses_an_empty_task_branch(self) -> None:
+        self.prepare()
+        result = self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no commit to publish", result.stderr)
+
+    def test_publication_preserves_a_dirty_source_checkout(self) -> None:
+        worktree = self.prepare()
+        self.commit_task_work(worktree)
+        (self.repository / "uncommitted.txt").write_text("keep me\n", encoding="utf-8")
+        result = self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preserved unchanged", result.stderr)
+        self.assertTrue((self.repository / "uncommitted.txt").is_file())
+        self.assertTrue(worktree.exists())
+        self.assertTrue(self.paths["record"].exists())
+
+    def test_publication_refuses_a_dirty_task_worktree(self) -> None:
+        worktree = self.prepare()
+        self.commit_task_work(worktree)
+        (worktree / "scratch.txt").write_text("scratch\n", encoding="utf-8")
+        result = self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("task worktree is dirty", result.stderr)
+        self.assertTrue((worktree / "scratch.txt").is_file())
+
+    def test_publication_refuses_a_drifted_non_fast_forward_source(self) -> None:
+        worktree = self.prepare()
+        self.commit_task_work(worktree)
+        (self.repository / "diverged.txt").write_text("diverged\n", encoding="utf-8")
+        git(self.repository, "add", "diverged.txt")
+        git(self.repository, "commit", "-qm", "diverge the source")
+        result = self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a fast-forward", result.stderr)
+        self.assertTrue(worktree.exists())
+        self.assertTrue((self.repository / "diverged.txt").is_file())
+
+    def test_publication_resumes_after_an_interrupted_retirement(self) -> None:
+        worktree = self.prepare()
+        accepted = self.commit_task_work(worktree)
+        git(self.repository, "merge", "--ff-only", accepted)
+        result = self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(worktree.exists())
+        self.assertEqual(
+            git(self.repository, "rev-parse", "refs/heads/dev").stdout.strip(), accepted
+        )
+
+    def test_publication_rejects_an_accepted_commit_that_is_not_the_tip(self) -> None:
+        worktree = self.prepare()
+        start = git(worktree, "rev-parse", "HEAD").stdout.strip()
+        self.commit_task_work(worktree)
+        result = self.run_command(
+            "publish", self.plan, "--owner-id", "owner-a", "--accepted-commit", start
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exact task branch tip", result.stderr)
+
+    def test_retirement_of_unpublished_work_stays_explicit(self) -> None:
+        worktree = self.prepare()
+        self.commit_task_work(worktree)
+        result = self.run_command("retire", self.plan, "--owner-id", "owner-a")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("publish it first", result.stderr)
+        self.assertTrue(worktree.exists())
+
+    def test_stopped_retirement_keeps_recoverable_commits(self) -> None:
+        worktree = self.prepare()
+        self.commit_task_work(worktree)
+        result = self.run_command("retire", self.plan, "--owner-id", "owner-a", "--stopped")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("recoverable", result.stderr)
+        self.assertTrue(worktree.exists())
+
+    def test_stopped_retirement_removes_an_effect_free_worktree(self) -> None:
+        worktree = self.prepare()
+        result = self.run_command("retire", self.plan, "--owner-id", "owner-a", "--stopped")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(worktree.exists())
+        self.assertFalse(self.paths["record"].exists())

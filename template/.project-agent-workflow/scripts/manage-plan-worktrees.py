@@ -936,6 +936,269 @@ def resume(args: argparse.Namespace) -> None:
     )
 
 
+EVIDENCE_DIRECTORIES = (".agent-logs", ".agent-artifacts")
+PUBLICATION_KEYS = {
+    "operation",
+    "repository_identity",
+    "task",
+    "source_ref",
+    "branch_ref",
+    "worktree_path",
+    "source_tip_before",
+    "accepted_commit",
+}
+
+
+def worktree_is_clean(worktree: Path) -> bool:
+    payload = git(worktree, "status", "--porcelain", "--untracked-files=all", "-z").stdout
+    return payload.strip(b"\0") == b""
+
+
+def untracked_paths(worktree: Path) -> list[str]:
+    payload = git(
+        worktree, "ls-files", "-z", "--others", "--exclude-standard"
+    ).stdout
+    return [item.decode("utf-8", "surrogateescape") for item in payload.split(b"\0") if item]
+
+
+def source_checkout(repository: Path, source_ref: str) -> Path:
+    """Return the single registered checkout that holds the source branch."""
+
+    matches = [
+        registered_worktree_path(record)
+        for record in parse_worktrees(repository)
+        if record.get("branch") == source_ref
+    ]
+    if not matches:
+        raise WorktreeError(
+            f"no registered checkout has {source_ref} checked out; publication needs one"
+        )
+    if len(matches) > 1:
+        raise WorktreeError(f"more than one registered checkout holds {source_ref}")
+    return matches[0]
+
+
+def relocate_evidence(target: Path, destination_root: Path, slug: str) -> list[str]:
+    """Move ignored local evidence out of a worktree that is about to vanish."""
+
+    import shutil
+
+    relocated: list[str] = []
+    for name in EVIDENCE_DIRECTORIES:
+        source = target / name
+        if not source.is_dir() or source.is_symlink() or not any(source.iterdir()):
+            continue
+        destination = destination_root / name / "retired-tasks" / slug
+        if destination.exists():
+            raise WorktreeError(f"relocated evidence already exists at {destination}")
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        shutil.move(str(source), str(destination))
+        relocated.append(str(destination))
+    return relocated
+
+
+def publication_journal(
+    record: dict[str, Any], accepted_commit: str, source_tip_before: str
+) -> dict[str, Any]:
+    return {
+        "operation": "publish",
+        "repository_identity": record["repository_identity"],
+        "task": record["task"],
+        "source_ref": record["source_ref"],
+        "branch_ref": record["branch_ref"],
+        "worktree_path": record["worktree_path"],
+        "source_tip_before": source_tip_before,
+        "accepted_commit": accepted_commit,
+    }
+
+
+def read_publication_journal(path: Path) -> dict[str, Any]:
+    if has_symlink_component(path) or path.is_symlink() or not path.is_file():
+        raise WorktreeError("publication journal must be a regular non-symlink file")
+    metadata = path.stat()
+    if stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1:
+        raise WorktreeError("publication journal must be single-linked mode 0600")
+    data = path.read_bytes()
+    if len(data) > MAX_RECORD_BYTES:
+        raise WorktreeError("publication journal exceeds the size limit")
+    value = json.loads(data.decode("utf-8"), object_pairs_hook=guard.reject_duplicate_json_keys)
+    unsigned = dict(value)
+    observed = unsigned.pop("content_digest", None)
+    if set(unsigned) != PUBLICATION_KEYS:
+        raise WorktreeError("publication journal schema is invalid")
+    if observed != digest_bytes(canonical_json(unsigned)):
+        raise WorktreeError("publication journal digest does not match its content")
+    return unsigned
+
+
+def retire_worktree(
+    repository: Path,
+    target: Path,
+    branch_ref: str,
+    branch_short: str,
+) -> None:
+    """Remove the exact task worktree and its temporary local branch."""
+
+    if target.exists():
+        if not worktree_is_clean(target):
+            raise WorktreeError("task worktree still holds uncommitted or untracked work")
+        git(repository, "worktree", "remove", str(target))
+    git(repository, "worktree", "prune")
+    if target.exists() or target.is_symlink():
+        raise WorktreeError("task worktree directory remains after removal")
+    if find_registered_worktree(parse_worktrees(repository), target) is not None:
+        raise WorktreeError("task worktree registration remains after removal")
+    if exact_ref_tip(repository, branch_ref) is not None:
+        git(repository, "branch", "-d", branch_short)
+    if exact_ref_tip(repository, branch_ref) is not None:
+        raise WorktreeError("temporary task branch remains after deletion")
+
+
+def publish(args: argparse.Namespace) -> None:
+    """Publish the accepted commit, then retire this exact task worktree.
+
+    The transaction journals its intent first, so an interrupted run resumes
+    from the exact same bound facts instead of replaying a merge. It never
+    touches a dirty or drifted source checkout, and it never removes a task
+    worktree that still holds work.
+    """
+
+    repository = repository_root()
+    allowed_root, record, paths = load_bound_record(repository, args, allow_resume_journal=True)
+    with locked_file(paths["lock"]):
+        record = read_record(paths["record"])
+        now = int(time.time())
+        validate_lease(record["owner"], args.owner_id, now)
+        target, tip = verify_record_context(repository, allowed_root, record)
+        verify_history(repository, record["start_commit"], record["accepted_tip"], tip)
+        source_ref = record["source_ref"]
+        branch_ref = record["branch_ref"]
+        branch_short = branch_ref.removeprefix("refs/heads/")
+        accepted_commit = args.accepted_commit or tip
+        if accepted_commit != tip:
+            raise WorktreeError("the accepted commit must be the exact task branch tip")
+        if accepted_commit == record["start_commit"]:
+            raise WorktreeError("the task branch holds no commit to publish")
+        if not worktree_is_clean(target):
+            raise WorktreeError(
+                "task worktree is dirty; commit or resolve its work before publication"
+            )
+        checkout = source_checkout(repository, source_ref)
+        source_tip = exact_ref_tip(repository, source_ref)
+        if source_tip is None:
+            raise WorktreeError(f"source ref {source_ref} is unavailable")
+        journal_path = paths["journal"]
+        resumed = None
+        if journal_path.exists():
+            resumed = read_publication_journal(journal_path)
+            if resumed["accepted_commit"] != accepted_commit or (
+                resumed["branch_ref"] != branch_ref
+                or resumed["source_ref"] != source_ref
+                or resumed["worktree_path"] != record["worktree_path"]
+                or resumed["repository_identity"] != record["repository_identity"]
+            ):
+                raise WorktreeError("an interrupted publication has different bound facts")
+        published_already = is_ancestor(repository, accepted_commit, source_tip)
+        if not published_already:
+            if not is_ancestor(repository, source_tip, accepted_commit):
+                raise WorktreeError(
+                    f"{source_ref} moved to unrelated history; this publication is not a "
+                    "fast-forward and the source state is preserved unchanged"
+                )
+            if not worktree_is_clean(checkout):
+                raise WorktreeError(
+                    "the source checkout has uncommitted or untracked changes; "
+                    "its state is preserved unchanged"
+                )
+            if git_text(checkout, "rev-parse", "HEAD") != source_tip:
+                raise WorktreeError("the source checkout drifted from its branch tip")
+            if resumed is None:
+                atomic_write(
+                    journal_path,
+                    add_content_digest(
+                        publication_journal(record, accepted_commit, source_tip)
+                    ),
+                )
+            git(checkout, "merge", "--ff-only", accepted_commit)
+        observed = exact_ref_tip(repository, source_ref)
+        if observed != accepted_commit and not (
+            observed is not None and is_ancestor(repository, accepted_commit, observed)
+        ):
+            raise WorktreeError("the source ref does not contain the accepted commit")
+        if git_text(checkout, "rev-parse", "HEAD") != observed:
+            raise WorktreeError("the source checkout does not reflect the published commit")
+        relocated = relocate_evidence(
+            target, checkout, PurePosixPath(record["worktree_path"]).name
+        )
+        retire_worktree(repository, target, branch_ref, branch_short)
+        journal_path.unlink(missing_ok=True)
+        paths["record"].unlink(missing_ok=True)
+    print(
+        json.dumps(
+            {
+                "operation": "publish",
+                "task": task_label(record["task"]),
+                "source_ref": source_ref,
+                "published_commit": accepted_commit,
+                "relocated_evidence": relocated,
+                "worktree_removed": True,
+                "branch_removed": True,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def retire(args: argparse.Namespace) -> None:
+    """Retire a task worktree the current transaction did not publish.
+
+    Retirement outside a successful publication stays explicit. A stopped
+    task keeps its recoverable state unless its owner acknowledges the loss.
+    """
+
+    repository = repository_root()
+    allowed_root, record, paths = load_bound_record(repository, args)
+    with locked_file(paths["lock"]):
+        record = read_record(paths["record"])
+        validate_lease(record["owner"], args.owner_id, int(time.time()))
+        target, tip = verify_record_context(repository, allowed_root, record)
+        branch_ref = record["branch_ref"]
+        branch_short = branch_ref.removeprefix("refs/heads/")
+        source_tip = exact_ref_tip(repository, record["source_ref"])
+        published = source_tip is not None and is_ancestor(repository, tip, source_tip)
+        if not published and not args.stopped:
+            raise WorktreeError(
+                f"{branch_ref} is not reachable from {record['source_ref']}; publish it "
+                "first, or pass --stopped to retire unpublished work explicitly"
+            )
+        if not published:
+            if tip != record["start_commit"]:
+                raise WorktreeError(
+                    "a stopped task with unpublished commits keeps its recoverable "
+                    "state; remove it with the explicit retirement workflow instead"
+                )
+            if not worktree_is_clean(target):
+                raise WorktreeError("stopped task worktree still holds uncommitted work")
+        checkout = source_checkout(repository, record["source_ref"])
+        relocated = relocate_evidence(
+            target, checkout, PurePosixPath(record["worktree_path"]).name
+        )
+        retire_worktree(repository, target, branch_ref, branch_short)
+        paths["journal"].unlink(missing_ok=True)
+        paths["record"].unlink(missing_ok=True)
+    print(
+        json.dumps(
+            {
+                "operation": "retire",
+                "task": task_label(record["task"]),
+                "published": published,
+                "relocated_evidence": relocated,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def add_task_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("plan", nargs="?")
     parser.add_argument("--direct-task")
@@ -978,6 +1241,18 @@ def parser() -> argparse.ArgumentParser:
     add_task_arguments(resume_parser)
     add_owner_arguments(resume_parser)
     resume_parser.set_defaults(handler=resume)
+
+    publish_parser = sub.add_parser("publish")
+    add_task_arguments(publish_parser)
+    publish_parser.add_argument("--owner-id", default="parent")
+    publish_parser.add_argument("--accepted-commit")
+    publish_parser.set_defaults(handler=publish)
+
+    retire_parser = sub.add_parser("retire")
+    add_task_arguments(retire_parser)
+    retire_parser.add_argument("--owner-id", default="parent")
+    retire_parser.add_argument("--stopped", action="store_true")
+    retire_parser.set_defaults(handler=retire)
     return root
 
 

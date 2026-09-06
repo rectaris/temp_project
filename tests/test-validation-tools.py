@@ -14,7 +14,11 @@ from validation_tools.generated import (
 )
 from validation_tools.plan import PlanValidationCommandsTest
 from validation_tools.plan_authoring import PlanAuthoringTest
-from validation_tools.worktrees import ManagedPlanWorktreesTest, TaskWorktreeGuardTest
+from validation_tools.worktrees import (
+    ManagedPlanWorktreesTest,
+    TaskPublicationTest,
+    TaskWorktreeGuardTest,
+)
 
 
 if __name__ == "__main__":
