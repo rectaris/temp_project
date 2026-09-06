@@ -1,6 +1,6 @@
 # Enforce the plan completion gate across supported agent runtimes
 
-status: in_progress
+status: checked
 primary_invariant: On every repository-shipped completion boundary, the root or generated check-agent-completion.sh --plans-only command remains the only completion judgment: CI checks the committed tree, pre-commit checks the staged tree, and supported main-agent Stop hooks check the working tree without copying the completion predicates or claiming enforcement when a local layer is inactive.
 task_types:
   - template_workflow
@@ -138,15 +138,15 @@ checked_summary_ja: commit 済みツリー、ステージ済みツリー、対�
 
 ## Tasks
 
-- [ ] Add failing fixtures for committed completion evidence, staged-versus-working-tree divergence, ready-to-archive finalization, a missing gate, inactive configuration, linked-worktree commit, a non-executable hook, and `--no-verify`.
-- [ ] Add the root and template pre-commit hook that expands the complete index into a disposable snapshot and delegates to the gate resolved inside that snapshot.
-- [ ] Extend the aligned shared Stop adapter for fail-closed missing-gate output, non-empty fallback diagnostics, one-continuation self-limiting, and both Codex and Copilot configuration fixtures.
-- [ ] Add the root-only activation detector with exact work-tree, shipped-hook, CI, and effective-value guards and no Git configuration write.
-- [ ] Add the completion command to root and generated CI and extend generated path filters for both managed hook surfaces.
-- [ ] Register and mirror every added artifact, enforcing root/template bytes, executable bits, and complete modes.
-- [ ] Record the manual activation command and bounded layer guarantees in Copier's post-copy message and the aligned plan-workflow specifications.
-- [ ] Extend fresh-generation smoke and actual Copier update fixtures, including proof that project-owned files and Git configuration remain unchanged.
-- [ ] Review the exact implementation and critical invariants independently, run every focused command, then run the authoritative suite once for an otherwise acceptable candidate.
+- [x] Add failing fixtures for committed completion evidence, staged-versus-working-tree divergence, ready-to-archive finalization, a missing gate, inactive configuration, linked-worktree commit, a non-executable hook, and `--no-verify`.
+- [x] Add the root and template pre-commit hook that expands the complete index into a disposable snapshot and delegates to the gate resolved inside that snapshot.
+- [x] Extend the aligned shared Stop adapter for fail-closed missing-gate output, non-empty fallback diagnostics, one-continuation self-limiting, and both Codex and Copilot configuration fixtures.
+- [x] Add the root-only activation detector with exact work-tree, shipped-hook, CI, and effective-value guards and no Git configuration write.
+- [x] Add the completion command to root and generated CI and extend generated path filters for both managed hook surfaces.
+- [x] Register and mirror every added artifact, enforcing root/template bytes, executable bits, and complete modes.
+- [x] Record the manual activation command and bounded layer guarantees in Copier's post-copy message and the aligned plan-workflow specifications.
+- [x] Extend fresh-generation smoke and actual Copier update fixtures, including proof that project-owned files and Git configuration remain unchanged.
+- [x] Review the exact implementation and critical invariants independently, run every focused command, then run the authoritative suite once for an otherwise acceptable candidate.
 
 ## Validation Notes
 
@@ -161,4 +161,12 @@ checked_summary_ja: commit 済みツリー、ステージ済みツリー、対�
 - A main-agent Stop hook requests at most one continuation. Subagents remain advisory and the main session retains plan lifecycle, validation acceptance, commits, and final reporting.
 - No performance or time saving is claimed. Implementation must establish only the declared tree-specific reachability, fail-closed adapter behavior, and non-destructive distribution.
 - Plan-polish validation passed: `python3 scripts/check-root-agent-policy.py`, `python3 tests/test-validation-tools.py`, `scripts/lint-project-workflow.sh`, and `tests/smoke.sh` exited 0. Smoke exercised generated-project scenarios; optional GitHub Actions lint was skipped because `actionlint` was unavailable. These results validate this plan update and the existing repository, not the future implementation witnesses.
+- Implementation baseline: `7e5644b3ad528f37a80191ee3bfb21b4d54bc218` in `temp_project`. Owner direction: 「docs/plan/active/288-enforce-plan-completion-gate-across-agents.md について実装作業をせよ。」
+- Focused validation passed: `python3 tests/test-validation-tools.py` (136 tests), `tests/root-plan-lifecycle.sh`, and `python3 tests/test-hooks.py` (52 tests) exited 0, together with `python3 scripts/check-copier-template.py`, `python3 scripts/check-root-agent-policy.py`, and `git diff --check`.
+- Authoritative validation ran once after the reviewed candidate was complete: `scripts/lint-project-workflow.sh`, `tests/smoke.sh`, and `tests/copier-update.sh --require-copier` exited 0. Optional GitHub Actions lint was skipped because `actionlint` was unavailable.
+- Independent review of the exact candidate reported two Medium defects in the staged expansion, both reproduced and fixed before the authoritative run. `git checkout-index --all` omits `skip-worktree` entries, which let a sparse selection hide a plan record and pass the gate; the expansion now passes `--ignore-skip-worktree-bits`. The same expansion also ran configured clean/smudge filter drivers, which could execute a network-backed command such as Git LFS on every commit and rewrite the judged records; the expansion now neutralizes every configured driver and disables line-ending conversion, and it fails closed on a driver name it cannot neutralize. Both fixes carry mutation-checked fixtures in `tests/root-plan-lifecycle.sh`.
+- The review also found that the activation detector's work-tree guard had no behavioral coverage, because both candidate cases returned early at the hook-absent guard. The fixture now places a shipped hook in a directory proven to be outside any work tree.
+- Declared `write_scope` was mechanically incomplete and three additional paths changed: `template/.project-agent-workflow/ownership.yaml` had to classify the two newly managed hook artifacts, and `scripts/validate-copier-update.py` with its generated counterpart carry the coupled `CURRENT_OWNERSHIP_SHA256` digest of that file. `tests/fixtures/orchestration/copier-update-source-inventory.txt` also lists the new template files so the update lane installs them. No requirement, acceptance item, validation authority, or security boundary changed.
+- Local hook activation is manual and was performed once in this clone with `git config core.hooksPath .githooks`. No repository file sets, overwrites, or unsets that value; a fresh clone stays inactive until its owner runs the same command.
+- One read-only review helper was used with no write scope. It reviewed the uncommitted candidate and reported findings only. The main session reproduced every finding, owned the fixes, ran all validation, and owns this plan update, the commit, and the report.
 - The earlier read-only research helper had no write scope. This polish turn used no helper; the main session verified repository behavior and current official hook semantics and owns the plan update, validation, commit, and report.

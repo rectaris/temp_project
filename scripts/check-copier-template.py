@@ -2709,6 +2709,140 @@ def require_verify_copier_update_skill() -> None:
         fail("verify-copier-update discovery bridge is not reserved by Copier ownership")
 
 
+def require_completion_gate_distribution() -> None:
+    """Keep one completion judgment distributed across every shipped boundary."""
+
+    for root_path, template_path in (
+        (".githooks/pre-commit", "template/.githooks/pre-commit"),
+        (".github/hooks/plan-lifecycle.json", "template/.github/hooks/plan-lifecycle.json"),
+    ):
+        root_file = ROOT / root_path
+        template_file = ROOT / template_path
+        if root_file.read_bytes() != template_file.read_bytes():
+            fail(f"root and generated completion-gate surfaces differ: {root_path}")
+        if (root_file.stat().st_mode & 0o777) != (template_file.stat().st_mode & 0o777):
+            fail(f"root and generated completion-gate surface modes differ: {root_path}")
+
+    for path in (".githooks/pre-commit", "template/.githooks/pre-commit"):
+        if (ROOT / path).stat().st_mode & 0o777 != 0o755:
+            fail(f"Git pre-commit hook must be mode 755 because Git ignores a non-executable hook: {path}")
+
+    hook = read(".githooks/pre-commit")
+    for marker in (
+        "checkout-index --all --force",
+        "--ignore-skip-worktree-bits --prefix=",
+        "-c core.autocrlf=false -c core.eol=lf",
+        "filter.$driver.smudge=",
+        "--plans-only",
+        ".project-agent-workflow/scripts/check-agent-completion.sh",
+        "scripts/check-agent-completion.sh",
+        "git commit --no-verify",
+        "trap 'rm -rf \"$snapshot\"' EXIT HUP INT TERM",
+    ):
+        if marker not in hook:
+            fail(f"Git pre-commit hook missing completion-gate marker: {marker}")
+    for forbidden in (
+        "core.hooksPath",
+        "complete-plan.sh",
+        "finalize-active-plan.sh",
+        "git add ",
+        "git commit -m",
+        "update-index",
+    ):
+        if forbidden in hook:
+            fail(f"Git pre-commit hook must not perform: {forbidden}")
+
+    copilot_text = read(".github/hooks/plan-lifecycle.json")
+    copilot = json.loads(copilot_text)
+    if copilot.get("version") != 1:
+        fail("Copilot hook configuration must declare version 1")
+    events = copilot.get("hooks")
+    if not isinstance(events, dict) or set(events) != {"agentStop"}:
+        fail("Copilot hook configuration must configure exactly the agentStop event")
+    entries = events["agentStop"]
+    if not isinstance(entries, list) or len(entries) != 1:
+        fail("Copilot agentStop must configure exactly one command hook")
+    entry = entries[0]
+    if entry.get("type") != "command":
+        fail("Copilot agentStop hook must be a command hook")
+    if "exec" in entry or "powershell" in entry:
+        fail("Copilot agentStop hook must stay one POSIX shell command in this release")
+    if ".project-agent-workflow/hooks/stop_review_gate.py" not in entry.get("bash", ""):
+        fail("Copilot agentStop hook must reuse the shared Stop adapter")
+    if "subagentStop" in copilot_text:
+        fail("Copilot hook configuration must not attach the completion gate to subagentStop")
+
+    adapter = read(".project-agent-workflow/hooks/stop_review_gate.py")
+    for marker in (
+        'payload.get("stop_hook_active")',
+        '"decision": "block"',
+        "MISSING_GATE_REASON",
+        "FALLBACK_REASON",
+        "--plans-only",
+    ):
+        if marker not in adapter:
+            fail(f"shared Stop adapter missing completion-gate marker: {marker}")
+
+    detector = read("scripts/lint-project-workflow.sh")
+    for marker in (
+        "check_hook_activation()",
+        "--check-hook-activation",
+        "git config core.hooksPath .githooks",
+        "rev-parse --is-inside-work-tree",
+        '[ -z "${CI:-}" ] || return 0',
+        '[ -f "$target/.githooks/pre-commit" ] || return 0',
+    ):
+        if marker not in detector:
+            fail(f"root Git hook activation detector missing marker: {marker}")
+    if "config core.hooksPath .githooks" in detector.replace(
+        "echo \"Next: git config core.hooksPath .githooks\" >&2", ""
+    ):
+        fail("root validation must never write core.hooksPath")
+
+    root_workflow = read(".github/workflows/ci.yml")
+    if "sh scripts/check-agent-completion.sh --plans-only" not in root_workflow:
+        fail("root CI must run the completion gate against the checked-out commit tree")
+    generated_workflow = read("template/.github/workflows/project-agent-workflow.yml")
+    for marker in (
+        '      - ".githooks/**"',
+        '      - ".github/hooks/**"',
+        "sh .project-agent-workflow/scripts/check-agent-completion.sh --plans-only",
+    ):
+        if marker not in generated_workflow:
+            fail(f"generated workflow missing completion-gate marker: {marker}")
+    if generated_workflow.count('      - ".githooks/**"') != 2:
+        fail("generated workflow must watch .githooks on both pull_request and push")
+    if "core.hooksPath" in generated_workflow:
+        fail("generated workflow must never write Git configuration")
+
+    copier_yml = read("copier.yml")
+    if copier_yml.count("core.hooksPath") != copier_yml.count("git config core.hooksPath .githooks"):
+        fail("copier.yml must reference core.hooksPath only as the manual activation command")
+    if "_message_after_copy:" not in copier_yml or "git config core.hooksPath .githooks" not in copier_yml:
+        fail("copier.yml must document the manual Git hook activation command after copy")
+
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    for marker in ("  - .githooks/pre-commit", "  - .github/hooks/plan-lifecycle.json"):
+        if marker not in ownership:
+            fail(f"Copier ownership does not reserve the completion-gate surface: {marker.strip()}")
+
+    root_spec = read("docs/agent/SPEC_PLAN_WORKFLOW.md")
+    generated_spec = read("template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md")
+    for marker in (
+        "## Completion Gate Boundaries",
+        "git config core.hooksPath .githooks",
+        "git commit --no-verify",
+        "`.github/hooks/plan-lifecycle.json`",
+        "`subagentStop`",
+    ):
+        if marker not in root_spec:
+            fail(f"root plan-workflow specification missing completion-gate marker: {marker}")
+        if marker not in generated_spec:
+            fail(f"generated plan-workflow specification missing completion-gate marker: {marker}")
+    if "lint-project-workflow.sh" in generated_spec:
+        fail("generated plan-workflow specification must not claim the root-only activation detector")
+
+
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--print-source-required":
         print("\n".join(SOURCE_REQUIRED))
@@ -2782,6 +2916,7 @@ def main() -> int:
     require_root_pre_tool_hardening()
     require_orchestration_policy_markers()
     require_shared_human_report_boundary()
+    require_completion_gate_distribution()
     require_template_manifest_complete()
 
     fixture_answers: list[dict[str, str]] = []

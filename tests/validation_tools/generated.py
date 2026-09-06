@@ -16,6 +16,20 @@ from .support import (
     load_module,
 )
 
+ROOT_HOOK = ROOT / ".githooks/pre-commit"
+TEMPLATE_HOOK = ROOT / "template/.githooks/pre-commit"
+ROOT_COPILOT_HOOKS = ROOT / ".github/hooks/plan-lifecycle.json"
+TEMPLATE_COPILOT_HOOKS = ROOT / "template/.github/hooks/plan-lifecycle.json"
+GATE_PLAN_BODY = (
+    "# Fixture plan\n\n"
+    "status: {lifecycle}\n"
+    "checked_summary_ja: 完了ゲートの境界を確認する。\n\n"
+    "## Tasks\n\n"
+    "- [{task}] fixture task\n\n"
+    "## Validation Notes\n\n"
+    "- {notes}\n"
+)
+
 
 class GeneratedCiTest(unittest.TestCase):
     GENERATED_LINT = ROOT / "template/.project-agent-workflow/scripts/lint-plan-docs.py"
@@ -324,6 +338,146 @@ class GeneratedCiTest(unittest.TestCase):
             ],
             cwd=repo,
             check=True,
+        )
+
+    def build_gate_tree(
+        self,
+        directory: Path,
+        *,
+        lifecycle: str = "in_progress",
+        indexed: str = "in_progress",
+        task: str = "x",
+        notes: str = "Fixture validation passed.",
+        plan: bool = True,
+    ) -> None:
+        (directory / "scripts").mkdir(parents=True)
+        for name in ("check-agent-completion.sh", "complete-plan.sh"):
+            (directory / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
+        (directory / "docs/plan/active").mkdir(parents=True)
+        rows = ["# Active Plan", "", "id\tpath\tstatus"]
+        if plan:
+            (directory / "docs/plan/active/001-fixture.md").write_text(
+                GATE_PLAN_BODY.format(lifecycle=lifecycle, task=task, notes=notes),
+                encoding="utf-8",
+            )
+            rows.append(f"001\tdocs/plan/active/001-fixture.md\t{indexed}")
+        (directory / "docs/plan/plan.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    def run_gate(self, directory: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", "scripts/check-agent-completion.sh", "--plans-only"],
+            cwd=directory,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_gate_rejects_a_completed_in_progress_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_gate_tree(directory)
+            completed = self.run_gate(directory)
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("completed plan is not marked ready", completed.stderr)
+        self.assertIn("scripts/complete-plan.sh", completed.stderr)
+
+    def test_gate_rejects_a_ready_to_archive_plan_with_the_finalization_command(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_gate_tree(directory, lifecycle="ready_to_archive", indexed="ready_to_archive")
+            completed = self.run_gate(directory)
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("ready-to-archive plan blocks completion", completed.stderr)
+        self.assertIn("scripts/finalize-active-plan.sh", completed.stderr)
+
+    def test_gate_accepts_sampled_unfinished_states(self) -> None:
+        samples = {
+            "unchecked task": {"task": " "},
+            "pending validation notes": {"notes": "Pending validation."},
+            "deferred plan": {"lifecycle": "deferred", "indexed": "deferred"},
+            "replan required": {"lifecycle": "replan_required", "indexed": "replan_required"},
+            "no active plan": {"plan": False},
+        }
+        for label, options in samples.items():
+            with self.subTest(sample=label), tempfile.TemporaryDirectory() as raw:
+                directory = Path(raw)
+                self.build_gate_tree(directory, **options)
+                completed = self.run_gate(directory)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_root_ci_runs_the_gate_against_the_checked_out_commit_tree(self) -> None:
+        jobs = self.root_workflow_jobs()
+        self.assertIn("sh scripts/check-agent-completion.sh --plans-only", jobs["validate"])
+
+    def test_generated_workflow_runs_the_gate_and_watches_both_hook_surfaces(self) -> None:
+        workflow = (
+            ROOT / "template/.github/workflows/project-agent-workflow.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "sh .project-agent-workflow/scripts/check-agent-completion.sh --plans-only", workflow
+        )
+        self.assertEqual(workflow.count('      - ".githooks/**"'), 2)
+        self.assertEqual(workflow.count('      - ".github/hooks/**"'), 2)
+        self.assertNotIn("core.hooksPath", workflow)
+
+    def test_hook_surfaces_are_registered_in_the_install_inventory(self) -> None:
+        inventory = load_module(
+            ROOT / "scripts/project_workflow/copier_inventory.py", "gate_inventory"
+        )
+        for path in (
+            ".githooks/pre-commit",
+            ".github/hooks/plan-lifecycle.json",
+            "template/.githooks/pre-commit",
+            "template/.github/hooks/plan-lifecycle.json",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(path, inventory.SOURCE_REQUIRED)
+        for path in (".githooks/pre-commit", ".github/hooks/plan-lifecycle.json"):
+            with self.subTest(path=path):
+                self.assertIn(path, inventory.GENERATED_REQUIRED)
+        self.assertIn(".githooks/pre-commit", inventory.SOURCE_SHELL_LINT)
+        self.assertIn("template/.githooks/pre-commit", inventory.SOURCE_SHELL_LINT)
+
+    def test_hook_surfaces_are_byte_and_mode_aligned(self) -> None:
+        self.assertEqual(ROOT_HOOK.read_bytes(), TEMPLATE_HOOK.read_bytes())
+        self.assertEqual(
+            ROOT_COPILOT_HOOKS.read_bytes(), TEMPLATE_COPILOT_HOOKS.read_bytes()
+        )
+        for path in (ROOT_HOOK, TEMPLATE_HOOK):
+            with self.subTest(path=str(path)):
+                self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+                self.assertTrue(os.access(path, os.X_OK))
+
+    def test_generated_projects_receive_no_activation_detector(self) -> None:
+        ownership = (
+            ROOT / "template/.project-agent-workflow/ownership.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("  - .githooks/pre-commit", ownership)
+        self.assertIn("  - .github/hooks/plan-lifecycle.json", ownership)
+        inventory = load_module(
+            ROOT / "scripts/project_workflow/copier_inventory.py", "gate_inventory_detector"
+        )
+        self.assertNotIn("scripts/lint-project-workflow.sh", inventory.GENERATED_REQUIRED)
+        detector = (ROOT / "scripts/lint-project-workflow.sh").read_text(encoding="utf-8")
+        self.assertIn("--check-hook-activation", detector)
+        copier = (ROOT / "copier.yml").read_text(encoding="utf-8")
+        self.assertIn("git config core.hooksPath .githooks", copier)
+        self.assertEqual(
+            copier.count("core.hooksPath"), copier.count("git config core.hooksPath .githooks")
+        )
+
+    def test_both_gates_resolve_in_the_same_order_as_the_stop_adapter(self) -> None:
+        hook = ROOT_HOOK.read_text(encoding="utf-8")
+        managed = hook.index(".project-agent-workflow/scripts/check-agent-completion.sh")
+        fallback = hook.index("\n  scripts/check-agent-completion.sh")
+        self.assertLess(managed, fallback)
+        adapter = (
+            ROOT / ".project-agent-workflow/hooks/stop_review_gate.py"
+        ).read_text(encoding="utf-8")
+        self.assertLess(
+            adapter.index('".project-agent-workflow/scripts/check-agent-completion.sh"'),
+            adapter.index('"scripts/check-agent-completion.sh"'),
         )
 
 

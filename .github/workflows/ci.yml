@@ -40,6 +40,9 @@ jobs:
       - name: Check Copier
         run: UV_CACHE_DIR=.uv-cache uv run copier --version
 
+      - name: Check plan completion
+        run: sh scripts/check-agent-completion.sh --plans-only
+
       - name: Lint package structure
         run: scripts/lint-project-workflow.sh
 

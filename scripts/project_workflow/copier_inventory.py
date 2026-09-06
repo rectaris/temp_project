@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 SOURCE_REQUIRED = [
     "CHANGELOG.md",
+    ".githooks/pre-commit",
+    ".github/hooks/plan-lifecycle.json",
     ".github/workflows/ci.yml",
     ".github/workflows/codex-ci-autofix.yml",
     ".github/codex/prompts/ci-autofix.md",
@@ -70,6 +72,8 @@ SOURCE_REQUIRED = [
     "template/.project-agent-workflow/README.md",
     "template/.project-agent-workflow/human-report.json.jinja",
     "template/.project-agent-workflow/ownership.yaml",
+    "template/.githooks/pre-commit",
+    "template/.github/hooks/plan-lifecycle.json",
     "template/.github/workflows/project-agent-workflow.yml",
     "template/.github/workflows/codex-ci-autofix.yml.jinja",
     "template/.github/codex/prompts/ci-autofix.md",
@@ -277,6 +281,8 @@ SOURCE_REQUIRED = [
 GENERATED_REQUIRED = [
     ".copier-answers.yml",
     ".gitignore",
+    ".githooks/pre-commit",
+    ".github/hooks/plan-lifecycle.json",
     ".codex/config.toml",
     ".codex/agents/change_reviewer.toml",
     ".codex/agents/docs_researcher.toml",
@@ -418,7 +424,11 @@ GENERATED_REQUIRED = [
     ".project-agent-workflow/scripts/sync-plan-to-linear.sh",
 ]
 
-SOURCE_SHELL_LINT = [path for path in SOURCE_REQUIRED if path.endswith(".sh")]
+SOURCE_SHELL_LINT = [
+    path
+    for path in SOURCE_REQUIRED
+    if path.endswith(".sh") or path.endswith("/pre-commit")
+]
 SOURCE_PYTHON_COMPILE = [path for path in SOURCE_REQUIRED if path.endswith(".py")]
 
 

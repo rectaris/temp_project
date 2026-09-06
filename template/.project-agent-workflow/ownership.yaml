@@ -18,8 +18,10 @@ copier_managed:
   - .codex/hooks/semantic_guard_advisory.py
   - .codex/hooks/stop_review_gate.py
   - .github/codex/prompts/ci-autofix.md
+  - .github/hooks/plan-lifecycle.json
   - .github/workflows/project-agent-workflow.yml
   - .github/workflows/codex-ci-autofix.yml
+  - .githooks/pre-commit
 
 seeded_project_owned:
   - AGENTS.md

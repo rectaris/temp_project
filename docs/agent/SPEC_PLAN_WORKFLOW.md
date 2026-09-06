@@ -118,6 +118,18 @@ Serial execution stays the default. An explicitly admitted execution group is th
 - Treat `status: checked` as the terminal state written by finalization.
 - Enforce the numbered-plan admission contract for every root active or backlog plan whose identifier is 264 or higher through `scripts/check-root-agent-policy.py`. Lower-numbered durable plans stay readable unchanged.
 
+## Completion Gate Boundaries
+
+`scripts/check-agent-completion.sh --plans-only` is the only plan-completion judgment. Every layer runs that same command against the tree its own boundary owns and adds no predicate of its own.
+
+- CI judges the checked-out commit tree and is the repository-shipped enforcement boundary.
+- The committed `.githooks/pre-commit` hook judges the exact staged tree. It expands the complete index into a disposable directory with `git checkout-index`, resolves the gate inside that directory, and never reads unstaged plan bytes, mutates the index, or runs a lifecycle transition.
+- The staged expansion copies staged bytes. It includes `skip-worktree` entries, so a sparse selection cannot hide a plan record, and it disables line-ending conversion and every configured filter driver, so no repository-configured command runs and no record is rewritten before the gate reads it.
+- Supported main-agent Stop hooks judge the current working tree through the shared adapter `.project-agent-workflow/hooks/stop_review_gate.py`. One adapter serves the Codex `Stop` event and the Copilot `agentStop` event configured in `.github/hooks/plan-lifecycle.json`. A missing gate, a failing gate, or an empty gate diagnostic returns exactly one `block` decision with exit code zero, and `stop_hook_active` limits the forced continuation to one turn. The gate is never attached to `subagentStop`, so helpers gain no plan-finalization authority.
+- Activate the local hooks manually with `git config core.hooksPath .githooks`. No script, hook, Copier task, or migration sets, overwrites, or unsets `core.hooksPath`. Root mandatory validation only reports an inactive selection and the command to run.
+- Local reach is bounded. `git commit --no-verify`, a changed `core.hooksPath`, a non-executable hook file, and a fresh clone before activation stay outside local enforcement, and repository files do not configure branch protection.
+- A `ready_to_archive` staged tree directs the reader to finalization. A fully finalized staged tree commits without a hook exception or bypass.
+
 ## Bounded Descope
 
 A bounded descope reduces the acceptance set of the current plan without restructuring it. Use it when review findings show that the plan is too wide, not that its design is wrong.

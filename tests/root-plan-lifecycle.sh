@@ -334,4 +334,256 @@ archived=$(find "$grouped/docs/plan/checked" -name '290-solo.md' | head -n 1)
 [ -n "$archived" ] || { echo "root finalize-active-plan did not archive an ungrouped plan" >&2; exit 1; }
 grep -q '^status: checked$' "$archived"
 
+# The committed pre-commit hook judges the exact staged tree through the same
+# completion gate, and every documented local escape stays outside its reach.
+hookfix="$tmp/precommit"
+mkdir -p "$hookfix/scripts" "$hookfix/.githooks" "$hookfix/docs/plan/active" "$hookfix/docs/plan/checked"
+cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" \
+  "$root/scripts/parallel-plan-state.py" "$root/scripts/check-agent-completion.sh" \
+  "$hookfix/scripts/"
+cp "$root/.githooks/pre-commit" "$hookfix/.githooks/pre-commit"
+chmod 755 "$hookfix/.githooks/pre-commit"
+git -C "$hookfix" init -q -b main
+git -C "$hookfix" config user.email "test@example.invalid"
+git -C "$hookfix" config user.name "Test"
+git -C "$hookfix" config core.hooksPath .githooks
+
+write_hook_plan() {
+  cat >"$hookfix/docs/plan/active/$1" <<HOOK_PLAN_EOF
+# Hook fixture plan $2
+
+status: in_progress
+checked_summary_ja: 完了ゲートの境界を確認する。
+
+## Tasks
+
+- [$3] fixture task
+
+## Validation Notes
+
+- $4
+HOOK_PLAN_EOF
+}
+
+write_hook_index() {
+  {
+    printf '# Active Plan\n\n'
+    printf 'id\tpath\tstatus\n'
+    while [ "$#" -gt 0 ]; do
+      printf '%s\tdocs/plan/active/%s\tin_progress\n' "${1%%-*}" "$1"
+      shift
+    done
+  } >"$hookfix/docs/plan/plan.md"
+}
+
+hook_commit() {
+  git -C "$hookfix" add -A
+  git -C "$hookfix" commit -qm "$1" 2>"$tmp/precommit-$2.err"
+}
+
+cat >"$hookfix/docs/plan/checked.md" <<'HOOK_CHECKED_EOF'
+# Checked Plan Index
+
+id	path
+HOOK_CHECKED_EOF
+
+write_hook_plan "001-hook.md" one " " "Pending validation."
+write_hook_index "001-hook.md"
+hook_commit "unfinished plan" unfinished ||
+  { echo "pre-commit hook blocked an unfinished plan" >&2; cat "$tmp/precommit-unfinished.err" >&2; exit 1; }
+
+# A staged completed plan that is still in_progress is refused, and the refusal
+# names the lifecycle command that resolves it.
+write_hook_plan "001-hook.md" one x "Fixture validation passed."
+if hook_commit "completed plan" completed; then
+  echo "pre-commit hook accepted a staged completed in_progress plan" >&2
+  exit 1
+fi
+grep -q 'completed plan is not marked ready' "$tmp/precommit-completed.err"
+grep -q 'scripts/complete-plan.sh' "$tmp/precommit-completed.err"
+
+# The staged tree decides. A completion that exists only in the working tree is
+# not judged, and a completion that exists only in the index is.
+git -C "$hookfix" reset -q
+write_hook_plan "001-hook.md" one x "Fixture validation passed."
+mkdir -p "$hookfix/src"
+printf 'unrelated\n' >"$hookfix/src/unrelated.txt"
+git -C "$hookfix" add src/unrelated.txt
+git -C "$hookfix" commit -qm "unstaged completion" 2>"$tmp/precommit-unstaged.err" ||
+  { echo "pre-commit hook judged unstaged plan bytes" >&2; cat "$tmp/precommit-unstaged.err" >&2; exit 1; }
+
+git -C "$hookfix" add docs/plan/active/001-hook.md
+write_hook_plan "001-hook.md" one " " "Pending validation."
+if git -C "$hookfix" commit -qm "staged completion" 2>"$tmp/precommit-staged.err"; then
+  echo "pre-commit hook ignored a staged completion behind an unfinished working tree" >&2
+  exit 1
+fi
+grep -q 'completed plan is not marked ready' "$tmp/precommit-staged.err"
+git -C "$hookfix" checkout -q -- docs/plan/active/001-hook.md
+
+# A ready-to-archive snapshot directs the reader to finalization, and the
+# finalized tree commits without a hook exception.
+(cd "$hookfix" && scripts/complete-plan.sh docs/plan/active/001-hook.md >/dev/null)
+if hook_commit "ready to archive" ready; then
+  echo "pre-commit hook accepted a staged ready-to-archive plan" >&2
+  exit 1
+fi
+grep -q 'ready-to-archive plan blocks completion' "$tmp/precommit-ready.err"
+grep -q 'scripts/finalize-active-plan.sh' "$tmp/precommit-ready.err"
+(cd "$hookfix" && scripts/finalize-active-plan.sh docs/plan/active/001-hook.md >/dev/null)
+hook_commit "finalized plan" finalized ||
+  { echo "pre-commit hook blocked a finalized staged tree" >&2; cat "$tmp/precommit-finalized.err" >&2; exit 1; }
+
+# Everything below reuses one staged blocking state.
+write_hook_plan "002-blocked.md" two x "Fixture validation passed."
+write_hook_index "002-blocked.md"
+if hook_commit "blocking state" blocking; then
+  echo "pre-commit hook accepted a second staged completed plan" >&2
+  exit 1
+fi
+grep -q 'completed plan is not marked ready' "$tmp/precommit-blocking.err"
+
+# A skip-worktree entry is staged content, so a sparse selection must not hide
+# a plan record from the judgment.
+git -C "$hookfix" update-index --skip-worktree docs/plan/active/002-blocked.md
+if git -C "$hookfix" commit -qm "skip-worktree record" 2>"$tmp/precommit-sparse.err"; then
+  echo "pre-commit hook skipped a skip-worktree plan record" >&2
+  exit 1
+fi
+grep -q 'completed plan is not marked ready' "$tmp/precommit-sparse.err"
+git -C "$hookfix" update-index --no-skip-worktree docs/plan/active/002-blocked.md
+
+# Expansion copies the staged bytes. A configured filter driver never runs, and
+# line-ending conversion never rewrites the records the gate reads.
+printf 'docs/plan/active/*.md filter=hookdemo\n' >"$hookfix/.gitattributes"
+git -C "$hookfix" add .gitattributes
+git -C "$hookfix" config filter.hookdemo.clean cat
+git -C "$hookfix" config filter.hookdemo.smudge 'tr x " "'
+git -C "$hookfix" config filter.hookdemo.required true
+git -C "$hookfix" config core.autocrlf true
+if git -C "$hookfix" commit -qm "filtered expansion" 2>"$tmp/precommit-filter.err"; then
+  echo "pre-commit hook judged filtered bytes instead of staged bytes" >&2
+  exit 1
+fi
+grep -q 'completed plan is not marked ready' "$tmp/precommit-filter.err"
+git -C "$hookfix" config --unset core.autocrlf
+
+# A filter driver whose name cannot be neutralized fails closed instead of
+# letting an unreviewed command run during expansion.
+git -C "$hookfix" config 'filter.hook demo.smudge' cat
+if git -C "$hookfix" commit -qm "unusual driver name" 2>"$tmp/precommit-driver.err"; then
+  echo "pre-commit hook expanded the index with an un-neutralized filter driver" >&2
+  exit 1
+fi
+grep -q 'cannot neutralize a Git filter driver' "$tmp/precommit-driver.err"
+git -C "$hookfix" config --remove-section 'filter.hook demo'
+git -C "$hookfix" config --remove-section filter.hookdemo
+git -C "$hookfix" rm -q --cached .gitattributes
+rm "$hookfix/.gitattributes"
+
+# A staged tree without any completion gate fails closed.
+git -C "$hookfix" rm -q --cached scripts/check-agent-completion.sh
+mv "$hookfix/scripts/check-agent-completion.sh" "$tmp/precommit-gate-away.sh"
+if git -C "$hookfix" commit -qm "missing gate" 2>"$tmp/precommit-missing.err"; then
+  echo "pre-commit hook committed without a staged completion gate" >&2
+  exit 1
+fi
+grep -q 'ships no plan completion gate' "$tmp/precommit-missing.err"
+grep -q 'no-verify' "$tmp/precommit-missing.err"
+cp "$tmp/precommit-gate-away.sh" "$hookfix/scripts/check-agent-completion.sh"
+git -C "$hookfix" add scripts/check-agent-completion.sh
+
+# Documented local escapes: an explicit bypass, a non-executable hook file, and
+# an unselected core.hooksPath all leave the blocking state committable.
+git -C "$hookfix" commit -q --no-verify -m "explicit bypass" ||
+  { echo "git commit --no-verify was blocked" >&2; exit 1; }
+git -C "$hookfix" log -1 --format=%s | grep -q '^explicit bypass$'
+
+write_hook_plan "003-blocked.md" three x "Fixture validation passed."
+write_hook_index "003-blocked.md"
+chmod 644 "$hookfix/.githooks/pre-commit"
+hook_commit "non-executable hook" nonexec ||
+  { echo "a non-executable hook still blocked the commit" >&2; exit 1; }
+chmod 755 "$hookfix/.githooks/pre-commit"
+
+write_hook_plan "004-blocked.md" four x "Fixture validation passed."
+write_hook_index "004-blocked.md"
+git -C "$hookfix" config --unset core.hooksPath
+hook_commit "inactive hooks path" inactive ||
+  { echo "an unselected core.hooksPath still blocked the commit" >&2; exit 1; }
+git -C "$hookfix" config core.hooksPath .githooks
+
+# One relative main-clone setting also governs a linked worktree.
+linked="$tmp/precommit-linked"
+git -C "$hookfix" worktree add -q -b linked "$linked"
+mkdir -p "$linked/docs/plan/active"
+cat >"$linked/docs/plan/active/005-linked.md" <<'HOOK_LINKED_EOF'
+# Hook fixture plan five
+
+status: in_progress
+checked_summary_ja: 完了ゲートの境界を確認する。
+
+## Tasks
+
+- [x] fixture task
+
+## Validation Notes
+
+- Fixture validation passed.
+HOOK_LINKED_EOF
+{
+  printf '# Active Plan\n\n'
+  printf 'id\tpath\tstatus\n'
+  printf '005\tdocs/plan/active/005-linked.md\tin_progress\n'
+} >"$linked/docs/plan/plan.md"
+git -C "$linked" add -A
+if git -C "$linked" commit -qm "linked worktree" 2>"$tmp/precommit-linked.err"; then
+  echo "pre-commit hook did not run from a linked worktree" >&2
+  exit 1
+fi
+grep -q 'completed plan is not marked ready' "$tmp/precommit-linked.err"
+git -C "$hookfix" worktree remove --force "$linked"
+
+# The root-only activation detector reports an inactive selection and never
+# writes Git configuration.
+lint="$root/scripts/lint-project-workflow.sh"
+activation="$tmp/activation"
+mkdir -p "$activation/.githooks"
+cp "$root/.githooks/pre-commit" "$activation/.githooks/pre-commit"
+git -C "$activation" init -q -b main
+
+if CI= "$lint" --check-hook-activation "$activation" >/dev/null 2>"$tmp/activation-inactive.err"; then
+  echo "root validation accepted an unselected core.hooksPath" >&2
+  exit 1
+fi
+grep -q 'git config core.hooksPath .githooks' "$tmp/activation-inactive.err"
+[ -z "$(git -C "$activation" config --get core.hooksPath || true)" ] ||
+  { echo "root validation wrote core.hooksPath" >&2; exit 1; }
+
+git -C "$activation" config core.hooksPath .githooks
+CI= "$lint" --check-hook-activation "$activation" >/dev/null
+git -C "$activation" config core.hooksPath .other-hooks
+if CI= "$lint" --check-hook-activation "$activation" >/dev/null 2>&1; then
+  echo "root validation accepted a different core.hooksPath" >&2
+  exit 1
+fi
+git -C "$activation" config --unset core.hooksPath
+
+CI=true "$lint" --check-hook-activation "$activation" >/dev/null
+
+# A shipped hook outside any work tree, such as an extracted archive, reports
+# nothing because no Git configuration can select it there.
+plain=$(mktemp -d "${TMPDIR:-/tmp}/project-agent-workflow-plain-XXXXXX")
+mkdir -p "$plain/.githooks"
+cp "$root/.githooks/pre-commit" "$plain/.githooks/pre-commit"
+if git -C "$plain" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "the non-work-tree activation fixture is inside a work tree: $plain" >&2
+  exit 1
+fi
+CI= "$lint" --check-hook-activation "$plain" >/dev/null
+rm -rf "$plain"
+
+rm "$activation/.githooks/pre-commit"
+CI= "$lint" --check-hook-activation "$activation" >/dev/null
+
 echo "root plan lifecycle test passed"

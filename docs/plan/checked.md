@@ -211,3 +211,4 @@ id	path
 286	docs/plan/checked/2026/09/01-15/286-install-same-plan-continuation-epochs.md
 287	docs/plan/checked/2026/09/01-15/287-complete-resumable-parent-worktrees.md
 284	docs/plan/checked/2026/09/01-15/284-bind-parallel-plan-execution-to-shared-authority.md
+288	docs/plan/checked/2026/09/01-15/288-enforce-plan-completion-gate-across-agents.md

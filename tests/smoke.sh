@@ -67,6 +67,8 @@ if [ -z "$source_ref" ]; then
     scripts/migrate-sequential-plan-worker.py \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
+    template/.githooks/pre-commit \
+    template/.github/hooks/plan-lifecycle.json \
     template/.github/workflows/project-agent-workflow.yml \
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
@@ -125,6 +127,8 @@ if [ -z "$source_ref" ]; then
     scripts/migrate-sequential-plan-worker.py \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
+    template/.githooks/pre-commit \
+    template/.github/hooks/plan-lifecycle.json \
     template/.github/workflows/project-agent-workflow.yml \
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
@@ -208,6 +212,32 @@ assert_generated_inventory() {
   python3 "$root/scripts/check-copier-template.py" --print-expected-generated "$fixture" >"$expected"
   find "$out" -type f -printf '%P\n' | LC_ALL=C sort >"$actual"
   diff -u "$expected" "$actual"
+}
+
+assert_generated_hook_surfaces() {
+  out=$1
+  hook="$out/.githooks/pre-commit"
+  copilot="$out/.github/hooks/plan-lifecycle.json"
+  if [ ! -x "$hook" ]; then
+    echo "generated project is missing an executable pre-commit hook: $out" >&2
+    exit 1
+  fi
+  cmp "$root/template/.githooks/pre-commit" "$hook"
+  cmp "$root/template/.github/hooks/plan-lifecycle.json" "$copilot"
+  grep -q '.project-agent-workflow/hooks/stop_review_gate.py' "$copilot"
+  grep -q 'agentStop' "$copilot"
+  if grep -q 'subagentStop' "$copilot"; then
+    echo "generated Copilot configuration attaches the gate to subagent stop: $out" >&2
+    exit 1
+  fi
+  if [ -e "$out/scripts/lint-project-workflow.sh" ]; then
+    echo "generated project received the root-only activation detector: $out" >&2
+    exit 1
+  fi
+  if [ -e "$out/.git" ] && [ -n "$(git -C "$out" config --local --get core.hooksPath || true)" ]; then
+    echo "generation selected core.hooksPath in the generated project: $out" >&2
+    exit 1
+  fi
 }
 
 assert_managed_orchestration_reports() {
@@ -1167,6 +1197,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
   (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check)
   git -C "$out" init -b main >/dev/null
+  assert_generated_hook_surfaces "$out"
   git -C "$out" diff --check
   git -C "$out" check-ignore .agent-logs/sample/manifest.json >/dev/null
   git -C "$out" check-ignore .agent-artifacts/sample/output.txt >/dev/null
@@ -1199,6 +1230,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode human_repo
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
   assert_managed_orchestration_reports "$out"
+  assert_generated_hook_surfaces "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
   run_root_python "$root/scripts/check-yaml.py" "$out" >/dev/null
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
@@ -1207,6 +1239,7 @@ done <"$root/tests/fixtures/copier-pairwise.tsv"
 default_out="$tmp/defaults"
 render_defaults "$default_out"
 assert_managed_orchestration_reports "$default_out"
+assert_generated_hook_surfaces "$default_out"
 run_root_python "$root/tests/assert-generated-semantics.py" "$default_out"
 run_root_python "$root/scripts/check-yaml.py" "$default_out" >/dev/null
 (cd "$default_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check)

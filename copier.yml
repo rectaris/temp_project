@@ -37,6 +37,14 @@ _tasks:
       - "--destination"
       - "."
 
+_message_after_copy: |
+  ローカルの Git hook はまだ有効ではありません。有効にするには次を実行してください。
+
+    git config core.hooksPath .githooks
+
+  この設定は生成でも update でも自動的には書き換えません。pre-commit hook はステージ済みツリーを
+  完了ゲートで確認する高速な補助であり、最終的な強制境界は CI です。
+
 _migrations:
   - version: v1.0.0
     command:

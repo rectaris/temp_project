@@ -985,6 +985,16 @@ validate_common_lane() {
     [ -n "$path" ] || continue
     test -f "$out/$path"
   done
+  if [ ! -x "$out/.githooks/pre-commit" ]; then
+    echo "updated project is missing an executable pre-commit hook: $out" >&2
+    exit 1
+  fi
+  cmp "$root/template/.githooks/pre-commit" "$out/.githooks/pre-commit"
+  cmp "$root/template/.github/hooks/plan-lifecycle.json" "$out/.github/hooks/plan-lifecycle.json"
+  if [ -e "$out/.git" ] && [ -n "$(fixture_git "$out" config --local --get core.hooksPath || true)" ]; then
+    echo "the update selected core.hooksPath in the project: $out" >&2
+    exit 1
+  fi
   assert_agent_profiles "$out"
 }
 

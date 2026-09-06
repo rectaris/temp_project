@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "python3 \"$(git rev-parse --show-toplevel)/.project-agent-workflow/hooks/stop_review_gate.py\"",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}

@@ -2,6 +2,33 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+# Local Git hook activation is a repository-shipped fast-feedback layer, not the
+# enforcement boundary. This detector reports an inactive selection and never
+# writes Git configuration. It stays root-only and is not shipped to generated
+# projects.
+check_hook_activation() {
+  target=$1
+  [ -f "$target/.githooks/pre-commit" ] || return 0
+  [ -z "${CI:-}" ] || return 0
+  git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  selected=$(git -C "$target" config --get core.hooksPath || true)
+  [ "$selected" != ".githooks" ] || return 0
+  echo "core.hooksPath does not select the shipped Git hooks: ${selected:-<unset>}" >&2
+  echo "Next: git config core.hooksPath .githooks" >&2
+  return 1
+}
+
+if [ "${1:-}" = "--check-hook-activation" ]; then
+  shift
+  [ "$#" -le 1 ] || { echo "Usage: $0 [--check-hook-activation [DIRECTORY]]" >&2; exit 2; }
+  if [ "$#" -eq 1 ]; then
+    root=$(CDPATH= cd -- "$1" && pwd)
+  fi
+  check_hook_activation "$root"
+  exit 0
+fi
+
 required_list=${TMPDIR:-/tmp}/project-agent-workflow-required-$$
 python_list=${TMPDIR:-/tmp}/project-agent-workflow-python-$$
 trap 'rm -f "$required_list" "$python_list"' EXIT HUP INT TERM
@@ -49,5 +76,7 @@ python3 "$root/tests/test-copier-adoption.py"
 python3 "$root/tests/test-referent-contract.py"
 python3 "$root/tests/test-validation-tools.py"
 "$root/tests/root-plan-lifecycle.sh"
+
+check_hook_activation "$root"
 
 echo "workflow package lint passed"

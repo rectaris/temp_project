@@ -24,8 +24,27 @@ ROOT_CONTEXT_COMPRESS = ROOT / "scripts/context-compress.sh"
 PRE_TOOL = ROOT / "template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py"
 ROOT_PRE_TOOL = ROOT / ".project-agent-workflow/hooks/pre_tool_hardening_gate.py"
 STOP_REVIEW = ROOT / "template/.project-agent-workflow/hooks/stop_review_gate.py"
+ROOT_STOP_REVIEW = ROOT / ".project-agent-workflow/hooks/stop_review_gate.py"
 LEGACY_STOP_BRIDGE = ROOT / "template/.codex/hooks/stop_review_gate.py"
 SEMANTIC_GUARD = ROOT / "template/.project-agent-workflow/hooks/semantic_guard_advisory.py"
+CODEX_HOOK_CONFIG = ROOT / ".codex/hooks.json"
+COPILOT_HOOK_CONFIG = ROOT / ".github/hooks/plan-lifecycle.json"
+TEMPLATE_COPILOT_HOOK_CONFIG = ROOT / "template/.github/hooks/plan-lifecycle.json"
+
+
+def init_gate_repository(repo: Path, gate: str | None = "#!/bin/sh\nexit 0\n") -> Path:
+    """Create a Git repository whose staged tree ships the given completion gate.
+
+    ``gate`` is the shell body written to ``scripts/check-agent-completion.sh``.
+    Passing ``None`` leaves the repository without any completion gate.
+    """
+
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, stdout=subprocess.DEVNULL, check=True)
+    if gate is not None:
+        scripts = repo / "scripts"
+        scripts.mkdir(exist_ok=True)
+        (scripts / "check-agent-completion.sh").write_text(gate, encoding="utf-8")
+    return repo
 
 
 def run_hook(
