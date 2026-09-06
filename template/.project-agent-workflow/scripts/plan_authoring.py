@@ -235,10 +235,46 @@ class AuthoringError(ValueError):
     """Raised when a bounded authoring input or its target cannot be accepted."""
 
 
+def locate_worktree_guard() -> Any:
+    """Load the shared worktree guard shipped beside this module."""
+
+    candidate = Path(__file__).resolve().with_name("worktree_guard.py")
+    if not candidate.is_file():
+        raise AuthoringError("could not locate worktree_guard.py beside this module")
+    spec = importlib.util.spec_from_file_location("plan_authoring_worktree_guard", candidate)
+    if spec is None or spec.loader is None:
+        raise AuthoringError("could not load worktree_guard.py beside this module")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 @contextlib.contextmanager
 def lifecycle_lock(root: Path):
-    """Hold the same exclusive plan lifecycle lock the other commands hold."""
+    """Hold the exclusive plan lifecycle lock every linked worktree shares.
 
+    A lock inside one worktree cannot serialize a second linked checkout of the
+    same repository, so the lock lives under the common Git directory. A
+    directory that is not a Git worktree at all, such as a rendered fixture,
+    has no shared directory to bind to and keeps the local lock; it also has no
+    second checkout to race against. Acquisition is separated from the guarded
+    body so that a failure raised by the caller never re-runs that body.
+    """
+
+    shared = None
+    try:
+        candidate = locate_worktree_guard().plan_lifecycle_lock(root)
+        candidate.__enter__()
+        shared = candidate
+    except Exception:  # noqa: BLE001 - any guard failure falls back to the local lock
+        shared = None
+    if shared is not None:
+        try:
+            yield
+        finally:
+            shared.__exit__(None, None, None)
+        return
     lock_dir = root / ".agent-artifacts"
     lock_dir.mkdir(parents=True, exist_ok=True)
     with (lock_dir / "plan-lifecycle.lock").open("a", encoding="utf-8") as handle:
@@ -1214,6 +1250,34 @@ def next_plan_id(root: Path) -> str:
     return f"{value:03d}"
 
 
+def reserve_plan_identifier(root: Path, document: dict[str, Any], digest: str) -> str:
+    """Reserve the smallest identifier free in the published state for these bytes.
+
+    Allocation reads the exact published source state and the live cross-worktree
+    reservations rather than this checkout's files, so a stale or ahead working
+    tree cannot hand the same identifier to two linked worktrees. The reservation
+    is keyed by the checked input digest, so the identifier a check reports is the
+    identifier its own write consumes, and publication is what releases it.
+    """
+
+    try:
+        guard = locate_worktree_guard()
+        reservation = guard.reserve_plan_id(
+            root,
+            input_digest=digest,
+            lifecycle=document["lifecycle"],
+            slug=document["slug"],
+        )
+    except AuthoringError:
+        raise
+    except Exception:  # noqa: BLE001 - a directory outside a repository keeps local scanning
+        return next_plan_id(root)
+    plan_id = reservation["plan_id"]
+    if PLAN_ID_RE.fullmatch(plan_id) is None:
+        raise AuthoringError(f"reserved plan identifier is malformed: {plan_id!r}")
+    return plan_id
+
+
 def plan_relative_path(document: dict[str, Any], plan_id: str) -> str:
     return f"docs/plan/{document['lifecycle']}/{plan_id}-{document['slug']}.md"
 
@@ -1276,7 +1340,7 @@ def check_authoring_input(
     document = build_document(parse_input(raw), profile=profile, interface=interface)
     reject_symlinked_declared_paths(root, document)
     read_index_rows(root)
-    plan_id = next_plan_id(root)
+    plan_id = reserve_plan_identifier(root, document, digest)
     relative = plan_relative_path(document, plan_id)
     if (root / relative).exists():
         raise AuthoringError(f"plan target is already occupied: {relative}")
@@ -1306,7 +1370,7 @@ def write_authoring_input(
     with lifecycle_lock(root):
         reject_symlinked_declared_paths(root, document)
         rows = read_index_rows(root)
-        plan_id = next_plan_id(root)
+        plan_id = reserve_plan_identifier(root, document, digest)
         relative = plan_relative_path(document, plan_id)
         reject_symlinked_components(root, relative, "plan target")
         target = root / relative

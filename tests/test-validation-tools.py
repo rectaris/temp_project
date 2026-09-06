@@ -16,6 +16,7 @@ from validation_tools.plan import PlanValidationCommandsTest
 from validation_tools.plan_authoring import PlanAuthoringTest
 from validation_tools.worktrees import (
     ManagedPlanWorktreesTest,
+    PlanIdentifierReservationTest,
     TaskPublicationTest,
     TaskWorktreeGuardTest,
 )

@@ -221,8 +221,48 @@ def has_pre_v1_adoption_provenance() -> bool:
     )
 
 
+def locate_worktree_guard() -> Any:
+    """Load the shared worktree guard shipped beside this module."""
+
+    import importlib.util
+    import sys
+
+    candidate = Path(__file__).resolve().with_name("worktree_guard.py")
+    if not candidate.is_file():
+        raise PlanError("could not locate worktree_guard.py beside this module")
+    spec = importlib.util.spec_from_file_location("planlib_worktree_guard", candidate)
+    if spec is None or spec.loader is None:
+        raise PlanError("could not load worktree_guard.py beside this module")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 @contextmanager
 def lifecycle_lock():
+    """Hold the exclusive plan lifecycle lock every linked worktree shares.
+
+    A lock inside one worktree cannot serialize a second linked checkout of the
+    same repository, so the lock lives under the common Git directory. A
+    directory that is not a Git worktree keeps the local lock; it also has no
+    second checkout to race against. Acquisition is separated from the guarded
+    body so that a failure raised by the caller never re-runs that body.
+    """
+
+    shared = None
+    try:
+        candidate = locate_worktree_guard().plan_lifecycle_lock(ROOT)
+        candidate.__enter__()
+        shared = candidate
+    except Exception:  # noqa: BLE001 - any guard failure falls back to the local lock
+        shared = None
+    if shared is not None:
+        try:
+            yield
+        finally:
+            shared.__exit__(None, None, None)
+        return
     lock_dir = ROOT / ".agent-artifacts"
     lock_dir.mkdir(parents=True, exist_ok=True)
     with (lock_dir / "plan-lifecycle.lock").open("a", encoding="utf-8") as handle:
@@ -1849,7 +1889,18 @@ def plan_ids() -> set[int]:
 
 
 def next_id() -> str:
+    """Report the smallest identifier no local file and no live reservation holds.
+
+    This is a report, not an allocation. It still consults the shared reservation
+    ledger so that it does not name an identifier another linked worktree has
+    already reserved and not yet published.
+    """
+
     ids = plan_ids()
+    try:
+        ids |= locate_worktree_guard().reserved_plan_ids(ROOT)
+    except Exception:  # noqa: BLE001 - a checkout without shared state reports local ids
+        pass
     value = 1
     while value in ids:
         value += 1

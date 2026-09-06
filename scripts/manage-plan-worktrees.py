@@ -764,6 +764,25 @@ def refresh_lease(
     return updated, target, tip
 
 
+def read_task_record(paths: dict[str, Path]) -> dict:
+    """Read the ownership record for this task, or explain why it cannot be used.
+
+    An ownership record is parent-owned state outside the repository, so an
+    unreadable or superseded one is never rewritten or removed automatically: a
+    live worktree may still depend on it. The operator is told the exact record
+    path instead, so the retirement workflow can settle the worktree it names
+    before a new binding is created.
+    """
+
+    try:
+        return read_record(paths["record"])
+    except WorktreeError as exc:
+        raise WorktreeError(
+            f"{exc}: {paths['record']}. Settle the worktree this record names with the "
+            "explicit retirement workflow, then remove the record before preparing again."
+        ) from exc
+
+
 def prepare(args: argparse.Namespace) -> None:
     """Create or resume the task worktree without another owner prompt."""
 
@@ -777,7 +796,7 @@ def prepare(args: argparse.Namespace) -> None:
     ensure_metadata_directory(paths["directory"])
     with locked_file(paths["lock"]):
         if paths["record"].exists():
-            record = read_record(paths["record"])
+            record = read_task_record(paths)
             updated, target, tip = refresh_lease(
                 repository,
                 canonical_directory(record["allowed_root"], label="allowed root"),
@@ -873,7 +892,7 @@ def load_bound_record(
             raise WorktreeError("managed worktree has an interrupted create journal")
         if not allow_resume_journal:
             raise WorktreeError("managed worktree has an interrupted resume journal")
-    record = read_record(paths["record"])
+    record = read_task_record(paths)
     if task_selector(record["task"]) != task_selector(selector_task):
         raise WorktreeError("ownership record task identity changed or mismatched")
     if task_at_commit(repository, record["task"], record["start_commit"]) != record["task"]:
@@ -916,7 +935,7 @@ def resume(args: argparse.Namespace) -> None:
         repository, args, allow_resume_journal=True
     )
     with locked_file(paths["lock"]):
-        record = read_record(paths["record"])
+        record = read_task_record(paths)
         updated, target, tip = refresh_lease(
             repository, allowed_root, record, paths, args.owner_id, args.lease_seconds
         )
@@ -1066,7 +1085,7 @@ def publish(args: argparse.Namespace) -> None:
     repository = repository_root()
     allowed_root, record, paths = load_bound_record(repository, args, allow_resume_journal=True)
     with locked_file(paths["lock"]):
-        record = read_record(paths["record"])
+        record = read_task_record(paths)
         now = int(time.time())
         validate_lease(record["owner"], args.owner_id, now)
         target, tip = verify_record_context(repository, allowed_root, record)
@@ -1159,7 +1178,7 @@ def retire(args: argparse.Namespace) -> None:
     repository = repository_root()
     allowed_root, record, paths = load_bound_record(repository, args)
     with locked_file(paths["lock"]):
-        record = read_record(paths["record"])
+        record = read_task_record(paths)
         validate_lease(record["owner"], args.owner_id, int(time.time()))
         target, tip = verify_record_context(repository, allowed_root, record)
         branch_ref = record["branch_ref"]

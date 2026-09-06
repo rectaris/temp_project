@@ -18,6 +18,7 @@ layout-specific string.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -777,6 +778,300 @@ def assert_task_worktree(
                 + preparation_guidance(repository, plan)
             )
     return binding
+
+
+# --- shared plan-identifier allocation across every linked worktree ---
+#
+# A worktree-local lock cannot serialize two linked checkouts of the same
+# repository, and a worktree-local file scan sees neither another checkout's
+# unpublished plan nor its in-flight allocation. Both the lock and the
+# reservation ledger therefore live under the common Git directory, which every
+# linked worktree of one repository shares and which is never a tracked path.
+# Allocation reads the exact published source state plus live reservations, so
+# two checkouts that hold the same published commit derive the same answer and
+# the lock decides the race. A reservation is consumed only once its identifier
+# appears in the published state, so an unpublished plan cannot lose its
+# identifier to a later allocation merely because its lease aged.
+
+SHARED_STATE_DIRECTORY_NAME = "project-agent-workflow"
+PLAN_LOCK_NAME = "plan-lifecycle.lock"
+RESERVATION_LEDGER_NAME = "plan-id-reservations.json"
+RESERVATION_SCHEMA_VERSION = 1
+RESERVATION_LEASE_SECONDS = 86_400
+MAX_RESERVATIONS = 128
+MAX_RESERVATION_BYTES = 262_144
+MAX_PLAN_ID = 999
+RESERVATION_KEYS = {
+    "plan_id",
+    "input_digest",
+    "relative_path",
+    "worktree_path",
+    "owner",
+    "reserved_at",
+    "lease_expires_at",
+}
+PLAN_ID_PREFIX_RE = re.compile(r"[0-9]{3}")
+PLAN_FILE_RE = re.compile(r"docs/plan/(active|backlog|shelved)/([0-9]{3})-[^/]*\.md")
+NESTED_PLAN_FILE_RE = re.compile(r"docs/plan/(checked|replanned)/.*?([0-9]{3})-[^/]*\.md")
+CHECKED_INDEX_ROW_RE = re.compile(r"^([0-9]{3})\s")
+
+
+def common_git_directory(repository: Path) -> Path:
+    """Return the one directory every linked worktree of this repository shares."""
+
+    return canonical_directory(
+        git_text(repository, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+        label="common Git directory",
+    )
+
+
+def shared_lifecycle_directory(repository: Path) -> Path:
+    """Return the private per-repository directory that holds shared lifecycle state."""
+
+    directory = common_git_directory(repository) / SHARED_STATE_DIRECTORY_NAME
+    if has_symlink_component(directory):
+        raise WorktreeError("shared lifecycle directory contains a symlink component")
+    if not directory.exists():
+        directory.mkdir(mode=0o700, parents=True)
+    require_owned_directory(directory, label="shared lifecycle directory")
+    return directory
+
+
+_HELD_PLAN_LOCKS: dict[str, list[Any]] = {}
+
+
+@contextlib.contextmanager
+def plan_lifecycle_lock(repository: Path):
+    """Hold the exclusive plan lifecycle lock shared by every linked worktree.
+
+    `flock` is held per open file description, so a second `open` of the same
+    lock inside one process would block against itself rather than nest. A
+    lifecycle command that allocates an identifier while already holding the
+    lock is ordinary, so re-entry in the same process reuses the held
+    description and releases it only when the outermost holder exits.
+    """
+
+    key = str(shared_lifecycle_directory(repository) / PLAN_LOCK_NAME)
+    held = _HELD_PLAN_LOCKS.get(key)
+    if held is not None:
+        held[0] += 1
+        try:
+            yield
+        finally:
+            held[0] -= 1
+        return
+    handle = locked_file(Path(key))
+    _HELD_PLAN_LOCKS[key] = [1, handle]
+    try:
+        yield
+    finally:
+        del _HELD_PLAN_LOCKS[key]
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def plan_ids_in_commit(repository: Path, commit: str) -> set[int]:
+    """Return every plan identifier present in one exact published commit."""
+
+    ids: set[int] = set()
+    listing = git(
+        repository, "ls-tree", "-r", "--name-only", "-z", commit, "--", "docs/plan", check=False
+    )
+    if listing.returncode != 0:
+        return ids
+    for name in listing.stdout.decode("utf-8", "replace").split("\0"):
+        if not name:
+            continue
+        match = PLAN_FILE_RE.fullmatch(name) or NESTED_PLAN_FILE_RE.fullmatch(name)
+        if match is not None:
+            ids.add(int(match.group(2)))
+    index = git(repository, "show", f"{commit}:docs/plan/checked.md", check=False)
+    if index.returncode == 0:
+        for line in index.stdout.decode("utf-8", "replace").splitlines():
+            match = CHECKED_INDEX_ROW_RE.match(line)
+            if match is not None:
+                ids.add(int(match.group(1)))
+    return ids
+
+
+def published_source_commit(repository: Path) -> str | None:
+    """Return the commit whose plan state a new identifier must not collide with.
+
+    A bound task worktree allocates against its recorded source ref, which is the
+    branch its work will publish to. Any other checkout allocates against its own
+    committed HEAD. Neither reads the working tree, so an uncommitted or
+    unpublished local file never silently claims an identifier without a
+    reservation.
+    """
+
+    try:
+        binding = find_binding(repository)
+    except WorktreeError:
+        binding = None
+    if binding is not None:
+        tip = exact_ref_tip(repository, binding.record["source_ref"])
+        if tip is not None:
+            return tip
+    head = git(repository, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False)
+    resolved = head.stdout.decode("utf-8", "replace").strip()
+    return resolved if head.returncode == 0 and OID_RE.fullmatch(resolved) else None
+
+
+def reservation_ledger_path(repository: Path) -> Path:
+    return shared_lifecycle_directory(repository) / RESERVATION_LEDGER_NAME
+
+
+def read_reservations(path: Path) -> list[dict[str, Any]]:
+    """Return the recorded reservations, refusing a malformed or oversized ledger."""
+
+    if not path.exists():
+        return []
+    if path.is_symlink() or not path.is_file():
+        raise WorktreeError("plan-id reservation ledger must be a regular non-symlink file")
+    metadata = path.stat()
+    if metadata.st_nlink != 1:
+        raise WorktreeError("plan-id reservation ledger must be single-linked")
+    if metadata.st_size > MAX_RESERVATION_BYTES:
+        raise WorktreeError("plan-id reservation ledger is too large")
+    try:
+        document = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_json_keys
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorktreeError(f"plan-id reservation ledger is unreadable: {exc}") from exc
+    if not isinstance(document, dict) or document.get("schema_version") != RESERVATION_SCHEMA_VERSION:
+        raise WorktreeError("plan-id reservation ledger schema is not supported")
+    entries = document.get("reservations")
+    if not isinstance(entries, list) or len(entries) > MAX_RESERVATIONS:
+        raise WorktreeError("plan-id reservation ledger is malformed")
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != RESERVATION_KEYS:
+            raise WorktreeError("plan-id reservation entry is malformed")
+        if PLAN_ID_PREFIX_RE.fullmatch(str(entry["plan_id"])) is None:
+            raise WorktreeError("plan-id reservation entry carries a malformed identifier")
+        if DIGEST_RE.fullmatch(str(entry["input_digest"])) is None:
+            raise WorktreeError("plan-id reservation entry carries a malformed input digest")
+        if not isinstance(entry["reserved_at"], int) or not isinstance(
+            entry["lease_expires_at"], int
+        ):
+            raise WorktreeError("plan-id reservation entry carries a malformed lease")
+    return entries
+
+
+def write_reservations(path: Path, entries: list[dict[str, Any]]) -> None:
+    atomic_write(
+        path,
+        {"schema_version": RESERVATION_SCHEMA_VERSION, "reservations": entries},
+    )
+
+
+def live_reservations(
+    repository: Path, entries: list[dict[str, Any]], published: set[int], now: int
+) -> list[dict[str, Any]]:
+    """Drop reservations that publication consumed or that no live worktree owns."""
+
+    registered = {
+        str(registered_worktree_path(record)) for record in parse_worktrees(repository)
+    }
+    retained: list[dict[str, Any]] = []
+    for entry in entries:
+        if int(entry["plan_id"]) in published:
+            continue
+        if entry["worktree_path"] in registered or entry["lease_expires_at"] > now:
+            retained.append(entry)
+    return retained
+
+
+def smallest_available_plan_id(taken: set[int]) -> str:
+    value = 1
+    while value in taken:
+        value += 1
+    if value > MAX_PLAN_ID:
+        raise WorktreeError("no plan identifier remains available")
+    return f"{value:03d}"
+
+
+def reservation_relative_path(plan_id: str, lifecycle: str, slug: str) -> str:
+    """Describe the plan path a reservation is held for, or nothing when unknown."""
+
+    if not lifecycle or not slug:
+        return ""
+    candidate = f"docs/plan/{lifecycle}/{plan_id}-{slug}.md"
+    return candidate if len(candidate) <= 256 else ""
+
+
+def reserve_plan_id(
+    repository: Path,
+    *,
+    input_digest: str,
+    lifecycle: str = "",
+    slug: str = "",
+    owner: str | None = None,
+    now: int | None = None,
+    lease_seconds: int = RESERVATION_LEASE_SECONDS,
+) -> dict[str, Any]:
+    """Reserve the smallest free identifier for one exact checked authoring input.
+
+    The reservation is keyed by the checked input bytes, so the identifier a
+    check reports is the identifier its own write consumes. Re-reserving the same
+    input from the same worktree renews rather than advances, which keeps check
+    and write idempotent while a competing worktree still cannot take that
+    identifier.
+    """
+
+    if DIGEST_RE.fullmatch(input_digest) is None:
+        raise WorktreeError("plan-id reservation requires a sha256:<64 hex> input digest")
+    moment = int(time.time()) if now is None else now
+    if not 0 < lease_seconds <= MAX_LEASE_SECONDS:
+        raise WorktreeError("plan-id reservation lease is out of range")
+    ledger = reservation_ledger_path(repository)
+    with plan_lifecycle_lock(repository):
+        commit = published_source_commit(repository)
+        published = plan_ids_in_commit(repository, commit) if commit is not None else set()
+        entries = live_reservations(repository, read_reservations(ledger), published, moment)
+        holder = str(repository)
+        mine = [
+            entry
+            for entry in entries
+            if entry["input_digest"] == input_digest and entry["worktree_path"] == holder
+        ]
+        if mine:
+            reservation = dict(mine[0])
+            reservation["lease_expires_at"] = moment + lease_seconds
+            entries = [entry for entry in entries if entry not in mine]
+        else:
+            taken = published | {int(entry["plan_id"]) for entry in entries}
+            reservation = {
+                "plan_id": smallest_available_plan_id(taken),
+                "input_digest": input_digest,
+                "relative_path": "",
+                "worktree_path": holder,
+                "owner": owner or f"pid:{os.getpid()}",
+                "reserved_at": moment,
+                "lease_expires_at": moment + lease_seconds,
+            }
+        reservation["relative_path"] = (
+            reservation_relative_path(reservation["plan_id"], lifecycle, slug)
+            or reservation["relative_path"]
+        )
+        entries.append(reservation)
+        if len(entries) > MAX_RESERVATIONS:
+            raise WorktreeError("plan-id reservation ledger is full")
+        write_reservations(ledger, sorted(entries, key=lambda entry: entry["plan_id"]))
+    return reservation
+
+
+def reserved_plan_ids(repository: Path, *, now: int | None = None) -> set[int]:
+    """Return the identifiers currently held by a live reservation."""
+
+    moment = int(time.time()) if now is None else now
+    with plan_lifecycle_lock(repository):
+        commit = published_source_commit(repository)
+        published = plan_ids_in_commit(repository, commit) if commit is not None else set()
+        entries = live_reservations(repository, read_reservations(reservation_ledger_path(repository)), published, moment)
+    return {int(entry["plan_id"]) for entry in entries}
 
 
 def main(argv: list[str] | None = None) -> int:

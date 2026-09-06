@@ -1448,3 +1448,167 @@ class TaskPublicationTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(worktree.exists())
         self.assertFalse(self.paths["record"].exists())
+
+
+class PlanIdentifierReservationTest(unittest.TestCase):
+    """Disposable-repository tests for cross-worktree plan-identifier allocation."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.repository = self.base / "repository"
+        self.repository.mkdir()
+        git(self.repository, "init", "-q", "-b", "dev")
+        git(self.repository, "config", "user.name", "Reservation Test")
+        git(self.repository, "config", "user.email", "reserve@example.invalid")
+        git(self.repository, "remote", "add", "origin", "git@github.com:example/reserve.git")
+        self.publish_plans(
+            "docs/plan/active/001-a.md",
+            "docs/plan/backlog/002-b.md",
+            "docs/plan/shelved/003-c.md",
+            "docs/plan/checked/2026/01/004-d.md",
+            "docs/plan/replanned/2026/01/005-e.md",
+        )
+
+    def tearDown(self) -> None:
+        GUARD_MODULE._HELD_PLAN_LOCKS.clear()
+        self.temp.cleanup()
+
+    def publish_plans(self, *relative: str, index_ids: tuple[str, ...] = ("006",)) -> str:
+        for item in relative:
+            path = self.repository / item
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("status: in_progress\n", encoding="utf-8")
+        rows = "".join(f"{value}\tdocs/plan/checked/2026/01/{value}-x.md\n" for value in index_ids)
+        (self.repository / "docs/plan/checked.md").write_text(
+            f"# Checked Plan Index\n\nid\tpath\n{rows}", encoding="utf-8"
+        )
+        git(self.repository, "add", "-A")
+        git(self.repository, "commit", "-qm", "publish plans")
+        return git(self.repository, "rev-parse", "HEAD").stdout.strip()
+
+    @staticmethod
+    def digest(marker: str) -> str:
+        return "sha256:" + (marker * 64)[:64]
+
+    def linked_worktree(self, name: str) -> Path:
+        target = self.base / name
+        git(self.repository, "worktree", "add", "-q", "-b", f"task/{name}", str(target), "dev")
+        return target
+
+    def test_published_scan_reads_every_lifecycle_location(self) -> None:
+        commit = GUARD_MODULE.published_source_commit(self.repository)
+        self.assertEqual(
+            sorted(GUARD_MODULE.plan_ids_in_commit(self.repository, commit)),
+            [1, 2, 3, 4, 5, 6],
+        )
+
+    def test_reservation_allocates_the_smallest_free_published_identifier(self) -> None:
+        reservation = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("a"), lifecycle="active", slug="next"
+        )
+        self.assertEqual(reservation["plan_id"], "007")
+        self.assertEqual(reservation["relative_path"], "docs/plan/active/007-next.md")
+
+    def test_the_same_checked_input_keeps_its_reserved_identifier(self) -> None:
+        first = GUARD_MODULE.reserve_plan_id(self.repository, input_digest=self.digest("a"))
+        second = GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("a"), lifecycle="active", slug="named"
+        )
+        self.assertEqual(first["plan_id"], second["plan_id"])
+        self.assertEqual(second["relative_path"], "docs/plan/active/007-named.md")
+
+    def test_a_second_linked_worktree_cannot_take_a_reserved_identifier(self) -> None:
+        first = GUARD_MODULE.reserve_plan_id(self.repository, input_digest=self.digest("a"))
+        linked = self.linked_worktree("second")
+        second = GUARD_MODULE.reserve_plan_id(linked, input_digest=self.digest("b"))
+        self.assertEqual(first["plan_id"], "007")
+        self.assertEqual(second["plan_id"], "008")
+        self.assertEqual(
+            GUARD_MODULE.reservation_ledger_path(linked),
+            GUARD_MODULE.reservation_ledger_path(self.repository),
+        )
+
+    def test_an_uncommitted_plan_file_does_not_claim_an_identifier(self) -> None:
+        stray = self.repository / "docs/plan/active/007-uncommitted.md"
+        stray.write_text("status: in_progress\n", encoding="utf-8")
+        reservation = GUARD_MODULE.reserve_plan_id(self.repository, input_digest=self.digest("a"))
+        self.assertEqual(reservation["plan_id"], "007")
+
+    def test_publication_consumes_the_reservation(self) -> None:
+        reserved = GUARD_MODULE.reserve_plan_id(self.repository, input_digest=self.digest("a"))
+        self.assertEqual(GUARD_MODULE.reserved_plan_ids(self.repository), {7})
+        self.publish_plans(f"docs/plan/active/{reserved['plan_id']}-published.md")
+        self.assertEqual(GUARD_MODULE.reserved_plan_ids(self.repository), set())
+        following = GUARD_MODULE.reserve_plan_id(self.repository, input_digest=self.digest("b"))
+        self.assertEqual(following["plan_id"], "008")
+
+    def test_an_expired_reservation_without_a_live_worktree_is_released(self) -> None:
+        moment = int(time.time())
+        GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("a"), now=moment, lease_seconds=60
+        )
+        ledger = GUARD_MODULE.reservation_ledger_path(self.repository)
+        entries = GUARD_MODULE.read_reservations(ledger)
+        entries[0]["worktree_path"] = str(self.base / "removed")
+        GUARD_MODULE.write_reservations(ledger, entries)
+        self.assertEqual(GUARD_MODULE.reserved_plan_ids(self.repository, now=moment + 61), set())
+
+    def test_an_expired_reservation_with_a_live_worktree_is_retained(self) -> None:
+        moment = int(time.time())
+        GUARD_MODULE.reserve_plan_id(
+            self.repository, input_digest=self.digest("a"), now=moment, lease_seconds=60
+        )
+        self.assertEqual(GUARD_MODULE.reserved_plan_ids(self.repository, now=moment + 61), {7})
+
+    def test_a_malformed_reservation_ledger_is_refused(self) -> None:
+        ledger = GUARD_MODULE.reservation_ledger_path(self.repository)
+        ledger.write_text('{"schema_version": 1, "reservations": [{"plan_id": "7"}]}', encoding="utf-8")
+        with self.assertRaises(GUARD_MODULE.WorktreeError):
+            GUARD_MODULE.read_reservations(ledger)
+
+    def test_a_foreign_ledger_schema_is_refused(self) -> None:
+        ledger = GUARD_MODULE.reservation_ledger_path(self.repository)
+        ledger.write_text('{"schema_version": 99, "reservations": []}', encoding="utf-8")
+        with self.assertRaises(GUARD_MODULE.WorktreeError):
+            GUARD_MODULE.read_reservations(ledger)
+
+    def test_a_malformed_input_digest_is_refused(self) -> None:
+        with self.assertRaises(GUARD_MODULE.WorktreeError):
+            GUARD_MODULE.reserve_plan_id(self.repository, input_digest="not-a-digest")
+
+    def test_the_shared_lock_binds_to_the_common_git_directory(self) -> None:
+        linked = self.linked_worktree("second")
+        shared = GUARD_MODULE.shared_lifecycle_directory(self.repository)
+        common = GUARD_MODULE.common_git_directory(self.repository)
+        self.assertEqual(shared, GUARD_MODULE.shared_lifecycle_directory(linked))
+        self.assertEqual(common, GUARD_MODULE.common_git_directory(linked))
+        self.assertTrue(GUARD_MODULE.path_is_strict_descendant(shared, common))
+        self.assertFalse(GUARD_MODULE.path_is_strict_descendant(shared, linked))
+        tracked = git(self.repository, "ls-files", "--", str(shared), check=False)
+        self.assertEqual(tracked.stdout.strip(), "")
+
+    def test_the_shared_lock_nests_within_one_process(self) -> None:
+        with GUARD_MODULE.plan_lifecycle_lock(self.repository):
+            with GUARD_MODULE.plan_lifecycle_lock(self.repository):
+                reservation = GUARD_MODULE.reserve_plan_id(
+                    self.repository, input_digest=self.digest("a")
+                )
+        self.assertEqual(reservation["plan_id"], "007")
+        self.assertEqual(GUARD_MODULE._HELD_PLAN_LOCKS, {})
+
+    def test_an_unbound_checkout_allocates_against_its_own_committed_state(self) -> None:
+        linked = self.linked_worktree("second")
+        self.publish_plans("docs/plan/active/007-later.md")
+        self.assertEqual(
+            sorted(GUARD_MODULE.plan_ids_in_commit(linked, GUARD_MODULE.published_source_commit(linked))),
+            [1, 2, 3, 4, 5, 6],
+        )
+        self.assertEqual(
+            sorted(
+                GUARD_MODULE.plan_ids_in_commit(
+                    self.repository, GUARD_MODULE.published_source_commit(self.repository)
+                )
+            ),
+            [1, 2, 3, 4, 5, 6, 7],
+        )
