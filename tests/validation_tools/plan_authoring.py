@@ -393,6 +393,24 @@ class PlanAuthoringInRepositoryTest(unittest.TestCase):
         self.assertEqual(len(created), 1, created)
         self.assertTrue(created[0].startswith("001-"), created)
 
+    def test_a_governed_repository_refuses_authoring_outside_a_task_worktree(self) -> None:
+        """A repository a binding can name must author its plan in that worktree."""
+
+        self.git("remote", "add", "origin", "git@github.com:example/authoring.git")
+        source = self.root / "input.json"
+        source.write_text(
+            json.dumps(self.accepted_input(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        checked = self.run_command("check", "--input", str(source), "--print-digest")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        written = self.run_command(
+            "write", "--input", str(source), "--expect-input-sha256", checked.stdout.strip()
+        )
+        self.assertEqual(written.returncode, 1)
+        self.assertIn("pre-existing checkout", written.stderr)
+        self.assertEqual(list((self.root / "docs/plan/active").iterdir()), [])
+
     def test_rechecking_a_written_input_moves_past_the_plan_it_created(self) -> None:
         module = self.module()
         source = self.root / "input.json"

@@ -1391,6 +1391,12 @@ def write_authoring_input(
             f"authoring input changed since it was checked: {digest} != {expected_digest}"
         )
     document = build_document(parse_input(raw), profile=profile, interface=interface)
+    guard = locate_worktree_guard()
+    if hasattr(guard, "require_task_worktree"):
+        try:
+            guard.require_task_worktree(root, action="authoring this plan")
+        except Exception as error:
+            raise AuthoringError(f"{error}") from error
     with lifecycle_lock(root):
         reject_symlinked_declared_paths(root, document)
         rows = read_index_rows(root)

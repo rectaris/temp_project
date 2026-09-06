@@ -1185,7 +1185,12 @@ def require_task_worktree(
     from :func:`enforcement_scope` rather than treating ``None`` as success.
     """
 
-    repository = repository_root(cwd)
+    try:
+        repository = repository_root(cwd)
+    except (OSError, UnicodeError, WorktreeError):
+        # A directory that is not a Git worktree cannot carry a binding, which
+        # is the same reason an unnameable repository is left alone.
+        return None
     governed, _ = enforcement_scope(repository)
     if not governed:
         return None

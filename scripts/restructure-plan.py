@@ -8220,6 +8220,36 @@ def verify_companion_baseline(records: list[dict[str, Any]]) -> str | None:
     return published
 
 
+def require_task_worktree(action: str) -> None:
+    """Refuse a governed restructuring write outside its bound task worktree.
+
+    A repository that ships no guard keeps its previous behavior. A shipped
+    guard that refuses or fails stops the write, so a broken boundary never
+    silently allows one.
+    """
+
+    for candidate in (
+        ".project-agent-workflow/scripts/worktree_guard.py",
+        "scripts/project_workflow/worktree_guard.py",
+    ):
+        path = Path(candidate)
+        if not path.is_file():
+            continue
+        guard = sys.modules.get("worktree_guard")
+        if guard is None:
+            spec = importlib.util.spec_from_file_location("worktree_guard", path)
+            if spec is None or spec.loader is None:
+                return
+            guard = importlib.util.module_from_spec(spec)
+            sys.modules["worktree_guard"] = guard
+            spec.loader.exec_module(guard)
+        try:
+            guard.require_task_worktree(action=action)
+        except Exception as error:
+            raise RestructureError(f"{error}") from error
+        return
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("specification", type=Path, nargs="?")
@@ -8242,6 +8272,7 @@ def main() -> int:
         if args.recover is not None:
             if not args.journal_id or not SHA_RE.fullmatch(args.journal_id):
                 raise RestructureError("--recover requires one exact --journal-id")
+            require_task_worktree("recovering this restructuring")
             print(recover_transaction(args.recover, args.journal_id))
         elif args.verify:
             if args.specification is not None:
@@ -8255,6 +8286,7 @@ def main() -> int:
                 raise RestructureError("missing restructure specification")
             if args.journal_id:
                 raise RestructureError("a specification does not accept --journal-id")
+            require_task_worktree("restructuring this plan")
             print(execute(args.specification))
     except (OSError, UnicodeError, RestructureError) as exc:
         print(f"plan restructuring failed: {exc}", file=sys.stderr)

@@ -1,6 +1,7 @@
 """Pre-tool and stop-gate behavior tests."""
 
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from .support import (
     LEGACY_STOP_BRIDGE,
     PRE_COMMIT,
     PRE_TOOL,
+    ROOT,
     ROOT_PRE_TOOL,
     ROOT_STOP_REVIEW,
     STOP_REVIEW,
@@ -145,6 +147,29 @@ class TaskWorktreeGateTest(unittest.TestCase):
         self.assertEqual(output["decision"], "block")
         self.assertIn(str(worktree), output["reason"])
         self.assertIn("publish", output["reason"])
+
+    def test_lifecycle_commands_refuse_a_governed_run_outside_a_task_worktree(self) -> None:
+        commands = {
+            "scripts/complete-plan.sh": "completing this plan",
+            "scripts/finalize-active-plan.sh": "finalizing this plan",
+            "scripts/shelve-plan.sh": "shelving this plan",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            for relative, action in commands.items():
+                shutil.copy2(ROOT / relative, repo / Path(relative).name)
+                with self.subTest(command=relative):
+                    result = subprocess.run(
+                        ["sh", str(repo / Path(relative).name), "docs/plan/active/001-x.md"],
+                        cwd=repo,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn(action, result.stderr)
+                    self.assertIn("pre-existing checkout", result.stderr)
 
     def test_stop_gate_allows_success_once_no_task_worktree_is_bound(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

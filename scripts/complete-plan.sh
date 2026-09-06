@@ -1,6 +1,25 @@
 #!/bin/sh
 set -eu
 
+# Every repository-changing lifecycle command runs in its own task worktree.
+# The guard reports its own enforcement scope, so a repository that cannot
+# carry a binding keeps its previous behavior instead of refusing every run.
+require_task_worktree() {
+  _top=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+  for _candidate in \
+    .project-agent-workflow/scripts/worktree_guard.py \
+    scripts/project_workflow/worktree_guard.py; do
+    if [ -f "$_top/$_candidate" ]; then
+      if ! _refusal=$(python3 "$_top/$_candidate" require --action "$1" 2>&1); then
+        echo "$_refusal" >&2
+        exit 1
+      fi
+      return 0
+    fi
+  done
+}
+require_task_worktree "completing this plan"
+
 # 0: completion evidence is present, 1: unchecked tasks remain,
 # 2: Validation Notes are empty or pending.
 completion_evidence() {
