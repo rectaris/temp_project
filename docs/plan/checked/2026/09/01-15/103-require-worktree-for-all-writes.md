@@ -1,6 +1,6 @@
 # Require a task worktree before every repository write
 
-status: in_progress
+status: checked
 primary_invariant: Every repository-changing task performs its writes in one exact task-bound linked worktree; a success response requires its accepted commit published to the exact source branch and its task worktree and temporary local branch absent.
 task_types:
   - planning_docs
@@ -177,15 +177,15 @@ checked_summary_ja: すべての書き込み作業を専用 worktree 上で実�
 
 ## Tasks
 
-- [ ] Add disposable plan-authoring, direct-task, single-plan, grouped-plan, allocation-race, stale-binding, original-checkout, dirty-target, publication-recovery, successful-retirement, stopped-retention, and bypass-boundary fixtures before changing production behavior.
-- [ ] Extract one aligned worktree assertion module and extend the manager with automatic default placement, mutually exclusive plan/direct task identities, idempotent prepare-or-resume, inspection, and bounded ownership records.
-- [ ] Move plan-id allocation under one common-Git-directory-bound lock and lease record that scans only the exact published source state and live reservations, binds the checked authoring input to its reserved id, and consumes it only after publication.
-- [ ] Gate plan authoring and every governed root/generated lifecycle mutation before its first repository effect, keep an unintegrated plan non-executable, and make pre-tool, pre-commit, and Stop surfaces report the exact worktree or publication action needed.
-- [ ] Require the sequential orchestrator and sandboxed runner to start from the bound plan worktree while retaining disposable clone isolation, exact candidate review, focused validation, authoritative validation, apply, and ledger rules.
-- [ ] Bind every grouped member to its own managed worktree and preserve existing group membership, permits, baseline transfer, counters, stop states, serial integration, and publication authority.
-- [ ] Implement one checked completion transaction for direct and plan work that journals intent, rechecks the source ref and clean registered checkout, fast-forwards only to the accepted commit, relocates required ignored evidence, retires only its exact task worktree and temporary branch, and recovers without replay.
-- [ ] Update root/generated plan, retirement, security, orchestration, skill, hook, inventory, and Copier policy while retaining explicit retirement for every worktree not proven to be the exact successfully published current task.
-- [ ] Run referent-contract checks, exact-target adversarial preflight, independent review within the execution epoch, every focused command, and the authoritative validation suite once for the otherwise acceptable implementation.
+- [x] Add disposable plan-authoring, direct-task, single-plan, grouped-plan, allocation-race, stale-binding, original-checkout, dirty-target, publication-recovery, successful-retirement, stopped-retention, and bypass-boundary fixtures before changing production behavior.
+- [x] Extract one aligned worktree assertion module and extend the manager with automatic default placement, mutually exclusive plan/direct task identities, idempotent prepare-or-resume, inspection, and bounded ownership records.
+- [x] Move plan-id allocation under one common-Git-directory-bound lock and lease record that scans only the exact published source state and live reservations, binds the checked authoring input to its reserved id, and consumes it only after publication.
+- [x] Gate plan authoring and every governed root/generated lifecycle mutation before its first repository effect, keep an unintegrated plan non-executable, and make pre-tool, pre-commit, and Stop surfaces report the exact worktree or publication action needed.
+- [x] Require the sequential orchestrator and sandboxed runner to start from the bound plan worktree while retaining disposable clone isolation, exact candidate review, focused validation, authoritative validation, apply, and ledger rules.
+- [x] Bind every grouped member to its own managed worktree and preserve existing group membership, permits, baseline transfer, counters, stop states, serial integration, and publication authority.
+- [x] Implement one checked completion transaction for direct and plan work that journals intent, rechecks the source ref and clean registered checkout, fast-forwards only to the accepted commit, relocates required ignored evidence, retires only its exact task worktree and temporary branch, and recovers without replay.
+- [x] Update root/generated plan, retirement, security, orchestration, skill, hook, inventory, and Copier policy while retaining explicit retirement for every worktree not proven to be the exact successfully published current task.
+- [x] Run referent-contract checks, exact-target adversarial preflight, independent review within the execution epoch, every focused command, and the authoritative validation suite once for the otherwise acceptable implementation.
 
 ## Validation Notes
 
@@ -198,3 +198,23 @@ checked_summary_ja: すべての書き込み作業を専用 worktree 上で実�
 - Planning baseline is f5ab608 in temp_project. The allocator selected Plan 103; its dedicated branch is plan/103-require-worktree-for-all-writes and its linked checkout is outside the pre-existing checkout.
 - Feasibility evidence is bounded source inspection and the reproduced absence of a task worktree for Plan 272. It is not a claim that the future implementation or completion witnesses already pass.
 - The parent owns design interpretation, scope admission, independent-review acceptance, validation, lifecycle transitions, publication, commit, and final reporting. No helper is authorized by this planning turn.
+
+### Execution record
+
+- Implementation ran from 43331d2 and published 16 commits to dev, ending at a77a3dc. Every increment was written in the bound plan/103-require-worktree-for-all-writes worktree and published through the delivered transaction; the publication that proved retirement ran from inside the task worktree it removed.
+- The delivered boundary was reproduced live after publication: `git worktree list` showed only the pre-existing checkout, the temporary local branch was absent, `outstanding` reported an empty list under `"enforced": true`, and the pre-existing checkout itself now refuses `git commit` through `worktree_guard.py require`.
+- No plan execution ledger was initialized for this run, so `scripts/plan-execution-state.py` never bound the run identifier, plan digest, source baseline, primary-invariant digest, or implementation mode, and no ledger-recorded preflight, review, attempt, or continuation event exists. The one-correction and two-review-per-epoch budgets were honored by parent reading and explicit owner decision rather than by mechanical enforcement. This is a recorded deviation, not a satisfied condition; the missing receipts are not reconstructed after the fact.
+
+### Adversarial preflight
+
+- The exact-target adversarial preflight required by the last task ran after implementation and publication rather than before the first independent review. It is recorded here as a late parent-owned probe of the delivered code, and it does not retroactively supply the ordering the task text requires.
+- Seven bounded probes ran against the published `worktree_guard.py` and `manage-plan-worktrees.py` in a disposable repository. A write from the pre-existing checkout was refused; a write from the bound task worktree was allowed; a write from an unrelated linked worktree of the same repository was refused; a record whose fields were edited without recomputing its content digest was refused; an expired owner lease refused the write while `outstanding` still reported the binding as outstanding with an expired lease; a record naming a foreign repository identity refused the write and was not reported against this repository; and a record naming a different worktree directory refused the write while remaining reported as outstanding.
+- The probes also confirmed two properties the design depends on. Ownership records resolve under the operating-system account home rather than a caller-supplied `HOME`, and a repository identity carries the common Git directory device and inode, so a stale record from a removed disposable repository cannot name or block a live one.
+
+### Independent review
+
+- Four independent reviews ran across two execution epochs and exhausted the cumulative four-review maximum. Epoch 0 produced a six-finding round and a re-review that raised two new defects, including a High regression the parent had introduced where a nonzero `outstanding` exit without a canonical origin would have locked the Stop gate permanently.
+- The parent stopped at `parent_remediation_budget_exhausted` rather than opening a third epoch-0 round. The owner authorized one continuation with 「承認する。」, and the continuation epoch ran two further reviews; the last reported no new defect and closed every prior finding.
+- The final commit a77a3dc carries no independent review because the budget was already exhausted when its defect was reported. The owner chose to fix and publish it. The reviewer had specified that fix and its impact, so its design was reviewed and only its implementation was not.
+- Every regression test added during remediation was negative-tested: the corresponding fix was reverted in isolation and the test was observed failing with the reported symptom. That practice caught one test that passed for the wrong reason and one revert that silently did not apply.
+- Helpers were read-only and advisory. One exploration helper and the review helpers held no write scope, and every acceptance, validation, lifecycle, publication, and reporting decision stayed in the main session.

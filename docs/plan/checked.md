@@ -216,3 +216,4 @@ id	path
 281	docs/plan/checked/2026/09/01-15/281-reject-malformed-active-plan-index.md
 282	docs/plan/checked/2026/09/01-15/282-render-plans-from-checked-authoring-input.md
 272	docs/plan/checked/2026/09/01-15/272-count-mirrored-mechanical-edits-as-tier-zero.md
+103	docs/plan/checked/2026/09/01-15/103-require-worktree-for-all-writes.md
