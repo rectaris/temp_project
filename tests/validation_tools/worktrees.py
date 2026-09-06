@@ -1296,7 +1296,7 @@ class TaskPublicationTest(unittest.TestCase):
         self.paths = WORKTREE_MODULE.metadata_paths(self.identity, plan_selector(self.plan))
 
     def tearDown(self) -> None:
-        for key in ("record", "journal", "lock"):
+        for key in ("record", "journal", "publication", "lock"):
             self.paths[key].unlink(missing_ok=True)
         self.temp.cleanup()
 
@@ -1360,6 +1360,79 @@ class TaskPublicationTest(unittest.TestCase):
         )
         self.assertFalse(self.paths["record"].exists())
         self.assertFalse(self.paths["journal"].exists())
+
+    def test_retire_recovers_a_record_whose_worktree_is_already_gone(self) -> None:
+        """An interrupted retirement must stay recoverable by a supported command.
+
+        Retirement is not atomic. A crash after `git worktree remove` and before
+        the record is unlinked leaves a record naming a directory that is gone.
+        Every command resolves that directory first, so publish, retire, prepare,
+        resume and inspect all refused it while the completion gate kept
+        reporting the task, which no supported command could clear.
+        """
+
+        worktree = self.prepare()
+        accepted = self.commit_task_work(worktree)
+        self.run_command("publish", self.plan, "--owner-id", "owner-a")
+        # Reproduce the interruption: the directory and registration are gone,
+        # the branch is published, and only the record survived.
+        worktree_again = self.prepare()
+        shutil.rmtree(worktree_again)
+        self.assertTrue(self.paths["record"].exists())
+
+        result = self.run_command("retire", self.plan, "--owner-id", "owner-a")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)["recovered"])
+        self.assertFalse(self.paths["record"].exists())
+        self.assertFalse(self.paths["publication"].exists())
+        self.assertEqual(
+            git(
+                self.repository,
+                "rev-parse",
+                "--verify",
+                "refs/heads/plan/311-publish",
+                check=False,
+            ).returncode,
+            128,
+        )
+        self.assertNotIn(str(worktree_again), git(self.repository, "worktree", "list").stdout)
+        self.assertEqual(
+            git(self.repository, "rev-parse", "refs/heads/dev").stdout.strip(), accepted
+        )
+        # The recovered task identity is reusable, which is the point.
+        self.assertEqual(
+            self.run_command(
+                "prepare",
+                self.plan,
+                "--allowed-root",
+                str(self.allowed_root),
+                "--owner-id",
+                "owner-a",
+            ).returncode,
+            0,
+        )
+
+    def test_recovery_keeps_unpublished_commits_unless_their_loss_is_acknowledged(self) -> None:
+        """Recovery finishes a retirement; it never silently discards work."""
+
+        worktree = self.prepare()
+        accepted = self.commit_task_work(worktree)
+        shutil.rmtree(worktree)
+        result = self.run_command("retire", self.plan, "--owner-id", "owner-a")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not reachable", result.stderr)
+        self.assertTrue(self.paths["record"].exists())
+        self.assertEqual(
+            git(
+                self.repository, "rev-parse", "refs/heads/plan/311-publish"
+            ).stdout.strip(),
+            accepted,
+        )
+        acknowledged = self.run_command(
+            "retire", self.plan, "--owner-id", "owner-a", "--stopped"
+        )
+        self.assertEqual(acknowledged.returncode, 0, acknowledged.stderr)
+        self.assertFalse(self.paths["record"].exists())
 
     def test_publication_fast_forwards_and_retires_the_exact_task(self) -> None:
         worktree = self.prepare()

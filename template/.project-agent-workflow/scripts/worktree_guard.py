@@ -1280,8 +1280,22 @@ def main(argv: list[str] | None = None) -> int:
         plan = arguments[index + 1]
     try:
         if command == "outstanding":
+            # A repository that cannot name itself can never hold a record, so
+            # asking it what it owes must answer "nothing" rather than fail.
+            # The completion gate treats a failure as a refusal, and refusing
+            # here would block every turn of a project that this guard has
+            # deliberately left outside enforcement.
+            governed, reason = enforcement_scope(repository_root())
+            if not governed:
+                print(
+                    json.dumps(
+                        {"outstanding": [], "enforced": False, "reason": reason},
+                        sort_keys=True,
+                    )
+                )
+                return 0
             entries = outstanding_tasks()
-            print(json.dumps({"outstanding": entries}, sort_keys=True))
+            print(json.dumps({"outstanding": entries, "enforced": True}, sort_keys=True))
             return 0
         if command == "describe":
             binding = find_binding()

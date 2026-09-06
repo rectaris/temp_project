@@ -483,6 +483,11 @@ def create_worktree(
     parent_identity = directory_identity(target.parent)
     if paths["record"].exists():
         raise WorktreeError("an ownership record already exists for this task")
+    # A publication journal only ever describes an in-flight publication for a
+    # live record. No record exists here, so any journal left under this key is
+    # the residue of a publication that already lost its record and would
+    # otherwise refuse the next publication of this same task identity forever.
+    paths["publication"].unlink(missing_ok=True)
     journal = add_content_digest(
         {
             "schema_version": SCHEMA_VERSION,
@@ -1192,6 +1197,68 @@ def publish(args: argparse.Namespace) -> None:
     )
 
 
+def recover_stranded_record(
+    repository: Path,
+    allowed_root: Path,
+    record: dict[str, Any],
+    paths: dict[str, Path],
+    *,
+    stopped: bool,
+) -> None:
+    """Finish a retirement whose task worktree is already gone.
+
+    Retirement is not atomic. A crash after `git worktree remove` and before the
+    record is unlinked leaves a record that names a directory no longer there.
+    Every other command resolves that directory first, so `publish`, `retire`,
+    `prepare`, `resume` and `inspect` all refuse it, while the completion gate
+    keeps reporting the task as outstanding. Without this path the repository
+    reaches a state no supported command can clear, which no crash should be
+    able to produce.
+
+    This finishes exactly the interrupted retirement and nothing more: it prunes
+    the stale registration, deletes the temporary branch only once its commits
+    are reachable from the source ref or the caller has acknowledged their loss,
+    and removes the record and its journals.
+    """
+
+    raw = Path(record["worktree_path"])
+    if not raw.is_absolute() or Path(os.path.normpath(str(raw))) != raw:
+        raise WorktreeError("recorded worktree path is not absolute and normalized")
+    if not path_is_strict_descendant(raw, allowed_root):
+        raise WorktreeError("recorded worktree path is outside the allowed root")
+    if raw.exists() or raw.is_symlink():
+        raise WorktreeError("the recorded task worktree still exists")
+
+    branch_ref = record["branch_ref"]
+    branch_short = branch_ref.removeprefix("refs/heads/")
+    anchor = guard.primary_worktree(repository)
+    tip = exact_ref_tip(repository, branch_ref)
+    source_tip = exact_ref_tip(repository, record["source_ref"])
+    published = tip is None or (
+        source_tip is not None and is_ancestor(repository, tip, source_tip)
+    )
+    if not published and not stopped:
+        raise WorktreeError(
+            f"the task worktree is gone but {branch_ref} is not reachable from "
+            f"{record['source_ref']}; publish those commits from a fresh checkout of "
+            "that branch, or pass --stopped to discard them explicitly"
+        )
+
+    git(anchor, "worktree", "prune")
+    if find_registered_worktree(parse_worktrees(anchor), raw) is not None:
+        raise WorktreeError("task worktree registration remains after pruning")
+    if exact_ref_tip(anchor, branch_ref) is not None:
+        # Reachability, or the caller's explicit acknowledgement, is the fact
+        # that justifies the delete. `-d` would instead measure merge status
+        # against the anchor's own HEAD, which this recovery cannot assume.
+        git(anchor, "branch", "-D", branch_short)
+    if exact_ref_tip(anchor, branch_ref) is not None:
+        raise WorktreeError("temporary task branch remains after deletion")
+    paths["journal"].unlink(missing_ok=True)
+    paths["publication"].unlink(missing_ok=True)
+    paths["record"].unlink(missing_ok=True)
+
+
 def retire(args: argparse.Namespace) -> None:
     """Retire a task worktree the current transaction did not publish.
 
@@ -1204,6 +1271,27 @@ def retire(args: argparse.Namespace) -> None:
     with locked_file(paths["lock"]):
         record = read_task_record(paths)
         validate_lease(record["owner"], args.owner_id, int(time.time()))
+        if record["repository_identity"] != repository_identity(repository):
+            raise WorktreeError("ownership record belongs to another repository or clone")
+        if record["allowed_root"] != str(allowed_root):
+            raise WorktreeError("ownership record allowed root changed or mismatched")
+        stranded = not Path(record["worktree_path"]).exists()
+        if stranded:
+            recover_stranded_record(
+                repository, allowed_root, record, paths, stopped=args.stopped
+            )
+            print(
+                json.dumps(
+                    {
+                        "operation": "retire",
+                        "task": task_label(record["task"]),
+                        "recovered": True,
+                        "relocated_evidence": [],
+                    },
+                    sort_keys=True,
+                )
+            )
+            return
         target, tip = verify_record_context(repository, allowed_root, record)
         branch_ref = record["branch_ref"]
         branch_short = branch_ref.removeprefix("refs/heads/")
@@ -1228,6 +1316,7 @@ def retire(args: argparse.Namespace) -> None:
         )
         retire_worktree(repository, target, branch_ref, branch_short)
         paths["journal"].unlink(missing_ok=True)
+        paths["publication"].unlink(missing_ok=True)
         paths["record"].unlink(missing_ok=True)
     print(
         json.dumps(

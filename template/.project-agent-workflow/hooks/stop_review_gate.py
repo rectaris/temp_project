@@ -98,6 +98,15 @@ def unretired_task(repo: Path) -> str | None:
     remainder = (
         f" {len(entries) - 1} further task worktree(s) also remain." if len(entries) > 1 else ""
     )
+    if not first.get("worktree_present", True):
+        # The record outlived the directory it names, so publication is no
+        # longer possible from here. Name the one command that clears it.
+        return (
+            f"This repository still owns a record for {first.get('task')} whose task "
+            f"worktree at {first.get('worktree_path')} is already gone, so its "
+            "retirement was interrupted. A success response requires no retained task "
+            f"state. Run `python3 {manager} retire` to finish that retirement." + remainder
+        )
     return (
         f"This repository still owns the task worktree for {first.get('task')} at "
         f"{first.get('worktree_path')}. A success response requires its accepted commit "

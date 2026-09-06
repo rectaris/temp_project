@@ -218,6 +218,37 @@ class TaskWorktreeGateTest(unittest.TestCase):
         self.assertEqual(output["decision"], "block")
         self.assertIn("nonexistent_module_for_gate_test", output["reason"])
 
+    def test_stop_gate_allows_a_repository_no_binding_can_name(self) -> None:
+        """A repository outside enforcement owes no retirement and must not block.
+
+        A binding names its repository by canonical origin, so a repository
+        without one can never hold an ownership record. Reporting a failure
+        there would block every turn with an instruction no command can satisfy,
+        which is the opposite of leaving that repository ungoverned.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp), origin=None)
+            output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
+        self.assertEqual(output, {})
+
+    def test_stop_gate_names_retirement_for_a_worktree_already_gone(self) -> None:
+        """A record whose directory is gone cannot be published, only retired."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_guarded_repository(base / "repository")
+            worktree, records = bind_direct_task_worktree(repo, base / "managed")
+            try:
+                shutil.rmtree(worktree)
+                output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
+            finally:
+                for record in records:
+                    record.unlink(missing_ok=True)
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("retire", output["reason"])
+        self.assertNotIn("publish", output["reason"])
+
     def test_stop_gate_allows_success_once_no_task_worktree_is_bound(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = init_guarded_repository(Path(tmp))
