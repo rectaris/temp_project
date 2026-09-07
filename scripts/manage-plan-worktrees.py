@@ -1061,6 +1061,7 @@ def validate_retained_replan_transition(
             target,
             "diff",
             "--name-only",
+            "--no-renames",
             "-z",
             source_tip,
             accepted_commit,
