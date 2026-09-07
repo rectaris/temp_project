@@ -54,3 +54,4 @@ id	path	contract
 279	docs/plan/replanned/2026/09/01-15/279-bind-parallel-plan-execution-to-shared-authority.md	docs/plan/replanned/contracts/278-complete-resumable-parent-worktrees.json
 280	docs/plan/replanned/2026/09/01-15/280-integrate-parallel-plan-candidates-in-order.md	docs/plan/replanned/contracts/278-complete-resumable-parent-worktrees.json
 283	docs/plan/replanned/2026/09/01-15/283-complete-resumable-parent-worktrees.md	docs/plan/replanned/contracts/283-bootstrap-same-plan-continuation.json
+106	docs/plan/replanned/2026/09/01-15/106-adapt-natural-japanese-for-copilot.md	docs/plan/replanned/contracts/106-complete-natural-japanese-copilot.json

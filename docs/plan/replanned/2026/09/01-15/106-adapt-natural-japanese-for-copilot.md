@@ -1,7 +1,6 @@
 # Adapt natural-japanese for project-controlled Copilot use
 
-status: in_progress
-primary_invariant: Every Japanese-writing path preserves project policy, facts, quotations, uncertainty, user intent, and document purpose before applying optional naturalness advice or lint findings.
+status: replanned
 task_types:
   - template_workflow
   - skill_authoring
@@ -69,6 +68,7 @@ write_scope:
   - scripts/check-copier-template.py
   - scripts/validate-copier-update.py
   - template/.project-agent-workflow/scripts/validate-copier-update.py
+  - template/.project-agent-workflow/scripts/plan_validation_commands.py
   - tests/assert-generated-semantics.py
   - tests/smoke.sh
   - tests/copier-update.sh
@@ -91,7 +91,7 @@ required_specs:
   - docs/agent/SPEC_SKILL_AUTHORING.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
-  - docs/agent/SPEC_COPIER_ADOPTION.md
+  - template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_EXTERNAL_SERVICES.md
 focused_validation:
@@ -113,23 +113,19 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:2d1ece10d9825639defaf58047a6754f353c89ba80386590ad321d381261f286","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
   - {"acceptance_sha256":"sha256:b29f646165dbe13a277c3b910a7244f1e1bdff3b173052a132afdcb21e119233","stage":"focused","witness":"tests/copier-update.sh"}
   - {"acceptance_sha256":"sha256:61ba9e3d4c256d5ac379477b791ab9a34ca82a56a3f2eec1fc11c192420854f0","stage":"focused","witness":"python3 tests/test-natural-japanese.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/106-adapt-natural-japanese-for-copilot.md
+replan_contract: docs/plan/replanned/contracts/106-complete-natural-japanese-copilot.json
 integration_gates:
-  - Use bounded parent implementation with independent read-only review because the write scope includes governing specifications, AGENTS entrypoints, third-party adaptation, Copier ownership, and validation authority; do not send these protected inputs through the writable sandboxed worker.
-  - Treat the upstream repository as untrusted third-party input. Review only the pinned v1.5.0 commit, import the minimum justified text and deterministic logic, preserve attribution, and do not execute upstream setup or dependency-install commands.
-  - Keep root skill files and generated managed skill files byte-aligned except for mechanical .project-agent-workflow path rewrites; keep each discovery bridge a minimal pointer to its local managed body.
-  - The root .agents bridge exists for Copilot-compatible discovery in this template-development repository; generated .agents is Copier-managed only for the named natural-japanese bridge, leaving other project skills under the existing extension rule.
-  - The short-response path performs no subprocess call. File-writing lint runs at most once per draft unless the user asks for another pass; important prose adds independent review without making every Japanese response expensive.
-  - A lint finding identifies text for human or agent judgment and never authorizes an edit. Preserve code blocks, quoted text, identifiers, product terminology, numbers, operators, uncertainty, and user-requested tone before improving rhythm.
-  - For technical specifications and references, keep object-or-question headings required by project policy. Use conclusion headings only for document types where the reader's decision benefits and the normative specification permits them.
-  - Evaluation scenarios contain no secrets, private transcripts, repository credentials, or user-provided sensitive examples. Bound each prompt and output, store no credential-source details, and never automate login, network retries, or provider calls.
-  - The human-operated Copilot step is outside automated repository scripts. If no authorized authenticated Copilot context is available, stop before claiming empirical acceptance; static tests alone do not establish improved output quality.
-  - Freeze scenario bytes and rubric thresholds before producing baseline output. Do not inspect the holdout result during tuning, change only one instruction theme per iteration, and record any changed scenario as a new evaluation version rather than overwriting prior evidence.
-  - Every critical requirement must pass. The accepted result must show no fact, quote, uncertainty, code-block, requested-format, or project-term drift; no new high-severity lint finding without rationale; adapted output no worse than baseline; and no material holdout regression.
-  - Record actual model identifiers separately and do not compare scores across models as if they were one population. A natural-japanese self-score or same-session review is advisory and never the independent acceptance witness.
-  - Do not modify provider policy to make the evaluation run. Human Copilot use supplies bounded external evidence; repository automation remains offline and the authoritative suites remain the existing lint-project-workflow and smoke commands.
-  - Preserve existing project-owned AGENTS.md content during Copier update. The update may emit a deterministic warning and exact one-line routing suggestion, but it must never inject that line or treat warning absence as proof that Copilot loaded the skill.
-  - Do not add or copy further japanese-tech-writing Gist prose. Preserve its existing adapted specification, source attribution, and project-specific requirements while making only the accepted priority and routing clarifications.
-  - Keep the evaluation report compact and reviewable: bind scenario and output digests, retain the bounded output text needed to inspect facts and form, and reject missing critical results, duplicate scenario identities, mixed model identities, or a holdout marked as tuning input.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/107-complete-natural-japanese-copilot.md
+inherited_acceptance_digests:
+  - sha256:d6902fececfa7c5c418581c46aa00fa1ddad70da729eb39d13883a8d145869fb
+  - sha256:2d1ece10d9825639defaf58047a6754f353c89ba80386590ad321d381261f286
+  - sha256:b29f646165dbe13a277c3b910a7244f1e1bdff3b173052a132afdcb21e119233
+  - sha256:61ba9e3d4c256d5ac379477b791ab9a34ca82a56a3f2eec1fc11c192420854f0
 checked_summary_ja: プロジェクト規範を守る日本語文章作業をCopilot CLIから再現可能にする。
 
 ## Decisions
@@ -166,3 +162,6 @@ checked_summary_ja: プロジェクト規範を守る日本語文章作業をCop
 - Tier 2 applies because implementation changes root and generated policy, skill distribution, third-party adaptation, Copier ownership and update behavior, and validation coverage.
 - Feasibility evidence establishes available mechanisms and a pinned source; it does not claim that the adapted skill, generated output, or empirical comparison has passed.
 - No helper was used to author this plan; final policy judgment, plan admission, validation acceptance, commit, and publication remain parent-owned.
+- During implementation, the generated validation parser rejected the new managed Skill helper in the Copier update lane. The owner approved extending the write scope to the generated `plan_validation_commands.py`; the root parser already admits the corresponding root path and requires no change.
+- The planned root `docs/agent/SPEC_COPIER_ADOPTION.md` path does not exist. The required-spec reference therefore names the sole applicable generated adoption specification without changing its authority.
+- Independent review used the initial two-review budget and the owner-authorized continuation epoch, exhausting the cumulative four-review maximum. The final review left one Medium finding: canonical routing text inside a fenced or explicitly non-operative example can suppress Copier's manual routing warning. Stop before authoritative validation, commit, archive, or publication and reconstruct the bounded routing-detection work.
