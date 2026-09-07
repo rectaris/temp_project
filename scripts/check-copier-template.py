@@ -2872,6 +2872,82 @@ def require_verify_copier_update_skill() -> None:
         fail("verify-copier-update discovery bridge is not reserved by Copier ownership")
 
 
+def require_natural_japanese_skill() -> None:
+    root = ROOT / ".codex/skills/natural-japanese"
+    generated = ROOT / "template/.project-agent-workflow/skills/natural-japanese"
+    relative_files = (
+        "SKILL.md",
+        "agents/openai.yaml",
+        "references/workflow.md",
+        "references/upstream-adaptation.md",
+        "scripts/check-japanese-prose.py",
+        "LICENSE",
+    )
+    for relative in relative_files:
+        root_text = (root / relative).read_text(encoding="utf-8")
+        generated_text = (
+            (generated / relative)
+            .read_text(encoding="utf-8")
+            .replace(
+                ".project-agent-workflow/skills/natural-japanese/",
+                ".codex/skills/natural-japanese/",
+            )
+            .replace(".project-agent-workflow/", "")
+            .replace(".agents/skills/", ".codex/skills/")
+        )
+        if root_text != generated_text:
+            fail(f"natural-japanese root/template file differs: {relative}")
+
+    root_helper = root / "scripts/check-japanese-prose.py"
+    generated_helper = generated / "scripts/check-japanese-prose.py"
+    if (root_helper.stat().st_mode & 0o777) != (generated_helper.stat().st_mode & 0o777):
+        fail("natural-japanese helper modes differ")
+    if root_helper.stat().st_mode & 0o111 == 0:
+        fail("natural-japanese helpers must be executable")
+
+    bridge = read("template/.agents/skills/natural-japanese/SKILL.md")
+    if ".project-agent-workflow/skills/natural-japanese/SKILL.md" not in bridge:
+        fail("natural-japanese discovery bridge does not point at the managed skill")
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .agents/skills/natural-japanese/SKILL.md" not in ownership:
+        fail("natural-japanese discovery bridge is not reserved by Copier ownership")
+
+    managed_agents = read("template/.project-agent-workflow/AGENTS.md.jinja")
+    seed_agents = read("template/AGENTS.md.jinja")
+    for path, text in (
+        ("template AGENTS seed", seed_agents),
+        ("managed AGENTS", managed_agents),
+    ):
+        for marker in (
+            "natural-japanese",
+            "Japanese replies",
+            "facts",
+            "quotations",
+            "uncertainty",
+            "requested form",
+            "document purpose",
+        ):
+            if marker not in text:
+                fail(f"{path} missing natural-japanese routing marker: {marker}")
+
+    validator = read("scripts/validate-copier-update.py")
+    for marker in (
+        "JAPANESE_ROUTING_PATH",
+        "JAPANESE_ROUTING_LINES",
+        "JAPANESE_ROUTING_SUGGESTION",
+        "preserved project-owned AGENTS.md without ",
+        "Japanese-writing routing. Add this line manually: ",
+    ):
+        if marker not in validator:
+            fail(f"Copier update validator missing Japanese routing guidance: {marker}")
+
+    generated_index = read(
+        "template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja"
+    )
+    if generated_index.count("  japanese_prose:\n") != 1:
+        fail("generated spec index must define japanese_prose exactly once")
+
+
 def require_completion_gate_distribution() -> None:
     """Keep one completion judgment distributed across every shipped boundary."""
 
@@ -3050,6 +3126,7 @@ def main() -> int:
     require_mcp_execution_context_contract()
     require_browser_automation_contract()
     require_verify_copier_update_skill()
+    require_natural_japanese_skill()
     for question in REMOVED_LOCAL_WORKFLOW_QUESTIONS:
         if re.search(rf"^{re.escape(question)}:", copier_yml, re.MULTILINE):
             fail(f"copier.yml still prompts for local workflow question: {question}")

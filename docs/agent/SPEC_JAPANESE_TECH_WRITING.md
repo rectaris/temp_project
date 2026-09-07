@@ -29,6 +29,27 @@ The root policy keeps the smaller subset needed to maintain this template reposi
 - Use this file for Japanese wording choices after the technical content is correct.
 - Use the project owner's product vocabulary when it conflicts with generic examples.
 
+Apply Japanese-writing guidance in this order:
+
+1. Preserve the user's requested tone, form, and output constraints.
+2. Preserve facts, quotations, uncertainty, identifiers, numbers, operators, code blocks, and project terminology.
+3. Preserve the document's purpose and required structure.
+4. Apply this project specification.
+5. Apply optional naturalness advice from `.codex/skills/natural-japanese/SKILL.md`.
+6. Use mechanical lint findings only as advisory signals.
+
+Never change a higher-priority item to satisfy a lower-priority item or improve a lint score.
+Do not invent personal experience, motive, emotion, or certainty to make prose sound human.
+
+## Application Depth
+
+- For a short Japanese reply, apply a brief final read for clarity and naturalness without running a subprocess.
+- For drafting or revising a Japanese file, identify the reader and purpose, preserve protected content, and run the bundled advisory lint at most once per draft unless the user asks for another pass.
+- For an important long-form document, also review structure, terminology, and reading load, then obtain an independent reader review when the repository's delegation rules permit it.
+- Do not trigger this workflow for code-only edits, machine-readable data, or text that must remain byte-exact.
+- A lint finding identifies a passage for judgment. It never authorizes an edit by itself.
+- Technical specifications and references keep subject or question headings when project policy requires them. Use conclusion headings only when the document type and reader decision benefit from them.
+
 ## Technical Writing Rules
 
 - Write one sentence per line in Markdown prose.

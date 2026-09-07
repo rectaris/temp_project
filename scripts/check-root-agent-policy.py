@@ -124,6 +124,13 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/browser-ops/SKILL.md",
     ".codex/skills/browser-ops/agents/openai.yaml",
     ".codex/skills/browser-ops/references/browser-run-policy.md",
+    ".codex/skills/natural-japanese/SKILL.md",
+    ".codex/skills/natural-japanese/agents/openai.yaml",
+    ".codex/skills/natural-japanese/references/workflow.md",
+    ".codex/skills/natural-japanese/references/upstream-adaptation.md",
+    ".codex/skills/natural-japanese/scripts/check-japanese-prose.py",
+    ".codex/skills/natural-japanese/LICENSE",
+    ".agents/skills/natural-japanese/SKILL.md",
     ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
     "docs/agent/SPEC_GIT_RETIREMENT.md",
@@ -158,6 +165,11 @@ REQUIRED_ROOT_FILES = [
     "tests/test-agent-model-profiles.py",
     "tests/fixtures/write-for-reader/scenarios.json",
     "tests/fixtures/mcp-ops/scenarios.json",
+    "tests/fixtures/natural-japanese/scenarios.json",
+    "tests/fixtures/natural-japanese/evaluator-prompt.md",
+    "tests/fixtures/natural-japanese/evaluation-results.json",
+    "scripts/natural-japanese-evaluation.py",
+    "tests/test-natural-japanese.py",
 ]
 
 REUSABLE_SKILLS = (
@@ -167,6 +179,7 @@ REUSABLE_SKILLS = (
     "implementation-guidelines",
     "linear-ops",
     "mcp-ops",
+    "natural-japanese",
     "plan-archive",
     "sequential-plan-orchestrator",
     "write-for-reader",
@@ -707,18 +720,86 @@ def check_reusable_skill_parity() -> None:
         relative_files = ["SKILL.md", "agents/openai.yaml"]
         if skill == "mcp-ops":
             relative_files.append("references/provider-call-execution-context.md")
+        if skill == "natural-japanese":
+            relative_files.extend(
+                [
+                    "references/workflow.md",
+                    "references/upstream-adaptation.md",
+                    "scripts/check-japanese-prose.py",
+                    "LICENSE",
+                ]
+            )
         for relative in relative_files:
             root_path = ROOT / ".codex" / "skills" / skill / relative
             template_path = ROOT / "template" / ".project-agent-workflow" / "skills" / skill / relative
             if not root_path.is_file() or not template_path.is_file():
                 fail(f"missing reusable skill file for parity: {skill}/{relative}")
-            template_text = (
-                template_path.read_text(encoding="utf-8")
-                .replace(".project-agent-workflow/", "")
-                .replace(".agents/skills/", ".codex/skills/")
-            )
+            template_text = template_path.read_text(encoding="utf-8")
+            if skill == "natural-japanese":
+                template_text = template_text.replace(
+                    ".project-agent-workflow/skills/natural-japanese/",
+                    ".codex/skills/natural-japanese/",
+                )
+            template_text = template_text.replace(
+                ".project-agent-workflow/", ""
+            ).replace(".agents/skills/", ".codex/skills/")
             if root_path.read_text(encoding="utf-8") != template_text:
                 fail(f"root/template reusable skill drift: {skill}/{relative}")
+
+
+def check_natural_japanese_contract() -> None:
+    agents = read("AGENTS.md")
+    for marker in (
+        ".codex/skills/natural-japanese/SKILL.md",
+        "Japanese replies",
+        "facts, quotations, uncertainty",
+        "requested form",
+        "document purpose",
+    ):
+        if marker not in agents:
+            fail(f"AGENTS.md missing natural-japanese routing marker: {marker}")
+
+    bridge = read(".agents/skills/natural-japanese/SKILL.md")
+    if ".codex/skills/natural-japanese/SKILL.md" not in bridge:
+        fail("root natural-japanese discovery bridge does not point at the managed skill")
+
+    workflow = read(".codex/skills/natural-japanese/references/workflow.md")
+    for marker in (
+        "## Short Reply",
+        "Do not run a subprocess.",
+        "## Japanese File Work",
+        "at most once per draft",
+        "## Important Long-Form Prose",
+        "independent reader review",
+        "## Protected Content",
+        "Never invent experience",
+        "## Non-Use Boundary",
+        "code-only changes",
+    ):
+        if marker not in workflow:
+            fail(f"natural-japanese workflow missing marker: {marker}")
+
+    provenance = read(".codex/skills/natural-japanese/references/upstream-adaptation.md")
+    for marker in (
+        "https://github.com/coji/natural-japanese",
+        "v1.5.0",
+        "21e632661a910bf97289c501089ad11eb8b4d85f",
+        "License: MIT",
+        "runtime downloads",
+        "future upstream update requires an explicit review",
+    ):
+        if marker not in provenance:
+            fail(f"natural-japanese provenance missing marker: {marker}")
+
+    if "Copyright (c) 2026 coji" not in read(".codex/skills/natural-japanese/LICENSE"):
+        fail("natural-japanese upstream MIT notice is missing")
+    helper = ROOT / ".codex/skills/natural-japanese/scripts/check-japanese-prose.py"
+    if helper.stat().st_mode & 0o111 == 0:
+        fail("natural-japanese lint helper must be executable")
+    helper_text = helper.read_text(encoding="utf-8").lower()
+    for forbidden in ("subprocess", "urllib", "requests", "sudachi"):
+        if forbidden in helper_text:
+            fail(f"natural-japanese lint helper must remain dependency-free: {forbidden}")
 
 
 def _mcp_exact_mapping(value: object, keys: set[str], label: str) -> dict:
@@ -3479,6 +3560,7 @@ def main() -> int:
     check_agent_model_profiles()
     check_sandboxed_worker_fallback()
     check_reusable_skill_parity()
+    check_natural_japanese_contract()
     check_mcp_execution_context()
     check_browser_routing()
     check_external_service_policy()

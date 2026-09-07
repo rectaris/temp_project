@@ -13,6 +13,7 @@ copier_managed:
   - .agents/skills/write-for-reader/SKILL.md
   - .agents/skills/browser-ops/SKILL.md
   - .agents/skills/verify-copier-update/SKILL.md
+  - .agents/skills/natural-japanese/SKILL.md
   - .codex/hooks/agent_log_event.py
   - .codex/hooks/pre_tool_hardening_gate.py
   - .codex/hooks/semantic_guard_advisory.py

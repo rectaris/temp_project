@@ -50,6 +50,8 @@ NPM_VALIDATION_SCRIPTS = frozenset({"build", "test", "test:unit", "lint", "typec
 PYTEST_PREFIXES = (("pytest",), ("python3", "-m", "pytest"), ("uv", "run", "pytest"))
 GENERATED_PYTHON_COMPILE_FILES = frozenset(
     {
+        ".project-agent-workflow/skills/natural-japanese/"
+        "scripts/check-japanese-prose.py",
         ".project-agent-workflow/skills/verify-copier-update/"
         "scripts/verify-copier-update.py",
     }
@@ -412,6 +414,10 @@ def run_plan(path: Path) -> None:
 def self_test() -> None:
     parse_validation_command("git diff --check")
     parse_validation_command("python3 -m py_compile .project-agent-workflow/scripts/example.py tests/example.py")
+    parse_validation_command(
+        "python3 -m py_compile "
+        ".project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py"
+    )
     parse_validation_command("python3 -m pytest")
     parse_validation_command("npm run typecheck")
     parse_validation_command("python3 .project-agent-workflow/scripts/check-external-service-policy.py check")
@@ -423,6 +429,7 @@ def self_test() -> None:
         "python3 - <<EOF",
         "npm run prepublish",
         "python3 -m pytest -q",
+        "python3 -m py_compile .project-agent-workflow/skills/unknown/scripts/check.py",
     ):
         try:
             parse_validation_command(bad)

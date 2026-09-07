@@ -63,6 +63,7 @@ task_types:
     required:
       - .project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_FLOW.md
       - .project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+      - .agents/skills/natural-japanese/SKILL.md
     conditional:
       - path: .project-agent-workflow/docs/agent/SPEC_UI_DESIGN.md
         when: visible UI copy, accessibility text, interaction labels, or screenshots are affected.
@@ -143,6 +144,8 @@ task_types:
       - .project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md
     conditional:
       - path: .project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+        when: the user-facing message is written in Japanese.
+      - path: .agents/skills/natural-japanese/SKILL.md
         when: the user-facing message is written in Japanese.
       - path: .project-agent-workflow/docs/agent/SPEC_REFERENT_FIRST.md
         when: the message introduces a new or compressed label that could hide multiple concrete referents.
@@ -243,7 +246,7 @@ rules:
   - Do not sweep all docs/agent files for normal startup.
   - Keep README files human-facing; agent-facing operational policy belongs in docs/agent.
   - Treat external-service modules as optional unless SPEC_EXTERNAL_SERVICES explicitly enables them.
-  - Apply SPEC_JAPANESE_TECH_WRITING to Japanese prose without requiring an installed external skill.
+  - Apply SPEC_JAPANESE_TECH_WRITING before the managed natural-japanese skill; naturalness advice and lint findings remain subordinate to project policy and protected content.
   - Apply SPEC_USER_COMMUNICATION before submitting a substantive user-facing message.
   - Apply SPEC_SKILL_AUTHORING when creating, updating, vendoring, or reviewing Codex skills.
   - Apply SPEC_REFERENT_FIRST before assigning new labels to unresolved or potentially overloaded referents.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Natural Japanese"
+  short_description: "Review Japanese prose without changing protected meaning"
+  default_prompt: "Use $natural-japanese at the appropriate depth while preserving facts, quotations, uncertainty, requested form, document purpose, code, and project terminology."

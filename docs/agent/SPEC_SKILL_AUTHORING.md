@@ -75,6 +75,10 @@ Do not add auxiliary files such as `README.md`, `CHANGELOG.md`, or `QUICK_REFERE
 - Put large procedural detail in `references/`, not in `SKILL.md`.
 - Put files meant for generated output in `assets/`, not `references/`.
 - Remove placeholder resource files before completion.
+- For an adapted third-party skill, record the upstream repository, release or tag, immutable commit, license, imported elements, and local changes in a direct reference.
+- Preserve the upstream license notice when imported text or code requires it.
+- Do not add runtime download, automatic update, or dependency installation merely because the upstream skill uses it.
+- Treat future upstream updates as a new explicit review of the pinned source and local adaptation boundary.
 
 ## Workflow
 

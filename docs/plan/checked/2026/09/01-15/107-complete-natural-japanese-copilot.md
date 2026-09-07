@@ -1,6 +1,6 @@
 # Complete natural-japanese Copilot adaptation
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Every Japanese-writing path preserves project policy, facts, quotations, uncertainty, user intent, and document purpose before applying optional naturalness advice or lint findings.
 replan_sources:
@@ -162,15 +162,15 @@ checked_summary_ja: プロジェクト規範を守る日本語文章作業をCop
 
 ## Tasks
 
-- [ ] Add concise root and generated natural-japanese skill bodies, UI metadata, direct references, dependency-free advisory lint scripts, MIT license text, upstream tag and commit provenance, and .agents discovery bridges.
-- [ ] Define the three application depths, exact non-use and over-trigger boundaries, policy conflict order, document-heading choice, lint interpretation, and prohibition on fabricated human experience in the normative and operational files.
-- [ ] Route Japanese user communication from root and generated AGENTS, spec indexes, and write-for-reader while keeping root and template policy semantically aligned and SKILL.md files concise.
-- [ ] Register every managed source and generated path in ownership and Copier inventories, extend root/template and generated semantic checks, and preserve executable modes for the bundled lint script.
-- [ ] Extend Copier update validation and fixtures so project-owned AGENTS.md bytes are preserved and an absent Japanese-routing marker produces the exact manual integration instruction without becoming an unsafe automatic edit.
-- [ ] Implement a bounded offline evaluation packet and validator with immutable scenario identifiers, one median case, multiple edge cases, one tuning-blind holdout, critical requirements, output bounds, digests, model identity, and evaluator fields.
-- [ ] Have a human run baseline and adapted packets in fresh Copilot CLI sessions using nonsensitive fixtures, record results by model, independently compare them, then reveal and score the holdout once without tuning against its outcome.
-- [ ] Add regression coverage for bridge targets, frontmatter, provenance and license, root/template bytes, policy priority, three depths, advisory-only lint, code-block preservation, fact and uncertainty preservation, no code-only over-trigger, evaluation schema, and Copier update behavior.
-- [ ] Run focused checks, obtain independent review of the exact candidate and evaluation record, then run the authoritative suites exactly once and publish only the reviewed in-scope commit.
+- [x] Add concise root and generated natural-japanese skill bodies, UI metadata, direct references, dependency-free advisory lint scripts, MIT license text, upstream tag and commit provenance, and .agents discovery bridges.
+- [x] Define the three application depths, exact non-use and over-trigger boundaries, policy conflict order, document-heading choice, lint interpretation, and prohibition on fabricated human experience in the normative and operational files.
+- [x] Route Japanese user communication from root and generated AGENTS, spec indexes, and write-for-reader while keeping root and template policy semantically aligned and SKILL.md files concise.
+- [x] Register every managed source and generated path in ownership and Copier inventories, extend root/template and generated semantic checks, and preserve executable modes for the bundled lint script.
+- [x] Extend Copier update validation and fixtures so project-owned AGENTS.md bytes are preserved and an absent Japanese-routing marker produces the exact manual integration instruction without becoming an unsafe automatic edit.
+- [x] Implement a bounded offline evaluation packet and validator with immutable scenario identifiers, one median case, multiple edge cases, one tuning-blind holdout, critical requirements, output bounds, digests, model identity, and evaluator fields.
+- [x] Have a human run baseline and adapted packets in fresh Copilot CLI sessions using nonsensitive fixtures, record results by model, independently compare them, then reveal and score the holdout once without tuning against its outcome.
+- [x] Add regression coverage for bridge targets, frontmatter, provenance and license, root/template bytes, policy priority, three depths, advisory-only lint, code-block preservation, fact and uncertainty preservation, no code-only over-trigger, evaluation schema, and Copier update behavior.
+- [x] Run focused checks, obtain independent review of the exact candidate and evaluation record, then run the authoritative suites exactly once and publish only the reviewed in-scope commit.
 
 ## Validation Notes
 
@@ -187,3 +187,6 @@ checked_summary_ja: プロジェクト規範を守る日本語文章作業をCop
 
 - Reconstruction authorization: 「プランの修正と実装作業をせよ。」
 - Continue in parent-direct mode from the exact promoted dirty snapshot; the remaining implementation change is bounded to canonical routing-line detection and its regression coverage.
+- The reconstructed successor used an owner-authorized continuation epoch. Its final rereview found no remaining High or Medium findings after exact canonical-line, Markdown fence, indented-code, HTML-comment, and lint fence handling were corrected.
+- Focused validation passed: `python3 scripts/check-root-agent-policy.py`, `python3 tests/test-natural-japanese.py`, `python3 scripts/check-copier-template.py`, and `tests/copier-update.sh`.
+- Authoritative validation passed once on the accepted diff: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.

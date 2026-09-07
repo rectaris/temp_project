@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "scenario_file_sha256": "sha256:53e22873f15fb24f996cd2de8744f92124cb6bfce3030f1fdd490745edec8e06",
+  "evaluator_prompt_sha256": "sha256:2c9f6903ee5a03bba3c3c406244635fb221627d994a98d87ed154477793fd3c1",
+  "evaluated_candidate_files": {
+    ".codex/skills/natural-japanese/SKILL.md": "sha256:9add6c609eb188ec6c17a7387146351cbef6b86960c9490dac2c99f12af41269",
+    ".codex/skills/natural-japanese/references/workflow.md": "sha256:1d7852210a7e402ec5ff5e9eca1866b6838a47566a394110a65cd257115bf04e",
+    "docs/agent/SPEC_JAPANESE_TECH_WRITING.md": "sha256:c6bdae14ea9081e23f6f46263ba757c755dcd83c83d53edcd3e03a4439d2615b"
+  },
+  "event_sequence": [
+    "scenarios_frozen",
+    "nonholdout_generated_and_compared",
+    "candidate_fixed",
+    "holdout_revealed",
+    "holdout_generated_and_compared"
+  ],
+  "candidate_fixed_before_holdout": true,
+  "records": [
+    {
+      "scenario_id": "median-short-status",
+      "scenario_sha256": "sha256:e2a8f21519669d6374f674cf93e4a6be9be9ea3d6519a84ee67ecd722abcf082",
+      "baseline": {
+        "model": "gpt-5.6-luna",
+        "session_id": "baseline-writer-20260907",
+        "output": "キャッシュのキー生成を修正しました。対象はAPIレスポンスのみで、テスト48件が成功し、データベース処理は変更していません。",
+        "output_sha256": "sha256:cc96273d5bcabae4125709494ba65016d0802a597c3eacfc3715c8ebdc55ddfc",
+        "requirement_results": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh baseline generation session; no tools used."
+      },
+      "adapted": {
+        "model": "gpt-5.6-luna",
+        "session_id": "adapted-writer-20260907",
+        "output": "キャッシュのキー生成を修正しました。対象はAPIレスポンスのみで、テスト48件が成功し、データベース処理は変更していません。",
+        "output_sha256": "sha256:cc96273d5bcabae4125709494ba65016d0802a597c3eacfc3715c8ebdc55ddfc",
+        "requirement_results": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh adapted generation session; no tools used."
+      },
+      "comparison": {
+        "evaluator": "gpt-5.6-sol",
+        "evaluator_session_id": "nonholdout-comparison-sol-20260907",
+        "verdict": "equivalent",
+        "fact_drift": false,
+        "quote_drift": false,
+        "uncertainty_drift": false,
+        "code_block_drift": false,
+        "requested_format_drift": false,
+        "project_term_drift": false,
+        "material_regression": false,
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh independent comparison session; no tools used.",
+        "notes": "Both outputs preserve all facts and the two-sentence limit."
+      },
+      "holdout_revealed_after_candidate_fixed": false
+    },
+    {
+      "scenario_id": "edge-fact-uncertainty",
+      "scenario_sha256": "sha256:fffc68bd10ac05aa4d2931496ce73a19a531e9c7c8981c8b824bb2b7b2795b7e",
+      "baseline": {
+        "model": "gpt-5.6-luna",
+        "session_id": "baseline-writer-20260907",
+        "output": "21:14にtimeoutが3件発生した。原因は接続プールの枯渇かもしれないが、ログだけでは未確認である。再現試験はまだ行っていない。",
+        "output_sha256": "sha256:7b2209941328954492b4589d977d2e548e59d3e7d934bfae21d247e3516cf535",
+        "requirement_results": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh baseline generation session; no tools used."
+      },
+      "adapted": {
+        "model": "gpt-5.6-luna",
+        "session_id": "adapted-writer-20260907",
+        "output": "21:14にtimeoutが3件発生した。原因は接続プールの枯渇かもしれないが、ログだけでは未確認である。再現試験はまだ行っていない。",
+        "output_sha256": "sha256:7b2209941328954492b4589d977d2e548e59d3e7d934bfae21d247e3516cf535",
+        "requirement_results": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh adapted generation session; no tools used."
+      },
+      "comparison": {
+        "evaluator": "gpt-5.6-sol",
+        "evaluator_session_id": "nonholdout-comparison-sol-20260907",
+        "verdict": "equivalent",
+        "fact_drift": false,
+        "quote_drift": false,
+        "uncertainty_drift": false,
+        "code_block_drift": false,
+        "requested_format_drift": false,
+        "project_term_drift": false,
+        "material_regression": false,
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh independent comparison session; no tools used.",
+        "notes": "Both outputs preserve the time, count, hypothesis, unconfirmed status, and absent reproduction test."
+      },
+      "holdout_revealed_after_candidate_fixed": false
+    },
+    {
+      "scenario_id": "edge-quote-code",
+      "scenario_sha256": "sha256:fca7fdd1e67cf61f943ffb45548b75b6fc2cc2daa00ef20c037fc9b94b06d5d9",
+      "baseline": {
+        "model": "gpt-5.6-luna",
+        "session_id": "baseline-writer-20260907",
+        "output": "> 承認前に実行しないこと\n\n```sh\n./deploy --region ap-northeast-1\n```\n\ndeploy_guardを確認することが、この手順では重要です。",
+        "output_sha256": "sha256:d83e578be7e1d8110d0fd1a5b3275b48cdf33e41b264dcb8bbc22595d1c2b784",
+        "requirement_results": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh baseline generation session; no tools used."
+      },
+      "adapted": {
+        "model": "gpt-5.6-luna",
+        "session_id": "adapted-writer-20260907",
+        "output": "> 承認前に実行しないこと\n\n```sh\n./deploy --region ap-northeast-1\n```\n\nこの手順では、deploy_guardを確認することが重要です。",
+        "output_sha256": "sha256:d8c7ddef8dd70c4467ab120aa8006afea3c13570da3bd1afce7c0da38f7e5e92",
+        "requirement_results": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh adapted generation session; no tools used."
+      },
+      "comparison": {
+        "evaluator": "gpt-5.6-sol",
+        "evaluator_session_id": "nonholdout-comparison-sol-20260907",
+        "verdict": "equivalent",
+        "fact_drift": false,
+        "quote_drift": false,
+        "uncertainty_drift": false,
+        "code_block_drift": false,
+        "requested_format_drift": false,
+        "project_term_drift": false,
+        "material_regression": false,
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh independent comparison session; no tools used.",
+        "notes": "The quotation, command, and deploy_guard identifier remain unchanged; the final sentence differs only in word order."
+      },
+      "holdout_revealed_after_candidate_fixed": false
+    },
+    {
+      "scenario_id": "edge-long-form-structure",
+      "scenario_sha256": "sha256:34def2e4d55b04136605857c58fe12e2e816d610acc736837466ef2c4ef4c6ad",
+      "baseline": {
+        "model": "gpt-5.6-luna",
+        "session_id": "baseline-writer-20260907",
+        "output": "失敗時の再試行条件\n\n- 対象はHTTP 429のみとする。\n- 再試行は最大2回までとする。\n- 各試行の間隔は30秒以上空ける。\n- 認証失敗は再試行しない。\n- 再試行によって成功率が上がる保証はない。",
+        "output_sha256": "sha256:82d137b2b01adf871d7137776e0871005fe6eebbaf61756d8f0c35a161dfad19",
+        "requirement_results": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh baseline generation session; no tools used."
+      },
+      "adapted": {
+        "model": "gpt-5.6-luna",
+        "session_id": "adapted-writer-20260907",
+        "output": "失敗時の再試行条件\n\n- 対象はHTTP 429のみとする。\n- 再試行は最大2回までとする。\n- 各試行の間隔は30秒以上空ける。\n- 認証失敗は再試行しない。\n- 再試行によって成功率が上がる保証はない。",
+        "output_sha256": "sha256:82d137b2b01adf871d7137776e0871005fe6eebbaf61756d8f0c35a161dfad19",
+        "requirement_results": {
+          "R1": "pass",
+          "R2": "pass",
+          "R3": "pass",
+          "R4": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh adapted generation session; no tools used."
+      },
+      "comparison": {
+        "evaluator": "gpt-5.6-sol",
+        "evaluator_session_id": "nonholdout-comparison-sol-20260907",
+        "verdict": "equivalent",
+        "fact_drift": false,
+        "quote_drift": false,
+        "uncertainty_drift": false,
+        "code_block_drift": false,
+        "requested_format_drift": false,
+        "project_term_drift": false,
+        "material_regression": false,
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh independent comparison session; no tools used.",
+        "notes": "Both outputs retain the requested heading, bullet structure, all retry conditions, and the absence of a success guarantee."
+      },
+      "holdout_revealed_after_candidate_fixed": false
+    },
+    {
+      "scenario_id": "holdout-code-only",
+      "scenario_sha256": "sha256:499a1bd50a34d77a276314fe5f251f3b8a7b60c710486e89dc50a19c057fcef0",
+      "baseline": {
+        "model": "gpt-5.6-luna",
+        "session_id": "baseline-holdout-20260907",
+        "output": "```python\ndef add(a, b):\n    return a + b\n```",
+        "output_sha256": "sha256:52ef41715ccdb6865f41ee553803832e5b74566ac31c4587f31ca0995f504f35",
+        "requirement_results": {
+          "R5": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh holdout baseline session; no tools used."
+      },
+      "adapted": {
+        "model": "gpt-5.6-luna",
+        "session_id": "adapted-holdout-20260907-r3",
+        "output": "def add(a, b):\n    return a + b",
+        "output_sha256": "sha256:8f75a68646c879fd0cff5c02708c010fb1c01d67ef9930d4e419106feb7897aa",
+        "requirement_results": {
+          "R5": "pass"
+        },
+        "unclear_points": [],
+        "discretionary_assumptions": [],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh holdout adapted session; no tools used."
+      },
+      "comparison": {
+        "evaluator": "gpt-5.6-sol",
+        "evaluator_session_id": "holdout-comparison-sol-20260907-r3",
+        "verdict": "equivalent",
+        "fact_drift": false,
+        "quote_drift": false,
+        "uncertainty_drift": false,
+        "code_block_drift": false,
+        "requested_format_drift": false,
+        "project_term_drift": false,
+        "material_regression": false,
+        "unclear_points": [],
+        "discretionary_assumptions": [
+          "Markdown fences were not requested; their removal is non-material and better matches a code-only response.",
+          "The absent trailing newline is non-material."
+        ],
+        "retry_count": 0,
+        "tool_time_notes": "Fresh independent holdout comparison session; no tools used and R5 passed.",
+        "notes": "The prompt contains no protected code block. The adapted output preserves the implementation exactly, adds no prose or comments, and is not worse than the baseline."
+      },
+      "holdout_revealed_after_candidate_fixed": true
+    }
+  ]
+}

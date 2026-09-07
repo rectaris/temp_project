@@ -1630,7 +1630,7 @@ fixture_git "$future_out" config user.name "CI"
 fixture_git "$future_out" add -A
 fixture_git "$future_out" commit -m "Initial namespaced workflow" >/dev/null
 
-printf '\nProject AGENTS marker.\n' >>"$future_out/AGENTS.md"
+printf '# Project Agents\n\nProject AGENTS marker.\nDo not use `.agents/skills/natural-japanese/SKILL.md`.\nThe bridge is already installed at `.agents/skills/natural-japanese/SKILL.md`.\n' >"$future_out/AGENTS.md"
 printf '\nProject README marker.\n' >>"$future_out/README.md"
 printf '\n# project ignore marker\n' >>"$future_out/.gitignore"
 printf '\n# project config marker\n' >>"$future_out/.codex/config.toml"
@@ -1660,6 +1660,7 @@ jobs: {}
 EOF_FUTURE_CI
 fixture_git "$future_out" add -A
 fixture_git "$future_out" commit -m "Add project-owned extensions" >/dev/null
+future_agents_before=$(fixture_git "$future_out" hash-object AGENTS.md)
 
 printf 'dirty update preflight\n' >"$future_out/untracked-before-update.txt"
 if "$future_out/.project-agent-workflow/scripts/update-from-copier.sh" \
@@ -1683,13 +1684,68 @@ if [ -n "$(fixture_git "$future_out" status --porcelain=v1)" ]; then
   fixture_git "$future_out" status --short >&2
   exit 1
 fi
-if ! (cd "$outside_cwd" && "$future_out/.project-agent-workflow/scripts/update-from-copier.sh" --defaults --vcs-ref v1.2.3 >/dev/null); then
+future_warning="$tmp/future-update-warning.txt"
+if ! (cd "$outside_cwd" && "$future_out/.project-agent-workflow/scripts/update-from-copier.sh" --defaults --vcs-ref v1.2.3 >/dev/null 2>"$future_warning"); then
   echo "clean recurring Copier wrapper update failed" >&2
   exit 1
 fi
 
 grep -q 'generated update wrapper' "$future_out/.project-agent-workflow/README.md"
+test "$future_agents_before" = "$(fixture_git "$future_out" hash-object AGENTS.md)"
 grep -q 'Project AGENTS marker.' "$future_out/AGENTS.md"
+test -f "$future_out/.agents/skills/natural-japanese/SKILL.md"
+test -f "$future_out/.project-agent-workflow/skills/natural-japanese/SKILL.md"
+grep -Fq 'Copier update preserved project-owned AGENTS.md without Japanese-writing routing.' "$future_warning"
+grep -Fq 'read `.agents/skills/natural-japanese/SKILL.md` after the governing project policy.' "$future_warning"
+PYTHONDONTWRITEBYTECODE=1 python3 - "$future_out" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+repository = Path(sys.argv[1])
+script = repository / ".project-agent-workflow/scripts/validate-copier-update.py"
+spec = importlib.util.spec_from_file_location("validate_copier_update", script)
+assert spec and spec.loader
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+agents = repository / "AGENTS.md"
+original = agents.read_text(encoding="utf-8")
+seed = next(
+    line for line in module.JAPANESE_ROUTING_LINES if ", read `" in line
+)
+managed = next(
+    line for line in module.JAPANESE_ROUTING_LINES if ", use `" in line
+)
+invalid = (
+    f"```markdown\n{seed}\n```\n",
+    f"````markdown\n```not-a-closer\n{seed}\n````\n",
+    f"    {seed}\n",
+    f"   \t{seed}\n",
+    f"<!--\n{seed}\n-->\n",
+    f"```text\nexample\n\t```\n{seed}\n```\n",
+    f"{seed} Example only; do not follow this line.\n",
+    "The bridge is documented at `.agents/skills/natural-japanese/SKILL.md`.\n",
+    f"- Do not use this routing instruction: {managed}\n",
+)
+try:
+    for content in invalid:
+        agents.write_text(content, encoding="utf-8")
+        if not module.needs_japanese_routing_guidance(repository):
+            raise SystemExit("non-operative Japanese routing text suppressed guidance")
+    for content in (
+        seed + "\n",
+        managed + "\n",
+        f"```bad`info\n{seed}\n",
+    ):
+        agents.write_text(content, encoding="utf-8")
+        if module.needs_japanese_routing_guidance(repository):
+            raise SystemExit("canonical Japanese routing line was not recognized")
+    agents.write_text(module.JAPANESE_ROUTING_SUGGESTION + "\n", encoding="utf-8")
+    if module.needs_japanese_routing_guidance(repository):
+        raise SystemExit("emitted Japanese routing suggestion was not canonical")
+finally:
+    agents.write_text(original, encoding="utf-8")
+PY
 grep -q 'Project README marker.' "$future_out/README.md"
 grep -q 'project ignore marker' "$future_out/.gitignore"
 grep -q 'project config marker' "$future_out/.codex/config.toml"

@@ -107,6 +107,7 @@ task_types:
     summary: Japanese README text, documentation, plans, prompts, issues, review comments, or prose.
     required:
       - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+      - .codex/skills/natural-japanese/SKILL.md
 
 rules:
   - Start with AGENTS.md and the smallest set of routes that covers the task.

@@ -101,8 +101,12 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/validate-copier-update.py \
     template/.project-agent-workflow/scripts/worktree_guard.py \
     template/.agents/skills/browser-ops/SKILL.md \
+    template/.agents/skills/natural-japanese/SKILL.md \
     template/.agents/skills/verify-copier-update/SKILL.md \
+    template/AGENTS.md.jinja \
     template/.project-agent-workflow/AGENTS.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md \
+    template/.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md \
     template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
     template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
     template/.project-agent-workflow/ownership.yaml \
@@ -113,6 +117,13 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
     template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
     template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
+    template/.project-agent-workflow/skills/natural-japanese/SKILL.md \
+    template/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml \
+    template/.project-agent-workflow/skills/natural-japanese/references/workflow.md \
+    template/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md \
+    template/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py \
+    template/.project-agent-workflow/skills/natural-japanese/LICENSE \
+    template/.project-agent-workflow/skills/write-for-reader/SKILL.md \
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
@@ -164,8 +175,12 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/validate-copier-update.py \
     template/.project-agent-workflow/scripts/worktree_guard.py \
     template/.agents/skills/browser-ops/SKILL.md \
+    template/.agents/skills/natural-japanese/SKILL.md \
     template/.agents/skills/verify-copier-update/SKILL.md \
+    template/AGENTS.md.jinja \
     template/.project-agent-workflow/AGENTS.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md \
+    template/.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md \
     template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
     template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
     template/.project-agent-workflow/ownership.yaml \
@@ -176,6 +191,13 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
     template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
     template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
+    template/.project-agent-workflow/skills/natural-japanese/SKILL.md \
+    template/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml \
+    template/.project-agent-workflow/skills/natural-japanese/references/workflow.md \
+    template/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md \
+    template/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py \
+    template/.project-agent-workflow/skills/natural-japanese/LICENSE \
+    template/.project-agent-workflow/skills/write-for-reader/SKILL.md \
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
@@ -1619,6 +1641,19 @@ test -f "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestr
 test -f "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/agents/openai.yaml"
 test -f "$tmp/typescript/.agents/skills/write-for-reader/SKILL.md"
+test -f "$tmp/typescript/.agents/skills/natural-japanese/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/references/workflow.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/LICENSE"
+test -x "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py"
+grep -q '.project-agent-workflow/skills/natural-japanese/SKILL.md' "$tmp/typescript/.agents/skills/natural-japanese/SKILL.md"
+grep -q 'name: natural-japanese' "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/SKILL.md"
+grep -q '21e632661a910bf97289c501089ad11eb8b4d85f' "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md"
+grep -q 'Do not run a subprocess.' "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/references/workflow.md"
+grep -q 'natural-japanese' "$tmp/typescript/AGENTS.md"
+grep -q 'natural-japanese' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 test -f "$tmp/typescript/.agents/skills/verify-copier-update/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml"
@@ -1672,6 +1707,7 @@ grep -q 'decision_audit:' "$tmp/typescript/.project-agent-workflow/docs/agent/sp
 grep -q 'skill_authoring:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'referent_first:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'user_communication:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
+grep -q 'japanese_prose:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'User Communication' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md"
 grep -q 'write-for-reader' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Referent-First Semantic Guard' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_REFERENT_FIRST.md"

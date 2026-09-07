@@ -22,8 +22,43 @@ NON_REPOSITORY_DIAGNOSIS = (
     "fatal: not a git repository (or any of the parent directories): .git"
 )
 OWNERSHIP_PATH = ".project-agent-workflow/ownership.yaml"
-CURRENT_OWNERSHIP_SHA256 = "428708fdfea2791670a83ea368018939ba06e12916bb73a74b8a7824c6163473"
+CURRENT_OWNERSHIP_SHA256 = "895975aad2a8141b5884444961dd6876176b8c524f316e8c76d1585342184aa1"
 OWNERSHIP_MAX_BYTES = 64 * 1024
+JAPANESE_ROUTING_PATH = ".agents/skills/natural-japanese/SKILL.md"
+JAPANESE_ROUTING_LINES = frozenset(
+    {
+        "- For Japanese replies, Japanese file drafting or revision, and important "
+        "Japanese long-form review, read `.agents/skills/natural-japanese/SKILL.md` "
+        "after the governing project policy. Naturalness advice never overrides "
+        "facts, quotations, uncertainty, project terms, requested form, or document "
+        "purpose.",
+        "- For Japanese replies, Japanese file drafting or revision, and important "
+        "Japanese long-form review, use `.agents/skills/natural-japanese/SKILL.md` "
+        "after applying the governing project policy. The managed skill is optional "
+        "operational guidance and never overrides facts, quotations, uncertainty, "
+        "project terms, requested form, or document purpose.",
+    }
+)
+JAPANESE_ROUTING_SUGGESTION = (
+    "- For Japanese replies, Japanese file drafting or revision, and important "
+    "Japanese long-form review, read `.agents/skills/natural-japanese/SKILL.md` "
+    "after the governing project policy. Naturalness advice never overrides "
+    "facts, quotations, uncertainty, project terms, requested form, or document "
+    "purpose."
+)
+
+
+def markdown_indentation(line: str) -> tuple[int, str]:
+    columns = 0
+    index = 0
+    while index < len(line) and line[index] in {" ", "\t"}:
+        columns = (
+            columns + 1
+            if line[index] == " "
+            else columns + (4 - columns % 4)
+        )
+        index += 1
+    return columns, line[index:]
 LEGACY_SEQUENTIAL_WORKER_SHA256 = "744ed4f634e13ec1de27076dfa9f12411a8b01ff56ba27cfbc5151086fbe1ccb"
 READ_ONLY_SEQUENTIAL_WORKER_SHA256 = "6011c848311f59e18a37f511af8620cc025e8cad72a54fc767a83dd8da7837d1"
 FIXED_AGENT_PROFILES = {
@@ -501,7 +536,57 @@ def inspect_external_access_profile(repository: Path) -> None:
         )
 
 
-def validate(destination: Path) -> None:
+def needs_japanese_routing_guidance(repository: Path) -> bool:
+    agents_path = repository / "AGENTS.md"
+    bridge_path = repository / ".agents/skills/natural-japanese/SKILL.md"
+    if not bridge_path.is_file():
+        return False
+    try:
+        agents = agents_path.read_text(encoding="utf-8")
+    except OSError:
+        return True
+    fence_character = ""
+    fence_length = 0
+    in_html_comment = False
+    for line in agents.splitlines():
+        indentation, content = markdown_indentation(line)
+        if fence_character:
+            closing = (
+                re.fullmatch(
+                    rf"{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
+                    content,
+                )
+                if indentation < 4
+                else None
+            )
+            if closing is not None:
+                fence_character = ""
+                fence_length = 0
+            continue
+        if in_html_comment:
+            if "-->" in line:
+                in_html_comment = False
+            continue
+        if "<!--" in line:
+            if "-->" not in line.split("<!--", 1)[1]:
+                in_html_comment = True
+            continue
+        opening = re.match(r"^(`{3,}|~{3,})(.*)$", content) if indentation < 4 else None
+        if opening is not None:
+            marker = opening.group(1)
+            if marker[0] == "`" and "`" in opening.group(2):
+                continue
+            fence_character = marker[0]
+            fence_length = len(marker)
+            continue
+        if indentation >= 4:
+            continue
+        if not fence_character and content.rstrip() in JAPANESE_ROUTING_LINES:
+            return False
+    return True
+
+
+def validate(destination: Path) -> bool:
     repository = destination.resolve()
     if not repository.is_dir():
         raise UpdateValidationError(f"destination is not a directory: {repository}")
@@ -509,6 +594,7 @@ def validate(destination: Path) -> None:
     inspect_project_owned_content(repository)
     inspect_filesystem(repository)
     inspect_external_access_profile(repository)
+    return needs_japanese_routing_guidance(repository)
 
 
 def main() -> int:
@@ -523,12 +609,20 @@ def main() -> int:
     try:
         if args.before_update:
             require_clean_update_start(args.destination.resolve())
+            needs_guidance = False
         else:
-            validate(args.destination)
+            needs_guidance = validate(args.destination)
     except UpdateValidationError as exc:
         print(f"unsafe Copier update result: {exc}", file=sys.stderr)
         return 1
     print("Copier update result validation passed")
+    if needs_guidance:
+        print(
+            "Copier update preserved project-owned AGENTS.md without "
+            "Japanese-writing routing. Add this line manually: "
+            + JAPANESE_ROUTING_SUGGESTION,
+            file=sys.stderr,
+        )
     return 0
 
 
