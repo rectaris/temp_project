@@ -1071,7 +1071,20 @@ def live_reservations(
         if entry["lease_expires_at"] > now:
             retained.append(entry)
             continue
-        if entry["written"] and entry["worktree_path"] in registered:
+        relative_path = entry["relative_path"]
+        materialized = False
+        if relative_path and entry["worktree_path"] in registered:
+            candidate = Path(entry["worktree_path"]) / relative_path
+            try:
+                metadata = os.lstat(candidate)
+            except OSError:
+                pass
+            else:
+                materialized = stat.S_ISREG(metadata.st_mode)
+        if (
+            entry["worktree_path"] in registered
+            and (entry["written"] or materialized)
+        ):
             retained.append(entry)
     return retained
 
@@ -1176,18 +1189,171 @@ def mark_plan_id_written(
         published = plan_ids_in_commit(repository, commit) if commit is not None else set()
         entries = live_reservations(repository, read_reservations(ledger), published, moment)
         holder = str(repository)
-        changed = False
+        matches = 0
         for entry in entries:
             if (
                 entry["input_digest"] == input_digest
                 and entry["worktree_path"] == holder
                 and entry["plan_id"] == plan_id
-                and not entry["written"]
             ):
+                matches += 1
                 entry["written"] = True
-                changed = True
-        if changed:
+        if matches != 1:
+            raise WorktreeError(
+                "no unique plan-id reservation matches the written plan"
+            )
+        if matches:
             write_reservations(ledger, sorted(entries, key=lambda item: item["plan_id"]))
+
+
+def require_plan_id_reservation(
+    repository: Path,
+    *,
+    input_digest: str,
+    plan_id: str,
+    relative_path: str,
+    now: int | None = None,
+) -> None:
+    """Require one live reservation bound to this worktree and successor path."""
+
+    if DIGEST_RE.fullmatch(input_digest) is None:
+        raise WorktreeError("plan-id reservation requires a sha256:<64 hex> input digest")
+    if re.fullmatch(r"[0-9]{3}", plan_id) is None:
+        raise WorktreeError("plan-id reservation carries an invalid plan identifier")
+    moment = int(time.time()) if now is None else now
+    ledger = reservation_ledger_path(repository)
+    with plan_lifecycle_lock(repository):
+        commit = published_source_commit(repository)
+        published = plan_ids_in_commit(repository, commit) if commit is not None else set()
+        entries = live_reservations(repository, read_reservations(ledger), published, moment)
+        matches = [
+            entry
+            for entry in entries
+            if entry["input_digest"] == input_digest
+            and entry["plan_id"] == plan_id
+            and entry["relative_path"] == relative_path
+            and entry["worktree_path"] == str(repository)
+            and not entry["written"]
+        ]
+    if len(matches) != 1:
+        raise WorktreeError(
+            "no live plan-id reservation matches this worktree, input, and successor path"
+        )
+
+
+def claim_plan_id_reservations(
+    repository: Path,
+    *,
+    reservations: list[dict[str, str]],
+    now: int | None = None,
+) -> None:
+    """Atomically make checked successor reservations durable before repository writes."""
+
+    moment = int(time.time()) if now is None else now
+    ledger = reservation_ledger_path(repository)
+    with plan_lifecycle_lock(repository):
+        commit = published_source_commit(repository)
+        published = plan_ids_in_commit(repository, commit) if commit is not None else set()
+        entries = live_reservations(repository, read_reservations(ledger), published, moment)
+        selected: list[dict[str, Any]] = []
+        for reservation in reservations:
+            matches = [
+                entry
+                for entry in entries
+                if entry["input_digest"] == reservation["input_digest"]
+                and entry["worktree_path"] == str(repository)
+                and entry["plan_id"] == reservation["id"]
+                and entry["relative_path"] == reservation["path"]
+            ]
+            if len(matches) != 1:
+                raise WorktreeError(
+                    "no unique live plan-id reservation matches the transaction claim"
+                )
+            selected.append(matches[0])
+        if len({entry["plan_id"] for entry in selected}) != len(selected):
+            raise WorktreeError("transaction claims a duplicate plan-id reservation")
+        for entry in selected:
+            entry["written"] = True
+        if selected:
+            write_reservations(ledger, sorted(entries, key=lambda item: item["plan_id"]))
+
+
+def release_plan_id_reservations(
+    repository: Path,
+    *,
+    reservations: list[dict[str, str]],
+    now: int | None = None,
+) -> None:
+    """Atomically return rolled-back transaction claims to renewable leases."""
+
+    moment = int(time.time()) if now is None else now
+    ledger = reservation_ledger_path(repository)
+    with plan_lifecycle_lock(repository):
+        commit = published_source_commit(repository)
+        published = plan_ids_in_commit(repository, commit) if commit is not None else set()
+        entries = live_reservations(repository, read_reservations(ledger), published, moment)
+        selected: list[dict[str, Any]] = []
+        missing = 0
+        for reservation in reservations:
+            matches = [
+                entry
+                for entry in entries
+                if entry["input_digest"] == reservation["input_digest"]
+                and entry["worktree_path"] == str(repository)
+                and entry["plan_id"] == reservation["id"]
+                and entry["relative_path"] == reservation["path"]
+            ]
+            if not matches:
+                missing += 1
+                continue
+            if len(matches) != 1:
+                raise WorktreeError(
+                    "no unique plan-id reservation matches the rollback claim"
+                )
+            selected.append(matches[0])
+        if missing:
+            if missing == len(reservations):
+                return
+            raise WorktreeError(
+                "rollback claims only a partial successor reservation set"
+            )
+        for entry in selected:
+            entry["written"] = False
+            entry["lease_expires_at"] = moment + RESERVATION_LEASE_SECONDS
+        if selected:
+            write_reservations(ledger, sorted(entries, key=lambda item: item["plan_id"]))
+
+
+def release_plan_id_reservation(
+    repository: Path,
+    *,
+    input_digest: str,
+    plan_id: str,
+    now: int | None = None,
+) -> None:
+    """Return a pre-commit reservation claim to a renewable unwritten lease."""
+
+    moment = int(time.time()) if now is None else now
+    ledger = reservation_ledger_path(repository)
+    with plan_lifecycle_lock(repository):
+        commit = published_source_commit(repository)
+        published = plan_ids_in_commit(repository, commit) if commit is not None else set()
+        entries = live_reservations(repository, read_reservations(ledger), published, moment)
+        matches = 0
+        for entry in entries:
+            if (
+                entry["input_digest"] == input_digest
+                and entry["worktree_path"] == str(repository)
+                and entry["plan_id"] == plan_id
+            ):
+                matches += 1
+                entry["written"] = False
+                entry["lease_expires_at"] = moment + RESERVATION_LEASE_SECONDS
+        if matches != 1:
+            raise WorktreeError(
+                "no unique plan-id reservation matches the rollback claim"
+            )
+        write_reservations(ledger, sorted(entries, key=lambda item: item["plan_id"]))
 
 
 def reserved_plan_ids(repository: Path, *, now: int | None = None) -> set[int]:

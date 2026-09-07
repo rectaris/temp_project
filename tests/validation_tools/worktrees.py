@@ -1329,6 +1329,87 @@ class TaskPublicationTest(unittest.TestCase):
         git(worktree, "commit", "-qm", f"add {name}")
         return git(worktree, "rev-parse", "HEAD").stdout.strip()
 
+    def test_retained_transition_accepts_plan_only_commit_and_dirty_snapshot(
+        self,
+    ) -> None:
+        worktree = self.prepare()
+        source_tip = git(worktree, "rev-parse", "HEAD").stdout.strip()
+        product = worktree / "file.txt"
+        product.write_text("promoted candidate\n", encoding="utf-8")
+        successor = "docs/plan/active/312-successor.md"
+        contract_path = "docs/plan/replanned/contracts/311-replan.json"
+        contract = {
+            "schema_version": 4,
+            "dirty_product_paths": ["file.txt"],
+            "promoted_dirty_paths": ["file.txt"],
+            "successors": [
+                {
+                    "path": successor,
+                    "content": (
+                        "status: in_progress\n"
+                        "implementation_mode: parent_direct\n"
+                    ),
+                }
+            ],
+        }
+        for relative, content in (
+            (successor, contract["successors"][0]["content"]),
+            (contract_path, json.dumps(contract, sort_keys=True) + "\n"),
+        ):
+            path = worktree / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        git(worktree, "add", successor, contract_path)
+        git(worktree, "commit", "-qm", "publish replan transition")
+        accepted = git(worktree, "rev-parse", "HEAD").stdout.strip()
+        snapshot = [{"path": "file.txt", "digest": "bound"}]
+        payload = {
+            "phase": "complete",
+            "source_head": source_tip,
+            "dirty_product_snapshot": snapshot,
+            "result_path": contract_path,
+            "operations": [
+                {
+                    "path": successor,
+                    "target_content": contract["successors"][0]["content"],
+                    "target_mode": 0o644,
+                },
+                {
+                    "path": contract_path,
+                    "target_content": json.dumps(contract, sort_keys=True) + "\n",
+                    "target_mode": 0o644,
+                },
+            ],
+        }
+        journal = self.base / "transition.json"
+        journal.write_text('{"journal_identity":"sha256:test"}\n', encoding="utf-8")
+
+        class Restructure:
+            class RestructureError(Exception):
+                pass
+
+            @staticmethod
+            def load_journal(path: Path, identity: str, **kwargs):
+                return payload
+
+            @staticmethod
+            def dirty_product_snapshot(paths: list[str]):
+                return snapshot
+
+        with mock.patch.object(
+            WORKTREE_MODULE,
+            "load_restructure_module",
+            return_value=Restructure,
+        ):
+            WORKTREE_MODULE.validate_retained_replan_transition(
+                worktree,
+                {"task": plan_selector(self.plan)},
+                journal,
+                accepted,
+                source_tip,
+            )
+        self.assertEqual(product.read_text(encoding="utf-8"), "promoted candidate\n")
+
     def test_publication_from_inside_the_task_worktree_retires_it_fully(self) -> None:
         """Retirement must not depend on the directory it deletes.
 
@@ -1818,6 +1899,117 @@ class PlanIdentifierReservationTest(unittest.TestCase):
             self.repository, input_digest=self.digest("a"), plan_id=reserved["plan_id"]
         )
         self.assertEqual(GUARD_MODULE.reserved_plan_ids(self.repository, now=moment + 61), {7})
+
+    def test_successor_reservations_are_claimed_atomically_before_writes(self) -> None:
+        moment = int(time.time())
+        reservations = [
+            GUARD_MODULE.reserve_plan_id(
+                self.repository,
+                input_digest=self.digest(marker),
+                lifecycle="active",
+                slug=f"successor-{marker}",
+                now=moment,
+                lease_seconds=60,
+            )
+            for marker in ("a", "b")
+        ]
+        records = [
+            {
+                "id": reservation["plan_id"],
+                "path": reservation["relative_path"],
+                "input_digest": reservation["input_digest"],
+            }
+            for reservation in reservations
+        ]
+        GUARD_MODULE.claim_plan_id_reservations(
+            self.repository,
+            reservations=records,
+            now=moment,
+        )
+        entries = GUARD_MODULE.read_reservations(
+            GUARD_MODULE.reservation_ledger_path(self.repository)
+        )
+        self.assertTrue(all(entry["written"] for entry in entries))
+        self.assertEqual(
+            GUARD_MODULE.reserved_plan_ids(self.repository, now=moment + 61),
+            {7, 8},
+        )
+        GUARD_MODULE.claim_plan_id_reservations(
+            self.repository,
+            reservations=records,
+            now=moment + 61,
+        )
+
+    def test_expired_successor_claim_fails_without_partial_mutation(self) -> None:
+        moment = int(time.time())
+        reservations = [
+            GUARD_MODULE.reserve_plan_id(
+                self.repository,
+                input_digest=self.digest(marker),
+                lifecycle="active",
+                slug=f"successor-{marker}",
+                now=moment,
+                lease_seconds=60,
+            )
+            for marker in ("a", "b")
+        ]
+        ledger = GUARD_MODULE.reservation_ledger_path(self.repository)
+        entries = GUARD_MODULE.read_reservations(ledger)
+        entries[0]["lease_expires_at"] = moment
+        GUARD_MODULE.write_reservations(ledger, entries)
+        records = [
+            {
+                "id": reservation["plan_id"],
+                "path": reservation["relative_path"],
+                "input_digest": reservation["input_digest"],
+            }
+            for reservation in reservations
+        ]
+        with self.assertRaises(GUARD_MODULE.WorktreeError):
+            GUARD_MODULE.claim_plan_id_reservations(
+                self.repository,
+                reservations=records,
+                now=moment + 1,
+            )
+        retained = GUARD_MODULE.read_reservations(ledger)
+        self.assertEqual(len(retained), 2)
+        self.assertTrue(all(not entry["written"] for entry in retained))
+
+    def test_rolled_back_successor_claims_return_to_renewable_leases(self) -> None:
+        moment = int(time.time())
+        reservation = GUARD_MODULE.reserve_plan_id(
+            self.repository,
+            input_digest=self.digest("a"),
+            lifecycle="active",
+            slug="successor",
+            now=moment,
+            lease_seconds=60,
+        )
+        records = [
+            {
+                "id": reservation["plan_id"],
+                "path": reservation["relative_path"],
+                "input_digest": reservation["input_digest"],
+            }
+        ]
+        GUARD_MODULE.claim_plan_id_reservations(
+            self.repository,
+            reservations=records,
+            now=moment,
+        )
+        GUARD_MODULE.release_plan_id_reservations(
+            self.repository,
+            reservations=records,
+            now=moment + 30,
+        )
+        entries = GUARD_MODULE.read_reservations(
+            GUARD_MODULE.reservation_ledger_path(self.repository)
+        )
+        self.assertFalse(entries[0]["written"])
+        self.assertEqual(
+            entries[0]["lease_expires_at"],
+            moment + 30 + GUARD_MODULE.RESERVATION_LEASE_SECONDS,
+        )
 
     def test_an_expired_unwritten_reservation_is_released_in_a_live_worktree(self) -> None:
         """A reservation that never became a plan file expires with its lease.

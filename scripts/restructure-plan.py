@@ -73,6 +73,7 @@ SCHEMA_THREE_CONTRACT_SOURCE_FIELDS = {
 }
 RECONSTRUCTION_SCHEMA_VERSIONS = {1, 3, 4}
 OWNER_CONTINUATION_SCHEMA_VERSIONS = {4}
+DIRTY_PROMOTION_SCHEMA_VERSIONS = {4}
 OWNER_CONTINUATION_AUTHORIZATION_MAX_BYTES = 400
 ADMISSION_FIELDS = (
     "plan_purpose",
@@ -129,7 +130,8 @@ CHECKED_PATH_RE = re.compile(
 SHELVED_PATH_RE = re.compile(
     r"docs/plan/shelved/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
 )
-JOURNAL_SCHEMA_VERSION = 2
+JOURNAL_SCHEMA_VERSION = 3
+SUPPORTED_JOURNAL_SCHEMA_VERSIONS = {2, 3}
 IDENTITY_KEYS = {"device", "inode", "mode", "link_count", "digest"}
 REPLACEMENT_IDENTITY_KEYS = {"temporary", "restored"}
 JOURNAL_PHASES = {
@@ -851,6 +853,177 @@ def reject_preservation_write_overlap(
         )
 
 
+def validate_promoted_dirty_paths(
+    value: Any,
+    *,
+    actual_dirty: list[str],
+    created_entries: list[dict[str, Any]],
+    label: str,
+) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or value != sorted(set(value))
+        or any(not isinstance(path, str) for path in value)
+    ):
+        raise RestructureError(f"{label} must be a non-empty sorted unique path list")
+    unknown = sorted(set(value) - set(actual_dirty))
+    if unknown:
+        raise RestructureError(
+            f"{label} contains paths outside dirty_product_paths: {', '.join(unknown)}"
+        )
+    if value != actual_dirty:
+        raise RestructureError(
+            f"{label} must promote the complete dirty_product_paths set"
+        )
+    owner_paths: set[str] = set()
+    for path in value:
+        normalized = preservation_scope(
+            {"preservation_scope": [path]},
+            label,
+            required=True,
+        )
+        if normalized != [path]:
+            raise RestructureError(f"{label} contains an invalid path")
+        owners = [
+            entry["path"]
+            for entry in created_entries
+            if scope_covers(items(entry["manifest"], "write_scope"), path)
+        ]
+        if len(owners) != 1:
+            raise RestructureError(
+                f"{label} path must be owned by exactly one created write_scope: {path}"
+            )
+        owner_paths.add(owners[0])
+    if len(owner_paths) != 1:
+        raise RestructureError(
+            f"{label} must transfer every dirty path to one created successor"
+        )
+    owner = next(
+        entry for entry in created_entries if entry["path"] in owner_paths
+    )
+    if scalar(owner["manifest"], "implementation_mode") != "parent_direct":
+        raise RestructureError(
+            f"{label} successor must declare implementation_mode: parent_direct"
+        )
+    return value
+
+
+def validate_dirty_product_path_list(value: Any, label: str) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or value != sorted(set(value))
+        or any(not isinstance(path, str) for path in value)
+    ):
+        raise RestructureError(f"{label} must be a sorted unique path list")
+    for path in value:
+        if preservation_scope(
+            {"preservation_scope": [path]},
+            label,
+            required=True,
+        ) != [path]:
+            raise RestructureError(f"{label} contains an invalid path")
+    return value
+
+
+def load_worktree_guard_module() -> ModuleType:
+    for candidate in (
+        Path(".project-agent-workflow/scripts/worktree_guard.py"),
+        Path("scripts/project_workflow/worktree_guard.py"),
+    ):
+        if not candidate.is_file():
+            continue
+        guard = sys.modules.get("worktree_guard")
+        if guard is not None:
+            return guard
+        spec = importlib.util.spec_from_file_location("worktree_guard", candidate)
+        if spec is None or spec.loader is None:
+            continue
+        guard = importlib.util.module_from_spec(spec)
+        sys.modules["worktree_guard"] = guard
+        spec.loader.exec_module(guard)
+        return guard
+    raise RestructureError("could not locate worktree_guard.py")
+
+
+def validate_successor_id_reservations(
+    value: Any,
+    *,
+    created_entries: list[dict[str, Any]],
+    verify_live: bool,
+    label: str,
+) -> list[dict[str, str]]:
+    if not isinstance(value, list) or len(value) != len(created_entries):
+        raise RestructureError(f"{label} must bind every created plan exactly once")
+    expected = {(entry["id"], entry["path"]) for entry in created_entries}
+    observed: set[tuple[str, str]] = set()
+    records: list[dict[str, str]] = []
+    guard = load_worktree_guard_module() if verify_live else None
+    for index, raw in enumerate(value):
+        record = exact_object(
+            raw,
+            {"id", "path", "input_digest"},
+            f"{label}[{index}]",
+        )
+        plan_id = record["id"]
+        path = record["path"]
+        input_digest = record["input_digest"]
+        if (
+            not isinstance(plan_id, str)
+            or not re.fullmatch(r"[0-9]{3}", plan_id)
+            or not isinstance(path, str)
+            or not isinstance(input_digest, str)
+            or not SHA_RE.fullmatch(input_digest)
+        ):
+            raise RestructureError(f"{label}[{index}] is invalid")
+        identity = (plan_id, path)
+        if identity in observed:
+            raise RestructureError(f"{label} contains a duplicate created plan")
+        observed.add(identity)
+        records.append(
+            {"id": plan_id, "path": path, "input_digest": input_digest}
+        )
+        if guard is not None:
+            try:
+                guard.require_plan_id_reservation(
+                    ROOT,
+                    input_digest=input_digest,
+                    plan_id=plan_id,
+                    relative_path=path,
+                )
+            except Exception as error:
+                raise RestructureError(str(error)) from error
+    if observed != expected:
+        raise RestructureError(f"{label} differs from the created plan identities")
+    return records
+
+
+def mark_successor_id_reservations(records: list[dict[str, str]]) -> None:
+    if not records:
+        return
+    guard = load_worktree_guard_module()
+    try:
+        guard.claim_plan_id_reservations(
+            ROOT,
+            reservations=records,
+        )
+    except Exception as error:
+        raise RestructureError(str(error)) from error
+
+
+def release_successor_id_reservations(records: list[dict[str, str]]) -> None:
+    if not records:
+        return
+    guard = load_worktree_guard_module()
+    try:
+        guard.release_plan_id_reservations(
+            ROOT,
+            reservations=records,
+        )
+    except Exception as error:
+        raise RestructureError(str(error)) from error
+
+
 def routing_contract(spec_index: Path) -> tuple[set[str], dict[str, set[str]]]:
     default_reads: set[str] = set()
     routes: dict[str, set[str]] = {}
@@ -1448,11 +1621,96 @@ def validate_replanned_successor(
         }
         if nested_schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS:
             nested_fields = nested_fields | {"owner_continuation_authorization"}
+        nested_promotion_fields = {
+            "promoted_dirty_paths",
+            "successor_id_reservations",
+        } & set(contract)
+        if nested_promotion_fields:
+            if nested_promotion_fields != {
+                "promoted_dirty_paths",
+                "successor_id_reservations",
+            }:
+                raise RestructureError(
+                    f"replanned schema-{nested_schema_version} successor contract "
+                    f"{plan_id} has an incomplete dirty-path promotion record"
+                )
+            nested_fields |= nested_promotion_fields
         exact_object(
             contract,
             nested_fields,
             f"replanned schema-{nested_schema_version} successor contract {plan_id}",
         )
+        if nested_promotion_fields:
+            nested_created: list[dict[str, Any]] = []
+            for raw_entry in [
+                *contract["successors"],
+                *contract["prerequisite_plans"],
+            ]:
+                if (
+                    not isinstance(raw_entry, dict)
+                    or not isinstance(raw_entry.get("id"), str)
+                    or not isinstance(raw_entry.get("path"), str)
+                    or not isinstance(raw_entry.get("content"), str)
+                ):
+                    raise RestructureError(
+                        f"replanned schema-{nested_schema_version} successor contract "
+                        f"{plan_id} has an invalid created plan"
+                    )
+                nested_created.append(
+                    {
+                        "id": raw_entry["id"],
+                        "path": raw_entry["path"],
+                        "manifest": parse_manifest(raw_entry["content"]),
+                    }
+                )
+            nested_dirty = validate_dirty_product_path_list(
+                contract["dirty_product_paths"],
+                f"replanned schema-{nested_schema_version} dirty_product_paths",
+            )
+            nested_promoted = validate_promoted_dirty_paths(
+                contract["promoted_dirty_paths"],
+                actual_dirty=nested_dirty,
+                created_entries=nested_created,
+                label=(
+                    f"replanned schema-{nested_schema_version} "
+                    "promoted_dirty_paths"
+                ),
+            )
+            nested_preserved = [
+                path
+                for entry in nested_created
+                for path in preservation_scope(
+                    entry["manifest"],
+                    f"replanned schema-{nested_schema_version} plan {entry['path']}",
+                    required=True,
+                )
+            ]
+            if (
+                len(nested_preserved) != len(set(nested_preserved))
+                or sorted(nested_preserved)
+                != sorted(set(nested_dirty) - set(nested_promoted))
+            ):
+                raise RestructureError(
+                    f"replanned schema-{nested_schema_version} successor contract "
+                    f"{plan_id} has an invalid preservation mapping"
+                )
+            reject_preservation_write_overlap(
+                nested_preserved,
+                [
+                    items(entry["manifest"], "write_scope")
+                    for entry in nested_created
+                ],
+                f"replanned schema-{nested_schema_version} successor contract {plan_id}",
+            )
+            validate_successor_id_reservations(
+                contract["successor_id_reservations"],
+                created_entries=nested_created,
+                verify_live=False,
+                label=(
+                    f"replanned schema-{nested_schema_version} "
+                    "successor_id_reservations"
+                ),
+            )
         if contract["contract_path"] != contract_path:
             raise RestructureError(
                 f"replanned successor contract identity mismatch: {expected_path}"
@@ -2691,24 +2949,28 @@ def validate_activation_promotion(
         )
 
 
-def read_spec(path: Path) -> dict[str, Any]:
+def read_json_object(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
-            raise RestructureError("restructure specification must be a regular file")
+            raise RestructureError(f"{label} must be a regular file")
         data = os.read(descriptor, MAX_SPEC_BYTES + 1)
     finally:
         os.close(descriptor)
     if len(data) > MAX_SPEC_BYTES:
-        raise RestructureError("restructure specification exceeds one MiB")
+        raise RestructureError(f"{label} exceeds one MiB")
     try:
         value = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RestructureError(f"invalid restructure specification: {exc}") from exc
+        raise RestructureError(f"invalid {label}: {exc}") from exc
     if not isinstance(value, dict):
-        raise RestructureError("specification must be a JSON object")
-    return value
+        raise RestructureError(f"{label} must be a JSON object")
+    return value, data
+
+
+def read_spec(path: Path) -> dict[str, Any]:
+    return read_json_object(path, "restructure specification")[0]
 
 
 def validate_single_source_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -4195,6 +4457,24 @@ def validate_schema_three_spec(
     }
     if schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS:
         reconstruct_fields = reconstruct_fields | {"owner_continuation_authorization"}
+    promotion_fields_present = {
+        "promoted_dirty_paths",
+        "successor_id_reservations",
+    } & set(spec)
+    if promotion_fields_present:
+        if promotion_fields_present != {
+            "promoted_dirty_paths",
+            "successor_id_reservations",
+        }:
+            raise RestructureError(
+                "dirty-path promotion requires promoted_dirty_paths and "
+                "successor_id_reservations together"
+            )
+        if schema_version not in DIRTY_PROMOTION_SCHEMA_VERSIONS:
+            raise RestructureError(
+                "dirty-path promotion requires a supported owner-continuation schema"
+            )
+        reconstruct_fields |= promotion_fields_present
     exact_object(
         spec,
         reconstruct_fields,
@@ -4468,14 +4748,29 @@ def validate_schema_three_spec(
         raise RestructureError(
             "dirty_product_paths must exactly match current Git status"
         )
+    promoted_dirty = (
+        validate_promoted_dirty_paths(
+            spec["promoted_dirty_paths"],
+            actual_dirty=actual_dirty,
+            created_entries=created_entries,
+            label="promoted_dirty_paths",
+        )
+        if promotion_fields_present
+        else []
+    )
     preserved = [
         path
         for entry in created_entries
         for path in entry["preservation_scope"]
     ]
-    if len(preserved) != len(set(preserved)) or sorted(preserved) != actual_dirty:
+    expected_preserved = sorted(set(actual_dirty) - set(promoted_dirty))
+    if (
+        len(preserved) != len(set(preserved))
+        or sorted(preserved) != expected_preserved
+    ):
         raise RestructureError(
-            "created plan preservation_scope must exactly match dirty_product_paths"
+            "created plan preservation_scope must exactly match non-promoted "
+            "dirty_product_paths"
         )
     reject_preservation_write_overlap(
         preserved,
@@ -4504,6 +4799,16 @@ def validate_schema_three_spec(
             (entry["id"], entry["path"], entry["manifest"])
             for entry in created_entries
         ]
+    )
+    successor_id_reservations = (
+        validate_successor_id_reservations(
+            spec["successor_id_reservations"],
+            created_entries=created_entries,
+            verify_live=True,
+            label="successor_id_reservations",
+        )
+        if promotion_fields_present
+        else []
     )
     transaction_id = canonical_digest(
         {
@@ -4615,6 +4920,9 @@ def validate_schema_three_spec(
     }
     if owner_continuation_authorization is not None:
         contract["owner_continuation_authorization"] = owner_continuation_authorization
+    if promotion_fields_present:
+        contract["promoted_dirty_paths"] = promoted_dirty
+        contract["successor_id_reservations"] = successor_id_reservations
     archives = [
         (
             source["archive_path"],
@@ -4705,6 +5013,7 @@ def validate_schema_three_spec(
         "expected_dirty_product_paths": actual_dirty,
         "expected_dirty_product_snapshot": dirty_product_snapshot(actual_dirty),
         "result_path": contract_path,
+        "successor_id_reservations": successor_id_reservations,
         "rebind_record_digests": [
             record["record_digest"] for record in rebind_records
         ],
@@ -5058,22 +5367,25 @@ def journal_file(journal_identity: str) -> Path:
 
 
 def canonical_journal_identity(payload: dict[str, Any]) -> str:
-    return canonical_digest(
-        {
-            "schema_version": payload["schema_version"],
-            "transaction_id": payload["transaction_id"],
-            "source_head": payload["source_head"],
-            "specification_digest": payload["specification_digest"],
-            "operation": payload["operation"],
-            "operations": payload["operations"],
-            "created_directories": payload["created_directories"],
-            "dirty_product_snapshot": payload["dirty_product_snapshot"],
-            "historical_contract_snapshot": payload[
-                "historical_contract_snapshot"
-            ],
-            "result_path": payload["result_path"],
-        }
-    )
+    identity = {
+        "schema_version": payload["schema_version"],
+        "transaction_id": payload["transaction_id"],
+        "source_head": payload["source_head"],
+        "specification_digest": payload["specification_digest"],
+        "operation": payload["operation"],
+        "operations": payload["operations"],
+        "created_directories": payload["created_directories"],
+        "dirty_product_snapshot": payload["dirty_product_snapshot"],
+        "historical_contract_snapshot": payload[
+            "historical_contract_snapshot"
+        ],
+        "result_path": payload["result_path"],
+    }
+    if payload["schema_version"] >= 3:
+        identity["successor_id_reservations"] = payload[
+            "successor_id_reservations"
+        ]
+    return canonical_digest(identity)
 
 
 def write_new_journal(path: Path, payload: dict[str, Any]) -> None:
@@ -5120,7 +5432,12 @@ def update_journal(path: Path, payload: dict[str, Any], phase: str, next_operati
     )
 
 
-def load_journal(path: Path, journal_identity: str) -> dict[str, Any]:
+def load_journal(
+    path: Path,
+    journal_identity: str,
+    *,
+    expected_source_head: str | None = None,
+) -> dict[str, Any]:
     expected = journal_file(journal_identity)
     if path.absolute() != expected.absolute():
         raise RestructureError("recovery journal identity does not match its Git-local path")
@@ -5131,32 +5448,36 @@ def load_journal(path: Path, journal_identity: str) -> dict[str, Any]:
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RestructureError("transaction journal is invalid JSON") from exc
+    journal_fields = {
+        "schema_version",
+        "journal_identity",
+        "transaction_id",
+        "source_head",
+        "specification_digest",
+        "operation",
+        "phase",
+        "next_operation",
+        "operations",
+        "created_directories",
+        "dirty_product_snapshot",
+        "historical_contract_snapshot",
+        "result_path",
+        "replacement_identities",
+    }
+    if payload.get("schema_version") == 3:
+        journal_fields.add("successor_id_reservations")
     exact_object(
         payload,
-        {
-            "schema_version",
-            "journal_identity",
-            "transaction_id",
-            "source_head",
-            "specification_digest",
-            "operation",
-            "phase",
-            "next_operation",
-            "operations",
-            "created_directories",
-            "dirty_product_snapshot",
-            "historical_contract_snapshot",
-            "result_path",
-            "replacement_identities",
-        },
+        journal_fields,
         "transaction journal",
     )
     if (
-        payload["schema_version"] != JOURNAL_SCHEMA_VERSION
+        payload["schema_version"] not in SUPPORTED_JOURNAL_SCHEMA_VERSIONS
         or payload["journal_identity"] != journal_identity
         or canonical_journal_identity(payload) != journal_identity
         or payload["phase"] not in JOURNAL_PHASES
-        or payload["source_head"] != current_head()
+        or payload["source_head"]
+        != (current_head() if expected_source_head is None else expected_source_head)
     ):
         raise RestructureError("transaction journal identity or source HEAD is stale")
     if (
@@ -5170,6 +5491,47 @@ def load_journal(path: Path, journal_identity: str) -> dict[str, Any]:
         or not isinstance(payload["historical_contract_snapshot"], list)
     ):
         raise RestructureError("transaction journal progress is invalid")
+    if payload["schema_version"] == 3:
+        reservations = payload["successor_id_reservations"]
+        if not isinstance(reservations, list):
+            raise RestructureError(
+                "transaction successor reservations are invalid"
+            )
+        destination_paths = {
+            operation["path"]
+            for operation in payload["operations"]
+            if isinstance(operation, dict)
+            and operation.get("role") == "destination"
+            and isinstance(operation.get("path"), str)
+        }
+        identities: set[tuple[str, str]] = set()
+        for index, raw in enumerate(reservations):
+            if not isinstance(raw, dict) or set(raw) != {
+                "id",
+                "path",
+                "input_digest",
+            }:
+                raise RestructureError(
+                    f"transaction successor reservation {index} is invalid"
+                )
+            plan_id = raw["id"]
+            relative_path = raw["path"]
+            input_digest = raw["input_digest"]
+            identity = (plan_id, relative_path)
+            if (
+                not isinstance(plan_id, str)
+                or not re.fullmatch(r"[0-9]{3}", plan_id)
+                or not isinstance(relative_path, str)
+                or Path(relative_path).name[:3] != plan_id
+                or relative_path not in destination_paths
+                or not isinstance(input_digest, str)
+                or not SHA_RE.fullmatch(input_digest)
+                or identity in identities
+            ):
+                raise RestructureError(
+                    f"transaction successor reservation {index} is invalid"
+                )
+            identities.add(identity)
     dirty_paths: list[str] = []
     for index, entry in enumerate(payload["dirty_product_snapshot"]):
         if (
@@ -5807,6 +6169,10 @@ def execute(
                 "expected_historical_contract_snapshot"
             ],
             "result_path": state["result_path"],
+            "successor_id_reservations": state.get(
+                "successor_id_reservations",
+                [],
+            ),
             "replacement_identities": [
                 {"temporary": None, "restored": None} for _ in operations
             ],
@@ -5826,6 +6192,9 @@ def execute(
                 raise RestructureError("transaction journal already exists")
             write_new_journal(journal_path, payload)
             try:
+                mark_successor_id_reservations(
+                    payload["successor_id_reservations"]
+                )
                 maybe_crash(crash_phase, "after_journal")
                 for index, operation in enumerate(operations):
                     prepare_operation_temporary(
@@ -5880,7 +6249,12 @@ def execute(
                 raise
             except BaseException:
                 if payload["phase"] in {"prepared", "temps_prepared", "applying"}:
-                    rollback_journal(journal_path, payload)
+                    try:
+                        rollback_journal(journal_path, payload)
+                    finally:
+                        release_successor_id_reservations(
+                            payload["successor_id_reservations"]
+                        )
                 raise
     return state["result_path"]
 
@@ -5930,11 +6304,17 @@ def recover_transaction(
                 "applying",
                 "rolling_back",
             }:
-                rollback_journal(
-                    path,
-                    payload,
-                    crash_phase=crash_phase,
-                )
+                try:
+                    rollback_journal(
+                        path,
+                        payload,
+                        crash_phase=crash_phase,
+                    )
+                finally:
+                    if payload["phase"] == "rolled_back":
+                        release_successor_id_reservations(
+                            payload.get("successor_id_reservations", [])
+                        )
             elif payload["phase"] in {"commit_point", "replaying"}:
                 roll_forward_journal(
                     path,
@@ -5952,7 +6332,11 @@ def recover_transaction(
                 )
             elif payload["phase"] == "complete":
                 verify_repository_contracts()
-            elif payload["phase"] != "rolled_back":
+            elif payload["phase"] == "rolled_back":
+                release_successor_id_reservations(
+                    payload.get("successor_id_reservations", [])
+                )
+            else:
                 raise RestructureError("transaction journal phase is unknown")
     return payload["result_path"]
 
@@ -7275,6 +7659,25 @@ def verify_schema_three_contract(
     }
     if schema_version in OWNER_CONTINUATION_SCHEMA_VERSIONS:
         contract_fields = contract_fields | {"owner_continuation_authorization"}
+    promotion_fields_present = {
+        "promoted_dirty_paths",
+        "successor_id_reservations",
+    } & set(contract)
+    if promotion_fields_present:
+        if promotion_fields_present != {
+            "promoted_dirty_paths",
+            "successor_id_reservations",
+        }:
+            raise RestructureError(
+                f"schema-{schema_version} contract {contract_path} has an incomplete "
+                "dirty-path promotion record"
+            )
+        if schema_version not in DIRTY_PROMOTION_SCHEMA_VERSIONS:
+            raise RestructureError(
+                f"schema-{schema_version} contract {contract_path} cannot promote "
+                "dirty paths"
+            )
+        contract_fields |= promotion_fields_present
     exact_object(
         contract,
         contract_fields,
@@ -7680,9 +8083,29 @@ def verify_schema_three_contract(
                 pending.append(dependency)
     if referenced != prerequisite_paths:
         raise RestructureError("schema-3 prerequisite mapping is incomplete")
+    contract_dirty_paths = validate_dirty_product_path_list(
+        contract["dirty_product_paths"],
+        f"schema-{schema_version} contract dirty_product_paths",
+    )
+    promoted_dirty = (
+        validate_promoted_dirty_paths(
+            contract["promoted_dirty_paths"],
+            actual_dirty=contract_dirty_paths,
+            created_entries=[
+                *validated_successors,
+                *validated_prerequisites,
+            ],
+            label=f"schema-{schema_version} contract promoted_dirty_paths",
+        )
+        if promotion_fields_present
+        else []
+    )
+    expected_preservation = sorted(
+        set(contract_dirty_paths) - set(promoted_dirty)
+    )
     if (
         len(contract_preservation) != len(set(contract_preservation))
-        or sorted(contract_preservation) != contract["dirty_product_paths"]
+        or sorted(contract_preservation) != expected_preservation
     ):
         raise RestructureError("schema-3 preservation mapping is invalid")
     reject_preservation_write_overlap(
@@ -7690,6 +8113,13 @@ def verify_schema_three_contract(
         contract_scopes,
         f"schema-3 contract {contract_path}",
     )
+    if promotion_fields_present:
+        validate_successor_id_reservations(
+            contract["successor_id_reservations"],
+            created_entries=[*validated_successors, *validated_prerequisites],
+            verify_live=False,
+            label=f"schema-{schema_version} contract successor_id_reservations",
+        )
     digests = contract["rebind_record_digests"]
     if (
         not isinstance(digests, list)
@@ -8228,26 +8658,88 @@ def require_task_worktree(action: str) -> None:
     silently allows one.
     """
 
-    for candidate in (
-        ".project-agent-workflow/scripts/worktree_guard.py",
-        "scripts/project_workflow/worktree_guard.py",
+    try:
+        load_worktree_guard_module().require_task_worktree(action=action)
+    except RestructureError as error:
+        if str(error) == "could not locate worktree_guard.py":
+            return
+        raise
+    except Exception as error:
+        raise RestructureError(f"{error}") from error
+
+
+def reserve_successor_id(request_path: Path) -> str:
+    request, request_bytes = read_json_object(
+        request_path,
+        "successor reservation request",
+    )
+    request = exact_object(
+        request,
+        {"schema_version", "source_plan", "lifecycle", "slug", "owner"},
+        "successor reservation request",
+    )
+    if request["schema_version"] != 1:
+        raise RestructureError("successor reservation request schema_version must be 1")
+    source_plan = normalized_path(
+        request["source_plan"],
+        PLAN_PATH_RE,
+        "successor reservation source_plan",
+    )
+    source_path = ROOT / source_plan
+    if not source_path.is_file():
+        raise RestructureError("successor reservation source plan does not exist")
+    source_manifest = parse_manifest(source_path.read_text(encoding="utf-8"))
+    if scalar(source_manifest, "status") != "replan_required":
+        raise RestructureError(
+            "successor reservation source plan must be replan_required"
+        )
+    lifecycle = request["lifecycle"]
+    slug = request["slug"]
+    owner = request["owner"]
+    if (
+        lifecycle != "active"
+        or not isinstance(slug, str)
+        or re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug) is None
+        or not isinstance(owner, str)
+        or not owner.strip()
+        or len(owner.encode("utf-8")) > 200
     ):
-        path = Path(candidate)
-        if not path.is_file():
-            continue
-        guard = sys.modules.get("worktree_guard")
-        if guard is None:
-            spec = importlib.util.spec_from_file_location("worktree_guard", path)
-            if spec is None or spec.loader is None:
-                return
-            guard = importlib.util.module_from_spec(spec)
-            sys.modules["worktree_guard"] = guard
-            spec.loader.exec_module(guard)
-        try:
-            guard.require_task_worktree(action=action)
-        except Exception as error:
-            raise RestructureError(f"{error}") from error
-        return
+        raise RestructureError("successor reservation request fields are invalid")
+    input_digest = sha256(request_bytes)
+    guard = load_worktree_guard_module()
+    try:
+        guard.require_task_worktree(action="reserving a restructuring successor id")
+        reservation = guard.reserve_plan_id(
+            ROOT,
+            input_digest=input_digest,
+            lifecycle=lifecycle,
+            slug=slug,
+            owner=owner,
+        )
+        if (ROOT / reservation["relative_path"]).exists():
+            guard.mark_plan_id_written(
+                ROOT,
+                input_digest=input_digest,
+                plan_id=reservation["plan_id"],
+            )
+            reservation = guard.reserve_plan_id(
+                ROOT,
+                input_digest=input_digest,
+                lifecycle=lifecycle,
+                slug=slug,
+                owner=owner,
+            )
+    except Exception as error:
+        raise RestructureError(str(error)) from error
+    return json.dumps(
+        {
+            "id": reservation["plan_id"],
+            "path": reservation["relative_path"],
+            "input_digest": input_digest,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def main() -> int:
@@ -8256,6 +8748,7 @@ def main() -> int:
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--recover", type=Path)
     parser.add_argument("--journal-id")
+    parser.add_argument("--reserve-successor-id", type=Path)
     args = parser.parse_args()
     try:
         selected = sum(
@@ -8263,13 +8756,21 @@ def main() -> int:
                 bool(args.verify),
                 args.recover is not None,
                 args.specification is not None,
+                args.reserve_successor_id is not None,
             )
         )
         if selected != 1:
             raise RestructureError(
-                "select exactly one specification, --verify, or --recover"
+                "select exactly one specification, --verify, --recover, or "
+                "--reserve-successor-id"
             )
-        if args.recover is not None:
+        if args.reserve_successor_id is not None:
+            if args.journal_id:
+                raise RestructureError(
+                    "--reserve-successor-id does not accept --journal-id"
+                )
+            print(reserve_successor_id(args.reserve_successor_id))
+        elif args.recover is not None:
             if not args.journal_id or not SHA_RE.fullmatch(args.journal_id):
                 raise RestructureError("--recover requires one exact --journal-id")
             require_task_worktree("recovering this restructuring")

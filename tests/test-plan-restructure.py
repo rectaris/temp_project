@@ -5618,7 +5618,9 @@ class PlanRestructureTest(unittest.TestCase):
         ]
         block = self.admission_block(conditions, "git diff --check") if admission is None else admission
         content = str(successor["content"]).replace(
-            "focused_validation:\n", block + "focused_validation:\n", 1
+            "focused_validation:\n",
+            "implementation_mode: parent_direct\n" + block + "focused_validation:\n",
+            1,
         )
         if write_scope is not None:
             content = content.replace("write_scope:\n  - coupled/\n", write_scope, 1)
@@ -5640,6 +5642,215 @@ class PlanRestructureTest(unittest.TestCase):
             "Continue the implementation through the reconstructed successors.",
         )
         self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_schema_four_promotes_dirty_path_with_bound_successor_reservation(
+        self,
+    ) -> None:
+        module = self.load_restructure_module("schema_four_promotion_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.schema_four_spec(module, source_paths)
+        promoted = "coupled/existing.py"
+        promoted_path = self.repo / promoted
+        promoted_path.parent.mkdir(parents=True, exist_ok=True)
+        promoted_path.write_text("candidate = True\n", encoding="utf-8")
+        successor = spec["successors"][0]
+        reservation = {
+            "id": successor["id"],
+            "path": successor["path"],
+            "input_digest": digest("successor reservation"),
+        }
+        spec["dirty_product_paths"] = [promoted]
+        spec["promoted_dirty_paths"] = [promoted]
+        spec["successor_id_reservations"] = [reservation]
+
+        marked: list[tuple[str, str]] = []
+
+        class Guard:
+            @staticmethod
+            def require_plan_id_reservation(*args, **kwargs) -> None:
+                return None
+
+            @staticmethod
+            def claim_plan_id_reservations(
+                repository: Path, *, reservations: list[dict[str, str]]
+            ) -> None:
+                marked.extend(
+                    (record["input_digest"], record["id"])
+                    for record in reservations
+                )
+
+            @staticmethod
+            def release_plan_id_reservations(
+                repository: Path, *, reservations: list[dict[str, str]]
+            ) -> None:
+                return None
+
+        module.load_worktree_guard_module = lambda: Guard
+        spec_path = self.base / "schema-four-promotion.json"
+        spec_path.write_text(
+            json.dumps(spec, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            result_path = module.execute(spec_path)
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(result_path, spec["contract_path"])
+        contract = json.loads(
+            (self.repo / str(spec["contract_path"])).read_text(encoding="utf-8")
+        )
+        self.assertEqual(contract["promoted_dirty_paths"], [promoted])
+        self.assertEqual(contract["successor_id_reservations"], [reservation])
+        self.assertEqual(
+            marked,
+            [(reservation["input_digest"], reservation["id"])],
+        )
+        self.assertEqual(promoted_path.read_text(encoding="utf-8"), "candidate = True\n")
+        self.assertEqual(self.run_verify().returncode, 0)
+        contract["dirty_product_paths"] = [promoted, promoted]
+        (self.repo / str(spec["contract_path"])).write_text(
+            json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        malformed = self.run_verify()
+        self.assertNotEqual(malformed.returncode, 0)
+        self.assertIn("sorted unique path list", malformed.stderr)
+
+    def test_schema_four_dirty_promotion_requires_single_write_owner(self) -> None:
+        module = self.load_restructure_module("schema_four_promotion_refusal_module")
+        source_paths = self.prepare_direct_active_sources()
+        spec = self.schema_four_spec(
+            module,
+            source_paths,
+            write_scope="write_scope:\n  - elsewhere/\n",
+        )
+        promoted = "coupled/existing.py"
+        promoted_path = self.repo / promoted
+        promoted_path.parent.mkdir(parents=True, exist_ok=True)
+        promoted_path.write_text("candidate = True\n", encoding="utf-8")
+        successor = spec["successors"][0]
+        spec["dirty_product_paths"] = [promoted]
+        spec["promoted_dirty_paths"] = [promoted]
+        spec["successor_id_reservations"] = [
+            {
+                "id": successor["id"],
+                "path": successor["path"],
+                "input_digest": digest("successor reservation"),
+            }
+        ]
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            with self.assertRaisesRegex(
+                module.RestructureError,
+                "exactly one created write_scope",
+            ):
+                module.validate_schema_three_spec(spec, schema_version=4)
+        finally:
+            os.chdir(old_cwd)
+
+    def test_successor_id_reservation_command_binds_request_bytes(self) -> None:
+        module = self.load_restructure_module("successor_reservation_module")
+        request = {
+            "schema_version": 1,
+            "source_plan": self.source_path,
+            "lifecycle": "active",
+            "slug": "continued-work",
+            "owner": "test-owner",
+        }
+        request_path = self.base / "successor-reservation.json"
+        request_bytes = (
+            json.dumps(request, ensure_ascii=False, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        request_path.write_bytes(request_bytes)
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        class Guard:
+            @staticmethod
+            def require_task_worktree(*, action: str) -> None:
+                calls.append(("guard", {"action": action}))
+
+            @staticmethod
+            def reserve_plan_id(repository: Path, **kwargs):
+                calls.append(("reserve", {"repository": repository, **kwargs}))
+                return {
+                    "plan_id": "289",
+                    "relative_path": "docs/plan/active/289-continued-work.md",
+                }
+
+        module.load_worktree_guard_module = lambda: Guard
+        result = json.loads(module.reserve_successor_id(request_path))
+        self.assertEqual(result["id"], "289")
+        self.assertEqual(
+            result["path"],
+            "docs/plan/active/289-continued-work.md",
+        )
+        self.assertEqual(result["input_digest"], digest(request_bytes))
+        self.assertEqual(calls[1][1]["input_digest"], digest(request_bytes))
+
+    def test_schema_three_journal_identity_binds_successor_reservations(self) -> None:
+        module = self.load_restructure_module("reservation_journal_identity_module")
+        payload = {
+            "schema_version": 3,
+            "transaction_id": digest("transaction"),
+            "source_head": "a" * 40,
+            "specification_digest": digest("specification"),
+            "operation": "reconstruct",
+            "operations": [],
+            "created_directories": [],
+            "dirty_product_snapshot": [],
+            "historical_contract_snapshot": [],
+            "result_path": "docs/plan/replanned/contracts/001-example.json",
+            "successor_id_reservations": [
+                {
+                    "id": "289",
+                    "path": "docs/plan/active/289-continued-work.md",
+                    "input_digest": digest("reservation"),
+                }
+            ],
+        }
+        original = module.canonical_journal_identity(payload)
+        payload["successor_id_reservations"] = []
+        self.assertNotEqual(
+            original,
+            module.canonical_journal_identity(payload),
+        )
+
+    def test_expired_materialized_reservation_remains_live(self) -> None:
+        path = ROOT / "scripts/project_workflow/worktree_guard.py"
+        spec = importlib.util.spec_from_file_location(
+            "materialized_reservation_guard",
+            path,
+        )
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        successor = self.repo / "docs/plan/active/289-continued-work.md"
+        successor.write_text("# Continued work\n", encoding="utf-8")
+        entry = {
+            "plan_id": "289",
+            "input_digest": digest("reservation"),
+            "relative_path": "docs/plan/active/289-continued-work.md",
+            "worktree_path": str(self.repo),
+            "owner": "test-owner",
+            "reserved_at": 1,
+            "lease_expires_at": 2,
+            "written": False,
+        }
+        with mock.patch.object(
+            module,
+            "parse_worktrees",
+            return_value=[{"worktree": str(self.repo)}],
+        ):
+            retained = module.live_reservations(
+                self.repo,
+                [entry],
+                set(),
+                now=3,
+            )
+        self.assertEqual(retained, [entry])
 
     def test_schema_four_refuses_unauthorized_or_inadmissible_successors(self) -> None:
         module = self.load_restructure_module("schema_four_refusal_module")

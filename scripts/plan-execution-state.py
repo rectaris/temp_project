@@ -3311,6 +3311,15 @@ def init_state(args: argparse.Namespace) -> None:
         raise StateError("plan digest mismatch")
     invariant_digest = require_digest(args.primary_invariant_digest, "primary_invariant_digest")
     plan_text = plan_bytes.decode("utf-8")
+    mode_matches = re.findall(
+        r"^implementation_mode: (candidate|parent_direct)$",
+        plan_text,
+        flags=re.MULTILINE,
+    )
+    if len(mode_matches) > 1 or (
+        mode_matches and mode_matches[0] != args.implementation_mode
+    ):
+        raise StateError("plan implementation_mode does not match the execution mode")
     invariant_matches = re.findall(r"^primary_invariant: (.+)$", plan_text, flags=re.MULTILINE)
     if len(invariant_matches) > 1 or (invariant_matches and digest(invariant_matches[0]) != invariant_digest):
         raise StateError("primary invariant digest mismatch")

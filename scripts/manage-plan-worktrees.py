@@ -989,6 +989,146 @@ def worktree_is_clean(worktree: Path) -> bool:
     return payload.strip(b"\0") == b""
 
 
+def load_restructure_module():
+    path = Path(__file__).resolve().with_name("restructure-plan.py")
+    spec = importlib.util.spec_from_file_location("managed_restructure_plan", path)
+    if spec is None or spec.loader is None:
+        raise WorktreeError("cannot load the restructuring validator")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def validate_retained_replan_transition(
+    target: Path,
+    record: dict[str, Any],
+    journal_path: Path,
+    accepted_commit: str,
+    source_tip: str,
+) -> None:
+    """Authorize publishing only the completed plan transition while retaining dirty bytes."""
+
+    if record["task"]["kind"] != PLAN_TASK:
+        raise WorktreeError("retained replan transition requires a numbered source plan")
+    module = load_restructure_module()
+    try:
+        raw = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal_identity = raw["journal_identity"]
+        payload = module.load_journal(
+            journal_path,
+            journal_identity,
+            expected_source_head=source_tip,
+        )
+    except (OSError, UnicodeError, KeyError, json.JSONDecodeError, module.RestructureError) as exc:
+        raise WorktreeError(f"invalid retained-transition journal: {exc}") from exc
+    if payload["phase"] != "complete":
+        raise WorktreeError("retained replan transition requires a complete journal")
+    if payload["source_head"] != source_tip:
+        raise WorktreeError("retained replan transition source changed")
+    snapshot = payload["dirty_product_snapshot"]
+    dirty_paths = [entry["path"] for entry in snapshot]
+    if not dirty_paths or module.dirty_product_snapshot(dirty_paths) != snapshot:
+        raise WorktreeError("retained dirty product bytes differ from the journal")
+    contract_path = payload["result_path"]
+    contract_file = target / contract_path
+    try:
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorktreeError(f"retained replan contract is unreadable: {exc}") from exc
+    if (
+        contract.get("schema_version") != 4
+        or contract.get("dirty_product_paths") != dirty_paths
+        or contract.get("promoted_dirty_paths") != dirty_paths
+    ):
+        raise WorktreeError(
+            "retained replan transition must promote the complete dirty product snapshot"
+        )
+    successors = contract.get("successors")
+    if not isinstance(successors, list) or len(successors) != 1:
+        raise WorktreeError("retained replan transition requires exactly one successor")
+    successor_content = successors[0].get("content")
+    if (
+        not isinstance(successor_content, str)
+        or "\nimplementation_mode: parent_direct\n" not in f"\n{successor_content}"
+    ):
+        raise WorktreeError(
+            "retained replan successor must require parent-direct implementation"
+        )
+    operation_paths = {operation["path"] for operation in payload["operations"]}
+    changed = {
+        item.decode("utf-8", "surrogateescape")
+        for item in git(
+            target,
+            "diff",
+            "--name-only",
+            "-z",
+            source_tip,
+            accepted_commit,
+        ).stdout.split(b"\0")
+        if item
+    }
+    if changed != operation_paths:
+        raise WorktreeError(
+            "retained transition commit does not exactly match the completed reconstruction"
+        )
+    if changed & set(dirty_paths):
+        raise WorktreeError("retained transition commit includes promoted product bytes")
+    operation_status = git(
+        target,
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "-z",
+        "--",
+        *sorted(operation_paths),
+    ).stdout
+    if operation_status.strip(b"\0"):
+        raise WorktreeError("retained transition operation paths differ from the accepted commit")
+    for operation in payload["operations"]:
+        relative = operation["path"]
+        expected_content = operation["target_content"]
+        probe = git(
+            target,
+            "cat-file",
+            "-e",
+            f"{accepted_commit}:{relative}",
+            check=False,
+        )
+        if expected_content is None:
+            if probe.returncode == 0:
+                raise WorktreeError(
+                    f"retained transition commit did not delete {relative}"
+                )
+            continue
+        if probe.returncode != 0:
+            raise WorktreeError(
+                f"retained transition commit is missing {relative}"
+            )
+        committed = git(
+            target,
+            "show",
+            f"{accepted_commit}:{relative}",
+        ).stdout
+        if committed != expected_content.encode("utf-8"):
+            raise WorktreeError(
+                f"retained transition commit bytes differ for {relative}"
+            )
+        tree = git(
+            target,
+            "ls-tree",
+            "-z",
+            accepted_commit,
+            "--",
+            relative,
+        ).stdout
+        rows = [row for row in tree.split(b"\0") if row]
+        expected_mode = b"100755" if operation["target_mode"] & 0o111 else b"100644"
+        if len(rows) != 1 or rows[0].split(b" ", 1)[0] != expected_mode:
+            raise WorktreeError(
+                f"retained transition commit mode differs for {relative}"
+            )
+
+
 def untracked_paths(worktree: Path) -> list[str]:
     payload = git(
         worktree, "ls-files", "-z", "--others", "--exclude-standard"
@@ -1133,7 +1273,17 @@ def publish(args: argparse.Namespace) -> None:
             raise WorktreeError("the accepted commit must be the exact task branch tip")
         if accepted_commit == record["start_commit"]:
             raise WorktreeError("the task branch holds no commit to publish")
-        if not worktree_is_clean(target):
+        retaining_transition = bool(args.retain_worktree)
+        if retaining_transition:
+            if not args.transition_journal:
+                raise WorktreeError(
+                    "--retain-worktree requires --transition-journal"
+                )
+        elif args.transition_journal:
+            raise WorktreeError(
+                "--transition-journal requires --retain-worktree"
+            )
+        if not worktree_is_clean(target) and not retaining_transition:
             raise WorktreeError(
                 "task worktree is dirty; commit or resolve its work before publication"
             )
@@ -1152,6 +1302,14 @@ def publish(args: argparse.Namespace) -> None:
                 or resumed["repository_identity"] != record["repository_identity"]
             ):
                 raise WorktreeError("an interrupted publication has different bound facts")
+        if retaining_transition:
+            validate_retained_replan_transition(
+                target,
+                record,
+                Path(args.transition_journal),
+                accepted_commit,
+                resumed["source_tip_before"] if resumed is not None else source_tip,
+            )
         published_already = is_ancestor(repository, accepted_commit, source_tip)
         if not published_already:
             if not is_ancestor(repository, source_tip, accepted_commit):
@@ -1181,6 +1339,29 @@ def publish(args: argparse.Namespace) -> None:
             raise WorktreeError("the source ref does not contain the accepted commit")
         if git_text(checkout, "rev-parse", "HEAD") != observed:
             raise WorktreeError("the source checkout does not reflect the published commit")
+        if retaining_transition:
+            updated = dict(record)
+            updated["accepted_tip"] = accepted_commit
+            updated["owner"] = {
+                "id": args.owner_id,
+                "lease_expires_at": now + 14_400,
+            }
+            atomic_write(paths["record"], add_content_digest(updated))
+            journal_path.unlink(missing_ok=True)
+            print(
+                json.dumps(
+                    {
+                        "operation": "publish-transition",
+                        "task": task_label(record["task"]),
+                        "source_ref": source_ref,
+                        "published_commit": accepted_commit,
+                        "worktree_removed": False,
+                        "branch_removed": False,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return
         relocated = relocate_evidence(
             target, checkout, PurePosixPath(record["worktree_path"]).name
         )
@@ -1400,6 +1581,8 @@ def parser() -> argparse.ArgumentParser:
     add_task_arguments(publish_parser)
     publish_parser.add_argument("--owner-id", default="parent")
     publish_parser.add_argument("--accepted-commit")
+    publish_parser.add_argument("--retain-worktree", action="store_true")
+    publish_parser.add_argument("--transition-journal")
     publish_parser.set_defaults(handler=publish)
 
     retire_parser = sub.add_parser("retire")

@@ -1539,6 +1539,10 @@ def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path
     if not plan_path.is_file():
         raise RunnerError(f"missing active plan: {plan_rel}")
     values = planlib.require_manifest_fields(plan_path)
+    if values.get("implementation_mode") == "parent_direct":
+        raise RunnerError(
+            "parent-direct plans cannot start a sandboxed candidate worker"
+        )
     status = planlib.manifest_scalar(values, "status")
     if status != "in_progress":
         raise RunnerError(f"plan must be in_progress: {plan_rel}")
