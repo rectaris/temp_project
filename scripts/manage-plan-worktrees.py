@@ -1024,8 +1024,6 @@ def validate_retained_replan_transition(
         raise WorktreeError(f"invalid retained-transition journal: {exc}") from exc
     if payload["phase"] != "complete":
         raise WorktreeError("retained replan transition requires a complete journal")
-    if payload["source_head"] != source_tip:
-        raise WorktreeError("retained replan transition source changed")
     snapshot = payload["dirty_product_snapshot"]
     dirty_paths = [entry["path"] for entry in snapshot]
     if not dirty_paths or module.dirty_product_snapshot(dirty_paths) != snapshot:
