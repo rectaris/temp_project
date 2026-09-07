@@ -1026,7 +1026,23 @@ def validate_retained_replan_transition(
         raise WorktreeError("retained replan transition requires a complete journal")
     snapshot = payload["dirty_product_snapshot"]
     dirty_paths = [entry["path"] for entry in snapshot]
-    if not dirty_paths or module.dirty_product_snapshot(dirty_paths) != snapshot:
+    current_snapshot = module.dirty_product_snapshot(dirty_paths)
+
+    def stable_snapshot(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        stable: list[dict[str, Any]] = []
+        for entry in entries:
+            item = dict(entry)
+            file_state = dict(item["file"])
+            for field in ("device", "inode", "mtime_ns", "ctime_ns"):
+                file_state.pop(field, None)
+            item["file"] = file_state
+            stable.append(item)
+        return stable
+
+    if (
+        not dirty_paths
+        or stable_snapshot(current_snapshot) != stable_snapshot(snapshot)
+    ):
         raise WorktreeError("retained dirty product bytes differ from the journal")
     contract_path = payload["result_path"]
     contract_file = target / contract_path

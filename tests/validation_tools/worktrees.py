@@ -1362,7 +1362,24 @@ class TaskPublicationTest(unittest.TestCase):
         git(worktree, "add", successor, contract_path)
         git(worktree, "commit", "-qm", "publish replan transition")
         accepted = git(worktree, "rev-parse", "HEAD").stdout.strip()
-        snapshot = [{"path": "file.txt", "digest": "bound"}]
+        snapshot = [
+            {
+                "path": "file.txt",
+                "status_digest": "sha256:" + "a" * 64,
+                "index_digest": "sha256:" + "b" * 64,
+                "file": {
+                    "kind": "regular",
+                    "mode": 0o644,
+                    "link_count": 1,
+                    "size": len("promoted candidate\n"),
+                    "content_digest": "sha256:" + "c" * 64,
+                    "device": 1,
+                    "inode": 2,
+                    "mtime_ns": 3,
+                    "ctime_ns": 4,
+                },
+            }
+        ]
         payload = {
             "phase": "complete",
             "source_head": source_tip,
