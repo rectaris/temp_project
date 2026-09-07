@@ -1382,7 +1382,16 @@ class TaskPublicationTest(unittest.TestCase):
             ],
         }
         journal = self.base / "transition.json"
-        journal.write_text('{"journal_identity":"sha256:test"}\n', encoding="utf-8")
+        journal.write_text(
+            json.dumps(
+                {
+                    "journal_identity": "sha256:test",
+                    "source_head": source_tip,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         class Restructure:
             class RestructureError(Exception):

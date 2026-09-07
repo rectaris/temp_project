@@ -1014,10 +1014,11 @@ def validate_retained_replan_transition(
     try:
         raw = json.loads(journal_path.read_text(encoding="utf-8"))
         journal_identity = raw["journal_identity"]
+        journal_source_head = raw["source_head"]
         payload = module.load_journal(
             journal_path,
             journal_identity,
-            expected_source_head=source_tip,
+            expected_source_head=journal_source_head,
         )
     except (OSError, UnicodeError, KeyError, json.JSONDecodeError, module.RestructureError) as exc:
         raise WorktreeError(f"invalid retained-transition journal: {exc}") from exc
@@ -1055,6 +1056,29 @@ def validate_retained_replan_transition(
             "retained replan successor must require parent-direct implementation"
         )
     operation_paths = {operation["path"] for operation in payload["operations"]}
+    if payload["source_head"] != source_tip:
+        if not is_ancestor(target, payload["source_head"], source_tip):
+            raise WorktreeError(
+                "retained transition source is not a descendant of the journal baseline"
+            )
+        source_drift = {
+            item.decode("utf-8", "surrogateescape")
+            for item in git(
+                target,
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                payload["source_head"],
+                source_tip,
+            ).stdout.split(b"\0")
+            if item
+        }
+        protected = operation_paths | set(dirty_paths)
+        if source_drift & protected:
+            raise WorktreeError(
+                "source advanced across retained transition paths after reconstruction"
+            )
     changed = {
         item.decode("utf-8", "surrogateescape")
         for item in git(
