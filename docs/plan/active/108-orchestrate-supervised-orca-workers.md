@@ -1,7 +1,6 @@
 # Orchestrate bounded Orca worker command sessions without transferring repository authority
 
-status: deferred
-completion_deferred_reason: Authoritative validation exposed a pre-existing shared-report supersede timestamp race; resume only after its independently bounded repair plan is checked.
+status: in_progress
 primary_invariant: The user-started coordinator remains the only repository acceptance and publication authority while an optional Orca bridge creates or reuses only one command terminal that runs the existing isolated candidate dispatcher for one exact admitted attempt.
 task_types:
   - template_workflow
@@ -112,3 +111,4 @@ checked_summary_ja: リポジトリの権限を移さず、Orca上で候補生�
 - Helper findings were read-only and advisory; the parent accepted only the plan-authoring workflow and bounded implementation-surface evidence verified against current repository sources.
 - Independent implementation rereview passed with zero High or Medium findings after the bounded remediation round.
 - `scripts/lint-project-workflow.sh` failed once in the pre-existing `test_shared_publication_requires_explicit_supersede_and_stops_at_conflicts` assertion because two unchanged publications crossed a UTC-second boundary and produced different `generated_at` values. The parent-owned execution record is stopped at `repair_required`; `tests/smoke.sh` was not run.
+- Plan 297 checked and committed the bounded shared-report repair at `16ad1c6b25ec5065d9ac12a2e374c7117465bf49`; this plan resumes with unchanged scope, acceptance, validation authority, safety boundary, and external-effect authority under a fresh execution.
