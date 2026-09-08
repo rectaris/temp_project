@@ -70,6 +70,20 @@ MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[
 APPROACH_MARKERS = {"A", "B", "C"}
 RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
 MATRIX_WINDOW_LINES = 20
+REVIEW_FINDING_BUDGETS_HEADING = "### Review-Finding Budgets"
+REVIEW_CONTINUATION_CLAUSE_PREFIX = (
+    "- A review-budget-exhausted `descope_pending` run with reason "
+    "`parent_remediation_budget_exhausted`"
+)
+REVIEW_CONTINUATION_CLAUSE = (
+    REVIEW_CONTINUATION_CLAUSE_PREFIX
+    + ", no open writable attempt, and exactly one or two prior formal reviews may "
+    "receive one owner-authorized same-plan continuation. Never reopen or modify "
+    "the stopped ledger. Create a fresh ledger with `plan-execution-state.py "
+    "continue`, bind the complete predecessor-ledger digest and event-chain leaf, "
+    "exact unchanged plan path and digest, source HEAD, primary invariant, "
+    "implementation mode, and a mode-0600 authorization record."
+)
 MCP_SCENARIO_IDS = {
     "same-context-success",
     "sandbox-credential-failure-host-success",
@@ -2381,6 +2395,52 @@ def check_worker_completion_receipt_scenarios(*, include_holdout: bool) -> None:
         fail("worker-completion-receipt execution differs from integration evidence")
 
 
+def has_exact_review_continuation_clause(policy: str) -> bool:
+    lines = policy.splitlines()
+    headings = [
+        index
+        for index, line in enumerate(lines)
+        if line == REVIEW_FINDING_BUDGETS_HEADING.lower()
+    ]
+    if len(headings) != 1:
+        return False
+    start = headings[0] + 1
+    end = next(
+        (
+            index
+            for index in range(start, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    candidates = [
+        line
+        for line in lines[start:end]
+        if line.startswith(REVIEW_CONTINUATION_CLAUSE_PREFIX.lower())
+    ]
+    return candidates == [REVIEW_CONTINUATION_CLAUSE.lower()]
+
+
+def check_review_continuation_clause(policy: str) -> None:
+    if not has_exact_review_continuation_clause(policy):
+        fail(
+            "SPEC_PLAN_WORKFLOW.md review-finding budget section does not contain "
+            "the exact one-or-two-review continuation clause"
+        )
+    old_clause = REVIEW_CONTINUATION_CLAUSE.replace(
+        "exactly one or two prior formal reviews",
+        "exactly two prior formal reviews",
+    )
+    decoy = "<!-- exactly one or two prior formal reviews -->"
+    mutated = policy.replace(
+        REVIEW_CONTINUATION_CLAUSE.lower(),
+        f"{old_clause.lower()}\n{decoy}",
+        1,
+    )
+    if has_exact_review_continuation_clause(mutated):
+        fail("review-continuation clause self-test accepted detached decoy wording")
+
+
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     check_plan_restructuring_scenarios()
     check_review_sequencing_scenarios(include_holdout=include_holdout)
@@ -2565,6 +2625,7 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     ):
         if marker not in plan_workflow:
             fail(f"SPEC_PLAN_WORKFLOW.md missing independent-repair marker: {marker}")
+    check_review_continuation_clause(plan_workflow)
 
     diagnosis_fixture = json.loads(
         read("tests/fixtures/orchestration/failure-diagnosis-scenarios.json")

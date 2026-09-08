@@ -1532,7 +1532,7 @@ def validate_execution_epoch(value: Any) -> dict[str, Any]:
             raise StateError("initial execution epoch contains continuation evidence")
     elif (
         not predecessor_run_id
-        or prior_reviews != INDEPENDENT_REVIEW_LIMIT
+        or not 1 <= prior_reviews <= INDEPENDENT_REVIEW_LIMIT
         or limit != MAX_CUMULATIVE_REVIEWS
         or any(not value[field] for field in digest_fields)
     ):
@@ -3533,8 +3533,11 @@ def continue_state(args: argparse.Namespace) -> None:
             )
         if prior_epoch["epoch"] >= MAX_CONTINUATION_EPOCH:
             raise StateError("same-plan continuation epoch limit is exhausted")
-        if formal_review_count(predecessor) != INDEPENDENT_REVIEW_LIMIT:
-            raise StateError("continuation requires exactly two prior formal reviews")
+        prior_review_count = formal_review_count(predecessor)
+        if not 1 <= prior_review_count <= INDEPENDENT_REVIEW_LIMIT:
+            raise StateError(
+                "continuation requires exactly one or two prior formal reviews"
+            )
         registry = read_continuation_registry(registry_path)
         if (
             registry["identity_digest"]
@@ -3591,7 +3594,7 @@ def continue_state(args: argparse.Namespace) -> None:
                 "predecessor_state_digest": predecessor_digest,
                 "predecessor_run_id": predecessor["run_id"],
                 "predecessor_event_chain_digest": predecessor["event_chain_digest"],
-                "predecessor_review_count": formal_review_count(predecessor),
+                "predecessor_review_count": prior_review_count,
                 "cumulative_review_limit": MAX_CUMULATIVE_REVIEWS,
                 "owner_authorization_digest": authorization_digest,
                 "continuation_registry_identity_digest": registry[
