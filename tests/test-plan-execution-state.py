@@ -1253,6 +1253,173 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertNotEqual(exhausted.returncode, 0)
         self.assertIn("epoch limit is exhausted", exhausted.stderr)
 
+    def test_same_plan_continuation_accepts_one_review_and_rejects_zero(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "continuation-one-review", mode="parent_direct", require_preflight=True
+        )
+        (self.repo / "allowed.txt").write_text(
+            "one-review continued candidate\n", encoding="utf-8"
+        )
+        plan_digest = digest(self.plan.read_text(encoding="utf-8"))
+        invariant = digest("one invariant")
+        target = digest(
+            subprocess.check_output(
+                [
+                    "git", "diff", "--binary", "--full-index",
+                    self.head, "--", "allowed.txt",
+                ],
+                cwd=self.repo,
+            )
+        )
+        identity = STATE_MODULE.canonical_digest(
+            {
+                "implementation_mode": "parent_direct",
+                "source_head": self.head,
+                "admitted_diff_digest": target,
+            }
+        )
+        preflight_evidence = self.base / "continuation-one-review-preflight.json"
+        preflight_evidence.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "plan_digest": plan_digest,
+                    "review_target_digest": target,
+                    "review_identity_digest": identity,
+                    "applicable_specification_digests": [
+                        digest((self.repo / "AGENTS.md").read_bytes())
+                    ],
+                    "cases": [
+                        {
+                            "id": "one-review-lower-bound",
+                            "result": "passed",
+                            "evidence_digest": digest("one-review preflight"),
+                        }
+                    ],
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        preflight_evidence.chmod(0o600)
+        preflight = self.run_cli(
+            "preflight", str(state), "--run-id", run_id,
+            "--event-id", "continuation-one-review-preflight",
+            "--implementation-mode", "parent_direct",
+            "--preflight-evidence", str(preflight_evidence),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(preflight.returncode, 0, preflight.stderr)
+
+        receipt = self.review_receipt(
+            "continuation-one-review", plan_digest,
+            round_value=1, review_target=target,
+        )
+        reviewed = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "continuation-one-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", invariant,
+            "--finding-severity", "Medium",
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        stopped_bytes = state.read_bytes()
+        stopped = json.loads(stopped_bytes)
+        self.assertEqual(stopped["state"], "descope_pending")
+        self.assertEqual(STATE_MODULE.formal_review_count(stopped), 1)
+
+        registry_header = json.loads(
+            self.continuation_registry.read_text(encoding="utf-8").splitlines()[0]
+        )
+        child = self.base / "continuation-one-review-child.json"
+        child_lifecycle = self.base / "continuation-one-review-child-lifecycle.json"
+        child_run = "run-continuation-one-review-child"
+        authorization = self.base / "continuation-one-review-authorization.json"
+        authorization.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "plan_path": "docs/plan/active/001-test.md",
+                    "plan_digest": plan_digest,
+                    "source_head": self.head,
+                    "primary_invariant_digest": invariant,
+                    "implementation_mode": "parent_direct",
+                    "predecessor_state_digest": digest(stopped_bytes),
+                    "predecessor_run_id": run_id,
+                    "predecessor_event_chain_digest": stopped["event_chain_digest"],
+                    "next_epoch": 1,
+                    "child_run_id": child_run,
+                    "child_state_path_digest": digest(str(child.absolute())),
+                    "continuation_registry_identity_digest": registry_header[
+                        "genesis_digest"
+                    ],
+                    "cumulative_review_limit": 4,
+                    "owner_authorization": "Continue this unchanged plan once.",
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        authorization.chmod(0o600)
+        continued = self.run_cli(
+            "continue", str(child),
+            "--predecessor-state", str(state),
+            "--continuation-registry", str(self.continuation_registry),
+            "--authorization", str(authorization),
+            "--run-id", child_run,
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(child_lifecycle),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertEqual(continued.returncode, 0, continued.stderr)
+        self.assertEqual(state.read_bytes(), stopped_bytes)
+        child_payload = json.loads(child.read_text(encoding="utf-8"))
+        child_epoch = child_payload["events"][0]["execution_epoch"]
+        self.assertEqual(child_epoch["predecessor_review_count"], 1)
+        self.assertEqual(child_epoch["cumulative_review_limit"], 4)
+
+        zero_state, zero_lifecycle, zero_run = self.initialize_execution(
+            "continuation-zero-review", mode="parent_direct", require_preflight=True
+        )
+        zero_lifecycle.write_text("zero-review-stop\n", encoding="utf-8")
+        zero_stopped = self.run_cli(
+            "record", str(zero_state), "--run-id", zero_run,
+            "--event-id", "continuation-zero-review-stop",
+            "--event-type", "parent_review",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest("zero-review-stop\n"),
+            "--lifecycle-state", str(zero_lifecycle),
+            "--invariant-digest", invariant,
+            "--finding-severity", "Medium",
+            "--independent-review-receipt-digest", digest("non-formal-review"),
+        )
+        self.assertEqual(zero_stopped.returncode, 0, zero_stopped.stderr)
+        zero_payload = json.loads(zero_state.read_text(encoding="utf-8"))
+        self.assertEqual(zero_payload["state"], "descope_pending")
+        self.assertEqual(STATE_MODULE.formal_review_count(zero_payload), 0)
+        zero_continuation = self.run_cli(
+            "continue", str(self.base / "continuation-zero-review-child.json"),
+            "--predecessor-state", str(zero_state),
+            "--continuation-registry", str(self.continuation_registry),
+            "--authorization", str(authorization),
+            "--run-id", "run-continuation-zero-review-child",
+            "--plan", "docs/plan/active/001-test.md",
+            "--lifecycle-state", str(self.base / "continuation-zero-review-lifecycle.json"),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(zero_continuation.returncode, 0)
+        self.assertIn(
+            "requires exactly one or two prior formal reviews",
+            zero_continuation.stderr,
+        )
+
     def test_preflight_is_bound_to_the_exact_current_target(self) -> None:
         state, lifecycle, run_id = self.initialize_execution(
             "preflight-target",
