@@ -93,6 +93,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-copier-update.sh \
+    template/.project-agent-workflow/scripts/orca-coordinator.py \
     template/.project-agent-workflow/scripts/run-parallel-plans.py \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
@@ -167,6 +168,7 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-copier-update.sh \
+    template/.project-agent-workflow/scripts/orca-coordinator.py \
     template/.project-agent-workflow/scripts/run-parallel-plans.py \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
@@ -1832,6 +1834,9 @@ test ! -e "$tmp/typescript/.agent-logs/namespaced-policy"
 # committed execution group description across its own lint and lifecycle paths.
 test -f "$tmp/typescript/.project-agent-workflow/scripts/parallel-plan-state.py"
 test -x "$tmp/typescript/.project-agent-workflow/scripts/parallel-plan-state.py"
+test -f "$tmp/typescript/.project-agent-workflow/scripts/orca-coordinator.py"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/orca-coordinator.py"
+grep -q 'optional `.project-agent-workflow/scripts/orca-coordinator.py ensure-worker` bridge' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Parallel Execution Groups' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-execution-groups >/dev/null)
 

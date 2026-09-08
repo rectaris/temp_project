@@ -1,6 +1,6 @@
 # Orchestrate bounded Orca worker command sessions without transferring repository authority
 
-status: in_progress
+status: checked
 primary_invariant: The user-started coordinator remains the only repository acceptance and publication authority while an optional Orca bridge creates or reuses only one command terminal that runs the existing isolated candidate dispatcher for one exact admitted attempt.
 task_types:
   - template_workflow
@@ -96,11 +96,11 @@ checked_summary_ja: リポジトリの権限を移さず、Orca上で候補生�
 
 ## Tasks
 
-- [ ] Implement strict CLI preflight, bounded JSON parsing, private external locking and records, exact attempt binding, pre-created start tokens, and start-or-reuse state transitions in the root bridge.
-- [ ] Implement a noninteractive terminal entry command that claims the pre-created token, waits for the coordinator to validate and bind the create response handle and incarnation, runs only the existing grouped candidate-dispatch argument vector, records the bounded exit result, and exits.
-- [ ] Add deterministic fake-Orca tests for success, live reuse, concurrent ensure calls, stale or mismatched bindings, malformed and oversized replies, symlink and hard-link state paths, settled attempts, entry-claim races, lost or ambiguous terminal creation, and shell metacharacters in every interpolated value.
-- [ ] Mirror the executable bridge and orchestration policy into the generated template, register inventory and alignment checks, and assert installation in the smoke suite.
-- [ ] Review the complete candidate and critical authority invariant before focused validation, obtain independent review with zero unresolved High or Medium findings, and run the authoritative validation suite exactly once.
+- [x] Implement strict CLI preflight, bounded JSON parsing, private external locking and records, exact attempt binding, pre-created start tokens, and start-or-reuse state transitions in the root bridge.
+- [x] Implement a noninteractive terminal entry command that claims the pre-created token, waits for the coordinator to validate and bind the create response handle and incarnation, runs only the existing grouped candidate-dispatch argument vector, records the bounded exit result, and exits.
+- [x] Add deterministic fake-Orca tests for success, live reuse, concurrent ensure calls, stale or mismatched bindings, malformed and oversized replies, symlink and hard-link state paths, settled attempts, entry-claim races, lost or ambiguous terminal creation, and shell metacharacters in every interpolated value.
+- [x] Mirror the executable bridge and orchestration policy into the generated template, register inventory and alignment checks, and assert installation in the smoke suite.
+- [x] Review the complete candidate and critical authority invariant before focused validation, obtain independent review with zero unresolved High or Medium findings, and run the authoritative validation suite exactly once.
 
 ## Validation Notes
 
@@ -112,3 +112,7 @@ checked_summary_ja: リポジトリの権限を移さず、Orca上で候補生�
 - Independent implementation rereview passed with zero High or Medium findings after the bounded remediation round.
 - `scripts/lint-project-workflow.sh` failed once in the pre-existing `test_shared_publication_requires_explicit_supersede_and_stops_at_conflicts` assertion because two unchanged publications crossed a UTC-second boundary and produced different `generated_at` values. The parent-owned execution record is stopped at `repair_required`; `tests/smoke.sh` was not run.
 - Plan 297 checked and committed the bounded shared-report repair at `16ad1c6b25ec5065d9ac12a2e374c7117465bf49`; this plan resumes with unchanged scope, acceptance, validation authority, safety boundary, and external-effect authority under a fresh execution.
+- The resumed implementation added the root and generated bridge, deterministic fake-Orca coverage, inventory and alignment checks, generated-project smoke assertions, and the bounded orchestration policy.
+- Independent review found pathname replacement, delayed-entry, output-bounding, bound-state reuse, and reboot-stale deadline defects. The parent corrected each finding; the final independent check reported High 0 and Medium 0.
+- Focused validation passed: `python3 tests/test-orca-coordinator.py` ran 15 tests and `python3 scripts/check-copier-template.py` passed.
+- Authoritative validation passed exactly once for the final candidate: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.

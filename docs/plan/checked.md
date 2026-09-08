@@ -221,3 +221,4 @@ id	path
 292	docs/plan/checked/2026/09/01-15/292-normalize-managed-worktree-hook-modes.md
 296	docs/plan/checked/2026/09/01-15/296-permit-one-or-two-review-continuation.md
 297	docs/plan/checked/2026/09/01-15/297-complete-safe-human-report-supersede.md
+108	docs/plan/checked/2026/09/01-15/108-orchestrate-supervised-orca-workers.md

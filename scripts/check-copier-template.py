@@ -1277,6 +1277,44 @@ def require_sandboxed_plan_worker_alignment() -> None:
                 fail(f"{relative} missing validation-witness check marker: {marker}")
 
 
+def require_orca_coordinator_alignment() -> None:
+    root_bridge = ROOT / "scripts/orca-coordinator.py"
+    template_bridge = (
+        ROOT / "template/.project-agent-workflow/scripts/orca-coordinator.py"
+    )
+    if root_bridge.read_bytes() != template_bridge.read_bytes():
+        fail("Orca coordinator root/template scripts differ")
+    root_mode = root_bridge.stat().st_mode & 0o777
+    template_mode = template_bridge.stat().st_mode & 0o777
+    if root_mode != template_mode:
+        fail("Orca coordinator root/template script modes differ")
+    if root_mode & 0o111 == 0:
+        fail("Orca coordinator scripts must be executable")
+    bridge = root_bridge.read_text(encoding="utf-8")
+    for marker in (
+        '"ensure-worker"',
+        '"worker-entry"',
+        "shlex.join(entry)",
+        "verified_member(",
+        "require_member_worktree(",
+        '"terminal_creation_unverified"',
+        "subprocess.run(command, check=False, cwd=worktree)",
+    ):
+        if marker not in bridge:
+            fail(f"Orca coordinator bridge missing safety marker: {marker}")
+    root_policy = read("references/orchestration.md")
+    generated_policy = read(
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+    )
+    root_marker = "optional `scripts/orca-coordinator.py ensure-worker` bridge"
+    generated_marker = (
+        "optional `.project-agent-workflow/scripts/orca-coordinator.py "
+        "ensure-worker` bridge"
+    )
+    if root_marker not in root_policy or generated_marker not in generated_policy:
+        fail("Orca coordinator policy markers are not aligned")
+
+
 def run_hook_payload(script_path: str, run_id: str, payload: dict[str, Any], cwd: Path) -> dict[str, Any]:
     env = dict(os.environ)
     env["CODEX_AGENT_LOG_RUN_ID"] = run_id
@@ -3153,6 +3191,7 @@ def main() -> int:
     require_active_index_grammar_alignment()
     require_plan_admission_alignment()
     require_sandboxed_plan_worker_alignment()
+    require_orca_coordinator_alignment()
     require_hook_logging_parity()
     require_root_pre_tool_hardening()
     require_orchestration_policy_markers()
