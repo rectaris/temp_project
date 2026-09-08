@@ -130,3 +130,5 @@ checked_summary_ja: 起動時の AGENTS.md から重複する詳細手順を規�
 - At activation, resolve every dependency to its unique checked record, confirm that the current source still supports this scope, and record the baseline before implementation.
 - The parent owns policy interpretation, write-scope admission, review acceptance, validation, lifecycle changes, and commits; helpers have no write authority.
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
+
+- 2026-09-08 planning alignment: This plan keeps its existing policy-relocation scope. Plan 299 separately consolidates operational judgment in existing skills after this plan is checked; do not add that behavior change or another skill to this relocation. The existing detailed-design approval remains pending.

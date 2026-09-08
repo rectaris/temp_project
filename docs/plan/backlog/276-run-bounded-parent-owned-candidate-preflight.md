@@ -128,3 +128,5 @@ checked_summary_ja: 候補生成後に親だけが隔離環境で短いテスト
 - At activation, resolve every dependency to its unique checked record, confirm that the current source still supports this scope, and record the baseline before implementation.
 - The parent owns policy interpretation, write-scope admission, review acceptance, validation, lifecycle changes, and commits; helpers have no write authority.
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
+
+- 2026-09-08 planning alignment: Reuse this one diagnostic preflight instead of adding another feedback or retry subsystem. Plan 299 supplies operational routing only, and Plan 300 prepares existing state only; neither may execute this preflight, count it as acceptance, or change its approval and correction limits. The existing detailed-design approval remains pending.

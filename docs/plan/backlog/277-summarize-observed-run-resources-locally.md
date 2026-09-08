@@ -120,3 +120,5 @@ checked_summary_ja: 既存の実行記録にある時間と資源使用量を、
 - At activation, resolve every dependency to its unique checked record, confirm that the current source still supports this scope, and record the baseline before implementation.
 - The parent owns policy interpretation, write-scope admission, review acceptance, validation, lifecycle changes, and commits; helpers have no write authority.
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
+
+- 2026-09-08 planning alignment: Use this existing local summary for the development-process improvement observations described in the backlog overview. Do not add measurement schemas, phase reconstruction, human-intervention inference or paired benchmark collection; unavailable values remain not_observed.
