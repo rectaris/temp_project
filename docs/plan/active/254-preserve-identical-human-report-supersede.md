@@ -1,6 +1,7 @@
 # Preserve identical shared-report supersedes
 
-status: in_progress
+status: deferred
+completion_deferred_reason: Authoritative validation exposed an independent managed-worktree hook-mode defect; resume only after its bounded repair plan is checked.
 primary_invariant: Superseding an unchanged shared report preserves byte-identical published source and HTML while a changed report receives current provenance.
 task_types:
   - template_workflow
@@ -67,3 +68,5 @@ checked_summary_ja: 内容が変わらない共有レポートの再発行結果
 
 - Plan 108 authoritative validation failed once at tests/test-human-report.py:292 and its stopped execution ledger confirmed one independent repair invariant.
 - The repair classification review bounded changes to the managed human-report script and its focused test.
+- This plan's authoritative validation failed before the human-report tests because its newly prepared worktree materialized both tracked pre-commit hooks as `0775` under umask `0002`, while repository validation requires exact mode `0755`.
+- Independent diagnosis confirmed one worktree-materialization invariant, and independent classification recorded `repair_required`; the staged human-report candidate remains preserved unchanged for a fresh run after that repair is checked.
