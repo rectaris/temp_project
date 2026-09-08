@@ -219,3 +219,4 @@ id	path
 103	docs/plan/checked/2026/09/01-15/103-require-worktree-for-all-writes.md
 107	docs/plan/checked/2026/09/01-15/107-complete-natural-japanese-copilot.md
 292	docs/plan/checked/2026/09/01-15/292-normalize-managed-worktree-hook-modes.md
+296	docs/plan/checked/2026/09/01-15/296-permit-one-or-two-review-continuation.md

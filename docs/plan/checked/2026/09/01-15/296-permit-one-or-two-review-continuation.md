@@ -1,6 +1,6 @@
 # Permit continuation after one or two prior formal reviews
 
-status: in_progress
+status: checked
 primary_invariant: One owner-authorized epoch-1 continuation may consume an otherwise eligible stopped parent-remediation execution after one or two prior formal reviews without changing the stopped ledger, the per-epoch review limit, the cumulative ceiling, or any other eligibility boundary.
 task_types:
   - template_workflow
@@ -94,10 +94,10 @@ checked_summary_ja: 正式レビューが一回または二回ある停止済み
 
 ## Tasks
 
-- [ ] Add focused continuation fixtures for one prior review and zero prior reviews while retaining the existing two-review, replay, identity and epoch-limit cases.
-- [ ] Generalize only the predecessor formal-review count check and continuation-epoch validation to accept one or two, then mirror the execution-state script exactly.
-- [ ] Update the root and generated review-budget policy wording and make the existing root policy checker enforce the new one-or-two boundary without changing authoritative validation or unrelated lifecycle rules.
-- [ ] Run exact-target adversarial preflight, independent review, focused validation and the authoritative suite, then archive and publish this prerequisite before resuming Plan 254.
+- [x] Add focused continuation fixtures for one prior review and zero prior reviews while retaining the existing two-review, replay, identity and epoch-limit cases.
+- [x] Generalize only the predecessor formal-review count check and continuation-epoch validation to accept one or two, then mirror the execution-state script exactly.
+- [x] Update the root and generated review-budget policy wording and make the existing root policy checker enforce the new one-or-two boundary without changing authoritative validation or unrelated lifecycle rules.
+- [x] Run exact-target adversarial preflight, independent review, focused validation and the authoritative suite, then archive and publish this prerequisite before resuming Plan 254.
 
 ## Validation Notes
 
@@ -105,3 +105,10 @@ checked_summary_ja: 正式レビューが一回または二回ある停止済み
 - Full decision audit: .agent-artifacts/decision-audits/early-review-continuation.md.
 - Required referent contract: .agent-artifacts/referent-contracts/early-review-continuation.json.
 - The current Plan 254 product diff and stopped execution ledger remain untouched while this prerequisite is authored and implemented.
+- Product commit: `f8a58c6059632ae38c3a21de5e700dc5bb79e256`.
+- Exact reviewed parent-direct diff: `sha256:019b289c3cf5f48a1cea252cd34cd5ecf5d6b98a4d8857d14f202403f665f672`.
+- The initial advisory review found that a detached substring could satisfy the policy marker. The bounded correction now validates the complete normative clause inside `Review-Finding Budgets` and runs an old-clause plus detached-comment mutation probe.
+- Formal independent rereview reported zero High and zero Medium findings for the corrected exact diff.
+- Focused validation passed after review: `python3 tests/test-plan-execution-state.py` (137 tests), `python3 scripts/check-copier-template.py`, and `python3 scripts/check-root-agent-policy.py`.
+- Authoritative validation passed once in this execution: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`; `actionlint` was unavailable and remained the suite's existing documented skip.
+- The stopped Plan 254 ledger remained byte-identical throughout this prerequisite.
