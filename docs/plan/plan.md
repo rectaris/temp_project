@@ -2,4 +2,4 @@
 
 id	path	status
 108	docs/plan/active/108-orchestrate-supervised-orca-workers.md	deferred
-254	docs/plan/active/254-preserve-identical-human-report-supersede.md	in_progress
+297	docs/plan/active/297-complete-safe-human-report-supersede.md	in_progress
