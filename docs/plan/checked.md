@@ -220,3 +220,4 @@ id	path
 107	docs/plan/checked/2026/09/01-15/107-complete-natural-japanese-copilot.md
 292	docs/plan/checked/2026/09/01-15/292-normalize-managed-worktree-hook-modes.md
 296	docs/plan/checked/2026/09/01-15/296-permit-one-or-two-review-continuation.md
+297	docs/plan/checked/2026/09/01-15/297-complete-safe-human-report-supersede.md

@@ -1,6 +1,6 @@
 # Complete safe shared-report supersedes
 
-status: in_progress
+status: checked
 primary_invariant: An explicit shared-report supersede validates the existing stored pair before any write, preserves both verified files byte-for-byte when publication content is unchanged, and can replace stale provenance with a current deterministic pair when any non-time field changes.
 replan_sources:
   - docs/plan/active/254-preserve-identical-human-report-supersede.md
@@ -90,10 +90,10 @@ checked_summary_ja: 変更のない共有レポートは同一バイトのまま
 
 ## Tasks
 
-- [ ] Extract or parameterize the stored-pair integrity checks without weakening verify-shared freshness.
-- [ ] Add the source-byte-change replacement regression while preserving every existing unchanged and unsafe-pair regression.
-- [ ] Run exact-target preflight, formal review, focused validation and the authoritative suite once.
-- [ ] Commit the reviewed two-file patch, archive this successor, and publish the retained task worktree.
+- [x] Extract or parameterize the stored-pair integrity checks without weakening verify-shared freshness.
+- [x] Add the source-byte-change replacement regression while preserving every existing unchanged and unsafe-pair regression.
+- [x] Run exact-target preflight, formal review, focused validation and the authoritative suite once.
+- [x] Commit the reviewed two-file patch, archive this successor, and publish the retained task worktree.
 
 ## Validation Notes
 
@@ -102,3 +102,11 @@ checked_summary_ja: 変更のない共有レポートは同一バイトのまま
 - Plan 254 epoch-1 formal review found one High acceptance gap on the exact promoted target: a legitimate source-byte change is rejected before replacement.
 - Full decision audit: `.agent-artifacts/decision-audits/254-source-change-supersede-reconstruction.md`.
 - Required referent contract: `.agent-artifacts/referent-contracts/297-safe-human-report-supersede/contract.json`.
+
+- Accepted product commit: `16ad1c6b25ec5065d9ac12a2e374c7117465bf49`; its complete diff against the execution baseline equals the reviewed two-file patch.
+- Exact-target adversarial preflight and independent epoch-1 review passed with High 0, Medium 0 and Low 0; the parent verified and accepted the evidence.
+- Owner-authorized alternate review evidence uses the actual reviewer transcript and result; no synthetic runtime hook event was admitted.
+- Focused validation: `scripts/lint-project-workflow.sh` passed once.
+- Authoritative validation: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each passed once; the shared-report suite passed all 14 tests. Optional actionlint checks were skipped because actionlint was unavailable.
+- Local evidence: `.agent-logs/plan297-epoch1-review/manifest.json` and `.agent-logs/plan297-epoch1-validation/manifest.json`; missing transcript or hook sources are explicitly recorded in those manifests.
+- No unresolved implementation findings remain. File writes are confined to retained directory descriptors; pair-level atomicity and an unrestricted same-user actor replacing every process and object remain outside the accepted guarantee.
