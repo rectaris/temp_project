@@ -1,6 +1,6 @@
 # Normalize managed task-worktree hook modes
 
-status: in_progress
+status: checked
 primary_invariant: Every newly created or recovered managed task worktree materializes its repository-profile-aware required completion-gate hooks as single-linked regular files with exact filesystem mode 0755, independent of the caller's umask, before ownership publication.
 task_types:
   - template_workflow
@@ -60,9 +60,9 @@ checked_summary_ja: 管理対象のタスク worktree でフックの権限を�
 
 ## Tasks
 
-- [ ] Add exact hook-path validation and mode normalization to both worktree-manager counterparts.
-- [ ] Add a disposable-worktree regression that creates tracked executable hooks under umask 0002 and asserts exact mode 0755.
-- [ ] Review, validate, archive, and publish the repair before resuming Plan 254 in a fresh run.
+- [x] Add exact hook-path validation and mode normalization to both worktree-manager counterparts.
+- [x] Add a disposable-worktree regression that creates tracked executable hooks under umask 0002 and asserts exact mode 0755.
+- [x] Review, validate, archive, and publish the repair before resuming Plan 254 in a fresh run.
 
 ## Validation Notes
 
@@ -70,3 +70,8 @@ checked_summary_ja: 管理対象のタスク worktree でフックの権限を�
 - Before either normal creation or registered interrupted-create recovery publishes an ownership record, the manager opens each required hook without following path-component or final symlinks, requires a single-linked regular file, changes its descriptor mode to 0755, verifies the result, and leaves the journal and registration unaccepted if any check fails.
 - Plan 254's authoritative lint failed before its product test because a freshly prepared worktree contained both required hooks as 0775.
 - Independent diagnosis and repair classification established one bounded worktree-materialization invariant and preserved Plan 254's staged candidate unchanged.
+- The initial read-only review found that a supported-profile repository missing its root hook would fail only after worktree creation. Parent remediation moved required-hook derivation to the start of `create_worktree` and added a no-residue regression for that case.
+- A fresh-session independent rereview of exact target `sha256:7073c8d2ec20746ff1366e09352ddf0608dcec5abd31aa9436e8c7c3db42bef9` found zero High and zero Medium findings and accepted the prior finding as resolved. The runtime manifest records the unavailable external transcript explicitly.
+- Focused validation passed after review: `python3 -m unittest tests.validation_tools.worktrees.ManagedPlanWorktreesTest` ran 37 tests, and `python3 scripts/check-copier-template.py` passed.
+- Authoritative validation passed once for the reviewed target: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`. The smoke run skipped optional GitHub Actions lint because `actionlint` was unavailable.
+- Product implementation commit: `98e58e9eedfc51924939f805cef2242fc247444e`.
