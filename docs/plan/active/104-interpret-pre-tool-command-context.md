@@ -1,6 +1,6 @@
 # Interpret actual command context before requiring a task worktree
 
-status: backlog
+status: in_progress
 primary_invariant: The pre-tool worktree decision uses a bounded recognized invocation and its effective repository directory; a lifecycle filename used only as data never becomes write classification or authority.
 task_types:
   - template_workflow
