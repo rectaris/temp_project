@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 import datetime as dt
 import hashlib
 import html
@@ -12,10 +14,12 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
+import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any
+from typing import Any, TextIO
 
 import security_rules
 
@@ -713,30 +717,48 @@ def freshness_failures(document: dict[str, Any], root: Path) -> list[str]:
     return failures
 
 
-def shared_directory(report_id: str, root: Path, *, create: bool) -> Path:
+@contextmanager
+def shared_directory_access(
+    report_id: str, root: Path, *, create: bool
+) -> Iterator[tuple[int, Callable[[], None], bool]]:
+    """Retain no-follow directory descriptors through verification and publication."""
     if not REPORT_ID_RE.fullmatch(report_id):
         raise ReportError("report id must use 1-64 lowercase letters, digits, or hyphens")
-    shared_root = root / SHARED_ROOT
-    if create:
-        shared_root.parent.mkdir(exist_ok=True)
-        shared_root.mkdir(exist_ok=True)
-    if not shared_root.is_dir():
-        raise ReportError(f"missing shared report root: {SHARED_ROOT.as_posix()}")
-    for candidate in (shared_root.parent, shared_root):
-        if candidate.is_symlink():
-            raise ReportError(f"refusing symlink shared report path: {candidate.relative_to(root).as_posix()}")
-    if root not in shared_root.resolve().parents:
-        raise ReportError("shared report root escaped the repository")
-    destination = shared_root / report_id
-    if create:
-        destination.mkdir(exist_ok=True)
-    if destination.is_symlink():
-        raise ReportError(f"refusing symlink shared report directory: {destination.relative_to(root).as_posix()}")
-    if not destination.is_dir():
-        raise ReportError(f"missing shared report: {(SHARED_ROOT / report_id).as_posix()}")
-    if shared_root.resolve() not in destination.resolve().parents:
-        raise ReportError("shared report escaped the shared report root")
-    return destination
+    descriptors = []
+    links = []
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(root, flags)
+        descriptors.append(descriptor)
+        links.append((None, root, os.fstat(descriptor)))
+        created = False
+        for part in (*SHARED_ROOT.parts, report_id):
+            created = False
+            if create:
+                try:
+                    os.mkdir(part, dir_fd=descriptor)
+                    created = True
+                except FileExistsError:
+                    pass
+            child = os.open(part, flags, dir_fd=descriptor)
+            descriptors.append(child)
+            links.append((descriptor, part, os.fstat(child)))
+            descriptor = child
+
+        def check() -> None:
+            for parent, name, original in links:
+                current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if not stat.S_ISDIR(current.st_mode) or (
+                    current.st_dev, current.st_ino
+                ) != (original.st_dev, original.st_ino):
+                    raise ReportError("shared report directory changed during publication")
+
+        check()
+        yield descriptor, check, created
+        check()
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def published_report_ids(root: Path) -> list[str]:
@@ -750,7 +772,26 @@ def published_report_ids(root: Path) -> list[str]:
     )
 
 
-def atomic_write(path: Path, content: str) -> None:
+def atomic_write(path: Path, content: str, *, directory_fd: int | None = None) -> None:
+    if directory_fd is not None:
+        try:
+            existing = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and (not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1):
+            raise ReportError(f"refusing unsafe output: {path.name}")
+        temporary = f".{path.name}.{secrets.token_hex(16)}.tmp"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory_fd)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(temporary, path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+        return
     if path.is_symlink():
         raise ReportError(f"refusing symlink output: {path}")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -878,17 +919,48 @@ def command_publish(args: argparse.Namespace) -> int:
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 4
-    existing = root / SHARED_ROOT / args.report_id
-    if existing.exists() and not args.supersede:
-        print(
-            f"shared human report already exists: {(SHARED_ROOT / args.report_id).as_posix()}; "
-            "pass --supersede to replace it in an explicit supersede commit, or remove it in an explicit removal commit",
-            file=sys.stderr,
-        )
-        return 4
-    destination = shared_directory(args.report_id, root, create=True)
-    atomic_write(destination / SHARED_SOURCE_NAME, json_text(document))
-    atomic_write(destination / SHARED_HTML_NAME, rendered)
+    destination = root / SHARED_ROOT / args.report_id
+    with (
+        ExitStack() as handles,
+        shared_directory_access(args.report_id, root, create=True) as (directory_fd, check, created),
+    ):
+        if not created and not args.supersede:
+            print(
+                f"shared human report already exists: {(SHARED_ROOT / args.report_id).as_posix()}; "
+                "pass --supersede to replace it in an explicit supersede commit, or remove it in an explicit removal commit",
+                file=sys.stderr,
+            )
+            return 4
+        unchanged = False
+        snapshots: dict[str, tuple[TextIO, os.stat_result]] = {}
+        if not created:
+            previous, existing_failures = stored_pair_integrity(
+                args.report_id, root, directory_fd=directory_fd, snapshots=snapshots, handles=handles
+            )
+            if existing_failures:
+                print("existing shared human report supersede is blocked:", file=sys.stderr)
+                for failure in existing_failures:
+                    print(f"- {failure}", file=sys.stderr)
+                return 4
+            assert previous is not None
+            previous_without_time = {
+                key: value for key, value in previous.items() if key != "generated_at"
+            }
+            document_without_time = {
+                key: value for key, value in document.items() if key != "generated_at"
+            }
+            unchanged = json_text(document_without_time) == json_text(previous_without_time)
+        check()
+        for name, (handle, original) in snapshots.items():
+            for current in (os.fstat(handle.fileno()), os.stat(name, dir_fd=directory_fd, follow_symlinks=False)):
+                if any(getattr(current, field) != getattr(original, field) for field in (
+                    "st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"
+                )):
+                    raise ReportError("published file changed during supersede validation")
+        if not unchanged:
+            atomic_write(destination / SHARED_SOURCE_NAME, json_text(document), directory_fd=directory_fd)
+            check()
+            atomic_write(destination / SHARED_HTML_NAME, rendered, directory_fd=directory_fd)
     for name in (SHARED_SOURCE_NAME, SHARED_HTML_NAME):
         print((destination / name).relative_to(root).as_posix())
     print(
@@ -898,36 +970,67 @@ def command_publish(args: argparse.Namespace) -> int:
     return 0
 
 
-def verify_shared_report(report_id: str, root: Path) -> list[str]:
-    directory = shared_directory(report_id, root, create=False)
+def stored_pair_integrity(
+    report_id: str,
+    root: Path,
+    *,
+    directory_fd: int | None = None,
+    snapshots: dict[str, tuple[TextIO, os.stat_result]] | None = None,
+    handles: ExitStack | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    if handles is None:
+        with ExitStack() as opened:
+            return stored_pair_integrity(report_id, root, directory_fd=directory_fd, snapshots=snapshots, handles=opened)
+    if directory_fd is None:
+        with shared_directory_access(report_id, root, create=False) as (descriptor, _check, _created):
+            return stored_pair_integrity(report_id, root, directory_fd=descriptor, snapshots=snapshots, handles=handles)
     failures: list[str] = []
     texts: dict[str, str] = {}
     for name, context in ((SHARED_SOURCE_NAME, "structured source"), (SHARED_HTML_NAME, "rendered HTML")):
-        path = directory / name
-        if path.is_symlink() or not path.is_file():
-            failures.append(f"missing published {context}: {(SHARED_ROOT / report_id / name).as_posix()}")
-            continue
         try:
-            texts[name] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            failures.append(f"could not read published {context}: {exc}")
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+            handle = handles.enter_context(os.fdopen(descriptor, "r", encoding="utf-8"))
+            original = os.fstat(handle.fileno())
+            if not stat.S_ISREG(original.st_mode) or original.st_nlink != 1:
+                raise ReportError(f"missing published {context}: unsafe file type or links")
+            texts[name] = handle.read()
+            current = os.fstat(handle.fileno())
+            if any(getattr(current, field) != getattr(original, field) for field in (
+                "st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"
+            )):
+                raise ReportError(f"published {context} changed while reading")
+            if snapshots is not None:
+                snapshots[name] = (handle, original)
+        except (OSError, UnicodeError, ReportError) as exc:
+            failures.append(f"missing published {context}: {exc}")
             continue
         failures.extend(conflict_failures(texts[name], f"published {context}"))
     if failures:
-        return failures
+        return None, failures
     try:
         document = validate_shared_document(json.loads(texts[SHARED_SOURCE_NAME]))
     except (ReportError, json.JSONDecodeError) as exc:
-        return [f"published structured source is invalid: {exc}"]
+        return None, [f"published structured source is invalid: {exc}"]
     if document["report_id"] != report_id:
-        return [f"published structured source records report id {document['report_id']}, not {report_id}"]
-    failures.extend(freshness_failures(document, root))
+        return None, [f"published structured source records report id {document['report_id']}, not {report_id}"]
+    for record in document["sources"]:
+        try:
+            source_path(record["path"], root)
+        except ReportError as exc:
+            failures.append(f"recorded source is no longer publishable: {exc}")
     rendered = render_shared_html(document)
     if texts[SHARED_HTML_NAME] != rendered:
         failures.append("published HTML is not the deterministic rendering of its structured source")
     failures.extend(publication_failures(document, rendered))
     failures.extend(secret_failures(texts[SHARED_HTML_NAME], "published rendered HTML"))
     failures.extend(html_publication_failures(texts[SHARED_HTML_NAME]))
+    return document, sorted(set(failures))
+
+
+def verify_shared_report(report_id: str, root: Path) -> list[str]:
+    document, failures = stored_pair_integrity(report_id, root)
+    if document is not None:
+        failures.extend(freshness_failures(document, root))
     return sorted(set(failures))
 
 
