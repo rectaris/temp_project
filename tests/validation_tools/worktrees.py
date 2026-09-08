@@ -52,6 +52,14 @@ def git(repository: Path, *arguments: str, check: bool = True) -> subprocess.Com
     )
 
 
+def install_executable(repository: Path, relative: str) -> Path:
+    path = repository / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
 class ManagedPlanWorktreesTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -74,6 +82,7 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
             encoding="utf-8",
         )
         (self.repository / "file.txt").write_text("baseline\n", encoding="utf-8")
+        install_executable(self.repository, ".githooks/pre-commit")
         git(self.repository, "add", ".")
         git(self.repository, "commit", "-qm", "baseline")
         self.plan = "docs/plan/active/278-example.md"
@@ -124,6 +133,139 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
 
     def record_path(self, result: subprocess.CompletedProcess[str]) -> Path:
         return Path(json.loads(result.stdout)["record"])
+
+    def interrupt_before_hook_normalization(self) -> subprocess.CompletedProcess[str]:
+        crash = self.base / "interrupt-hook-normalization.py"
+        crash.write_text(
+            "import importlib.util, sys\n"
+            "spec = importlib.util.spec_from_file_location('m', sys.argv[1])\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "def interrupt(*_args):\n"
+            "    raise SystemExit(9)\n"
+            "module.normalize_required_hook_modes = interrupt\n"
+            "sys.argv = ['manage-plan-worktrees.py'] + sys.argv[2:]\n"
+            "raise SystemExit(module.main())\n",
+            encoding="utf-8",
+        )
+        previous_umask = os.umask(0o002)
+        try:
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(crash),
+                    str(SCRIPT),
+                    "create",
+                    self.plan,
+                    "--allowed-root",
+                    str(self.allowed_root),
+                    "--worktree",
+                    str(self.target),
+                    "--branch",
+                    "plan/278",
+                    "--owner-id",
+                    "owner-a",
+                ],
+                cwd=self.repository,
+                env={**os.environ, "HOME": str(self.home)},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        finally:
+            os.umask(previous_umask)
+
+    def test_create_normalizes_the_generated_layout_root_hook(self) -> None:
+        previous_umask = os.umask(0o002)
+        try:
+            created = self.create()
+        finally:
+            os.umask(previous_umask)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        self.assertEqual(
+            (self.target / ".githooks/pre-commit").stat().st_mode & 0o777,
+            0o755,
+        )
+        self.assertFalse((self.target / "template/.githooks/pre-commit").exists())
+
+    def test_create_rejects_missing_profile_hook_before_mutation(self) -> None:
+        (self.repository / ".githooks/pre-commit").unlink()
+        install_executable(self.repository, "scripts/check-copier-template.py")
+        git(self.repository, "add", "-A")
+        git(self.repository, "commit", "-qm", "remove required root hook")
+
+        rejected = self.create()
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("missing its required root hook", rejected.stderr)
+        self.assertFalse(self.target.exists())
+        self.assertIsNone(
+            WORKTREE_MODULE.exact_ref_tip(self.repository, "refs/heads/plan/278")
+        )
+        self.assertFalse(self.metadata_paths["record"].exists())
+        self.assertFalse(self.metadata_paths["journal"].exists())
+
+    def test_create_normalizes_only_the_source_layout_required_hooks(self) -> None:
+        install_executable(self.repository, "template/.githooks/pre-commit")
+        install_executable(self.repository, "tools/unrelated-executable")
+        git(self.repository, "add", ".")
+        git(self.repository, "commit", "-qm", "add source-template hooks")
+        previous_umask = os.umask(0o002)
+        try:
+            created = self.create()
+        finally:
+            os.umask(previous_umask)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        for relative in (".githooks/pre-commit", "template/.githooks/pre-commit"):
+            self.assertEqual((self.target / relative).stat().st_mode & 0o777, 0o755)
+        self.assertEqual(
+            (self.target / "tools/unrelated-executable").stat().st_mode & 0o777,
+            0o775,
+        )
+
+    def test_registered_create_recovery_normalizes_before_record_publication(self) -> None:
+        interrupted = self.interrupt_before_hook_normalization()
+        self.assertEqual(interrupted.returncode, 9, interrupted.stderr)
+        hook = self.target / ".githooks/pre-commit"
+        self.assertEqual(hook.stat().st_mode & 0o777, 0o775)
+        self.assertFalse(self.metadata_paths["record"].exists())
+        self.assertTrue(self.metadata_paths["journal"].exists())
+
+        recovered = self.create()
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(hook.stat().st_mode & 0o777, 0o755)
+        self.assertTrue(self.metadata_paths["record"].exists())
+        self.assertFalse(self.metadata_paths["journal"].exists())
+
+    def test_registered_create_recovery_rejects_a_hard_linked_hook(self) -> None:
+        interrupted = self.interrupt_before_hook_normalization()
+        self.assertEqual(interrupted.returncode, 9, interrupted.stderr)
+        hook = self.target / ".githooks/pre-commit"
+        hook.unlink()
+        os.link(self.target / "file.txt", hook)
+
+        rejected = self.create()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("single-linked regular file", rejected.stderr)
+        self.assertFalse(self.metadata_paths["record"].exists())
+        self.assertTrue(self.metadata_paths["journal"].exists())
+
+    def test_registered_create_recovery_rejects_a_symlinked_hook_directory(self) -> None:
+        interrupted = self.interrupt_before_hook_normalization()
+        self.assertEqual(interrupted.returncode, 9, interrupted.stderr)
+        hook_directory = self.target / ".githooks"
+        (hook_directory / "pre-commit").unlink()
+        hook_directory.rmdir()
+        outside = self.base / "outside-hooks"
+        install_executable(self.base, "outside-hooks/pre-commit")
+        hook_directory.symlink_to(outside, target_is_directory=True)
+
+        rejected = self.create()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("missing or unsafe", rejected.stderr)
+        self.assertFalse(self.metadata_paths["record"].exists())
+        self.assertTrue(self.metadata_paths["journal"].exists())
 
     def test_create_preserves_dirty_primary_and_supports_linked_invocation(self) -> None:
         (self.repository / "file.txt").write_text("dirty tracked\n", encoding="utf-8")
@@ -1066,6 +1208,7 @@ class TaskWorktreeGuardTest(unittest.TestCase):
         plan.parent.mkdir(parents=True)
         plan.write_text("status: in_progress\n", encoding="utf-8")
         (self.repository / "file.txt").write_text("baseline\n", encoding="utf-8")
+        install_executable(self.repository, ".githooks/pre-commit")
         git(self.repository, "add", ".")
         git(self.repository, "commit", "-qm", "baseline")
         self.identity = WORKTREE_MODULE.repository_identity(self.repository)
@@ -1290,6 +1433,7 @@ class TaskPublicationTest(unittest.TestCase):
         (self.repository / ".gitignore").write_text(
             ".agent-logs/\n.agent-artifacts/\n", encoding="utf-8"
         )
+        install_executable(self.repository, ".githooks/pre-commit")
         git(self.repository, "add", ".")
         git(self.repository, "commit", "-qm", "baseline")
         self.identity = WORKTREE_MODULE.repository_identity(self.repository)

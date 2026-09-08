@@ -106,6 +106,13 @@ target_directory_identity = guard.target_directory_identity
 exact_ref_tip = guard.exact_ref_tip
 is_ancestor = guard.is_ancestor
 
+ROOT_PRE_COMMIT_HOOK = PurePosixPath(".githooks/pre-commit")
+SOURCE_TEMPLATE_PRE_COMMIT_HOOK = PurePosixPath("template/.githooks/pre-commit")
+SUPPORTED_PROFILE_MARKERS = (
+    PurePosixPath("scripts/check-copier-template.py"),
+    PurePosixPath(".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"),
+)
+
 
 def validate_allowed_root(raw: str, repository: Path) -> Path:
     allowed_root = require_owned_directory(Path(raw), label="allowed root")
@@ -463,6 +470,104 @@ def snapshot_source(repository: Path) -> tuple[bytes, bytes]:
     return (index_digest, raw_worktree_digest(repository))
 
 
+def tracked_at_commit(repository: Path, start_commit: str, relative: PurePosixPath) -> bool:
+    """Report whether one exact repository-relative path is tracked at a commit."""
+
+    encoded = relative.as_posix().encode("utf-8")
+    listing = git(
+        repository,
+        "ls-tree",
+        "--name-only",
+        "-z",
+        start_commit,
+        "--",
+        relative.as_posix(),
+    ).stdout
+    names = [item for item in listing.split(b"\0") if item]
+    if any(item != encoded for item in names) or len(names) > 1:
+        raise WorktreeError("Git reported an ambiguous required hook path")
+    return names == [encoded]
+
+
+def required_worktree_hooks(
+    repository: Path, start_commit: str
+) -> tuple[PurePosixPath, ...]:
+    """Return the completion-gate hooks required by the bound repository profile."""
+
+    root_tracked = tracked_at_commit(repository, start_commit, ROOT_PRE_COMMIT_HOOK)
+    supported_profile = any(
+        tracked_at_commit(repository, start_commit, marker)
+        for marker in SUPPORTED_PROFILE_MARKERS
+    )
+    if supported_profile and not root_tracked:
+        raise WorktreeError("supported repository is missing its required root hook")
+    # Minimal third-party harnesses that copy only the optional manager and
+    # guard ship no project-workflow profile and keep their previous behavior.
+    if not root_tracked:
+        return ()
+    hooks = [ROOT_PRE_COMMIT_HOOK]
+    if tracked_at_commit(repository, start_commit, SOURCE_TEMPLATE_PRE_COMMIT_HOOK):
+        hooks.append(SOURCE_TEMPLATE_PRE_COMMIT_HOOK)
+    return tuple(hooks)
+
+
+def normalize_hook_mode(worktree: Path, relative: PurePosixPath) -> None:
+    """Normalize one required hook through single-linked, no-follow descriptors."""
+
+    descriptors: list[int] = []
+    try:
+        current = os.open(
+            worktree,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        descriptors.append(current)
+        for component in relative.parts[:-1]:
+            current = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=current,
+            )
+            descriptors.append(current)
+        hook = os.open(
+            relative.parts[-1],
+            os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=current,
+        )
+        descriptors.append(hook)
+        metadata = os.fstat(hook)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise WorktreeError(
+                f"required worktree hook must be a single-linked regular file: {relative}"
+            )
+        os.fchmod(hook, 0o755)
+        normalized = os.fstat(hook)
+        visible = os.stat(relative.parts[-1], dir_fd=current, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(normalized.st_mode)
+            or normalized.st_nlink != 1
+            or stat.S_IMODE(normalized.st_mode) != 0o755
+            or (visible.st_dev, visible.st_ino) != (normalized.st_dev, normalized.st_ino)
+            or not stat.S_ISREG(visible.st_mode)
+            or visible.st_nlink != 1
+            or stat.S_IMODE(visible.st_mode) != 0o755
+        ):
+            raise WorktreeError(f"required worktree hook changed during normalization: {relative}")
+    except OSError as exc:
+        raise WorktreeError(f"required worktree hook is missing or unsafe: {relative}") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def normalize_required_hook_modes(
+    worktree: Path, required_hooks: tuple[PurePosixPath, ...]
+) -> None:
+    """Normalize the required hooks validated before creation began."""
+
+    for relative in required_hooks:
+        normalize_hook_mode(worktree, relative)
+
+
 def create_worktree(
     repository: Path,
     allowed_root: Path,
@@ -479,6 +584,7 @@ def create_worktree(
 ) -> dict[str, Any]:
     """Create one linked checkout under an exclusive ownership lock."""
 
+    required_hooks = required_worktree_hooks(repository, start_commit)
     allowed_identity = directory_identity(allowed_root)
     parent_identity = directory_identity(target.parent)
     if paths["record"].exists():
@@ -586,6 +692,7 @@ def create_worktree(
             )
         ):
             raise WorktreeError("interrupted worktree registration is inconsistent")
+        normalize_required_hook_modes(target, required_hooks)
         record = create_record(
             repository,
             allowed_root,
@@ -684,6 +791,7 @@ def create_worktree(
         ],
         target,
     )
+    normalize_required_hook_modes(target, required_hooks)
     record = create_record(
         repository,
         allowed_root,
