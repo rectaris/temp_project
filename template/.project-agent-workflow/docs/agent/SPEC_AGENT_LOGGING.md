@@ -165,6 +165,19 @@ A review turn-zero claim must bind one `ReviewPacketStart` observation whose ses
 - Bind each observation to the SHA-256 digest of the source evidence file that produced it. The `evidence_digests` object maps `external_transcript` and `codex_hooks` to the SHA-256 of the raw source file at the time observations were derived. The verifier recomputes each declared digest and rejects mismatches. Observed identity or metrics without at least one bound evidence digest are rejected.
 - Do not store prompts, response bodies, reasoning bodies, command bodies, environment values, or credentials in resource observations.
 
+## Local Resource Summary
+
+`.project-agent-workflow/scripts/summarize-agent-run.py` reports observed resources from explicitly supplied local records. It is advisory derived information, never acceptance, review, or validation evidence.
+
+- Supply each record on the command line. The command discovers no session, reads no home directory, deletes no log, calls no model, and needs no network or external service.
+- Supported inputs are run manifests, sandboxed-runner candidate manifests, and plan execution state records, read through their declared schema versions.
+- The report is written to stdout only. Save it yourself under `.agent-logs/` or `.agent-artifacts/` when a run needs a durable copy.
+- At most 32 explicit input files of at most 8 MiB each are accepted, and the report is bounded at 256 KiB. A symlinked, nonregular, oversized, or structurally invalid input is rejected before it is read further.
+- Pass raw evidence with `--evidence` to bind a declared `evidence_digests` value to its source bytes. A supplied file that matches no declared digest, an unreadable supplied file, a malformed digest, an unsupported schema, and a malformed record each reject the whole report with a nonzero exit.
+- Totals keep their unit and provenance. Provider token values and deterministic proxy counts are never merged, an observed zero stays a measurement, and a missing value stays `not_observed` instead of becoming zero.
+- Runner duration, per-attempt duration, and ledger elapsed checkpoints are different measurement boundaries and stay in separate totals. Every total is reported beside its record coverage.
+- Billed cost, human intervention, phase durations, replan counts, and total wall clock stay `not_observed` unless a supplied record observes them directly. The command performs no price lookup and no inference.
+
 ## Retention
 
 Keep raw logs by default. Do not add an automatic retention deadline.

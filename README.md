@@ -31,6 +31,8 @@ Copier 管理ファイルと、固定対象である agent model の2項目は�
 ローカル agent ログは生成先の `.agent-logs/` と `.agent-artifacts/` に保存する方針を常に生成します。
 これらは Git 管理外の情報資産として扱い、`docs/plan` には raw log ではなく要約、判断、検証結果、必要な run id を残します。
 大きなログを読み返す場合は `.project-agent-workflow/docs/agent/spec-index.yaml` のルーティング、manifest、検索、抜粋、`.project-agent-workflow/scripts/context-compress.sh` を使います。
+記録済みの実行から観測値だけを読み出す場合は `scripts/summarize-agent-run.py <記録ファイル>...` を使います。
+このコマンドは指定したローカルファイルだけを読み、結果を標準出力へ表示します。入力を書き換えず、外部サービスへ接続せず、観測されていない値は `not_observed` のまま残します。
 Headroom は PATH 上にある場合だけ任意 backend として使い、テンプレートの必須依存にはしません。
 
 外部サービスを opt-in した生成先には、`.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md` が生成されます。

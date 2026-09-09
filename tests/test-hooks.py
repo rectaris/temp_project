@@ -17,6 +17,7 @@ from hooks.logging import (
     EvidenceDigestValidationTest,
     RootLoggingCliDelegationTest,
 )
+from hooks.resource_summary import ResourceSummaryTest
 from hooks.semantic import SemanticGuardAdvisoryTest
 
 

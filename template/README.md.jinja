@@ -26,6 +26,14 @@ AI agent skill を追加または更新するリポジトリでは、任意で N
 - この生成設定では SkillSpector scan script は生成されません。
 [% endif %]
 
+## ローカル実行記録の集計
+
+`.project-agent-workflow/scripts/summarize-agent-run.py <記録ファイル>...` は、指定した run manifest、候補 manifest、実行台帳から観測値だけを集計して標準出力へ表示します。
+
+- 指定したファイルだけを読み、セッションの自動探索、ログ削除、モデル呼び出し、外部通信は行いません。
+- 単位と出所を保持し、観測されていない値は `not_observed` のまま残します。
+- 表示は助言用の派生情報であり、受入証拠や検証の成功記録としては使えません。
+
 ## 外部サービス連携
 
 MCP、Linear、graph memory、Browser Run は任意機能です。
