@@ -1,6 +1,6 @@
 # Summarize observed run resources locally without changing acceptance evidence
 
-status: backlog
+status: in_progress
 primary_invariant: A local read-only report exposes only evidence-backed resource and execution observations, preserves missingness and provenance, and cannot mutate or substitute for execution acceptance evidence.
 task_types:
   - template_workflow
@@ -122,3 +122,5 @@ checked_summary_ja: 既存の実行記録にある時間と資源使用量を、
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
 
 - 2026-09-08 planning alignment: Use this existing local summary for the development-process improvement observations described in the backlog overview. Do not add measurement schemas, phase reconstruction, human-intervention inference or paired benchmark collection; unavailable values remain not_observed.
+
+- 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Activation baseline: `fbaf252` in `temp_project`. Every declared dependency resolves to an existing record and the declared source mechanisms are still present.
