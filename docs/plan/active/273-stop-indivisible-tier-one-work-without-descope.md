@@ -1,6 +1,6 @@
 # Stop indivisible Tier 1 work without an impossible descope
 
-status: backlog
+status: in_progress
 primary_invariant: A Tier 1 plan keeps its single acceptance requirement intact when it must stop; it cannot fabricate a retained/deferred partition or obtain another execution budget through descope.
 task_types:
   - template_workflow
@@ -108,3 +108,5 @@ checked_summary_ja: 完了条件が一つの Tier 1 に分割不能な縮小手�
 - At activation, resolve every dependency to its unique checked record, confirm that the current source still supports this scope, and record the baseline before implementation.
 - The parent owns policy interpretation, write-scope admission, review acceptance, validation, lifecycle changes, and commits; helpers have no write authority.
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
+
+- 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Activation baseline: `b5cac7c` in `temp_project`. The declared source mechanisms are still present.

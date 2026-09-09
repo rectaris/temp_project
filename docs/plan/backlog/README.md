@@ -120,7 +120,6 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [273](273-stop-indivisible-tier-one-work-without-descope.md) | backlog | Stop indivisible Tier 1 work without an impossible descope | docs/plan/backlog/273-stop-indivisible-tier-one-work-without-descope.md |
 | [274](274-preserve-project-owned-agent-model-settings.md) | backlog | Preserve project-owned agent model settings during Copier updates | docs/plan/backlog/274-preserve-project-owned-agent-model-settings.md |
 | [275](275-route-detailed-agent-policy-on-demand.md) | backlog | Route detailed agent policy without losing mandatory requirements | docs/plan/backlog/275-route-detailed-agent-policy-on-demand.md |
 | [276](276-run-bounded-parent-owned-candidate-preflight.md) | backlog | Run one bounded parent-owned preflight per candidate | docs/plan/backlog/276-run-bounded-parent-owned-candidate-preflight.md |
