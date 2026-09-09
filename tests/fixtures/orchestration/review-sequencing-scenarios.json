@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "used_for_tuning": true,
+  "requirements": [
+    "A dependent writable attempt starts only from an exact accepted predecessor closing transition.",
+    "Only a parent-authored fixed review reason and external evidence digest may close a non-accepted attempt.",
+    "One initial attempt and at most two isolated corrections remain sequential and non-overlapping.",
+    "Independent bounded read-only helper work does not acquire a global task lock or writable chain authority."
+  ],
+  "scenarios": [
+    {"id": "median-accepted-two-plan-chain", "class": "median", "expected": "dependent_start_admitted"},
+    {"id": "edge-independent-read-only-helper", "class": "edge", "expected": "ledger_unchanged"},
+    {"id": "negative-rejected-predecessor", "class": "negative", "expected": "dependent_start_rejected"},
+    {"id": "negative-overlapping-starts", "class": "negative", "expected": "second_start_rejected"},
+    {"id": "negative-repeated-reason", "class": "negative", "expected": "replan_required"},
+    {"id": "edge-changed-reason", "class": "edge", "expected": "next_correction_admitted"},
+    {"id": "negative-unknown-reason", "class": "negative", "expected": "closure_rejected"},
+    {"id": "negative-worker-authored-reason", "class": "negative", "expected": "closure_rejected"},
+    {"id": "negative-missing-review-evidence", "class": "negative", "expected": "closure_rejected"},
+    {"id": "negative-replay-and-history-rewrite", "class": "negative", "expected": "ledger_rejected"},
+    {"id": "edge-crash-recovery", "class": "edge", "expected": "failed_attempt_closed"},
+    {"id": "negative-stale-predecessor-digest", "class": "negative", "expected": "dependent_start_rejected"},
+    {"id": "negative-correction-budget-exhausted", "class": "negative", "expected": "replan_required"},
+    {"id": "negative-multiple-invariants-coupled", "class": "negative", "expected": "replan_required"},
+    {"id": "negative-global-lock-or-shared-write", "class": "negative", "expected": "policy_rejected"}
+  ]
+}

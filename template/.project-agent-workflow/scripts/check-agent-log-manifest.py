@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import tempfile
@@ -48,6 +49,16 @@ ALLOWED_REDACTION_STATUS = {
     "automatic_redaction",
     "pending_review",
     "not_applicable",
+}
+RESOURCE_METRICS = {
+    "provider_input_tokens",
+    "provider_cached_input_tokens",
+    "provider_output_tokens",
+    "provider_reasoning_tokens",
+    "model_response_count",
+    "compaction_count",
+    "helper_turn_count",
+    "tool_call_count",
 }
 
 
@@ -208,6 +219,143 @@ def validate_transcript(run_dir: Path, manifest: dict[str, Any]) -> None:
             raise ValidationError(f"transcript_log line {lineno} has unsupported role: {record['role']}")
         if record["run_id"] != manifest.get("run_id"):
             raise ValidationError(f"transcript_log line {lineno} run_id does not match manifest")
+        if record["record_type"] == "review_packet_start":
+            metadata = record["metadata"]
+            if not isinstance(metadata, dict) or set(metadata) < {
+                "review_packet_digest", "inherited_turns", "session_id"
+            }:
+                raise ValidationError(
+                    f"transcript_log line {lineno} has incomplete review packet observation"
+                )
+            packet_digest = metadata["review_packet_digest"]
+            if (
+                not isinstance(packet_digest, str)
+                or len(packet_digest) != 71
+                or not packet_digest.startswith("sha256:")
+            ):
+                raise ValidationError(
+                    f"transcript_log line {lineno} has invalid review packet digest"
+                )
+            if (
+                isinstance(metadata["inherited_turns"], bool)
+                or not isinstance(metadata["inherited_turns"], int)
+                or metadata["inherited_turns"] < 0
+                or not isinstance(metadata["session_id"], str)
+                or not metadata["session_id"]
+            ):
+                raise ValidationError(
+                    f"transcript_log line {lineno} has invalid review turn observation"
+                )
+
+
+def validate_hook_events(run_dir: Path, manifest: dict[str, Any]) -> None:
+    path = resolve_declared_path(run_dir, manifest.get("hook_event_log"), "hook_event_log")
+    if path is None or not path.is_file():
+        return
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except Exception as exc:
+            raise ValidationError(f"hook_event_log line {lineno} is invalid JSON: {exc}") from exc
+        if not isinstance(record, dict):
+            raise ValidationError(f"hook_event_log line {lineno} must be an object")
+        if record.get("event") != "ReviewPacketStart":
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            raise ValidationError(
+                f"hook_event_log line {lineno} review packet payload must be an object"
+            )
+        packet_digest = payload.get("review_packet_digest")
+        inherited_turns = payload.get("inherited_turns")
+        session_id = payload.get("session_id")
+        if (
+            not isinstance(packet_digest, str)
+            or len(packet_digest) != 71
+            or not packet_digest.startswith("sha256:")
+            or isinstance(inherited_turns, bool)
+            or not isinstance(inherited_turns, int)
+            or inherited_turns < 0
+            or not isinstance(session_id, str)
+            or not session_id
+        ):
+            raise ValidationError(
+                f"hook_event_log line {lineno} has invalid review turn observation"
+            )
+
+
+def validate_resource_observations(value: Any, run_dir: Path, manifest: dict[str, Any]) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version", "root_session_identity", "evidence_digests", "metrics"
+    }:
+        raise ValidationError("resource_observations has an invalid exact field shape")
+    if value["schema_version"] != 1:
+        raise ValidationError("resource_observations has an unsupported schema version")
+    evidence_digests = value["evidence_digests"]
+    if not isinstance(evidence_digests, dict) or set(evidence_digests) != {
+        "external_transcript", "codex_hooks"
+    }:
+        raise ValidationError("evidence_digests has an invalid exact field shape")
+    source_paths = {
+        "external_transcript": manifest.get("transcript_log"),
+        "codex_hooks": manifest.get("hook_event_log"),
+    }
+    for source_key, declared_digest in evidence_digests.items():
+        if declared_digest is None:
+            continue
+        if not isinstance(declared_digest, str) or not declared_digest.startswith("sha256:") or len(declared_digest) != 71:
+            raise ValidationError(f"evidence_digests.{source_key} must be a SHA-256 digest or null")
+        source_rel = source_paths.get(source_key)
+        if not isinstance(source_rel, str):
+            raise ValidationError(f"evidence_digests.{source_key} is set but {source_key} source path is not declared")
+        source_file = run_dir / source_rel
+        if not source_file.is_file():
+            raise ValidationError(f"evidence_digests.{source_key} is set but source file is missing")
+        actual = "sha256:" + hashlib.sha256(source_file.read_bytes()).hexdigest()
+        if actual != declared_digest:
+            raise ValidationError(f"evidence_digests.{source_key} does not match recomputed source file digest")
+    identity = value["root_session_identity"]
+    if not isinstance(identity, dict) or set(identity) != {"status", "digest"}:
+        raise ValidationError("root_session_identity has an invalid exact field shape")
+    if identity["status"] == "observed":
+        digest = identity["digest"]
+        if not isinstance(digest, str) or len(digest) != 71 or not digest.startswith("sha256:"):
+            raise ValidationError("observed root_session_identity requires a SHA-256 digest")
+        has_bound_evidence = any(
+            isinstance(evidence_digests.get(k), str) for k in ("external_transcript", "codex_hooks")
+        )
+        if not has_bound_evidence:
+            raise ValidationError("observed root_session_identity requires at least one bound evidence digest")
+    elif identity != {"status": "not_observed", "digest": None}:
+        raise ValidationError("unavailable root_session_identity must remain not_observed")
+    metrics = value["metrics"]
+    if not isinstance(metrics, dict) or set(metrics) != RESOURCE_METRICS:
+        raise ValidationError("resource observation metrics have an invalid exact field shape")
+    for name, observation in metrics.items():
+        if not isinstance(observation, dict) or set(observation) != {
+            "status", "value", "provenance"
+        }:
+            raise ValidationError(f"resource metric {name} has an invalid exact field shape")
+        if observation["status"] == "observed":
+            metric_value = observation["value"]
+            if isinstance(metric_value, bool) or not isinstance(metric_value, int) or metric_value < 0:
+                raise ValidationError(f"resource metric {name} must be a nonnegative integer")
+            expected = "provider" if name.startswith("provider_") else "deterministic_proxy"
+            if observation["provenance"] != expected:
+                raise ValidationError(f"resource metric {name} has invalid provenance")
+            has_bound = any(
+                isinstance(evidence_digests.get(k), str) for k in ("external_transcript", "codex_hooks")
+            )
+            if not has_bound:
+                raise ValidationError(f"observed resource metric {name} requires at least one bound evidence digest")
+        elif observation != {
+            "status": "not_observed",
+            "value": None,
+            "provenance": "not_observed",
+        }:
+            raise ValidationError(f"unavailable resource metric {name} must remain not_observed")
 
 
 def validate_manifest(path: Path, require_transcript: bool = False, require_hooks: bool = False) -> list[str]:
@@ -246,6 +394,9 @@ def validate_manifest(path: Path, require_transcript: bool = False, require_hook
     if sorted(actual_missing_sources) != expected_missing_sources:
         raise ValidationError(f"missing_sources must be {expected_missing_sources}")
     validate_transcript(run_dir, manifest)
+    validate_hook_events(run_dir, manifest)
+    if "resource_observations" in manifest:
+        validate_resource_observations(manifest["resource_observations"], run_dir, manifest)
     if require_transcript and "external_transcript" in computed_missing_sources:
         raise ValidationError("external transcript coverage is required but missing")
     if require_hooks and "codex_hooks" in computed_missing_sources:
@@ -283,6 +434,14 @@ def sample_manifest(run_dir: Path, transcript: bool, hooks: bool) -> dict[str, A
         missing_sources.append("external_transcript")
     if not hooks:
         missing_sources.append("codex_hooks")
+    evidence_digests: dict[str, str | None] = {
+        "external_transcript": None,
+        "codex_hooks": None,
+    }
+    if transcript and (run_dir / "raw/transcript.jsonl").is_file():
+        evidence_digests["external_transcript"] = _file_digest(run_dir / "raw/transcript.jsonl")
+    if hooks and (run_dir / "raw/events.jsonl").is_file():
+        evidence_digests["codex_hooks"] = _file_digest(run_dir / "raw/events.jsonl")
     return {
         "run_id": run_dir.name,
         "created_at": "2026-06-30T00:00:00Z",
@@ -310,7 +469,24 @@ def sample_manifest(run_dir: Path, transcript: bool, hooks: bool) -> dict[str, A
             ),
         },
         "missing_sources": missing_sources,
+        "resource_observations": {
+            "schema_version": 1,
+            "root_session_identity": {"status": "not_observed", "digest": None},
+            "evidence_digests": evidence_digests,
+            "metrics": {
+                metric: {
+                    "status": "not_observed",
+                    "value": None,
+                    "provenance": "not_observed",
+                }
+                for metric in RESOURCE_METRICS
+            },
+        },
     }
+
+
+def _file_digest(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def create_run(root: Path, name: str, transcript: bool, hooks: bool) -> Path:
@@ -374,7 +550,27 @@ def self_test() -> None:
 
         bad_transcript = create_run(root, "bad-transcript", transcript=True, hooks=True)
         write_jsonl(bad_transcript.parent / "raw/transcript.jsonl", [{"role": "unexpected"}])
+        manifest = load_json(bad_transcript)
+        manifest["resource_observations"]["evidence_digests"]["external_transcript"] = _file_digest(
+            bad_transcript.parent / "raw/transcript.jsonl"
+        )
+        write_json(bad_transcript, manifest)
         expect_failure(bad_transcript)
+
+        fabricated_identity = create_run(root, "fabricated-identity", transcript=False, hooks=False)
+        manifest = load_json(fabricated_identity)
+        manifest["resource_observations"]["root_session_identity"] = {
+            "status": "observed",
+            "digest": "sha256:" + "a" * 64,
+        }
+        write_json(fabricated_identity, manifest)
+        expect_failure(fabricated_identity)
+
+        mismatched_digest = create_run(root, "mismatched-digest", transcript=True, hooks=False)
+        manifest = load_json(mismatched_digest)
+        manifest["resource_observations"]["evidence_digests"]["external_transcript"] = "sha256:" + "b" * 64
+        write_json(mismatched_digest, manifest)
+        expect_failure(mismatched_digest)
 
 
 def discover_manifests(paths: list[str]) -> list[Path]:

@@ -15,4 +15,6 @@ description: Identify important unstated decisions before implementation or plan
 
 Follow `SPEC_DECISION_AUDIT.md` for output language and format, skip conditions, artifact boundaries, and active-plan conversion.
 
+Read `references/implementation-preflight.md` when the audit is about to become work: when a settled decision would be reopened, before writing long plan prose, or after a formal validation failure.
+
 Do not invent requirements or copy the full audit into `docs/plan/active`.

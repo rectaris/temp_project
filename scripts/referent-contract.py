@@ -6,6 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+import shlex
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +63,7 @@ STATES = {
     "draft_created",
     "semantic_review_passed",
     "closed_advisory",
+    "ended_without_review",
 }
 ALLOWED_TRANSITIONS = {
     (None, "source_registered", "init"),
@@ -176,7 +180,96 @@ def unique_ids(items: list[dict[str, Any]], field: str) -> None:
         raise ContractError(f"{field} ids must be unique")
 
 
+def validate_relocations(contract: dict[str, Any]) -> str:
+    previous = contract["target"]["path"]
+    history = contract.get("draft_history", [])
+    if not isinstance(history, list):
+        raise ContractError("draft_history must be a list")
+    registrations = history + [{
+        "target_sha256": contract.get("target_sha256"),
+        "target_relocations": contract.get("target_relocations", []),
+    }]
+    for index, registration in enumerate(registrations):
+        if not isinstance(registration, dict) or set(registration) != {"target_sha256", "target_relocations"}:
+            raise ContractError("invalid draft history registration")
+        draft_hash = registration["target_sha256"]
+        if index < len(history) or draft_hash is not None:
+            if not isinstance(draft_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", draft_hash):
+                raise ContractError("draft history requires a registered draft hash")
+        relocations = registration["target_relocations"]
+        if not isinstance(relocations, list):
+            raise ContractError("target_relocations must be a list")
+        for relocation in relocations:
+            if not isinstance(relocation, dict) or set(relocation) != {"from", "to", "sha256", "reason", "at"}:
+                raise ContractError("invalid target relocation record")
+            for field in relocation:
+                nonempty_string(relocation[field], f"relocation {field}")
+            if relocation["from"] != previous or relocation["to"] == previous:
+                raise ContractError("target relocation does not continue the location history")
+            if relocation["sha256"] != draft_hash:
+                raise ContractError("target relocation must preserve the recorded draft hash")
+            previous = relocation["to"]
+    return previous
+
+
+def draft_path(contract: dict[str, Any]) -> str:
+    return validate_relocations(contract)
+
+
+def applicability_evidence(path_text: str) -> Path:
+    path = Path(path_text)
+    if (path.is_absolute() or len(path.parts) < 2 or path.parts[0] != ".agent-artifacts"
+            or ".." in path.parts or path.as_posix() != path_text):
+        raise ContractError("applicability evidence must be a normalized path under .agent-artifacts/")
+    for ancestor in (path, *path.parents):
+        if ancestor.is_symlink():
+            raise ContractError("applicability evidence must not follow symlinks")
+    if not path.is_file() or path.stat().st_nlink != 1:
+        raise ContractError("applicability evidence must be a separate regular file")
+    try:
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        raise ContractError("applicability evidence must be readable JSON") from exc
+    fields = {"target_history", "applicability_ended_reason", "unresolved_facts", "owner_instruction"}
+    if not isinstance(evidence, dict) or set(evidence) != fields:
+        raise ContractError("applicability evidence requires target_history, applicability_ended_reason, unresolved_facts, and owner_instruction")
+    for field in fields:
+        nonempty_string(evidence[field], f"applicability evidence {field}")
+    return path
+
+
+def validate_ended_contract(contract: dict[str, Any], *, check_files: bool) -> None:
+    record = contract.get("end_record")
+    if not isinstance(record, dict) or set(record) != {"reason", "report", "sha256", "prior_contract"}:
+        raise ContractError("ended applicability requires reason, evidence, and the prior contract")
+    for field in ("reason", "report", "sha256"):
+        nonempty_string(record[field], f"end_record.{field}")
+    prior = record["prior_contract"]
+    if not isinstance(prior, dict) or prior.get("state") == "ended_without_review":
+        raise ContractError("ended applicability requires one non-ended prior contract")
+    validate_contract(prior, check_files=False)
+    if not prior["active"]:
+        raise ContractError("only active contracts can end applicability")
+    expected = dict(prior)
+    expected.update(active=False, state="ended_without_review", end_record=record,
+                    updated_at=contract.get("updated_at"))
+    nonempty_string(expected["updated_at"], "updated_at")
+    expected["transitions"] = prior["transitions"] + [{
+        "from": prior["state"], "to": "ended_without_review",
+        "action": "end-applicability", "at": expected["updated_at"],
+    }]
+    if contract != expected:
+        raise ContractError("ended applicability must preserve the complete prior contract")
+    if check_files:
+        report = applicability_evidence(record["report"])
+        if file_sha256(report) != record["sha256"]:
+            raise ContractError("ended applicability evidence is missing or changed")
+
+
 def validate_contract(contract: dict[str, Any], *, check_files: bool = True) -> None:
+    if contract.get("state") == "ended_without_review":
+        validate_ended_contract(contract, check_files=check_files)
+        return
     if contract.get("schema_version") != SCHEMA_VERSION:
         raise ContractError(f"schema_version must be {SCHEMA_VERSION}")
     nonempty_string(contract.get("slug"), "slug")
@@ -218,6 +311,7 @@ def validate_contract(contract: dict[str, Any], *, check_files: bool = True) -> 
         raise ContractError("source and target must be objects")
     nonempty_string(contract["source"].get("path"), "source.path")
     nonempty_string(contract["target"].get("path"), "target.path")
+    validate_relocations(contract)
     if not isinstance(contract.get("unknowns_reviewed"), bool):
         raise ContractError("unknowns_reviewed must be a boolean")
     unknowns = contract.get("unknowns")
@@ -273,7 +367,7 @@ def validate_contract(contract: dict[str, Any], *, check_files: bool = True) -> 
         elif decision in {"pending", "blocked"} and (label is not None or definition is not None):
             raise ContractError(f"referent {referent_id} has label data without a label decision")
 
-    sealed_states = STATES - {"source_registered", "unknowns_recorded"}
+    sealed_states = STATES - {"source_registered", "unknowns_recorded", "ended_without_review"}
     if contract.get("state") in sealed_states:
         if not contract.get("unknowns_reviewed"):
             raise ContractError("unknowns must be reviewed before referents are sealed")
@@ -293,7 +387,7 @@ def validate_contract(contract: dict[str, Any], *, check_files: bool = True) -> 
         target_hash = contract.get("target_sha256")
         nonempty_string(target_hash, "target_sha256")
         if check_files:
-            target = resolve_artifact(contract["target"]["path"])
+            target = resolve_artifact(draft_path(contract))
             if not target.is_file():
                 raise ContractError(f"missing target: {target}")
             if file_sha256(target) != target_hash:
@@ -467,7 +561,7 @@ def command_record_draft(args: argparse.Namespace) -> None:
     contract = load_contract(path)
     require_state(contract, "labels_assigned")
     validate_contract(contract, check_files=False)
-    target = resolve_artifact(contract["target"]["path"])
+    target = resolve_artifact(draft_path(contract))
     if not target.is_file():
         raise ContractError(f"missing target: {target}")
     text = target.read_text(encoding="utf-8")
@@ -547,7 +641,13 @@ def command_reopen(args: argparse.Namespace) -> None:
             }
         )
     contract["referent_snapshot_sha256"] = None
+    if contract.get("target_sha256") is not None:
+        contract.setdefault("draft_history", []).append({
+            "target_sha256": contract["target_sha256"],
+            "target_relocations": contract.get("target_relocations", []),
+        })
     contract["target_sha256"] = None
+    contract.pop("target_relocations", None)
     contract["reviews"] = []
     contract["active"] = True
     contract["reopen_reason"] = args.reason
@@ -557,9 +657,115 @@ def command_reopen(args: argparse.Namespace) -> None:
     write_contract(path, contract)
 
 
+def command_relocate_target(args: argparse.Namespace) -> None:
+    path = Path(args.contract)
+    contract = load_contract(path)
+    require_state(contract, "draft_created", "closed_advisory", "semantic_review_passed")
+    validate_contract(contract, check_files=False)
+    nonempty_string(args.reason, "reason")
+    previous = draft_path(contract)
+    old = resolve_artifact(previous)
+    target = resolve_artifact(args.target)
+    try:
+        old_stat = old.lstat()
+    except FileNotFoundError:
+        old_stat = None
+    except OSError as exc:
+        raise ContractError(f"cannot inspect previous target: {old}") from exc
+    if old_stat is not None:
+        if not stat.S_ISREG(old_stat.st_mode):
+            raise ContractError("existing target is not a regular file; investigate target drift before relocation")
+        if file_sha256(old) != contract["target_sha256"]:
+            raise ContractError("existing target changed; relocation cannot hide draft drift")
+    if not target.is_file() or file_sha256(target) != contract["target_sha256"]:
+        raise ContractError("relocation target must match the recorded draft hash")
+    contract.setdefault("target_relocations", []).append({
+        "from": previous, "to": args.target, "sha256": contract["target_sha256"],
+        "reason": args.reason, "at": now(),
+    })
+    contract["updated_at"] = now()
+    validate_contract(contract)
+    write_contract(path, contract)
+
+
+def command_end_applicability(args: argparse.Namespace) -> None:
+    path = Path(args.contract)
+    contract = load_contract(path)
+    validate_contract(contract, check_files=False)
+    if not contract["active"]:
+        raise ContractError("only active contracts can end applicability")
+    nonempty_string(args.reason, "reason")
+    report = applicability_evidence(args.report)
+    if report.samefile(path):
+        raise ContractError("applicability evidence must be separate from the contract")
+    prior = json.loads(json.dumps(contract))
+    contract["end_record"] = {
+        "reason": args.reason, "report": args.report,
+        "sha256": file_sha256(report), "prior_contract": prior,
+    }
+    contract["active"] = False
+    transition(contract, "ended_without_review", "end-applicability")
+    validate_contract(contract)
+    write_contract(path, contract)
+    print("Applicability ended without semantic acceptance; prior evidence preserved.")
+
+
+def pending_contract_lines(root: Path, target_filter: str | None = None) -> list[str]:
+    entries: list[str] = []
+    count = 0
+    checker = shlex.quote(str(Path(__file__).resolve()))
+    for path in sorted((root / ".agent-artifacts/referent-contracts").glob("**/contract.json")):
+        try:
+            contract = load_contract(path)
+            references = {contract.get(key, {}).get("path") for key in ("source", "target")}
+            references.update(item["to"] for item in contract.get("target_relocations", []))
+            references.add(draft_path(contract))
+            if target_filter is not None and target_filter not in references:
+                continue
+            if contract.get("active") is False:
+                # A forged inactive flag on an incomplete record must not suppress it.
+                validate_contract(contract, check_files=contract.get("state") == "ended_without_review")
+                continue
+            state, mode = contract.get("state", "unknown"), contract.get("mode", "unknown")
+            validate_contract(contract, check_files=False)
+            target = root / draft_path(contract)
+            if target.is_symlink() or (target.exists() and not target.is_file()):
+                action = "Target is not a regular file: investigate the replacement before relocation or draft registration."
+            elif not target.is_file():
+                action = "Target missing: locate the exact draft and use relocate-target; if applicability ended, document evidence before end-applicability."
+            elif contract.get("target_sha256") and file_sha256(target) != contract["target_sha256"]:
+                action = "Draft changed: compare the changes and reopen/re-record the draft; do not close using stale evidence."
+            elif state == "draft_created":
+                action = ("Review missing: record an independent-agent or human passing review."
+                          if mode == "required" else "Closure pending: use close-advisory with a reason, or record an independent review.")
+            elif state == "labels_assigned":
+                action = "Draft not registered: use record-draft, then complete the review or advisory closure."
+            else:
+                action = "Definition work pending: complete unknowns, referents, and naming decisions before registering the draft."
+        except (ContractError, OSError, TypeError, AttributeError, KeyError) as exc:
+            state, mode, action = "invalid", "unknown", f"Repair invalid contract: {exc}"
+        count += 1
+        if count <= 5:
+            entries.extend([f"- {path.relative_to(root)} (state: {state}, mode: {mode})",
+                            f"  {action}", f"  Check: python3 {checker} check {shlex.quote(str(path.relative_to(root)))}"])
+    if count > 5:
+        entries.append(f"- {count - 5} additional active contract(s) not shown")
+    if entries:
+        entries.insert(0, "Referent-first advisory: reread and complete active semantic contracts before relying on labels or compressed context.")
+    return entries
+
+
+def command_pending(args: argparse.Namespace) -> None:
+    lines = pending_contract_lines(Path.cwd(), args.target)
+    if lines:
+        print("\n".join(lines))
+
+
 def command_check(args: argparse.Namespace) -> None:
     contract = load_contract(Path(args.contract))
     validate_contract(contract)
+    if contract["state"] == "ended_without_review":
+        raise ContractError("applicability ended without semantic acceptance; see end_record evidence")
     if args.require_review and contract["state"] != "semantic_review_passed":
         raise ContractError("a passing semantic review is required")
     if contract["mode"] == "required" and contract["state"] != "semantic_review_passed":
@@ -695,6 +901,22 @@ def build_parser() -> argparse.ArgumentParser:
     reopen.add_argument("contract")
     reopen.add_argument("--reason", required=True)
     reopen.set_defaults(func=command_reopen)
+
+    relocate = subparsers.add_parser("relocate-target")
+    relocate.add_argument("contract")
+    relocate.add_argument("--target", required=True)
+    relocate.add_argument("--reason", required=True)
+    relocate.set_defaults(func=command_relocate_target)
+
+    end = subparsers.add_parser("end-applicability")
+    end.add_argument("contract")
+    end.add_argument("--reason", required=True)
+    end.add_argument("--report", required=True)
+    end.set_defaults(func=command_end_applicability)
+
+    pending = subparsers.add_parser("pending")
+    pending.add_argument("--target")
+    pending.set_defaults(func=command_pending)
 
     check = subparsers.add_parser("check")
     check.add_argument("contract")

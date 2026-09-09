@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "suite": "worker-execution-contract",
+  "used_for_tuning": true,
+  "holdout_file": "worker-contract-holdout.json",
+  "base": {
+    "plan_path": "docs/plan/active/001-worker-contract-fixture.md",
+    "plan_bytes": "# Worker contract fixture\n\nstatus: in_progress\ntask_types:\n  - planning_docs\nreview_class: C\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: low\nimplementation_ambiguity: low\nprimary_invariant: change only the declared product file\nwrite_scope:\n  - product/allowed.txt\ncontext_files:\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nfocused_validation:\n  - git diff --check\nvalidation:\n  - git diff --check\nacceptance:\n  - Preserve the declared product change.\nchecked_summary_ja: 宣言済みproduct変更だけを許可する。\n",
+    "repository_files": {
+      "docs/agent/SPEC_PLAN_WORKFLOW.md": "fixture specification\n",
+      "product/allowed.txt": "before\n"
+    },
+    "orchestration_run_id": "worker-contract-fixture-run",
+    "attempt_lineage": {
+      "attempt_kind": "initial",
+      "correction_round": 0,
+      "attempt_label": "custom"
+    }
+  },
+  "cases": [
+    {
+      "id": "median-exact-initial-derivation",
+      "class": "median",
+      "used_for_tuning": true,
+      "covers": ["exact_derivation"],
+      "operation": "derive_twice",
+      "input": {},
+      "expected": {"result": "accepted", "error_code": null}
+    },
+    {
+      "id": "edge-correction-lineage-derivation",
+      "class": "edge",
+      "used_for_tuning": true,
+      "covers": ["lineage_binding"],
+      "operation": "derive_twice",
+      "input": {
+        "attempt_lineage": {
+          "attempt_kind": "correction",
+          "correction_round": 1,
+          "attempt_label": "custom",
+          "prior_manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      },
+      "expected": {"result": "accepted", "error_code": null}
+    },
+    {
+      "id": "edge-explicit-new-product-file",
+      "class": "edge",
+      "used_for_tuning": true,
+      "covers": ["explicit_new_non_authority_path"],
+      "operation": "validate_write_scope",
+      "input": {"write_scope": ["product/new-output.txt"]},
+      "expected": {"result": "accepted", "error_code": null}
+    },
+    {
+      "id": "negative-source-plan-mutation",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["source_plan_mutation"],
+      "operation": "derive_after_plan_mutation",
+      "input": {"append_to_plan": "\nmutated after admission\n"},
+      "expected": {"result": "rejected", "error_code": "source_plan_changed"}
+    },
+    {
+      "id": "negative-contract-digest-mismatch",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["digest_mismatch"],
+      "operation": "verify_contract_mutation",
+      "input": {"mutation": {"kind": "manifest_digest", "value": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
+      "expected": {"result": "rejected", "error_code": "contract_digest_mismatch"}
+    },
+    {
+      "id": "negative-lineage-mismatch",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["lineage_mismatch"],
+      "operation": "verify_contract_mutation",
+      "input": {"mutation": {"kind": "attempt_lineage", "value": {"attempt_kind": "initial", "correction_round": 0, "attempt_label": "primary"}}},
+      "expected": {"result": "rejected", "error_code": "lineage_mismatch"}
+    },
+    {
+      "id": "negative-missing-primary-invariant",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["missing_primary_invariant"],
+      "operation": "derive_with_plan_replacement",
+      "input": {"remove_line_prefix": "primary_invariant:"},
+      "expected": {"result": "rejected", "error_code": "missing_primary_invariant"}
+    },
+    {
+      "id": "negative-duplicate-contract-field",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["duplicate_field"],
+      "operation": "verify_serialized_contract",
+      "input": {"json_prefix": "{\"schema_version\":1,\"schema_version\":1,"},
+      "expected": {"result": "rejected", "error_code": "duplicate_contract_field"}
+    },
+    {
+      "id": "negative-unknown-contract-field",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["unknown_field"],
+      "operation": "verify_contract_mutation",
+      "input": {"mutation": {"kind": "add_field", "name": "undeclared_authority", "value": true}},
+      "expected": {"result": "rejected", "error_code": "unknown_contract_field"}
+    },
+    {
+      "id": "negative-path-traversal",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["path_traversal"],
+      "operation": "derive_with_plan_replacement",
+      "input": {"replace_write_scope": ["../outside.txt"]},
+      "expected": {"result": "rejected", "error_code": "path_traversal"}
+    },
+    {
+      "id": "negative-symlink-context-escape",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["symlink_escape"],
+      "operation": "derive_with_repository_mutation",
+      "input": {"replace_with_symlink": {"path": "docs/agent/SPEC_PLAN_WORKFLOW.md", "target": "../../outside-spec.md"}},
+      "expected": {"result": "rejected", "error_code": "symlink_escape"}
+    },
+    {
+      "id": "negative-oversized-contract",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["oversized_input"],
+      "operation": "verify_serialized_contract",
+      "input": {"byte_count": 65537, "fill_byte": "x"},
+      "expected": {"result": "rejected", "error_code": "contract_too_large"}
+    },
+    {
+      "id": "negative-attempted-contract-mutation",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["contract_mutation", "read_only_mount"],
+      "operation": "attempt_worker_write",
+      "input": {"target": "worker-contract.json", "content": "mutated\n"},
+      "expected": {"result": "rejected", "error_code": "read_only_contract"}
+    },
+    {
+      "id": "negative-attempted-authority-widening",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["authority_widening"],
+      "operation": "validate_write_scope",
+      "input": {"write_scope": ["tests/test-new-authority.py"]},
+      "expected": {"result": "rejected", "error_code": "validation_authority_write"}
+    },
+    {
+      "id": "negative-directory-prefix-write-scope",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["directory_prefix_scope"],
+      "operation": "validate_write_scope",
+      "input": {"write_scope": ["product/"]},
+      "expected": {"result": "rejected", "error_code": "non_exact_write_path"}
+    }
+  ]
+}

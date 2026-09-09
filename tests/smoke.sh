@@ -9,6 +9,22 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 source_ref=${COPIER_SMOKE_REF:-}
 render_source=$root
 
+create_admitted_plan() {
+  .project-agent-workflow/scripts/create-plan.sh "$@" \
+    --purpose implementation \
+    --write-scope "${SMOKE_WRITE_SCOPE:-src/smoke-target.ts}" \
+    --feasibility 'existing_mechanism:The generated project already ships this workflow command.' \
+    --completion 'Keep the generated smoke target behaviour unchanged.' \
+    --witness 'npm run lint'
+}
+
+strip_admission_record() {
+  sed -i '/^plan_purpose:/d' "$1"
+  sed -i '/^feasibility_evidence:/,/^completion_conditions:/{/^completion_conditions:/!d;}' "$1"
+  sed -i '/^completion_conditions:/,/^completion_witness_map:/{/^completion_witness_map:/!d;}' "$1"
+  sed -i '/^completion_witness_map:/,/^context_files:/{/^context_files:/!d;}' "$1"
+}
+
 run_root_python() {
   if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
     (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" uv run python "$@")
@@ -51,39 +67,74 @@ if [ -z "$source_ref" ]; then
     scripts/migrate-sequential-plan-worker.py \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
+    template/.githooks/pre-commit \
+    template/.github/hooks/plan-lifecycle.json \
     template/.github/workflows/project-agent-workflow.yml \
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
+    template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md \
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+    template/.project-agent-workflow/human-report.json.jinja \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/human-report.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
+    template/.project-agent-workflow/scripts/create-plan.sh \
+    template/.project-agent-workflow/scripts/plan_authoring.py \
     template/.project-agent-workflow/scripts/planlib.py \
+    template/.project-agent-workflow/scripts/plan_overview.py \
+    template/.project-agent-workflow/scripts/promote-plan.sh \
+    template/.project-agent-workflow/scripts/render-plan-overview.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
+    template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-copier-update.sh \
+    template/.project-agent-workflow/scripts/orca-coordinator.py \
+    template/.project-agent-workflow/scripts/run-parallel-plans.py \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py \
+    template/.project-agent-workflow/scripts/worktree_guard.py \
     template/.agents/skills/browser-ops/SKILL.md \
+    template/.agents/skills/natural-japanese/SKILL.md \
+    template/.agents/skills/verify-copier-update/SKILL.md \
+    template/AGENTS.md.jinja \
     template/.project-agent-workflow/AGENTS.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md \
+    template/.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md \
     template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
     template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
     template/.project-agent-workflow/ownership.yaml \
     template/.project-agent-workflow/skills/browser-ops/SKILL.md \
     template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
     template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
+    template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
+    template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
+    template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
+    template/.project-agent-workflow/skills/natural-japanese/SKILL.md \
+    template/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml \
+    template/.project-agent-workflow/skills/natural-japanese/references/workflow.md \
+    template/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md \
+    template/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py \
+    template/.project-agent-workflow/skills/natural-japanese/LICENSE \
+    template/.project-agent-workflow/skills/write-for-reader/SKILL.md \
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
+    template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
     template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-    template/docs/agent/external-services.yaml.jinja
+    template/docs/agent/external-services.yaml.jinja \
+    template/docs/agent/git-retirement.yaml.jinja
   do
     mkdir -p "$(dirname "$render_source/$candidate_path")"
     cp "$root/$candidate_path" "$render_source/$candidate_path"
@@ -93,39 +144,74 @@ if [ -z "$source_ref" ]; then
     scripts/migrate-sequential-plan-worker.py \
     scripts/validate-copier-update.py \
     template/README.md.jinja \
+    template/.githooks/pre-commit \
+    template/.github/hooks/plan-lifecycle.json \
     template/.github/workflows/project-agent-workflow.yml \
     template/.github/workflows/codex-ci-autofix.yml.jinja \
     template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
     template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
+    template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
+    template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md \
     template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
     template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
     template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
+    template/.project-agent-workflow/human-report.json.jinja \
     template/.project-agent-workflow/scripts/check-external-service-policy.py \
+    template/.project-agent-workflow/scripts/human-report.py \
     template/.project-agent-workflow/scripts/lint-plan-docs.py \
+    template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
     template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
+    template/.project-agent-workflow/scripts/create-plan.sh \
+    template/.project-agent-workflow/scripts/plan_authoring.py \
     template/.project-agent-workflow/scripts/planlib.py \
+    template/.project-agent-workflow/scripts/plan_overview.py \
+    template/.project-agent-workflow/scripts/promote-plan.sh \
+    template/.project-agent-workflow/scripts/render-plan-overview.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
+    template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
     template/docs/plan/replanned.md \
     template/.project-agent-workflow/scripts/run-copier-update.sh \
+    template/.project-agent-workflow/scripts/orca-coordinator.py \
+    template/.project-agent-workflow/scripts/run-parallel-plans.py \
     template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
     template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
     template/.project-agent-workflow/scripts/validate-changes.py \
     template/.project-agent-workflow/scripts/update-from-copier.sh \
     template/.project-agent-workflow/scripts/validate-copier-update.py \
+    template/.project-agent-workflow/scripts/worktree_guard.py \
     template/.agents/skills/browser-ops/SKILL.md \
+    template/.agents/skills/natural-japanese/SKILL.md \
+    template/.agents/skills/verify-copier-update/SKILL.md \
+    template/AGENTS.md.jinja \
     template/.project-agent-workflow/AGENTS.md.jinja \
+    template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md \
+    template/.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md \
     template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
     template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
     template/.project-agent-workflow/ownership.yaml \
     template/.project-agent-workflow/skills/browser-ops/SKILL.md \
     template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
     template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
+    template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
+    template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
+    template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
+    template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
+    template/.project-agent-workflow/skills/natural-japanese/SKILL.md \
+    template/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml \
+    template/.project-agent-workflow/skills/natural-japanese/references/workflow.md \
+    template/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md \
+    template/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py \
+    template/.project-agent-workflow/skills/natural-japanese/LICENSE \
+    template/.project-agent-workflow/skills/write-for-reader/SKILL.md \
     template/.project-agent-workflow/skills/graph-memory/SKILL.md \
     template/.project-agent-workflow/skills/linear-ops/SKILL.md \
     template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
+    template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
+    template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
     template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-    template/docs/agent/external-services.yaml.jinja
+    template/docs/agent/external-services.yaml.jinja \
+    template/docs/agent/git-retirement.yaml.jinja
   git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
     commit --allow-empty -qm "Create isolated smoke candidate"
   git -C "$render_source" tag v1.2.2
@@ -162,6 +248,32 @@ assert_generated_inventory() {
   diff -u "$expected" "$actual"
 }
 
+assert_generated_hook_surfaces() {
+  out=$1
+  hook="$out/.githooks/pre-commit"
+  copilot="$out/.github/hooks/plan-lifecycle.json"
+  if [ ! -x "$hook" ]; then
+    echo "generated project is missing an executable pre-commit hook: $out" >&2
+    exit 1
+  fi
+  cmp "$root/template/.githooks/pre-commit" "$hook"
+  cmp "$root/template/.github/hooks/plan-lifecycle.json" "$copilot"
+  grep -q '.project-agent-workflow/hooks/stop_review_gate.py' "$copilot"
+  grep -q 'agentStop' "$copilot"
+  if grep -q 'subagentStop' "$copilot"; then
+    echo "generated Copilot configuration attaches the gate to subagent stop: $out" >&2
+    exit 1
+  fi
+  if [ -e "$out/scripts/lint-project-workflow.sh" ]; then
+    echo "generated project received the root-only activation detector: $out" >&2
+    exit 1
+  fi
+  if [ -e "$out/.git" ] && [ -n "$(git -C "$out" config --local --get core.hooksPath || true)" ]; then
+    echo "generation selected core.hooksPath in the generated project: $out" >&2
+    exit 1
+  fi
+}
+
 assert_managed_orchestration_reports() {
   out=$1
   managed_agents="$out/.project-agent-workflow/AGENTS.md"
@@ -182,10 +294,17 @@ assert_managed_orchestration_reports() {
   grep -qi 'state path outside the repository' "$managed_orchestration"
   grep -qi 'skipped known-unavailable starts' "$managed_orchestration"
   grep -qi 'aggregate patch' "$managed_orchestration"
-  grep -qi 'at most two correction rounds' "$managed_orchestration"
+  grep -qi 'at most one correction round' "$managed_orchestration"
+  grep -qi 'independent_review_limit' "$managed_orchestration"
   grep -qi 'candidate generation and correction do not run plan validation' "$managed_orchestration"
   grep -q 'focused_validation' "$managed_orchestration"
   grep -qi 'bounded parent implementation' "$managed_orchestration"
+  grep -q 'predecessor_acceptance' "$managed_orchestration"
+  grep -q 'writable_attempt_started' "$managed_orchestration"
+  grep -q 'attempt_closed' "$managed_orchestration"
+  grep -q 'successor_claimed' "$managed_orchestration"
+  grep -q 'review_evidence_digest' "$managed_orchestration"
+  grep -q 'global task lock' "$managed_orchestration"
 }
 
 assert_ci_autofix_validation_graph() {
@@ -304,11 +423,11 @@ assert_generated_whitespace_range() {
 
 run_plan_lifecycle_smoke() {
   out=$1
-  (cd "$out" && .project-agent-workflow/scripts/create-plan.sh active sample --summary "Sample work." --summary-ja "サンプル作業を行う。" >/dev/null)
+  (cd "$out" && create_admitted_plan active sample --summary "Sample work." --summary-ja "サンプル作業を行う。" >/dev/null)
   (cd "$out" && test -f docs/plan/active/001-sample.md)
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
   (cd "$out" && .project-agent-workflow/scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^TASK_TYPES=environment_data_flow$')
-  (cd "$out" && .project-agent-workflow/scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^WRITE_SCOPE=TBD$')
+  (cd "$out" && .project-agent-workflow/scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^WRITE_SCOPE=src/smoke-target.ts$')
   (cd "$out" && .project-agent-workflow/scripts/select-task-context.sh docs/plan/active/001-sample.md | grep -q '^CONTEXT_FILES=$')
   if grep -q '^expected_output:' "$out/docs/plan/active/001-sample.md"; then
     echo "create-plan emitted removed expected_output field" >&2
@@ -361,6 +480,88 @@ run_plan_archive_compatibility_smoke() {
   cp "$original" "$out/$archive_path"
   rm "$original"
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+}
+
+assert_witness_plan_rejected() {
+  out=$1
+  plan=$2
+  description=$3
+  if (cd "$out" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-plan "$plan" >/dev/null 2>&1); then
+    echo "generated plan validation accepted $description" >&2
+    exit 1
+  fi
+}
+
+# The witness map is what makes an integration lane name its earliest evidence,
+# so the generated project must reject a lane that has no map and a lane whose
+# first executable witness is the authoritative suite while a declared focused
+# command would already prove the same acceptance item.
+run_validation_witness_map_smoke() {
+  out=$1
+  plan=docs/plan/active/900-witness-lane.md
+  accepted="Prove the generated witness map names the earliest parent-owned witness."
+  digest=$(printf '%s' "$accepted" | python3 -c 'import hashlib,sys; print("sha256:" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+
+  cat >"$out/$plan" <<EOF_WITNESS_PLAN
+# Witness lane
+
+status: in_progress
+task_types:
+  - environment_data_flow
+review_class: B
+human_design_required: no
+human_approval_status: not_required
+write_scope:
+  - src/witness.ts
+context_files:
+  - none
+required_specs:
+  - .project-agent-workflow/docs/agent/SPEC_VALIDATION.md
+focused_validation:
+  - git diff --check
+validation:
+  - git diff --check
+  - python3 .project-agent-workflow/scripts/lint-plan-docs.py
+acceptance:
+  - $accepted
+validation_witness_schema: 1
+validation_witness_map:
+  - {"acceptance_sha256":"$digest","stage":"focused","witness":"git diff --check"}
+integration_gates:
+  - The witness lane must name its earliest parent-owned witness before execution.
+checked_summary_ja: 受入条件を最も早いwitnessへ対応付ける。
+
+## Tasks
+
+- [ ] Prove the witness map.
+EOF_WITNESS_PLAN
+
+  (cd "$out" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-plan "$plan" >/dev/null)
+
+  original="$out/.witness-lane-original.md"
+  cp "$out/$plan" "$original"
+
+  sed -i '/^validation_witness_map:$/,+1d' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "an integration lane with no witness map"
+  cp "$original" "$out/$plan"
+
+  sed -i 's|  - {"acceptance_sha256":"'"$digest"'","stage":"focused","witness":"git diff --check"}|  - {"acceptance_sha256":"'"$digest"'","stage":"authoritative","witness":"git diff --check","authoritative_only_reason":"claims no narrower preflight exists"}|' "$out/$plan"
+  grep -q '"stage":"authoritative"' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "an authoritative witness that skips a declared focused command"
+  cp "$original" "$out/$plan"
+
+  sed -i 's|"stage":"focused","witness":"git diff --check"|"stage":"authoritative","witness":"python3 .project-agent-workflow/scripts/lint-plan-docs.py"|' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "an authoritative-only witness with no bounded reason"
+  cp "$original" "$out/$plan"
+
+  sed -i 's|"stage":"focused"|"stage":"static"|' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "a static witness that names no enforced predicate"
+  cp "$original" "$out/$plan"
+
+  sed -i 's|"acceptance_sha256":"'"$digest"'"|"acceptance_sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000"|' "$out/$plan"
+  assert_witness_plan_rejected "$out" "$plan" "a witness map that covers no declared acceptance item"
+
+  rm "$original" "$out/$plan"
 }
 
 write_legacy_lint_bridge() {
@@ -462,7 +663,7 @@ EOF_ADOPTION_MANIFEST
   fi
   sed -i 's|python3 scripts/lint-plan-docs.py; rm -rf .|python3 scripts/lint-plan-docs.py|' "$out/$legacy_plan"
 
-  managed_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active managed-root-alias --summary "Managed root alias." --summary-ja "managed 計画の root alias を拒否する。")
+  managed_plan=$(cd "$out" && create_admitted_plan active managed-root-alias --summary "Managed root alias." --summary-ja "managed 計画の root alias を拒否する。")
   sed -i 's|  - git diff --check|  - python3 scripts/lint-plan-docs.py|' "$out/$managed_plan"
   if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
     echo "lint-plan-docs accepted a root command alias in a managed plan" >&2
@@ -489,7 +690,7 @@ EOF_ADOPTION_MANIFEST
 run_plan_fail_closed_smoke() {
   out=$1
 
-  evidence_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active evidence-gate --summary "Evidence gate." --summary-ja "完了根拠を確認する。")
+  evidence_plan=$(cd "$out" && create_admitted_plan active evidence-gate --summary "Evidence gate." --summary-ja "完了根拠を確認する。")
   sed -i 's/^- \[ \] TBD$/-  [ ] TBD/' "$out/$evidence_plan"
   evidence_base=$(basename "$evidence_plan")
   evidence_id=${evidence_base%%-*}
@@ -515,7 +716,7 @@ run_plan_fail_closed_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
   sed -i 's/^status: ready_to_archive$/status: checked/' "$out/$evidence_archive"
 
-  archive_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active archive-preflight --summary "Archive preflight." --summary-ja "アーカイブ前提条件を確認する。")
+  archive_plan=$(cd "$out" && create_admitted_plan active archive-preflight --summary "Archive preflight." --summary-ja "アーカイブ前提条件を確認する。")
   archive_base=$(basename "$archive_plan")
   archive_id=${archive_base%%-*}
   sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$out/$archive_plan"
@@ -544,7 +745,7 @@ run_plan_fail_closed_smoke() {
   archive_result=$(cd "$out" && .project-agent-workflow/scripts/finalize-active-plan.sh "$archive_plan")
   grep -q '^status: checked$' "$out/$archive_result"
 
-  destination_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh backlog promotion-destination --summary "Promotion destination." --summary-ja "昇格先の競合を確認する。")
+  destination_plan=$(cd "$out" && create_admitted_plan backlog promotion-destination --summary "Promotion destination." --summary-ja "昇格先の競合を確認する。")
   destination_base=$(basename "$destination_plan")
   cp "$out/$destination_plan" "$out/docs/plan/active/$destination_base"
   if (cd "$out" && .project-agent-workflow/scripts/promote-plan.sh "$destination_plan" >/dev/null 2>&1); then
@@ -554,7 +755,7 @@ run_plan_fail_closed_smoke() {
   test -f "$out/$destination_plan"
   rm "$out/docs/plan/active/$destination_base"
 
-  id_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh backlog promotion-id --summary "Promotion id." --summary-ja "計画 ID の競合を確認する。")
+  id_plan=$(cd "$out" && create_admitted_plan backlog promotion-id --summary "Promotion id." --summary-ja "計画 ID の競合を確認する。")
   id_base=$(basename "$id_plan")
   id_value=${id_base%%-*}
   mkdir -p "$out/docs/plan/checked/2000/01/01-15"
@@ -567,7 +768,7 @@ run_plan_fail_closed_smoke() {
   test -f "$out/$id_plan"
   rm "$out/$legacy_path"
 
-  index_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh backlog promotion-index --summary "Promotion index." --summary-ja "索引の競合を確認する。")
+  index_plan=$(cd "$out" && create_admitted_plan backlog promotion-index --summary "Promotion index." --summary-ja "索引の競合を確認する。")
   index_base=$(basename "$index_plan")
   index_id=${index_base%%-*}
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --add-active "$index_id" "docs/plan/active/$index_base")
@@ -578,7 +779,38 @@ run_plan_fail_closed_smoke() {
   test -f "$out/$index_plan"
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$index_id")
 
-  mapping_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active index-id-mapping --summary "Index ID mapping." --summary-ja "索引 ID を確認する。")
+  legacy_admission=$(cd "$out" && create_admitted_plan backlog legacy-admission --summary "Legacy admission." --summary-ja "受け入れ条件のない旧計画を確認する。")
+  legacy_admission_base=$(basename "$legacy_admission")
+  legacy_admission_id=${legacy_admission_base%%-*}
+  strip_admission_record "$out/$legacy_admission"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-manifest "$legacy_admission" >/dev/null)
+  legacy_plan_count=$(find "$out/docs/plan" -name '[0-9][0-9][0-9]-*.md' | wc -l)
+  if (cd "$out" && .project-agent-workflow/scripts/promote-plan.sh "$legacy_admission" \
+      >/dev/null 2>"$out/legacy-admission.err"); then
+    echo "promote-plan accepted a backlog plan without an admission record" >&2
+    exit 1
+  fi
+  grep -q 'revise the plan in place' "$out/legacy-admission.err"
+  grep -q 'do not create another plan' "$out/legacy-admission.err"
+  test -f "$out/$legacy_admission"
+  test ! -f "$out/docs/plan/active/$legacy_admission_base"
+  test "$(find "$out/docs/plan" -name '[0-9][0-9][0-9]-*.md' | wc -l)" -eq "$legacy_plan_count"
+  grep -q '^status: backlog$' "$out/$legacy_admission"
+  rm "$out/legacy-admission.err" "$out/$legacy_admission"
+
+  legacy_active=$(cd "$out" && create_admitted_plan active legacy-active-admission --summary "Legacy active admission." --summary-ja "更新前から続く進行中計画を確認する。")
+  legacy_active_base=$(basename "$legacy_active")
+  legacy_active_id=${legacy_active_base%%-*}
+  strip_admission_record "$out/$legacy_active"
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
+  if (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-admission "$legacy_active" >/dev/null 2>&1); then
+    echo "lint-plan-docs admitted an active plan without an admission record" >&2
+    exit 1
+  fi
+  (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$legacy_active_id")
+  rm "$out/$legacy_active"
+
+  mapping_plan=$(cd "$out" && create_admitted_plan active index-id-mapping --summary "Index ID mapping." --summary-ja "索引 ID を確認する。")
   mapping_base=$(basename "$mapping_plan")
   mapping_id=${mapping_base%%-*}
   sed -i "s/^$mapping_id\t/999\t/" "$out/docs/plan/plan.md"
@@ -603,7 +835,7 @@ run_plan_fail_closed_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$mapping_id")
   rm "$out/$mapping_plan"
 
-  unsafe_validation=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active unsafe-validation --summary "Unsafe validation." --summary-ja "危険な検証コマンドを拒否する。")
+  unsafe_validation=$(cd "$out" && create_admitted_plan active unsafe-validation --summary "Unsafe validation." --summary-ja "危険な検証コマンドを拒否する。")
   unsafe_base=$(basename "$unsafe_validation")
   unsafe_id=${unsafe_base%%-*}
   sed -i 's|  - git diff --check|  - rm -rf .|' "$out/$unsafe_validation"
@@ -614,7 +846,7 @@ run_plan_fail_closed_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$unsafe_id")
   rm "$out/$unsafe_validation"
 
-  deferred_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active deferred-work --summary "Deferred work." --summary-ja "延期状態を確認する。")
+  deferred_plan=$(cd "$out" && create_admitted_plan active deferred-work --summary "Deferred work." --summary-ja "延期状態を確認する。")
   deferred_base=$(basename "$deferred_plan")
   deferred_id=${deferred_base%%-*}
   sed -i 's/^status: in_progress$/status: deferred/; /^checked_summary_ja:/a completion_deferred_reason: Waiting for an external prerequisite.' "$out/$deferred_plan"
@@ -629,7 +861,7 @@ run_plan_fail_closed_smoke() {
   (cd "$out" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$deferred_id")
   rm "$out/$deferred_plan"
 
-  replan_plan=$(cd "$out" && .project-agent-workflow/scripts/create-plan.sh active replan-required --summary "Replan required." --summary-ja "再構成停止状態を確認する。")
+  replan_plan=$(cd "$out" && create_admitted_plan active replan-required --summary "Replan required." --summary-ja "再構成停止状態を確認する。")
   replan_base=$(basename "$replan_plan")
   replan_id=${replan_base%%-*}
   sed -i 's/^status: in_progress$/status: replan_required/; /^checked_summary_ja:/a replan_reason_codes:\n  - multiple_independent_invariants' "$out/$replan_plan"
@@ -744,6 +976,130 @@ PY
   grep -q 'docs/plan/README.md' "$out/$output"
   git -C "$out" check-ignore "$output" >/dev/null
   rm "$out/$input"
+}
+
+run_shared_human_report_smoke() {
+  out=$1
+  shared="$out-shared"
+  clone="$out-shared-clone"
+  config=.project-agent-workflow/human-report.json
+  input=shared-human-report.json
+  source_path=docs/plan/README.md
+  rm -rf "$shared" "$clone"
+  cp -a "$out" "$shared"
+  grep -q '"shared_mode": "explicit_publish"' "$shared/$config"
+  python3 - "$shared/$input" "$source_path" <<'SHARED_INPUT_PY'
+from pathlib import Path
+import json
+import sys
+
+report = {
+    "version": 1,
+    "title": "Shared <team> decision",
+    "language": "en",
+    "audience": "developer",
+    "purpose": "decision",
+    "summary": "Compare three shared publication options.",
+    "facts": [
+        {
+            "label": "Plan policy",
+            "value": "The generated plan README is present.",
+            "certainty": "confirmed",
+            "source": sys.argv[2],
+        }
+    ],
+    "decisions": [
+        {
+            "question": "Which option should the team select?",
+            "options": [
+                {"label": label, "summary": label, "advantages": [], "disadvantages": []}
+                for label in ("A", "B", "C")
+            ],
+            "recommendation": "A",
+            "reason": "Shared publication smoke.",
+        }
+    ],
+    "relations": [],
+    "risks": [],
+    "next_actions": [],
+    "presentation": {
+        "explicit_html": False,
+        "needs_cross_comparison": True,
+        "needs_filtering": False,
+    },
+    "content_safety": {
+        "reviewed": True,
+        "contains_raw_logs": False,
+        "contains_unredacted_sensitive_data": False,
+    },
+    "sources": [sys.argv[2]],
+}
+Path(sys.argv[1]).write_text(json.dumps(report), encoding="utf-8")
+SHARED_INPUT_PY
+  sed -i 's/"shared_mode": "explicit_publish"/"shared_mode": "disabled"/' "$shared/$config"
+  if (cd "$shared" && python3 .project-agent-workflow/scripts/human-report.py publish "$input" --report-id team-decision >/dev/null 2>&1); then
+    echo "shared human report published while the shared mode was disabled" >&2
+    exit 1
+  fi
+  test ! -e "$shared/docs/human-report"
+  sed -i 's/"shared_mode": "disabled"/"shared_mode": "explicit_publish"/' "$shared/$config"
+
+  published=$(cd "$shared" && python3 .project-agent-workflow/scripts/human-report.py publish "$input" --report-id team-decision 2>/dev/null)
+  test "$published" = "docs/human-report/team-decision/report.json
+docs/human-report/team-decision/index.html"
+  for path in docs/human-report/team-decision/report.json docs/human-report/team-decision/index.html; do
+    test -f "$shared/$path"
+    if git -C "$shared" check-ignore "$path" >/dev/null 2>&1; then
+      echo "shared human report is Git ignored: $path" >&2
+      exit 1
+    fi
+  done
+  html="$shared/docs/human-report/team-decision/index.html"
+  grep -q '&lt;team&gt;' "$html"
+  grep -q 'team-decision' "$html"
+  grep -q "$source_path" "$html"
+  if grep -q '<script' "$html"; then
+    echo "shared human report HTML carries a script element" >&2
+    exit 1
+  fi
+  published_hash=$(python3 - "$shared/docs/human-report/team-decision/report.json" <<'SHARED_PROVENANCE_PY'
+from pathlib import Path
+import json
+import sys
+
+document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if document["schema_version"] != 1 or document["generator_version"] != 1:
+    raise SystemExit("shared human report provenance schema changed")
+for key in ("report_id", "generated_at", "source_commit"):
+    if not document[key]:
+        raise SystemExit(f"shared human report provenance is missing {key}")
+print(document["sources"][0]["sha256"])
+SHARED_PROVENANCE_PY
+)
+  grep -q "$published_hash" "$html"
+  (cd "$shared" && python3 .project-agent-workflow/scripts/human-report.py verify-shared >/dev/null)
+  if (cd "$shared" && python3 .project-agent-workflow/scripts/human-report.py publish "$input" --report-id team-decision >/dev/null 2>&1); then
+    echo "shared human report was replaced without an explicit supersede" >&2
+    exit 1
+  fi
+
+  rm "$shared/$input"
+  git -C "$shared" add -A
+  git -C "$shared" -c user.email=smoke@example.invalid -c user.name=smoke commit -qm "Publish the shared human report"
+  git clone -q "$shared" "$clone"
+  for path in docs/human-report/team-decision/report.json docs/human-report/team-decision/index.html; do
+    test -f "$clone/$path"
+    cmp -s "$shared/$path" "$clone/$path"
+  done
+  (cd "$clone" && python3 .project-agent-workflow/scripts/human-report.py verify-shared >/dev/null)
+
+  printf '\nStale detection line.\n' >>"$clone/$source_path"
+  if (cd "$clone" && python3 .project-agent-workflow/scripts/human-report.py verify-shared >/dev/null 2>&1); then
+    echo "shared human report freshness validator accepted a changed source" >&2
+    exit 1
+  fi
+  (cd "$clone" && python3 .project-agent-workflow/scripts/human-report.py verify-shared 2>&1 >/dev/null | grep -q 'changed')
+  rm -rf "$shared" "$clone"
 }
 
 run_external_policy_smoke() {
@@ -875,6 +1231,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
   (cd "$out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check)
   git -C "$out" init -b main >/dev/null
+  assert_generated_hook_surfaces "$out"
   git -C "$out" diff --check
   git -C "$out" check-ignore .agent-logs/sample/manifest.json >/dev/null
   git -C "$out" check-ignore .agent-artifacts/sample/output.txt >/dev/null
@@ -884,7 +1241,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
 done
 
 tab=$(printf '\t')
-while IFS="$tab" read -r case_name primary_language human_report_mode codex_hooks_mode skillspector_mode external_access_profile mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
+while IFS="$tab" read -r case_name primary_language human_report_mode human_report_shared_mode codex_hooks_mode skillspector_mode external_access_profile mcp_policy_mode linear_sync_mode graph_memory_mode ci_autofix_mode; do
   [ "$case_name" != "case" ] || continue
   [ -n "$case_name" ] || continue
   fixture="$tmp/$case_name.answers.yml"
@@ -895,6 +1252,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode codex_hook
     printf 'project_purpose: Exercise Copier pairwise generation.\n'
     printf 'primary_language: %s\n' "$primary_language"
     printf 'human_report_mode: %s\n' "$human_report_mode"
+    printf 'human_report_shared_mode: %s\n' "$human_report_shared_mode"
     printf 'codex_hooks_mode: %s\n' "$codex_hooks_mode"
     printf 'skillspector_mode: %s\n' "$skillspector_mode"
     printf 'external_access_profile: %s\n' "$external_access_profile"
@@ -906,6 +1264,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode codex_hook
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
   assert_managed_orchestration_reports "$out"
+  assert_generated_hook_surfaces "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
   run_root_python "$root/scripts/check-yaml.py" "$out" >/dev/null
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
@@ -914,6 +1273,7 @@ done <"$root/tests/fixtures/copier-pairwise.tsv"
 default_out="$tmp/defaults"
 render_defaults "$default_out"
 assert_managed_orchestration_reports "$default_out"
+assert_generated_hook_surfaces "$default_out"
 run_root_python "$root/tests/assert-generated-semantics.py" "$default_out"
 run_root_python "$root/scripts/check-yaml.py" "$default_out" >/dev/null
 (cd "$default_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check)
@@ -926,6 +1286,7 @@ answers = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = {
     "primary_language": "mixed",
     "human_report_mode": "agent_select_local",
+    "human_report_shared_mode": "disabled",
     "codex_hooks_mode": "install_templates",
     "skillspector_mode": "disabled",
     "external_access_profile": "restricted",
@@ -964,14 +1325,16 @@ Second line'
 assert_rejected_input multiline-purpose project_purpose "$multiline_purpose"
 
 run_plan_lifecycle_smoke "$tmp/typescript"
+run_validation_witness_map_smoke "$tmp/typescript"
 run_plan_archive_compatibility_smoke "$tmp/typescript"
 run_pre_v1_plan_compatibility_smoke "$tmp/typescript"
 run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
 run_human_report_smoke "$tmp/typescript"
+run_shared_human_report_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"
 
-bad_design=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh backlog bad-human-design --summary "Bad human design." --summary-ja "設計承認の不整合を確認する。")
+bad_design=$(cd "$tmp/typescript" && create_admitted_plan backlog bad-human-design --summary "Bad human design." --summary-ja "設計承認の不整合を確認する。")
 sed -i 's/^human_design_required: .*/human_design_required: yes/' "$tmp/typescript/$bad_design"
 if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
   echo "lint-plan-docs accepted human design outside Class C" >&2
@@ -984,7 +1347,7 @@ if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-do
 fi
 rm "$tmp/typescript/$bad_design"
 
-class_c=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh backlog class-c-approval --summary "Class C approval." --summary-ja "承認待ち計画を確認する。")
+class_c=$(cd "$tmp/typescript" && create_admitted_plan backlog class-c-approval --summary "Class C approval." --summary-ja "承認待ち計画を確認する。")
 sed -i 's/^review_class: .*/review_class: C/; s/^human_design_required: .*/human_design_required: yes/; s/^human_approval_status: .*/human_approval_status: pending/' "$tmp/typescript/$class_c"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
 if (cd "$tmp/typescript" && .project-agent-workflow/scripts/promote-plan.sh "$class_c" >/dev/null 2>&1); then
@@ -999,7 +1362,7 @@ printf 'class C lifecycle validation passed\n' >>"$tmp/typescript/$class_c_activ
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/complete-plan.sh "$class_c_active" >/dev/null)
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/finalize-active-plan.sh "$class_c_active" >/dev/null)
 
-route_union=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh active route-union --summary "Route union." --summary-ja "複数ルートを確認する。")
+route_union=$(cd "$tmp/typescript" && create_admitted_plan active route-union --summary "Route union." --summary-ja "複数ルートを確認する。")
 sed -i '/^review_class:/i\  - security' "$tmp/typescript/$route_union"
 if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py >/dev/null 2>&1); then
   echo "lint-plan-docs accepted a route union with missing required specs" >&2
@@ -1018,14 +1381,14 @@ route_id=${route_base%%-*}
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --remove-active "$route_id")
 rm "$tmp/typescript/$route_union"
 
-good_plan=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
+good_plan=$(cd "$tmp/typescript" && create_admitted_plan active final-decisions --summary "Final decision plan." --summary-ja "最終決定を記録する。" )
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py)
 sed -i 's/^- \[ \] TBD$/- [x] TBD/' "$tmp/typescript/$good_plan"
 printf 'smoke validation passed\n' >>"$tmp/typescript/$good_plan"
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/complete-plan.sh "$good_plan" >/dev/null)
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/finalize-active-plan.sh "$good_plan" >/dev/null)
 
-bad_plan=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh active recommendation-matrix --summary "Recommendation matrix." --summary-ja "推奨案を比較する。" )
+bad_plan=$(cd "$tmp/typescript" && create_admitted_plan active recommendation-matrix --summary "Recommendation matrix." --summary-ja "推奨案を比較する。" )
 cat >>"$tmp/typescript/$bad_plan" <<'EOF_BAD_PLAN'
 ## Decision Audit
 
@@ -1053,9 +1416,23 @@ test -f "$tmp/typescript/.codex/agents/evidence_synthesizer.toml"
 test -f "$tmp/typescript/.codex/agents/fast_scoped_worker.toml"
 test -f "$tmp/typescript/.codex/agents/sequential_plan_worker.toml"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+test -f "$tmp/typescript/.project-agent-workflow/scripts/manage-plan-worktrees.py"
+test -f "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
+grep -q '"suite": "worker-execution-contract-integration"' "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
+test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
+grep -q '"suite": "worker-completion-receipt"' "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
+test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
+test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-evidence.json"
 test -x "$root/scripts/run-sandboxed-plan-worker.py"
 test -x "$root/template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 test -x "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+test -x "$root/scripts/manage-plan-worktrees.py"
+test -x "$root/template/.project-agent-workflow/scripts/manage-plan-worktrees.py"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/manage-plan-worktrees.py"
+python3 "$tmp/typescript/.project-agent-workflow/scripts/manage-plan-worktrees.py" --help >/dev/null
+grep -q 'manage-plan-worktrees.py create' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'remove worktrees or branches' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q '^model = "gpt-5.6-sol"$' "$tmp/typescript/.codex/agents/change_reviewer.toml"
 grep -q '^model_reasoning_effort = "high"$' "$tmp/typescript/.codex/agents/change_reviewer.toml"
 grep -q '^model = "gpt-5.6-luna"$' "$tmp/typescript/.codex/agents/docs_researcher.toml"
@@ -1094,6 +1471,16 @@ grep -q 'def open_lifecycle_state' "$tmp/typescript/.project-agent-workflow/scri
 grep -q -- '--lifecycle-state' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'VALIDATION_AUTHORITY_SCOPE' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'network_enabled=False' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'WORKER_CONTRACT_SCHEMA_VERSION' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def derive_worker_contract' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def verify_worker_contract' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def validate_worker_completion_receipt' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def write_attempt_completion_receipt' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def write_attempt_process_result' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'def derive_repository_identity' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'worker_attempt_label' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+grep -q 'NEW_FILE_ROOT' "$tmp/typescript/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 grep -q 'implementation_risk' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
 grep -q 'implementation_ambiguity' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
 grep -q 'focused_validation' "$tmp/typescript/.project-agent-workflow/scripts/planlib.py"
@@ -1123,6 +1510,12 @@ grep -q 'stop_review_gate.py' "$tmp/typescript/.codex/hooks.json"
 grep -q '.project-agent-workflow/hooks/stop_review_gate.py' "$tmp/typescript/.codex/hooks.json"
 grep -q '.project-agent-workflow/AGENTS.md' "$tmp/typescript/AGENTS.md"
 test -f "$tmp/typescript/.project-agent-workflow/ownership.yaml"
+test -f "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/retire-merged-worktrees.py"
+test -f "$tmp/typescript/docs/agent/git-retirement.yaml"
+grep -q '^enabled: false$' "$tmp/typescript/docs/agent/git-retirement.yaml"
+grep -q '^merge_target_refs: \[\]$' "$tmp/typescript/docs/agent/git-retirement.yaml"
+grep -q '^protected_local_branch_refs: \[\]$' "$tmp/typescript/docs/agent/git-retirement.yaml"
 grep -q '^copier_managed:' "$tmp/typescript/.project-agent-workflow/ownership.yaml"
 grep -q '^  - .agents/skills/decision-audit/SKILL.md$' "$tmp/typescript/.project-agent-workflow/ownership.yaml"
 if grep -q '^  - .agents/skills/\*\*$' "$tmp/typescript/.project-agent-workflow/ownership.yaml"; then
@@ -1195,6 +1588,8 @@ grep -q 'Do not delegate short deterministic commands' "$tmp/typescript/.project
 grep -q 'external writes' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'sequential_plan_worker.*exactly one assigned active plan' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q '.project-agent-workflow/scripts/run-sandboxed-plan-worker.py run' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'primary_invariant' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'exact file paths' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'gpt-5.3-codex-spark.*medium reasoning' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'gpt-5.6-luna.*max reasoning' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'usage limit, rate limit, unavailable model, or denied model access' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
@@ -1219,6 +1614,20 @@ grep -q 'redaction_status' "$tmp/typescript/.project-agent-workflow/docs/agent/S
 grep -q 'agent_logging:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'Context compression helper: optional' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'external transcript logs as primary full-turn evidence' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+if grep -q 'validation-witness-migration-provenance-schema: 1' "$tmp/typescript/.project-agent-workflow/AGENTS.md"; then
+  echo 'generated entrypoint restates the relocated validation-witness migration guardian rule' >&2
+  exit 1
+fi
+grep -q 'read the whole validation-witness migration guardian rule in `.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md` and follow it there; no summary of it authorizes an update.' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'validation-witness-migration-provenance-schema: 1' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'earliest parent-owned static, focused, or authoritative witness' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'the map must never remove or weaken the authoritative `validation` suite' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'binds every acceptance item, in source order' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'never removes, reorders, or weakens the authoritative suite' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'authoritative_only_reason' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'durably transitions `pending` to `consumed` and returns a final keyed proof' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q '`consumed` remains terminal after the guardian exits' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'never count either as product acceptance evidence or as a validation witness by itself' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q '.project-agent-workflow/scripts/context-compress.sh' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_CONTEXT_COMPRESSION.md"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/check-agent-log-manifest.py"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/check-agent-log-manifest.py --self-test >/dev/null)
@@ -1234,6 +1643,7 @@ grep -q 'without candidate labels or controlled terms' "$tmp/typescript/.project
 grep -q 'show an unnamed referent and uncertainty stage before any candidate or controlled term' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'name: decision-audit' "$tmp/typescript/.project-agent-workflow/skills/decision-audit/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/linear-ops/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/graph-memory/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/plan-archive/SKILL.md"
@@ -1243,8 +1653,33 @@ test -f "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestr
 test -f "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/SKILL.md"
 test -f "$tmp/typescript/.project-agent-workflow/skills/write-for-reader/agents/openai.yaml"
 test -f "$tmp/typescript/.agents/skills/write-for-reader/SKILL.md"
+test -f "$tmp/typescript/.agents/skills/natural-japanese/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/references/workflow.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/LICENSE"
+test -x "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py"
+grep -q '.project-agent-workflow/skills/natural-japanese/SKILL.md' "$tmp/typescript/.agents/skills/natural-japanese/SKILL.md"
+grep -q 'name: natural-japanese' "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/SKILL.md"
+grep -q '21e632661a910bf97289c501089ad11eb8b4d85f' "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md"
+grep -q 'Do not run a subprocess.' "$tmp/typescript/.project-agent-workflow/skills/natural-japanese/references/workflow.md"
+grep -q 'natural-japanese' "$tmp/typescript/AGENTS.md"
+grep -q 'natural-japanese' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+test -f "$tmp/typescript/.agents/skills/verify-copier-update/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
+test -f "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml"
+test -f "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md"
+test -x "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
+grep -q '.project-agent-workflow/skills/verify-copier-update/SKILL.md' "$tmp/typescript/.agents/skills/verify-copier-update/SKILL.md"
+grep -q 'name: verify-copier-update' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
+grep -q 'not for applying or committing a live update' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
+grep -q 'verification-manifest.json' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md"
+grep -q '"--no-hardlinks"' "$tmp/typescript/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
 grep -q '.project-agent-workflow/skills/write-for-reader/SKILL.md' "$tmp/typescript/.agents/skills/write-for-reader/SKILL.md"
 grep -q 'name: mcp-ops' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/SKILL.md"
+grep -q 'Bind provider authentication to each exact call' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml"
+grep -q 'provider, command execution boundary, and credential source' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
 grep -q 'name: linear-ops' "$tmp/typescript/.project-agent-workflow/skills/linear-ops/SKILL.md"
 grep -q 'name: graph-memory' "$tmp/typescript/.project-agent-workflow/skills/graph-memory/SKILL.md"
 grep -q 'name: plan-archive' "$tmp/typescript/.project-agent-workflow/skills/plan-archive/SKILL.md"
@@ -1265,6 +1700,7 @@ grep -qi 'admissible implementation slice' "$tmp/typescript/.project-agent-workf
 grep -qi 'state path outside the repository' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'run-sandboxed-plan-worker.py correct' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'run-sandboxed-plan-worker.py validate' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+grep -qi 'worker completion receipt' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md" "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
 grep -q 'one bounded worker at a time' "$tmp/typescript/.project-agent-workflow/skills/sequential-plan-orchestrator/agents/openai.yaml"
 grep -q 'Generic Codex skills: installed by default' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
@@ -1272,6 +1708,7 @@ grep -q 'Union the `required` docs from every matching route' "$tmp/typescript/.
 grep -q 'Union their `required` docs, add matching `conditional` docs' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_FLOW.md"
 grep -q 'SPEC_SKILL_AUTHORING.md' "$tmp/typescript/README.md"
 grep -q 'docs/agent/external-services.yaml' "$tmp/typescript/.project-agent-workflow/skills/mcp-ops/SKILL.md"
+grep -q 'provider-call execution context' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'external_services.linear_sync' "$tmp/typescript/.project-agent-workflow/skills/linear-ops/SKILL.md"
 grep -q 'external_services.graph_memory' "$tmp/typescript/.project-agent-workflow/skills/graph-memory/SKILL.md"
 if grep -R 'supportcard-status' "$tmp/typescript/.project-agent-workflow/skills" >/dev/null; then
@@ -1282,6 +1719,7 @@ grep -q 'decision_audit:' "$tmp/typescript/.project-agent-workflow/docs/agent/sp
 grep -q 'skill_authoring:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'referent_first:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'user_communication:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
+grep -q 'japanese_prose:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'User Communication' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md"
 grep -q 'write-for-reader' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Referent-First Semantic Guard' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_REFERENT_FIRST.md"
@@ -1294,6 +1732,71 @@ grep -q 'Decision Audit Preflight' "$tmp/typescript/.project-agent-workflow/docs
 grep -q 'Run decision audit before creating or materially updating active plans' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'Full decision-audit output does not belong in `docs/plan/active`' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_DECISION_AUDIT.md"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/plan_validation_commands.py"
+test -f "$tmp/typescript/.project-agent-workflow/scripts/plan_authoring.py"
+grep -q 'Checked Authoring Input' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+authoring_input="$tmp/typescript-authoring-input.json"
+cat > "$authoring_input" <<'JSON'
+{
+  "schema_version": 1,
+  "profile": "generated",
+  "lifecycle": "backlog",
+  "slug": "reject-negative-retry-count",
+  "summary": "Reject a negative retry count",
+  "summary_ja": "負の再試行回数を拒否する。",
+  "plan_purpose": "implementation",
+  "task_types": ["environment_data_flow"],
+  "review_class": "B",
+  "human_design_required": "no",
+  "human_approval_status": "not_required",
+  "feasibility_evidence": [
+    {"kind": "reproduced_defect", "evidence": "The loader accepts a configuration whose retry count is negative."}
+  ],
+  "witnesses": [
+    {"id": "w-loader", "command": "npm run lint", "claim": "Asserts that the loader rejects a negative retry count."}
+  ],
+  "write_paths": [
+    {"id": "wp-loader", "path": "src/loader.ts"},
+    {"id": "wp-test", "path": "tests/loader.test.ts"}
+  ],
+  "completion_conditions": [
+    {"id": "cc-reject", "text": "The loader rejects a negative retry count.", "witness": "w-loader"},
+    {"id": "cc-name", "text": "The rejection report names the offending field.", "witness": "w-loader"}
+  ],
+  "acceptance_items": [
+    {"id": "ac-reject", "text": "A negative retry count is rejected before the loader returns.", "witness": "w-loader", "stage": "focused"},
+    {"id": "ac-name", "text": "The rejection report names the offending field.", "witness": "w-loader", "stage": "focused"}
+  ],
+  "requirements": [
+    {"id": "req-reject", "text": "Reject malformed loader configuration before use.", "write_paths": ["wp-loader", "wp-test"], "completion_conditions": ["cc-reject", "cc-name"], "acceptance_items": ["ac-reject", "ac-name"]}
+  ],
+  "context_files": [".project-agent-workflow/docs/agent/SPEC_VALIDATION.md"],
+  "target_json": ["config/loader.json"],
+  "required_specs": [".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"],
+  "validation": ["git diff --check"],
+  "acceptance_focus": ["Negative retry counts."],
+  "problem": ["The loader accepts a configuration whose retry count is negative."],
+  "goal": ["Reject that configuration and name the offending field."],
+  "implementation_instructions": ["Validate the retry count in the loader.", "Add one regression test."],
+  "decisions": ["Reject at load time rather than at first use."],
+  "tasks": ["Add the validation.", "Add the regression test."]
+}
+JSON
+(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh --check --input "$authoring_input" > "$tmp/authoring-check.txt")
+grep -q 'repository-writes-performed: 0' "$tmp/authoring-check.txt"
+grep -q 'semantic-review-required:' "$tmp/authoring-check.txt"
+grep -q 'requirement 1 \[req-reject\]' "$tmp/authoring-check.txt"
+authoring_plan=$(cd "$tmp/typescript" && .project-agent-workflow/scripts/create-plan.sh --input "$authoring_input")
+test -f "$tmp/typescript/$authoring_plan"
+grep -q 'validation_witness_schema: 1' "$tmp/typescript/$authoring_plan"
+grep -q '^status: backlog$' "$tmp/typescript/$authoring_plan"
+(cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-admission "$authoring_plan")
+authoring_digest=$(cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_authoring.py check --profile generated --input "$authoring_input" --print-digest)
+sed -i 's/"summary": "Reject a negative retry count"/"summary": "Reject a negative retry count everywhere"/' "$authoring_input"
+if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_authoring.py write --profile generated --input "$authoring_input" --expect-input-sha256 "$authoring_digest" >/dev/null 2>"$tmp/authoring-write.err"); then
+  echo "plan authoring rendered a plan from an input that changed after it was checked" >&2
+  exit 1
+fi
+grep -q 'changed since it was checked' "$tmp/authoring-write.err"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/check-codex-toml.py"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/sync-plan-to-linear.sh"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_validation_commands.py --self-test)
@@ -1305,7 +1808,7 @@ test -f "$tmp/typescript/.project-agent-workflow/scripts/sync-plan-to-linear.sh"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/plan_validation_commands.py check-commands "python3 .project-agent-workflow/scripts/validate-changes.py --print-only --json")
 sample_archive_path=$(cat "$tmp/typescript/.sample-archive-path")
 (cd "$tmp/typescript" && .project-agent-workflow/scripts/sync-plan-to-linear.sh "$sample_archive_path" --dry-run | grep -q 'Desired status: Done')
-(cd "$tmp/broad" && .project-agent-workflow/scripts/create-plan.sh active broad-linear --summary "Exercise the Linear version 2 gate." --summary-ja "Linear version 2 ゲートを検証する。" >/dev/null)
+(cd "$tmp/broad" && create_admitted_plan active broad-linear --summary "Exercise the Linear version 2 gate." --summary-ja "Linear version 2 ゲートを検証する。" >/dev/null)
 if (cd "$tmp/broad" && .project-agent-workflow/scripts/sync-plan-to-linear.sh docs/plan/active/001-broad-linear.md --ensure-issue 2>"$tmp/broad-linear.err"); then
   echo "generic Linear adapter treated the version 2 profile as operation authorization" >&2
   exit 1
@@ -1336,5 +1839,96 @@ if (cd "$tmp/typescript" && HEADROOM_DISABLED=1 .project-agent-workflow/scripts/
   exit 1
 fi
 test ! -e "$tmp/typescript/.agent-logs/namespaced-policy"
+
+# The generated project installs the parallel group authority and preserves a
+# committed execution group description across its own lint and lifecycle paths.
+test -f "$tmp/typescript/.project-agent-workflow/scripts/parallel-plan-state.py"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/parallel-plan-state.py"
+test -f "$tmp/typescript/.project-agent-workflow/scripts/orca-coordinator.py"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/orca-coordinator.py"
+grep -q 'optional `.project-agent-workflow/scripts/orca-coordinator.py ensure-worker` bridge' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'Parallel Execution Groups' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+(cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-execution-groups >/dev/null)
+
+group_project="$tmp/typescript"
+mkdir -p "$group_project/docs/plan/execution-groups"
+(cd "$group_project" && create_admitted_plan active group-alpha \
+  --summary "Exercise the parallel execution group gate." \
+  --summary-ja "並行実行グループの門を検証する。" >/dev/null)
+group_alpha=$(cd "$group_project" && ls docs/plan/active/*-group-alpha.md | head -n 1)
+# The two members must declare disjoint write scope, so the partner plan
+# claims a different generated module than the shared smoke target.
+SMOKE_WRITE_SCOPE=src/smoke-partner.ts
+export SMOKE_WRITE_SCOPE
+(cd "$group_project" && create_admitted_plan active group-beta \
+  --summary "Exercise the parallel execution group partner." \
+  --summary-ja "並行実行グループの相手側を検証する。" >/dev/null)
+unset SMOKE_WRITE_SCOPE
+group_beta=$(cd "$group_project" && ls docs/plan/active/*-group-beta.md | head -n 1)
+python3 - "$group_project" "$group_alpha" "$group_beta" <<'SMOKE_GROUP_EOF'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+project = Path(sys.argv[1])
+members = []
+for relative in sys.argv[2:]:
+    plan = project / relative
+    text = plan.read_text(encoding="utf-8")
+    scope = re.search(r"^write_scope:\n((?:  - .*\n)+)", text, re.MULTILINE)
+    if scope is None:
+        raise SystemExit(f"generated plan has no write scope: {relative}")
+    entries = [
+        line.strip()[2:].strip().rstrip("/") for line in scope.group(1).splitlines()
+    ]
+    members.append(
+        {
+            "plan_id": Path(relative).name.split("-", 1)[0],
+            "plan_path": relative,
+            "plan_digest": "sha256:"
+            + hashlib.sha256(plan.read_bytes()).hexdigest(),
+            "write_scope_digest": "sha256:"
+            + hashlib.sha256(
+                json.dumps(entries, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
+        }
+    )
+(project / "docs/plan/execution-groups/smoke.json").write_text(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "group_id": "smoke",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint generated modules with no shared interface",
+            "members": members,
+        },
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+SMOKE_GROUP_EOF
+git -C "$group_project" add -A
+git -C "$group_project" -c user.email=ci@example.invalid -c user.name=CI \
+  commit -qm "generated execution group"
+(cd "$group_project" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-execution-groups >/dev/null)
+if (cd "$group_project" && .project-agent-workflow/scripts/complete-plan.sh "$group_alpha" \
+    >/dev/null 2>"$tmp/generated-group-complete.err"); then
+  echo "generated complete-plan accepted an enrolled execution group member" >&2
+  exit 1
+fi
+grep -q 'enrolled in execution group' "$tmp/generated-group-complete.err"
+if (cd "$group_project" && .project-agent-workflow/scripts/finalize-active-plan.sh "$group_beta" \
+    >/dev/null 2>"$tmp/generated-group-finalize.err"); then
+  echo "generated finalize-active-plan accepted an enrolled execution group member" >&2
+  exit 1
+fi
+grep -q 'enrolled in execution group' "$tmp/generated-group-finalize.err"
+test -f "$group_project/docs/plan/execution-groups/smoke.json"
+git -C "$group_project" diff --quiet -- docs/plan/execution-groups/smoke.json
 
 echo "smoke test passed"

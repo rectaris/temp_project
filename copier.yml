@@ -37,6 +37,14 @@ _tasks:
       - "--destination"
       - "."
 
+_message_after_copy: |
+  ローカルの Git hook はまだ有効ではありません。有効にするには次を実行してください。
+
+    git config core.hooksPath .githooks
+
+  この設定は生成でも update でも自動的には書き換えません。pre-commit hook はステージ済みツリーを
+  完了ゲートで確認する高速な補助であり、最終的な強制境界は CI です。
+
 _migrations:
   - version: v1.0.0
     command:
@@ -88,6 +96,24 @@ _migrations:
       - "--destination"
       - "."
     when: "[[ _stage == 'after' ]]"
+  - version: v1.4.5
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/snapshot-validation-witness-provenance.py"
+      - "--destination"
+      - "."
+      - "--stage"
+      - "before"
+    when: "[[ _stage == 'before' ]]"
+  - version: v1.4.5
+    command:
+      - "python3"
+      - "[[ _copier_conf.src_path ]]/scripts/snapshot-validation-witness-provenance.py"
+      - "--destination"
+      - "."
+      - "--stage"
+      - "after"
+    when: "[[ _stage == 'after' ]]"
 
 project_name:
   type: str
@@ -124,6 +150,14 @@ human_report_mode:
     無効にする: disabled
     AI エージェントが判断してローカル生成する: agent_select_local
   default: "agent_select_local"
+
+human_report_shared_mode:
+  type: str
+  help: チームで共有する HTML 報告を Git 追跡先へ公開する機能を選んでください。
+  choices:
+    無効にする: disabled
+    明示コマンドで公開し人が確認して commit する: explicit_publish
+  default: "disabled"
 
 codex_hooks_mode:
   type: str

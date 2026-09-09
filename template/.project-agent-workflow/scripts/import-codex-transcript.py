@@ -133,6 +133,50 @@ def normalize_record(raw: dict[str, Any], run_id: str, line_number: int) -> dict
         metadata["call_id"] = str(payload["call_id"])
     if payload.get("id"):
         metadata["item_id"] = str(payload["id"])
+    for candidate in (raw.get("session_id"), payload.get("session_id")):
+        if isinstance(candidate, str) and candidate:
+            metadata["session_id"] = candidate
+    passthrough = payload.get("internal_chat_message_metadata_passthrough")
+    if isinstance(passthrough, dict) and isinstance(passthrough.get("session_id"), str):
+        metadata["session_id"] = passthrough["session_id"]
+    provider_keys = {
+        "provider_input_tokens": {"input_tokens"},
+        "provider_cached_input_tokens": {"cached_input_tokens", "cached_tokens"},
+        "provider_output_tokens": {"output_tokens"},
+        "provider_reasoning_tokens": {"reasoning_tokens", "reasoning_output_tokens"},
+    }
+    usage_containers = provider_usage_containers(payload)
+    if payload_type == "token_count" and isinstance(payload.get("info"), dict):
+        usage_containers.append(payload["info"])
+    provider_usage = {
+        metric: max(values)
+        for metric, names in provider_keys.items()
+        if (values := [
+            number
+            for usage in usage_containers
+            for number in find_numeric_values(usage, names)
+        ])
+    }
+    if provider_usage:
+        metadata["provider_usage"] = provider_usage
+    if payload_type == "review_packet_start":
+        packet_digest = payload.get("review_packet_digest")
+        inherited_turns = payload.get("inherited_turns")
+        session_id = payload.get("session_id")
+        if (
+            isinstance(packet_digest, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", packet_digest)
+            and isinstance(inherited_turns, int)
+            and not isinstance(inherited_turns, bool)
+            and inherited_turns >= 0
+            and isinstance(session_id, str)
+            and session_id
+        ):
+            metadata.update({
+                "review_packet_digest": packet_digest,
+                "inherited_turns": inherited_turns,
+                "session_id": session_id,
+            })
 
     if top_type == "response_item" and payload_type == "message":
         role = str(payload.get("role") or "system_event")
@@ -158,6 +202,10 @@ def normalize_record(raw: dict[str, Any], run_id: str, line_number: int) -> dict
         role = "user"
         record_type = "message"
         content = content_text(payload.get("message", ""))
+    elif payload_type == "review_packet_start":
+        role = "system_event"
+        record_type = "review_packet_start"
+        content = ""
     else:
         role = "system_event"
         record_type = "system_event"
@@ -190,6 +238,112 @@ def load_source_records(source: Path, run_id: str) -> list[dict[str, Any]]:
     if not records:
         raise ImportErrorWithContext(f"{source}: no transcript records found")
     return records
+
+
+def find_numeric_values(value: Any, names: set[str]) -> list[int]:
+    found: list[int] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in names and isinstance(item, int) and not isinstance(item, bool) and item >= 0:
+                found.append(item)
+            found.extend(find_numeric_values(item, names))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(find_numeric_values(item, names))
+    return found
+
+
+def provider_usage_containers(payload: dict[str, Any]) -> list[Any]:
+    containers: list[Any] = []
+    stack: list[Any] = [payload]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"usage", "token_usage", "total_token_usage", "last_token_usage"}:
+                    containers.append(item)
+                elif isinstance(item, (dict, list)):
+                    stack.append(item)
+        elif isinstance(value, list):
+            stack.extend(value)
+    return containers
+
+
+def source_resource_observations(source: Path) -> dict[str, Any]:
+    observations = agent_log_manifest.not_observed_resource_observations()
+    session_id: str | None = None
+    model_response_count = 0
+    compaction_count = 0
+    tool_call_count = 0
+    provider_keys = {
+        "provider_input_tokens": {"input_tokens"},
+        "provider_cached_input_tokens": {"cached_input_tokens", "cached_tokens"},
+        "provider_output_tokens": {"output_tokens"},
+        "provider_reasoning_tokens": {"reasoning_tokens", "reasoning_output_tokens"},
+    }
+    provider_values: dict[str, list[int]] = {key: [] for key in provider_keys}
+    for line in source.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        raw = json.loads(line)
+        if not isinstance(raw, dict):
+            continue
+        if "record_type" in raw:
+            metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+            if isinstance(metadata.get("session_id"), str):
+                session_id = metadata["session_id"]
+            if raw.get("role") == "assistant" and raw.get("record_type") == "message":
+                model_response_count += 1
+            if raw.get("record_type") == "tool_call":
+                tool_call_count += 1
+            if metadata.get("payload_type") in {"context_compacted", "compacted", "compact"}:
+                compaction_count += 1
+            usage = metadata.get("provider_usage")
+            if isinstance(usage, dict):
+                for metric in provider_keys:
+                    value = usage.get(metric)
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                        provider_values[metric].append(value)
+            continue
+        payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+        assert isinstance(payload, dict)
+        metadata = payload.get("internal_chat_message_metadata_passthrough")
+        if isinstance(metadata, dict) and isinstance(metadata.get("session_id"), str):
+            session_id = metadata["session_id"]
+        for candidate in (raw.get("session_id"), payload.get("session_id")):
+            if isinstance(candidate, str) and candidate:
+                session_id = candidate
+        top_type = str(raw.get("type") or "")
+        payload_type = str(payload.get("type") or top_type)
+        if top_type == "response_item" and payload_type == "message" and payload.get("role") == "assistant":
+            model_response_count += 1
+        if top_type == "response_item" and payload_type == "function_call":
+            tool_call_count += 1
+        if payload_type in {"context_compacted", "compacted", "compact"}:
+            compaction_count += 1
+        usage_containers = provider_usage_containers(payload)
+        if payload_type == "token_count" and isinstance(payload.get("info"), dict):
+            usage_containers.append(payload["info"])
+        for metric, names in provider_keys.items():
+            for usage in usage_containers:
+                provider_values[metric].extend(find_numeric_values(usage, names))
+    observations["root_session_identity"] = agent_log_manifest.observed_session_identity(session_id)
+    observations["evidence_digests"]["external_transcript"] = agent_log_manifest.file_digest(source)
+    for metric, values in provider_values.items():
+        observations["metrics"][metric] = agent_log_manifest.observed_metric(
+            max(values) if values else None,
+            "provider",
+        )
+    observations["metrics"]["model_response_count"] = agent_log_manifest.observed_metric(
+        model_response_count, "deterministic_proxy"
+    )
+    observations["metrics"]["compaction_count"] = agent_log_manifest.observed_metric(
+        compaction_count, "deterministic_proxy"
+    )
+    observations["metrics"]["tool_call_count"] = agent_log_manifest.observed_metric(
+        tool_call_count, "deterministic_proxy"
+    )
+    return observations
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -242,12 +396,22 @@ def import_transcript(source: Path, run_dir: Path, run_id: str, redaction_status
     raw_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / TRANSCRIPT_REL
     if target.exists() and not overwrite:
-        agent_log_manifest.record_transcript(run_dir, run_id, redaction_status)
+        agent_log_manifest.record_transcript(
+            run_dir,
+            run_id,
+            redaction_status,
+            source_resource_observations(target),
+        )
         update_redaction_report(run_dir, redaction_status)
         return target
     records = load_source_records(source, run_id)
     write_jsonl(target, records)
-    agent_log_manifest.record_transcript(run_dir, run_id, redaction_status)
+    agent_log_manifest.record_transcript(
+        run_dir,
+        run_id,
+        redaction_status,
+        source_resource_observations(target),
+    )
     update_redaction_report(run_dir, redaction_status)
     return target
 

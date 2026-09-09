@@ -76,3 +76,7 @@ Run ids must contain only letters, numbers, underscores, and hyphens.
 Compressed files may be cited in handoffs or plan notes as local derived views, but the raw log remains the source evidence.
 
 If a compressed view is used to make a durable decision, include the run id and the raw source path in the plan or checked record.
+
+Compaction is a diagnostic proxy only.
+A compacted or summarized continuation of the same conversation does not establish a fresh root session and cannot satisfy a numbered-plan session checkpoint.
+It also cannot establish staged-review turn zero; that requires the uncompressed runtime `ReviewPacketStart` source evidence.

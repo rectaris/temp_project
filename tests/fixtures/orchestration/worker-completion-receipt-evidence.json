@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "suite": "worker-completion-receipt-integration",
+  "implementation_commit": "006056f276d930562641caa221c009eb7e66be27",
+  "tuned_fixture": {
+    "path": "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json",
+    "sha256": "264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a"
+  },
+  "exposed_holdout_fixture": {
+    "path": "tests/fixtures/orchestration/worker-completion-receipt-holdout.json",
+    "sha256": "4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76",
+    "evidence_status": "known_regression_after_initial_failure"
+  },
+  "replacement_holdout_fixture": {
+    "path": "tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json",
+    "sha256": "ddbbedb5c65cfe16ae48763b403c1beb16c241b7a77ab9379a88f98c8dd0f8de",
+    "evidence_status": "untuned_holdout"
+  },
+  "runner_sha256": "c04c78a8caf504452516c8e34e7c97aae6ddbe087115c4a6b8931d806171e1ad",
+  "template_runner_sha256": "c04c78a8caf504452516c8e34e7c97aae6ddbe087115c4a6b8931d806171e1ad",
+  "observations": [
+    {"id": "median-successful-initial-attempt", "class": "median", "used_for_tuning": true, "result": "accepted", "error_code": null},
+    {"id": "edge-failed-initial-before-candidate", "class": "edge", "used_for_tuning": true, "result": "accepted", "error_code": null},
+    {"id": "edge-failed-correction-attempt", "class": "edge", "used_for_tuning": true, "result": "accepted", "error_code": null},
+    {"id": "edge-successful-correction-attempt", "class": "edge", "used_for_tuning": true, "result": "accepted", "error_code": null},
+    {"id": "edge-partial-command-execution", "class": "edge", "used_for_tuning": true, "result": "accepted", "error_code": null},
+    {"id": "negative-stale-source-head", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "stale_receipt"},
+    {"id": "negative-replayed-attempt", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "replayed_receipt"},
+    {"id": "negative-plan-digest-mismatch", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "plan_mismatch"},
+    {"id": "negative-contract-digest-mismatch", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "contract_mismatch"},
+    {"id": "negative-patch-digest-mismatch", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "patch_mismatch"},
+    {"id": "negative-changed-path-mismatch", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "changed_path_mismatch"},
+    {"id": "negative-false-success-claim", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "false_success_claim"},
+    {"id": "negative-missing-out-of-scope-declaration", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "missing_out_of_scope_declaration"},
+    {"id": "negative-unknown-receipt-field", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "unknown_receipt_field"},
+    {"id": "negative-duplicate-receipt-field", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "duplicate_receipt_field"},
+    {"id": "negative-oversized-receipt", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "receipt_too_large"},
+    {"id": "negative-oversized-residual-risk", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "receipt_value_too_large"},
+    {"id": "negative-receipt-path-traversal", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "receipt_path_traversal"},
+    {"id": "negative-receipt-symlink-escape", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "receipt_symlink_escape"},
+    {"id": "negative-attempted-secret-inclusion", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "prohibited_receipt_content"},
+    {"id": "negative-attempted-raw-output-inclusion", "class": "negative", "used_for_tuning": true, "result": "rejected", "error_code": "prohibited_receipt_content"},
+    {"id": "holdout-host-path-raw-output-in-residual-risk", "class": "holdout", "used_for_tuning": false, "result": "rejected", "error_code": "prohibited_receipt_content"},
+    {"id": "holdout-host-path-in-completion-risk", "class": "holdout", "used_for_tuning": false, "result": "rejected", "error_code": "prohibited_receipt_content"}
+  ],
+  "source_acceptance": [
+    {"digest": "06c51fc5b5f78aa822c035fccc95b51ce1f72a6f8a53ba7cb3979994c182a252", "result": "passed"},
+    {"digest": "cc0e91a1c82a44375418b3d4dcfc6e9140da675727149aff02bffed945ce5cea", "result": "passed"},
+    {"digest": "95ab4926d09833304ba7223b6dfc8ce15fdf4a870566265e03aaf579795b14dd", "result": "passed"},
+    {"digest": "b29da5035ef6c28f6cb15dd7c9e74e6d0aaea22550eb83d451f147533ca3d089", "result": "passed"},
+    {"digest": "33683401587ba19a91f7cec022b9a60135cfa8cf6f90b899ef9ad5cd325a4076", "result": "passed"},
+    {"digest": "ed3224f61d6379b777c481ec2974d3dc706e94efb1506044254a8003e8e5a780", "result": "passed"},
+    {"digest": "43997ad5fe2020050017d78b835084d1ea3efa60b8f3ddad9d672573e88dcab8", "result": "passed"},
+    {"digest": "4b360c8a07c7174dbcadaa6e6261828d5ef34f007686bb8f52094529fa3b8daf", "result": "passed"},
+    {"digest": "b8e2256526a3dcd71afae0f2d9e662e2ffd766c2528c4837bb43654663ee0ba7", "result": "passed"},
+    {"digest": "00287f9ca9cb9ea1bb9e2ebb4ee5fc1d0badca83daa7d712e3fe48658055ac51", "result": "passed"},
+    {"digest": "82556513f481a08d6941fd122a8a4e8633391421047d5e7803cd57a89a328fe4", "result": "passed"},
+    {"digest": "5906dbdbacb32377ea164fff882c5cb1f5b10878410be01b008e50d93015212e", "result": "passed"},
+    {"digest": "12d75a4567202438fa26035648ffeb23ead6ce2b0cd83483d63833776f706a3f", "result": "passed"}
+  ]
+}

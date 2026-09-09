@@ -1,6 +1,7 @@
 """Generated CI and security tests."""
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -15,8 +16,184 @@ from .support import (
     load_module,
 )
 
+ROOT_HOOK = ROOT / ".githooks/pre-commit"
+TEMPLATE_HOOK = ROOT / "template/.githooks/pre-commit"
+ROOT_COPILOT_HOOKS = ROOT / ".github/hooks/plan-lifecycle.json"
+TEMPLATE_COPILOT_HOOKS = ROOT / "template/.github/hooks/plan-lifecycle.json"
+GATE_PLAN_BODY = (
+    "# Fixture plan\n\n"
+    "status: {lifecycle}\n"
+    "checked_summary_ja: 完了ゲートの境界を確認する。\n\n"
+    "## Tasks\n\n"
+    "- [{task}] fixture task\n\n"
+    "## Validation Notes\n\n"
+    "- {notes}\n"
+)
+
 
 class GeneratedCiTest(unittest.TestCase):
+    GENERATED_LINT = ROOT / "template/.project-agent-workflow/scripts/lint-plan-docs.py"
+    GENERATED_GROUP_AUTHORITY = (
+        ROOT / "template/.project-agent-workflow/scripts/parallel-plan-state.py"
+    )
+
+    def build_generated_group_project(self, directory: Path, *, valid: bool = True) -> None:
+        """Create a generated-layout project holding one execution group description."""
+
+        import hashlib
+        import json
+
+        workflow = directory / ".project-agent-workflow"
+        (directory / "docs/plan/active").mkdir(parents=True)
+        (directory / "docs/plan/execution-groups").mkdir(parents=True)
+        (workflow / "scripts").mkdir(parents=True)
+        for name in (
+            "parallel-plan-state.py",
+            "lint-plan-docs.py",
+            "planlib.py",
+            "plan_validation_commands.py",
+        ):
+            source = ROOT / "template/.project-agent-workflow/scripts" / name
+            (workflow / "scripts" / name).write_bytes(source.read_bytes())
+        subprocess.run(["git", "init", "-q", "-b", "main", str(directory)], check=True)
+        subprocess.run(["git", "-C", str(directory), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(directory), "config", "user.email", "test@example.invalid"],
+            check=True,
+        )
+
+        def group_digest(value) -> str:
+            data = value if isinstance(value, bytes) else str(value).encode("utf-8")
+            return "sha256:" + hashlib.sha256(data).hexdigest()
+
+        members = []
+        for plan_id, slug, scope in (("284", "alpha", "src/alpha.py"), ("285", "beta", "src/beta.py")):
+            relative = f"docs/plan/active/{plan_id}-{slug}.md"
+            body = (
+                f"# Plan {plan_id}\n\n"
+                "status: in_progress\n"
+                "plan_purpose: implementation\n"
+                f"primary_invariant: invariant {plan_id}\n"
+                "execution_group: docs/plan/execution-groups/alpha-beta.json\n"
+                f"write_scope:\n  - {scope}\n"
+                "context_files:\n  - AGENTS.md\n"
+                "\n## Tasks\n\n- [ ] implement\n"
+            )
+            (directory / relative).write_text(body, encoding="utf-8")
+            members.append(
+                {
+                    "plan_id": plan_id,
+                    "plan_path": relative,
+                    "plan_digest": group_digest(body.encode("utf-8")),
+                    "write_scope_digest": group_digest(
+                        json.dumps([scope], sort_keys=True, separators=(",", ":"))
+                    ),
+                }
+            )
+        if not valid:
+            members[1]["write_scope_digest"] = group_digest("wrong")
+        description = {
+            "schema_version": 1,
+            "group_id": "alpha-beta",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint modules with no shared interface",
+            "members": members,
+        }
+        (
+            directory / "docs/plan/execution-groups/alpha-beta.json"
+        ).write_text(json.dumps(description, indent=2) + "\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(directory), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(directory), "commit", "-qm", "fixture"], check=True)
+
+    def run_generated_group_lint(self, directory: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable,
+                ".project-agent-workflow/scripts/lint-plan-docs.py",
+                "--check-execution-groups",
+            ],
+            cwd=directory,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def test_generated_lint_accepts_a_valid_execution_group(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "project"
+            directory.mkdir()
+            self.build_generated_group_project(directory)
+            completed = self.run_generated_group_lint(directory)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_generated_lint_rejects_an_invalid_execution_group(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "project"
+            directory.mkdir()
+            self.build_generated_group_project(directory, valid=False)
+            completed = self.run_generated_group_lint(directory)
+            self.assertEqual(completed.returncode, 1)
+            self.assertIn("write scope digest", completed.stderr)
+
+    def test_generated_lint_accepts_a_project_without_execution_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "project"
+            directory.mkdir()
+            self.build_generated_group_project(directory)
+            for path in (directory / "docs/plan/execution-groups").iterdir():
+                path.unlink()
+            for plan_id, slug in (("284", "alpha"), ("285", "beta")):
+                plan = directory / f"docs/plan/active/{plan_id}-{slug}.md"
+                plan.write_text(
+                    plan.read_text(encoding="utf-8").replace(
+                        "execution_group: docs/plan/execution-groups/alpha-beta.json\n",
+                        "",
+                    ),
+                    encoding="utf-8",
+                )
+            subprocess.run(["git", "-C", str(directory), "add", "-A"], check=True)
+            subprocess.run(
+                ["git", "-C", str(directory), "commit", "-qm", "remove groups"], check=True
+            )
+            completed = self.run_generated_group_lint(directory)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_generated_lint_fails_closed_on_a_worktree_only_group_deletion(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / "project"
+            directory.mkdir()
+            self.build_generated_group_project(directory)
+            (directory / "docs/plan/execution-groups/alpha-beta.json").unlink()
+            completed = self.run_generated_group_lint(directory)
+            self.assertEqual(completed.returncode, 1, completed.stdout)
+            self.assertIn("tracked but missing from the working tree", completed.stderr)
+
+    def test_generated_group_authority_matches_the_root_authority(self) -> None:
+        root_authority = ROOT / "scripts/parallel-plan-state.py"
+        self.assertEqual(
+            root_authority.read_bytes(), self.GENERATED_GROUP_AUTHORITY.read_bytes()
+        )
+        self.assertTrue(os.access(self.GENERATED_GROUP_AUTHORITY, os.X_OK))
+
+    def test_group_authority_is_registered_in_the_install_inventory(self) -> None:
+        inventory = load_module(
+            ROOT / "scripts/project_workflow/copier_inventory.py", "group_inventory"
+        )
+        self.assertIn("scripts/parallel-plan-state.py", inventory.SOURCE_REQUIRED)
+        self.assertIn(
+            "template/.project-agent-workflow/scripts/parallel-plan-state.py",
+            inventory.SOURCE_REQUIRED,
+        )
+        self.assertIn(
+            ".project-agent-workflow/scripts/parallel-plan-state.py",
+            inventory.GENERATED_REQUIRED,
+        )
+
+    def test_default_generated_lint_checks_execution_groups(self) -> None:
+        text = self.GENERATED_LINT.read_text(encoding="utf-8")
+        self.assertIn("--check-execution-groups", text)
+        self.assertIn("lint_execution_groups()", text)
+
     def test_generated_workflow_is_namespaced_and_workflow_scoped(self) -> None:
         root_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         workflow = (ROOT / "template/.github/workflows/project-agent-workflow.yml").read_text(encoding="utf-8")
@@ -31,6 +208,58 @@ class GeneratedCiTest(unittest.TestCase):
         self.assertIn('python3 .project-agent-workflow/scripts/security-static-check.py --managed', workflow)
         self.assertNotIn('npm run test', workflow)
         self.assertIn("fetch-depth: 0", workflow)
+
+    def test_large_python_suites_run_as_independent_root_ci_jobs(self) -> None:
+        jobs = self.root_workflow_jobs()
+        dedicated = {
+            "plan-restructure": "python3 tests/test-plan-restructure.py",
+            "plan-execution-state": "python3 tests/test-plan-execution-state.py",
+            "sandboxed-plan-worker": "python3 tests/test-sandboxed-plan-worker.py",
+        }
+        for job, command in dedicated.items():
+            with self.subTest(job=job):
+                self.assertIn(job, jobs)
+                self.assertIn(f"        run: {command}\n", jobs[job])
+                self.assertIn("    runs-on: ubuntu-latest\n", jobs[job])
+                self.assertIn("        uses: actions/checkout@v4\n", jobs[job])
+                self.assertNotIn("    needs:", jobs[job])
+                self.assertNotIn(command, jobs["validate"])
+        self.assertIn("bubblewrap", jobs["sandboxed-plan-worker"])
+
+    def test_existing_ci_jobs_and_commands_are_preserved(self) -> None:
+        jobs = self.root_workflow_jobs()
+        for job in ("validate", "copier-fixture-validator", "minimum-compatibility"):
+            self.assertIn(job, jobs)
+        for command in (
+            "scripts/lint-project-workflow.sh",
+            "tests/smoke.sh",
+            "tests/test-hooks.py",
+            "tests/copier-update.sh",
+            "scripts/check-yaml.py",
+            "scripts/lint-github-actions.sh",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, jobs["validate"])
+        self.assertIn("python3 tests/test-copier-fixture-validator.py", jobs["copier-fixture-validator"])
+        self.assertIn("tests/copier-minimum.sh", jobs["minimum-compatibility"])
+
+    @staticmethod
+    def root_workflow_jobs() -> dict[str, str]:
+        text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        jobs: dict[str, list[str]] = {}
+        current: str | None = None
+        seen_jobs_key = False
+        for line in text.splitlines(keepends=True):
+            if not seen_jobs_key:
+                seen_jobs_key = line.rstrip("\n") == "jobs:"
+                continue
+            match = re.fullmatch(r"  ([A-Za-z0-9_-]+):\n", line)
+            if match:
+                current = match.group(1)
+                jobs[current] = []
+            elif current is not None:
+                jobs[current].append(line)
+        return {name: "".join(body) for name, body in jobs.items()}
 
     def test_empty_tree_range_checks_the_full_initial_push_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,6 +338,149 @@ class GeneratedCiTest(unittest.TestCase):
             ],
             cwd=repo,
             check=True,
+        )
+
+    def build_gate_tree(
+        self,
+        directory: Path,
+        *,
+        lifecycle: str = "in_progress",
+        indexed: str = "in_progress",
+        task: str = "x",
+        notes: str = "Fixture validation passed.",
+        plan: bool = True,
+    ) -> None:
+        (directory / "scripts").mkdir(parents=True)
+        for name in ("check-agent-completion.sh", "complete-plan.sh"):
+            (directory / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
+        (directory / "docs/plan/active").mkdir(parents=True)
+        rows = ["# Active Plan", ""]
+        if plan:
+            (directory / "docs/plan/active/001-fixture.md").write_text(
+                GATE_PLAN_BODY.format(lifecycle=lifecycle, task=task, notes=notes),
+                encoding="utf-8",
+            )
+            rows.append("id\tpath\tstatus")
+            rows.append(f"001\tdocs/plan/active/001-fixture.md\t{indexed}")
+        else:
+            rows.append("No active development items.")
+        (directory / "docs/plan/plan.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    def run_gate(self, directory: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", "scripts/check-agent-completion.sh", "--plans-only"],
+            cwd=directory,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_gate_rejects_a_completed_in_progress_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_gate_tree(directory)
+            completed = self.run_gate(directory)
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("completed plan is not marked ready", completed.stderr)
+        self.assertIn("scripts/complete-plan.sh", completed.stderr)
+
+    def test_gate_rejects_a_ready_to_archive_plan_with_the_finalization_command(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_gate_tree(directory, lifecycle="ready_to_archive", indexed="ready_to_archive")
+            completed = self.run_gate(directory)
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertIn("ready-to-archive plan blocks completion", completed.stderr)
+        self.assertIn("scripts/finalize-active-plan.sh", completed.stderr)
+
+    def test_gate_accepts_sampled_unfinished_states(self) -> None:
+        samples = {
+            "unchecked task": {"task": " "},
+            "pending validation notes": {"notes": "Pending validation."},
+            "deferred plan": {"lifecycle": "deferred", "indexed": "deferred"},
+            "replan required": {"lifecycle": "replan_required", "indexed": "replan_required"},
+            "no active plan": {"plan": False},
+        }
+        for label, options in samples.items():
+            with self.subTest(sample=label), tempfile.TemporaryDirectory() as raw:
+                directory = Path(raw)
+                self.build_gate_tree(directory, **options)
+                completed = self.run_gate(directory)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_root_ci_runs_the_gate_against_the_checked_out_commit_tree(self) -> None:
+        jobs = self.root_workflow_jobs()
+        self.assertIn("sh scripts/check-agent-completion.sh --plans-only", jobs["validate"])
+
+    def test_generated_workflow_runs_the_gate_and_watches_both_hook_surfaces(self) -> None:
+        workflow = (
+            ROOT / "template/.github/workflows/project-agent-workflow.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "sh .project-agent-workflow/scripts/check-agent-completion.sh --plans-only", workflow
+        )
+        self.assertEqual(workflow.count('      - ".githooks/**"'), 2)
+        self.assertEqual(workflow.count('      - ".github/hooks/**"'), 2)
+        self.assertNotIn("core.hooksPath", workflow)
+
+    def test_hook_surfaces_are_registered_in_the_install_inventory(self) -> None:
+        inventory = load_module(
+            ROOT / "scripts/project_workflow/copier_inventory.py", "gate_inventory"
+        )
+        for path in (
+            ".githooks/pre-commit",
+            ".github/hooks/plan-lifecycle.json",
+            "template/.githooks/pre-commit",
+            "template/.github/hooks/plan-lifecycle.json",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(path, inventory.SOURCE_REQUIRED)
+        for path in (".githooks/pre-commit", ".github/hooks/plan-lifecycle.json"):
+            with self.subTest(path=path):
+                self.assertIn(path, inventory.GENERATED_REQUIRED)
+        self.assertIn(".githooks/pre-commit", inventory.SOURCE_SHELL_LINT)
+        self.assertIn("template/.githooks/pre-commit", inventory.SOURCE_SHELL_LINT)
+
+    def test_hook_surfaces_are_byte_and_mode_aligned(self) -> None:
+        self.assertEqual(ROOT_HOOK.read_bytes(), TEMPLATE_HOOK.read_bytes())
+        self.assertEqual(
+            ROOT_COPILOT_HOOKS.read_bytes(), TEMPLATE_COPILOT_HOOKS.read_bytes()
+        )
+        for path in (ROOT_HOOK, TEMPLATE_HOOK):
+            with self.subTest(path=str(path)):
+                self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+                self.assertTrue(os.access(path, os.X_OK))
+
+    def test_generated_projects_receive_no_activation_detector(self) -> None:
+        ownership = (
+            ROOT / "template/.project-agent-workflow/ownership.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("  - .githooks/pre-commit", ownership)
+        self.assertIn("  - .github/hooks/plan-lifecycle.json", ownership)
+        inventory = load_module(
+            ROOT / "scripts/project_workflow/copier_inventory.py", "gate_inventory_detector"
+        )
+        self.assertNotIn("scripts/lint-project-workflow.sh", inventory.GENERATED_REQUIRED)
+        detector = (ROOT / "scripts/lint-project-workflow.sh").read_text(encoding="utf-8")
+        self.assertIn("--check-hook-activation", detector)
+        copier = (ROOT / "copier.yml").read_text(encoding="utf-8")
+        self.assertIn("git config core.hooksPath .githooks", copier)
+        self.assertEqual(
+            copier.count("core.hooksPath"), copier.count("git config core.hooksPath .githooks")
+        )
+
+    def test_both_gates_resolve_in_the_same_order_as_the_stop_adapter(self) -> None:
+        hook = ROOT_HOOK.read_text(encoding="utf-8")
+        managed = hook.index(".project-agent-workflow/scripts/check-agent-completion.sh")
+        fallback = hook.index("\n  scripts/check-agent-completion.sh")
+        self.assertLess(managed, fallback)
+        adapter = (
+            ROOT / ".project-agent-workflow/hooks/stop_review_gate.py"
+        ).read_text(encoding="utf-8")
+        self.assertLess(
+            adapter.index('".project-agent-workflow/scripts/check-agent-completion.sh"'),
+            adapter.index('"scripts/check-agent-completion.sh"'),
         )
 
 

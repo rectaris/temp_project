@@ -21,13 +21,17 @@ Generated states are MCP=`[[ mcp_state ]]`, Linear=`[[ linear_state ]]`, graph m
 ## Common Invariants
 
 - Read `docs/agent/external-services.yaml` before every external provider read or write.
+- The provider-call execution context is the provider, command execution boundary, and credential source used for one exact external call.
 - Provider availability and authentication do not authorize an operation by themselves.
+- Configuration and authentication evidence must come from the provider-call execution context that will make the call; changing the provider, authenticated account, credential source, or command boundary requires a new non-mutating preflight and fresh authorization.
 - Under version 1, the current user request or a documented lifecycle command must require the exact provider operation; under version 2, the current user request itself must require it.
 - Keep credentials in environment variables or platform secret stores, never in repository files or provider payloads.
 - Never persist secret material or expose write credentials to untrusted code.
 - Local repository files, tests, validation output, and Git history remain the implementation source of truth unless a project-specific spec says otherwise.
 - Use the configured fallback when a provider is unavailable, and report it only when it changes scope, confidence, validation, or completion.
 - Deny an external operation when the applicable policy check is missing, ambiguous, stale, or mismatched.
+- Keep host approval to execute outside a sandbox separate from project authorization for the exact provider operation, target, and effect. A saved command-prefix approval does not authorize an external write.
+- Keep host-specific sandbox and credential-store configuration out of policy files and generated documentation.
 
 ## Schema Version 1
 
@@ -64,7 +68,7 @@ Version 1 states mean:
 
 Version 2 uses `access_profile: task_scoped_default_allow`.
 
-- `provider_requirement: runtime_configured` requires the active execution environment to confirm that the requested provider is configured and authenticated.
+- `provider_requirement: runtime_configured` requires the intended provider-call execution context to confirm that the requested provider is configured and authenticated.
 - `task_scope_rule: current_user_request` requires the current request to authorize the exact provider, operation, target, and effect.
 - Reads that satisfy both requirements, declare their exact target, and have the `ordinary` effect classification are authorized without `allowed_reads`.
 - Ordinary writes that satisfy both requirements are authorized without `allowed_writes`.
@@ -90,6 +94,20 @@ For a confirmation-required or unclassified write, also pass `--confirmed-target
 
 The command verifies consistency of the declared facts.
 The agent must establish provider configuration, task relevance, effect classification, and exact confirmation from the active environment and current user request before passing those flags.
+
+Check whether the exact selected credential source is locally available without reading credential material; diagnostics may expose only its credential-source class.
+When a provider identity preflight contacts the provider, treat it as a separate exact external read.
+Before that read, establish project authorization for its exact provider, operation, target, payload, current-task relevance, and `ordinary` effect without asserting that authentication already succeeded.
+Obtain host execution approval separately when the selected command boundary requires it; this approval grants no provider operation, target, payload, or effect.
+For schema version 1, the identity read must pass the normal configured-state and `allowed_reads` checks.
+For schema version 2, do not use the normal `authorize` command for the identity read that establishes authentication because its `--provider-configured` premise would be circular.
+Evaluate only that non-mutating read directly against the unchanged policy: the current request must require its exact tuple, `ordinary` must be its only effect, and no denied effect may apply.
+This prerequisite is not `runtime_configured`, creates no reusable authorization state, and never authorizes a write or the intended call.
+After the read succeeds, bind its process-local or otherwise ephemeral evidence to the exact provider, account, command boundary, and credential source, then run the normal fresh authorization for the intended call.
+If a local check of the exact credential source fails only in the current sandbox while the user reports a valid login elsewhere, one project-authorized non-mutating provider read may run through the intended provider-call execution context after separately obtaining any required host execution approval and before requesting reauthentication.
+If that check is unavailable or inconclusive, fail closed and report the exact missing provider, credential source, or command capability.
+Distinguish process-local credential-source unavailability, an authenticated provider account's permission denial, and the absence of a configured backend.
+Do not reuse authentication evidence between connectors, command-line providers, or browser sessions.
 
 ## Service Rules
 
@@ -126,20 +144,24 @@ The agent must establish provider configuration, task relevance, effect classifi
 
 1. Read `docs/agent/external-services.yaml` and run `python3 .project-agent-workflow/scripts/check-external-service-policy.py check`.
 2. Identify the schema version before applying its authorization rules.
-3. Confirm the active environment has configured and authenticated the exact provider.
+3. Select the provider-call execution context and check whether its exact credential source is locally available without reading credential material; expose only the source class in diagnostics.
 4. Classify the proposed provider call as a read or write and identify its exact target and effect.
-5. Under version 1, confirm the current user request or documented lifecycle command requires that exact call; under version 2, confirm the current user request itself requires it.
-6. Apply the version 1 allowlist and write rule, or the version 2 task-scoped default and effect boundaries.
-7. Run the matching `authorize` command before the provider call.
-8. Run any provider-specific dry-run, duplicate-prevention check, or payload validation.
-9. Re-run authorization when the provider, operation, target, effect, payload, or user request changes.
-10. Use the configured fallback if the provider is unavailable.
+5. If an identity preflight contacts the provider, establish its exact project authorization without an authenticated-result premise, independently obtain any required host execution approval, then run it through the intended provider-call execution context. Under version 2, do not use the normal `authorize` command for this authentication-establishing read.
+6. Under version 1, confirm the current user request or documented lifecycle command requires the intended call; under version 2, confirm the current user request itself requires it.
+7. Apply the version 1 allowlist and write rule, or the version 2 task-scoped default and effect boundaries to the intended call.
+8. Run a fresh matching `authorize` command immediately before the intended provider call.
+9. Keep retries non-mutating until the provider-call execution context is selected; after an uncertain write, read exact remote state before retrying when supported and skip an already-applied write.
+10. Re-run preflight and authorization when the provider, account, credential source, command boundary, operation, target, effect, payload, or user request changes, and use the configured fallback if the provider is unavailable.
+
+Diagnostics may report only sanitized provider availability, safely exposed account identity, credential-source class, command-boundary class, and error classification; they must not expose the exact credential-source binding.
+Never read, print, persist, log, fixture, or send token values or credential material.
 
 ## Local Configuration And Migration
 
 `docs/agent/external-services.yaml` is project-owned after generation.
 
 Copier update must preserve an existing version 1 policy byte-for-byte and must not expand its permissions.
+Copier update must also preserve an existing project-owned version 2 policy byte-for-byte.
 
 To adopt version 2 in an existing project, review the project-specific providers and protected data classes, then replace the policy explicitly and validate representative reads, ordinary writes, confirmation-required writes, denied effects, and unavailable-provider fallbacks.
 

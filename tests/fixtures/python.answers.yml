@@ -3,6 +3,7 @@ project_slug: python-tool
 project_purpose: Build a Python tool.
 primary_language: python
 human_report_mode: disabled
+human_report_shared_mode: explicit_publish
 codex_hooks_mode: install_templates
 skillspector_mode: disabled
 external_access_profile: restricted

@@ -9,6 +9,9 @@ Agent entrypoint for `[[ project_slug ]]`.
 - Treat `.project-agent-workflow/` as Copier-managed and do not place project-specific facts there.
 - Read `docs/agent/PROJECT_POLICY.md` and any linked project-owned policy when it applies.
 - Track repository work under project-owned `docs/plan/`.
+- Perform every repository-changing task in its task-bound linked worktree prepared by `.project-agent-workflow/scripts/manage-plan-worktrees.py prepare`, and finish it with the matching `publish`.
+- For high-risk or correction-capable work, follow the managed execution-ledger policy, including exact-target adversarial preflight and the single owner-authorized same-plan continuation limit.
+- For Japanese replies, Japanese file drafting or revision, and important Japanese long-form review, read `.agents/skills/natural-japanese/SKILL.md` after the governing project policy. Naturalness advice never overrides facts, quotations, uncertainty, project terms, requested form, or document purpose.
 
 ## Project-owned additions
 

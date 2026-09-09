@@ -76,6 +76,8 @@ Generated projects include `.codex/hooks/agent_log_event.py` and use it through 
 
 The hook records observable payloads for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop` events.
 
+For staged review, a runtime may emit `ReviewPacketStart` with the reviewer session id, the canonical review packet digest, and the inherited turn count. Only this explicit runtime event, or its normalized external-transcript equivalent, may establish review turn zero. `SessionStart` alone and caller-authored receipt fields do not establish it.
+
 Hook logs are written to:
 
 ```text
@@ -144,6 +146,31 @@ If a run is referenced by `docs/plan`, treat it as pinned.
 
 Missing transcript or hook sources are warnings by default.
 Validation may require complete transcript or hook coverage by using `scripts/check-agent-log-manifest.py --require-transcript` or `scripts/check-agent-log-manifest.py --require-hooks`.
+
+## Resource Observations
+
+Run manifests keep one bounded `resource_observations` object.
+
+- Store provider token values only when the provider transcript directly reports input, cached input, output, or reasoning tokens.
+- Store model-response, compaction, helper-turn, and tool-call counts only from directly observable records or deterministic proxy counting.
+- Keep every unavailable value as `not_observed`; never estimate tokens or convert proxy counts into token claims.
+- Store only the digest of a directly observed root-session identity.
+- Bind each observation to the SHA-256 digest of the source evidence file that produced it. The `evidence_digests` object maps `external_transcript` and `codex_hooks` to the SHA-256 of the raw source file at the time observations were derived. The verifier recomputes each declared digest and rejects mismatches. Observed identity or metrics without at least one bound evidence digest are rejected.
+- Bind a review turn-zero claim to one `ReviewPacketStart` observation whose session id, packet digest, inherited turn count, and source-file digest match the review receipt.
+- Do not store prompts, response bodies, reasoning bodies, command bodies, environment values, or credentials in resource observations.
+
+## Local Resource Summary
+
+`scripts/summarize-agent-run.py` reports observed resources from explicitly supplied local records. It is advisory derived information, never acceptance, review, or validation evidence.
+
+- Supply each record on the command line. The command discovers no session, reads no home directory, deletes no log, calls no model, and needs no network or external service.
+- Supported inputs are run manifests, sandboxed-runner candidate manifests, and plan execution state records, read through their declared schema versions.
+- The report is written to stdout only. Save it yourself under `.agent-logs/` or `.agent-artifacts/` when a run needs a durable copy.
+- At most 32 explicit input files of at most 8 MiB each are accepted, and the report is bounded at 256 KiB. A symlinked, nonregular, oversized, or structurally invalid input is rejected before it is read further.
+- Pass raw evidence with `--evidence` to bind a declared `evidence_digests` value to its source bytes. A supplied file that matches no declared digest, an unreadable supplied file, a malformed digest, an unsupported schema, and a malformed record each reject the whole report with a nonzero exit.
+- Totals keep their unit and provenance. Provider token values and deterministic proxy counts are never merged, an observed zero stays a measurement, and a missing value stays `not_observed` instead of becoming zero.
+- Runner duration, per-attempt duration, and ledger elapsed checkpoints are different measurement boundaries and stay in separate totals. Every total is reported beside its record coverage.
+- Billed cost, human intervention, phase durations, replan counts, and total wall clock stay `not_observed` unless a supplied record observes them directly. The command performs no price lookup and no inference.
 
 ## Retention
 

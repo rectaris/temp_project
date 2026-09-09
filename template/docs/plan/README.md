@@ -16,6 +16,24 @@
 - `replanned/contracts/`: 元要件と後続計画の対応を保持する機械可読契約です。
 - `handoffs/`: 複数エージェントや別セッションへ渡す一時的な作業依頼を置きます。
 
+## 番号付き計画の受け入れ条件
+
+番号付き計画は、実装を開始してよいという許可です。
+`active/` と `backlog/` に新しく作る計画は、次の 4 つの項目を書きます。
+
+- `plan_purpose`: 認められる値は `implementation` だけです。
+- `feasibility_evidence`: 選んだ実装方法が宣言した範囲で完了できる根拠です。
+  `kind` は `reproduced_defect`、`existing_mechanism`、`bounded_prototype`、`mechanical_transformation` のいずれかです。
+- `completion_conditions`: その計画自身が成立させる振る舞いの条件です。
+- `completion_witness_map`: 各条件の SHA-256 ダイジェストを `focused_validation` の 1 コマンドへ対応させます。
+
+`write_scope` には、`docs/plan/`、`.agent-logs/`、`.agent-artifacts/` の外にあるファイルを 1 つ以上含めます。
+調査、実現性の確認、価値評価、再検証、停止の記録、候補の保全、実行環境の作り直しは番号付き計画にしません。
+
+計画を作るときは、`.project-agent-workflow/scripts/create-plan.sh` に `--purpose`、`--write-scope`、`--feasibility`、`--completion`、`--witness` を渡します。
+既存の計画記録は書き換えません。
+受け入れ条件は、作成、昇格、再構成の各時点で確認します。
+
 ## 運用の考え方
 
 - `plan.md` には、実行中の作業と、着手後に延期理由を記録して未解決のまま保持する作業だけを載せます。

@@ -1,0 +1,7 @@
+version: 1
+enabled: true
+merge_target_refs:
+  - refs/heads/dev
+protected_local_branch_refs:
+  - refs/heads/main
+  - refs/heads/dev

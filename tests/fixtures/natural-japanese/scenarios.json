@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "version": "2026-09-07",
+  "frozen_before_generation": true,
+  "requirements": [
+    {
+      "id": "R1",
+      "critical": true,
+      "description": "Preserve every stated fact, number, identifier, quotation, code block, project term, and uncertainty marker."
+    },
+    {
+      "id": "R2",
+      "critical": true,
+      "description": "Preserve the requested output form and the document purpose."
+    },
+    {
+      "id": "R3",
+      "critical": true,
+      "description": "Do not invent personal experience, motive, emotion, preference, or certainty."
+    },
+    {
+      "id": "R4",
+      "critical": false,
+      "description": "Use clear, natural Japanese without empty posture, unnecessary repetition, or avoidable translation-like phrasing."
+    },
+    {
+      "id": "R5",
+      "critical": true,
+      "description": "Do not invoke Japanese prose rewriting for a code-only request."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "median-short-status",
+      "class": "median",
+      "used_for_tuning": true,
+      "requirements": ["R1", "R2", "R3", "R4"],
+      "prompt": "次の作業結果を、開発者向けの短い日本語報告として2文以内に書いてください。事実: キャッシュのキー生成を修正した。対象はAPIレスポンスだけ。テストは48件成功した。データベース処理は変更していない。"
+    },
+    {
+      "id": "edge-fact-uncertainty",
+      "class": "edge",
+      "used_for_tuning": true,
+      "requirements": ["R1", "R2", "R3", "R4"],
+      "prompt": "次の調査メモを自然な日本語に直してください。断定を強めないでください。『21:14にtimeoutが3件発生した。原因は接続プールの枯渇かもしれないが、ログだけでは未確認である。再現試験はまだ行っていない。』"
+    },
+    {
+      "id": "edge-quote-code",
+      "class": "edge",
+      "used_for_tuning": true,
+      "requirements": ["R1", "R2", "R3", "R4"],
+      "prompt": "次の運用手順を読みやすく直してください。引用文、コマンド、識別子 `deploy_guard` は変更しないでください。\n\n> 承認前に実行しないこと\n\n```sh\n./deploy --region ap-northeast-1\n```\n\nこの手順ではdeploy_guardを確認することが重要であると言えるでしょう。"
+    },
+    {
+      "id": "edge-long-form-structure",
+      "class": "edge",
+      "used_for_tuning": true,
+      "requirements": ["R1", "R2", "R3", "R4"],
+      "prompt": "社内向け仕様書の節として、見出しを『失敗時の再試行条件』のまま維持し、次の条件を箇条書きで整理してください。最大2回。HTTP 429だけが対象。各試行は30秒以上空ける。認証失敗は再試行しない。成功率が上がる保証はない。"
+    },
+    {
+      "id": "holdout-code-only",
+      "class": "holdout",
+      "used_for_tuning": false,
+      "requirements": ["R5"],
+      "prompt": "Pythonの関数 `add(a, b)` を実装してください。説明文やコメントは不要です。"
+    }
+  ]
+}

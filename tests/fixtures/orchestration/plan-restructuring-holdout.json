@@ -15,6 +15,22 @@
         "reason_code": "security_boundary_drift",
         "next_action": "atomic_restructure_preserving_dirty_path"
       }
+    },
+    {
+      "id": "holdout-independent-repair-rejects-stopped-run-reuse",
+      "class": "holdout",
+      "used_for_tuning": false,
+      "requirements": ["P1", "P5"],
+      "input": {
+        "source_plan_status": "deferred",
+        "repair_plan_status": "checked",
+        "execution_run": "stopped_repair_required_run"
+      },
+      "expected": {
+        "state": "repair_required",
+        "reason_code": "independent_repair_required",
+        "next_action": "reject_transition_and_initialize_fresh_run"
+      }
     }
   ]
 }

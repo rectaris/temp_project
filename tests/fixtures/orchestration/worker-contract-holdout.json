@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "suite": "worker-execution-contract",
+  "used_for_tuning": false,
+  "base": {
+    "plan_path": "docs/plan/active/001-worker-contract-holdout.md",
+    "plan_bytes": "# Worker contract holdout\n\nstatus: in_progress\ntask_types:\n  - planning_docs\nreview_class: C\nhuman_design_required: no\nhuman_approval_status: not_required\nimplementation_risk: low\nimplementation_ambiguity: low\nprimary_invariant: create one declared product artifact\nwrite_scope:\n  - product/report.txt\ncontext_files:\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nrequired_specs:\n  - docs/agent/SPEC_PLAN_WORKFLOW.md\nfocused_validation:\n  - git diff --check\nvalidation:\n  - git diff --check\nacceptance:\n  - Create the declared product artifact.\nchecked_summary_ja: 宣言済みproduct成果物だけを作成する。\n",
+    "repository_files": {
+      "docs/agent/SPEC_PLAN_WORKFLOW.md": "holdout specification\n",
+      "product/report.txt": "before\n"
+    },
+    "orchestration_run_id": "worker-contract-holdout-run",
+    "attempt_lineage": {
+      "attempt_kind": "initial",
+      "correction_round": 0,
+      "attempt_label": "custom"
+    }
+  },
+  "cases": [
+    {
+      "id": "holdout-missing-parent-new-package-manifest",
+      "class": "holdout",
+      "used_for_tuning": false,
+      "covers": ["authority_widening", "explicit_new_path", "missing_parent_path"],
+      "operation": "validate_write_scope",
+      "input": {"write_scope": ["packages/new-component/package.json"]},
+      "expected": {"result": "rejected", "error_code": "validation_authority_write"}
+    }
+  ]
+}

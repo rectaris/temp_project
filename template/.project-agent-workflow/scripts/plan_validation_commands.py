@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -13,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import ModuleType
 
 
 class ValidationCommandError(ValueError):
@@ -46,6 +48,14 @@ DIRECT_SCRIPT_ARGUMENTS = {
 }
 NPM_VALIDATION_SCRIPTS = frozenset({"build", "test", "test:unit", "lint", "typecheck", "verify"})
 PYTEST_PREFIXES = (("pytest",), ("python3", "-m", "pytest"), ("uv", "run", "pytest"))
+GENERATED_PYTHON_COMPILE_FILES = frozenset(
+    {
+        ".project-agent-workflow/skills/natural-japanese/"
+        "scripts/check-japanese-prose.py",
+        ".project-agent-workflow/skills/verify-copier-update/"
+        "scripts/verify-copier-update.py",
+    }
+)
 
 # These are the bridgeable v0.5.0 managed CLI aliases that can remain in an open plan
 # after pre-v1 adoption. They are accepted by plan lint only when the root
@@ -224,6 +234,8 @@ def is_python_compile(argv: tuple[str, ...]) -> bool:
         path = Path(raw_path)
         if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
             return False
+        if raw_path in GENERATED_PYTHON_COMPILE_FILES:
+            continue
         if (
             path.parts[0] not in {"scripts", "tests", ".codex"}
             and path.parts[:2] != ("template", "scripts")
@@ -357,8 +369,26 @@ def parse_validation_commands(
     ]
 
 
+def load_planlib() -> ModuleType:
+    candidate = Path(__file__).with_name("planlib.py")
+    if not candidate.is_file():
+        raise ValidationCommandError("could not locate managed planlib.py")
+    spec = importlib.util.spec_from_file_location("plan_validation_commands_planlib", candidate)
+    if spec is None or spec.loader is None:
+        raise ValidationCommandError("could not load managed planlib.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def check_plan(path: Path) -> list[ValidationCommand]:
-    return parse_validation_commands(extract_validation_commands(path))
+    commands = parse_validation_commands(extract_validation_commands(path))
+    planlib = load_planlib()
+    try:
+        planlib.validate_validation_witness_map(planlib.parse_manifest(path), plan_path=path)
+    except ValueError as exc:
+        raise ValidationCommandError(str(exc)) from exc
+    return commands
 
 
 def check_legacy_plan_for_lint(path: Path, repository_root: Path) -> list[ValidationCommand]:
@@ -384,6 +414,10 @@ def run_plan(path: Path) -> None:
 def self_test() -> None:
     parse_validation_command("git diff --check")
     parse_validation_command("python3 -m py_compile .project-agent-workflow/scripts/example.py tests/example.py")
+    parse_validation_command(
+        "python3 -m py_compile "
+        ".project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py"
+    )
     parse_validation_command("python3 -m pytest")
     parse_validation_command("npm run typecheck")
     parse_validation_command("python3 .project-agent-workflow/scripts/check-external-service-policy.py check")
@@ -395,6 +429,7 @@ def self_test() -> None:
         "python3 - <<EOF",
         "npm run prepublish",
         "python3 -m pytest -q",
+        "python3 -m py_compile .project-agent-workflow/skills/unknown/scripts/check.py",
     ):
         try:
             parse_validation_command(bad)

@@ -1,5 +1,6 @@
 """Change-selection tests."""
 
+import io
 import json
 import os
 import shutil
@@ -7,9 +8,45 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 
 from .support import PLAN_COMMAND_MODULES, ROOT, VALIDATE_CHANGE_MODULES, load_module
+
+
+SELECTOR = ROOT / "tests/select-copier-fixture-validator-tests.py"
+AGGREGATE_ENTRYPOINT = ROOT / "tests/test-copier-fixture-validator.py"
+DOMAIN_MODULE_NAMES = ("contract", "inventory", "execution", "grammar", "placement")
+AGGREGATE_ARGV = ["python3", "tests/test-copier-fixture-validator.py"]
+
+
+def load_selector(name: str) -> object:
+    return load_module(SELECTOR, name)
+
+
+def domain_test_ids(module_name: str) -> set[str]:
+    """Collect the unittest ids a Copier fixture validator module contributes."""
+    path = (
+        AGGREGATE_ENTRYPOINT
+        if module_name == "aggregate"
+        else ROOT / f"tests/copier_fixture_validator/{module_name}.py"
+    )
+    tests_dir = str(ROOT / "tests")
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    module = load_module(path, f"copier_fixture_validator_inventory_{module_name}")
+    ids: set[str] = set()
+
+    def walk(suite: unittest.TestSuite) -> None:
+        for item in suite:
+            if isinstance(item, unittest.TestSuite):
+                walk(item)
+            else:
+                ids.add(item.id().rsplit(".", 2)[-2] + "." + item.id().rsplit(".", 1)[-1])
+
+    walk(unittest.defaultTestLoader.loadTestsFromModule(module))
+    return ids
 
 
 class ValidateChangesTest(unittest.TestCase):
@@ -116,6 +153,96 @@ class ValidateChangesTest(unittest.TestCase):
                 )
                 self.assertTrue(
                     any(any(part.endswith("format-plan-docs.py") for part in command) for command in managed_commands)
+                )
+
+    def test_malformed_managed_plan_index_fails_instead_of_deselecting(self) -> None:
+        malformed = {
+            "escaped separators": "# Active Plan\n\nid\\tpath\\tstatus\n281\\tdocs/plan/active/281-a.md\\tin_progress\n",
+            "header without rows": "# Active Plan\n\nid\tpath\tstatus\n",
+            "rows without header": "# Active Plan\n\n281\tdocs/plan/active/281-a.md\tin_progress\n",
+            "empty marker with a row": (
+                "# Active Plan\n\nNo active development items.\n"
+                "281\tdocs/plan/active/281-a.md\tin_progress\n"
+            ),
+            "carriage returns": "# Active Plan\r\n\r\nNo active development items.\r\n",
+            "content before the title": (
+                "<<<<<<< HEAD\n# Active Plan\n\nNo active development items.\n"
+            ),
+            "blank document": "",
+            "newline only": "\n",
+        }
+        for index, (plan_path, validate_path) in enumerate(
+            zip(PLAN_COMMAND_MODULES, VALIDATE_CHANGE_MODULES, strict=True)
+        ):
+            dependency = load_module(plan_path, "plan_validation_commands")
+            sys.modules["plan_validation_commands"] = dependency
+            module = load_module(validate_path, f"validate_changes_malformed_index_{index}")
+            for case, text in malformed.items():
+                with self.subTest(module=validate_path, rejected=case), tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp)
+                    plan_index = repo / "docs/plan/plan.md"
+                    (repo / "docs/plan/active").mkdir(parents=True)
+                    plan_index.write_bytes(text.encode("utf-8"))
+                    module.ROOT = repo
+                    self.assertTrue(module.uses_managed_plan_format())
+                    fault = module.active_plan_index_fault()
+                    self.assertIsNotNone(fault)
+                    self.assertIn("active plan index", str(fault))
+
+            with self.subTest(module=validate_path, accepted="canonical"), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                plan_index = repo / "docs/plan/plan.md"
+                plan_index.parent.mkdir(parents=True)
+                module.ROOT = repo
+                plan_index.write_text(
+                    "# Active Plan\n\nNo active development items.\n", encoding="utf-8"
+                )
+                self.assertIsNone(module.active_plan_index_fault())
+                plan_index.write_text(
+                    "# Active Plan\n\nid\tpath\tstatus\n281\tdocs/plan/active/281-a.md\tin_progress\n",
+                    encoding="utf-8",
+                )
+                self.assertIsNone(module.active_plan_index_fault())
+
+            with self.subTest(module=validate_path, skipped="unmanaged index"), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                plan_index = repo / "docs/plan/plan.md"
+                plan_index.parent.mkdir(parents=True)
+                plan_index.write_text("# アクティブプラン\n\n既存プロジェクト形式\n", encoding="utf-8")
+                module.ROOT = repo
+                self.assertFalse(module.uses_managed_plan_format())
+                self.assertIsNone(module.active_plan_index_fault())
+
+    def test_the_plan_formatter_never_repairs_a_malformed_active_index(self) -> None:
+        formatter = ROOT / "template/.project-agent-workflow/scripts/format-plan-docs.py"
+        malformed = {
+            "trailing blank line": "# Active Plan\n\nNo active development items.\n\n",
+            "missing trailing newline": "# Active Plan\n\nNo active development items.",
+            "four columns": (
+                "# Active Plan\n\nid\tpath\tstatus\n"
+                "281\tdocs/plan/active/281-a.md\tin_progress\t\n"
+            ),
+        }
+        for case, index_text in malformed.items():
+            with self.subTest(preserved=case), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                plan_index = repo / "docs/plan/plan.md"
+                (repo / "docs/plan/active").mkdir(parents=True)
+                plan_index.write_text(index_text, encoding="utf-8")
+                other = repo / "docs/plan/active/281-a.md"
+                other.write_text("# Plan   \n\nstatus: in_progress   \n", encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, "-B", str(formatter)],
+                    cwd=repo,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(plan_index.read_text(encoding="utf-8"), index_text)
+                self.assertEqual(
+                    other.read_text(encoding="utf-8"), "# Plan\n\nstatus: in_progress\n"
                 )
 
     def test_template_selects_external_service_policy_check(self) -> None:
@@ -264,6 +391,244 @@ class ValidateChangesTest(unittest.TestCase):
             check=False,
         )
 
+    # --- Copier fixture validator selector -------------------------------
+    # The root-only selector maps Git-visible changes to fixed test commands.
+
+    def selector(self, name: str):
+        return load_selector(f"copier_fixture_validator_selector_{name}")
+
+    def test_a_domain_module_change_selects_only_its_own_command(self) -> None:
+        module = self.selector("domain")
+        for name in DOMAIN_MODULE_NAMES:
+            with self.subTest(domain=name):
+                path = f"tests/copier_fixture_validator/{name}.py"
+                self.assertEqual(
+                    module.select_commands([path]),
+                    [["python3", path]],
+                )
+
+    def test_several_domain_changes_select_each_command_once(self) -> None:
+        module = self.selector("dedupe")
+        paths = [
+            "tests/copier_fixture_validator/grammar.py",
+            "tests/copier_fixture_validator/grammar.py",
+            "tests/copier_fixture_validator/contract.py",
+            "README.md",
+        ]
+        self.assertEqual(
+            module.select_commands(paths),
+            [
+                ["python3", "tests/copier_fixture_validator/grammar.py"],
+                ["python3", "tests/copier_fixture_validator/contract.py"],
+            ],
+        )
+
+    def test_shared_and_unclassified_relevant_paths_select_the_complete_suite(self) -> None:
+        module = self.selector("shared")
+        shared = [
+            "tests/copier_fixture_validator/support.py",
+            "tests/copier_fixture_validator/__init__.py",
+            "tests/test-copier-fixture-validator.py",
+            "tests/select-copier-fixture-validator-tests.py",
+            "tests/validation_tools/changes.py",
+            "tests/validation_tools/plan.py",
+            "scripts/plan_validation_commands.py",
+            "scripts/project_workflow/copier_fixture_validator.py",
+            "scripts/project_workflow/shell_lexical.py",
+            "scripts/project_workflow/shell_functions.py",
+            "scripts/project_workflow/shell_execution.py",
+            "tests/copier_fixture_validator/unclassified.py",
+            "scripts/project_workflow/unclassified.py",
+        ]
+        for path in shared:
+            with self.subTest(path=path):
+                self.assertEqual(module.select_commands([path]), [AGGREGATE_ARGV])
+        self.assertEqual(
+            module.select_commands(
+                ["tests/copier_fixture_validator/contract.py", "tests/copier_fixture_validator/support.py"]
+            ),
+            [AGGREGATE_ARGV],
+        )
+
+    def test_a_missing_domain_module_falls_back_to_the_complete_suite(self) -> None:
+        module = self.selector("missing")
+        module.ROOT = Path("/nonexistent-selector-root")
+        self.assertEqual(
+            module.select_commands(["tests/copier_fixture_validator/contract.py"]),
+            [AGGREGATE_ARGV],
+        )
+
+    def test_unrelated_paths_select_no_command(self) -> None:
+        module = self.selector("unrelated")
+        self.assertEqual(module.select_commands(["README.md", "docs/plan/plan.md"]), [])
+
+    def test_unsafe_changed_paths_never_reach_a_selected_command(self) -> None:
+        module = self.selector("unsafe")
+        unsafe = [
+            "tests/copier_fixture_validator/contract.py; rm -rf .",
+            "tests/copier_fixture_validator/$(id).py",
+            "../tests/copier_fixture_validator/contract.py",
+            "/etc/passwd",
+        ]
+        for path in unsafe:
+            with self.subTest(path=path):
+                commands = module.select_commands([path])
+                self.assertIn(commands, ([], [AGGREGATE_ARGV]))
+                module.validate_selected_commands(commands)
+                for command in commands:
+                    for word in command:
+                        self.assertNotIn(path, word)
+
+    def test_selected_commands_stay_allowlisted(self) -> None:
+        module = self.selector("allowlisted")
+        commands = [AGGREGATE_ARGV, *(list(value) for value in module.DOMAIN_COMMANDS.values())]
+        module.validate_selected_commands(commands)
+
+    def test_staged_paths_take_precedence_over_unstaged_paths(self) -> None:
+        module = self.selector("staged")
+
+        def fake_git(args: list[str]) -> list[str]:
+            if args[:2] == ["diff", "--cached"]:
+                return ["tests/copier_fixture_validator/contract.py"]
+            if args[:1] == ["diff"]:
+                return ["README.md"]
+            return []
+
+        module.git = fake_git
+        self.assertEqual(
+            module.changed_files("auto"),
+            (["tests/copier_fixture_validator/contract.py"], "staged", ["README.md"]),
+        )
+        self.assertEqual(
+            module.changed_files("all"),
+            (["README.md", "tests/copier_fixture_validator/contract.py"], "all", []),
+        )
+
+    def test_a_relevant_unstaged_path_still_forces_the_complete_suite(self) -> None:
+        module = self.selector("deferred")
+        self.assertEqual(
+            module.select_commands(
+                ["tests/copier_fixture_validator/contract.py"],
+                ["tests/copier_fixture_validator/support.py"],
+            ),
+            [AGGREGATE_ARGV],
+        )
+        self.assertEqual(
+            module.select_commands(["tests/copier_fixture_validator/contract.py"], ["README.md"]),
+            [["python3", "tests/copier_fixture_validator/contract.py"]],
+        )
+
+    def test_git_paths_are_read_unquoted_and_null_separated(self) -> None:
+        module = self.selector("quoting")
+        recorded: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):
+            recorded.append(list(argv))
+            return SimpleNamespace(
+                returncode=0,
+                stdout="tests/copier_fixture_validator/\u65e5\u672c\u8a9e.py\0README.md\0",
+            )
+
+        module.subprocess = SimpleNamespace(run=fake_run, PIPE=subprocess.PIPE, DEVNULL=subprocess.DEVNULL)
+        self.assertEqual(
+            module.git(["diff", "--name-only"]),
+            ["tests/copier_fixture_validator/\u65e5\u672c\u8a9e.py", "README.md"],
+        )
+        self.assertEqual(
+            recorded[0],
+            ["git", "-c", "core.quotePath=false", "diff", "--name-only", "-z"],
+        )
+        self.assertEqual(
+            module.select_commands(["tests/copier_fixture_validator/\u65e5\u672c\u8a9e.py"]),
+            [AGGREGATE_ARGV],
+        )
+
+    def test_a_rejected_command_exits_nonzero_without_running_tests(self) -> None:
+        module = self.selector("rejected_command")
+
+        def forbidden_run(*args: object, **kwargs: object) -> None:
+            raise AssertionError("no test command may run after command validation fails")
+
+        module.git = lambda args: []
+        module.select_commands = lambda paths, deferred=None: [["python3", "tests/unlisted.py"]]
+        module.subprocess = SimpleNamespace(run=forbidden_run)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertEqual(module.main(["--all", "--json"]), 1)
+        payload = json.loads(buffer.getvalue())
+        self.assertEqual(payload["status"], "command_rejected")
+        self.assertEqual(payload["commands"], [])
+
+    def test_a_failed_git_query_exits_nonzero_without_running_tests(self) -> None:
+        module = self.selector("git_failure")
+
+        def failing_git(args: list[str]) -> list[str]:
+            raise module.GitQueryError("Git query failed (128): git diff --cached --name-only")
+
+        def forbidden_run(*args: object, **kwargs: object) -> None:
+            raise AssertionError("no test command may run after a Git query failure")
+
+        module.git = failing_git
+        module.subprocess = SimpleNamespace(run=forbidden_run)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertEqual(module.main(["--all", "--json"]), 1)
+        payload = json.loads(buffer.getvalue())
+        self.assertEqual(payload["status"], "git_query_failed")
+        self.assertEqual(payload["commands"], [])
+
+    def test_json_selection_reports_the_changed_paths_and_commands(self) -> None:
+        module = self.selector("json")
+        module.git = lambda args: (
+            ["tests/copier_fixture_validator/execution.py"] if args[:2] == ["diff", "--cached"] else []
+        )
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertEqual(module.main(["--print-only", "--json"]), 0)
+        payload = json.loads(buffer.getvalue())
+        self.assertEqual(payload["status"], "selected")
+        self.assertEqual(payload["diff_mode"], "staged")
+        self.assertEqual(payload["changed_files"], ["tests/copier_fixture_validator/execution.py"])
+        self.assertEqual(
+            [record["argv"] for record in payload["commands"]],
+            [["python3", "tests/copier_fixture_validator/execution.py"]],
+        )
+
+    def test_unrelated_changes_report_no_required_test(self) -> None:
+        module = self.selector("no_match")
+        module.git = lambda args: ["README.md"] if args[:2] == ["diff", "--cached"] else []
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            self.assertEqual(module.main(["--json"]), 0)
+        self.assertEqual(json.loads(buffer.getvalue())["status"], "no_matching_tests")
+
+    def test_the_aggregate_inventory_is_the_disjoint_union_of_the_domains(self) -> None:
+        aggregate = domain_test_ids("aggregate")
+        collected: set[str] = set()
+        for name in DOMAIN_MODULE_NAMES:
+            ids = domain_test_ids(name)
+            with self.subTest(domain=name):
+                self.assertTrue(ids)
+                self.assertTrue(ids < aggregate, f"{name} must be a strict subset")
+                self.assertFalse(ids & collected, f"{name} duplicates an inherited case")
+            collected |= ids
+        self.assertEqual(collected, aggregate)
+
+    def test_each_domain_module_runs_directly(self) -> None:
+        for name in DOMAIN_MODULE_NAMES:
+            with self.subTest(domain=name):
+                selected = sorted(domain_test_ids(name))[0]
+                path = ROOT / f"tests/copier_fixture_validator/{name}.py"
+                result = subprocess.run(
+                    [sys.executable, "-B", str(path), selected],
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Ran 1 test", result.stderr)
 
 
 if __name__ == "__main__":

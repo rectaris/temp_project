@@ -1,0 +1,990 @@
+{
+  "schema_version": 1,
+  "used_for_tuning": false,
+  "purpose": "Cases authored after the checker was frozen and never used to adjust it. A failure here is recorded in observed_outcomes rather than resolved by changing the case.",
+  "observed_outcomes": [
+    {
+      "case": "holdout-duplicate-write-path-value",
+      "decision_matched": true,
+      "note": "The frozen decision (reject) held on first run. The predicted message substring 'duplicate' did not appear; the checker reports \"write_paths repeats the path 'src/loader.py'\". Only the recorded substring was corrected to the observed wording, and the checker was not changed."
+    }
+  ],
+  "cases": [
+    {
+      "id": "holdout-root-backlog",
+      "class": "median",
+      "expect": "accept",
+      "note": "A root backlog plan renders without an active index row.",
+      "input": {
+        "schema_version": 1,
+        "profile": "root",
+        "lifecycle": "backlog",
+        "slug": "backlog-bind-plan-bytes",
+        "summary": "Bind plan bytes to the checked input",
+        "summary_ja": "計画の内容を検査済み入力に束縛する。",
+        "plan_purpose": "implementation",
+        "primary_invariant": "A rendered plan reproduces the digest of the input that was checked.",
+        "implementation_tier": "2",
+        "implementation_risk": "low",
+        "implementation_ambiguity": "low",
+        "task_types": [
+          "planning_docs"
+        ],
+        "review_class": "B",
+        "human_design_required": "no",
+        "human_approval_status": "not_required",
+        "feasibility_evidence": [
+          {
+            "kind": "existing_mechanism",
+            "evidence": "The renderer already derives every manifest digest from the input text."
+          }
+        ],
+        "witnesses": [
+          {
+            "id": "w-unit",
+            "command": "python3 tests/test-validation-tools.py",
+            "claim": "Asserts that a changed input is refused at write time."
+          },
+          {
+            "id": "w-suite",
+            "command": "tests/smoke.sh",
+            "claim": "Runs the generated-project suite end to end."
+          }
+        ],
+        "write_paths": [
+          {
+            "id": "wp-lib",
+            "path": "scripts/project_workflow/plan_authoring.py"
+          }
+        ],
+        "completion_conditions": [
+          {
+            "id": "cc-bind",
+            "text": "A write refuses an input whose bytes changed after the check.",
+            "witness": "w-unit"
+          }
+        ],
+        "acceptance_items": [
+          {
+            "id": "ac-bind",
+            "text": "Rendering refuses an input that changed after it was checked.",
+            "witness": "w-unit",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-suite",
+            "text": "The authoritative suites keep passing.",
+            "witness": "w-suite",
+            "stage": "authoritative",
+            "authoritative_only_reason": "No narrower safe preflight renders a real generated project."
+          }
+        ],
+        "requirements": [
+          {
+            "id": "req-bind",
+            "text": "Bind rendered plan bytes to the checked input.",
+            "write_paths": [
+              "wp-lib"
+            ],
+            "completion_conditions": [
+              "cc-bind"
+            ],
+            "acceptance_items": [
+              "ac-bind",
+              "ac-suite"
+            ]
+          }
+        ],
+        "context_files": [
+          "AGENTS.md"
+        ],
+        "required_specs": [
+          "docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ],
+        "validation": [
+          "tests/smoke.sh"
+        ],
+        "decisions": [
+          "Derive every digest from the input text."
+        ],
+        "tasks": [
+          "Implement the digest binding."
+        ],
+        "validation_notes": [
+          "Baseline recorded before implementation."
+        ]
+      }
+    },
+    {
+      "id": "holdout-three-requirements",
+      "class": "median",
+      "expect": "accept",
+      "note": "Three requirements partition three paths, three conditions, and three acceptance items.",
+      "input": {
+        "schema_version": 1,
+        "profile": "generated",
+        "lifecycle": "active",
+        "slug": "reject-negative-retry-count",
+        "summary": "Reject a negative retry count",
+        "summary_ja": "負の再試行回数を拒否する。",
+        "plan_purpose": "implementation",
+        "task_types": [
+          "environment_data_flow"
+        ],
+        "review_class": "B",
+        "human_design_required": "no",
+        "human_approval_status": "not_required",
+        "feasibility_evidence": [
+          {
+            "kind": "reproduced_defect",
+            "evidence": "The loader accepts a configuration whose retry count is negative."
+          }
+        ],
+        "witnesses": [
+          {
+            "id": "w-loader",
+            "command": "python3 tests/test_loader.py",
+            "claim": "Asserts that the loader rejects a negative retry count."
+          }
+        ],
+        "write_paths": [
+          {
+            "id": "wp-a",
+            "path": "src/a.py"
+          },
+          {
+            "id": "wp-b",
+            "path": "src/b.py"
+          },
+          {
+            "id": "wp-c",
+            "path": "src/c.py"
+          }
+        ],
+        "completion_conditions": [
+          {
+            "id": "cc-a",
+            "text": "The first stage rejects the malformed value.",
+            "witness": "w-loader"
+          },
+          {
+            "id": "cc-b",
+            "text": "The second stage records the rejection.",
+            "witness": "w-loader"
+          },
+          {
+            "id": "cc-c",
+            "text": "The third stage reports the offending field.",
+            "witness": "w-loader"
+          }
+        ],
+        "acceptance_items": [
+          {
+            "id": "ac-a",
+            "text": "The malformed value is rejected.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-b",
+            "text": "The rejection is recorded.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-c",
+            "text": "The offending field is reported.",
+            "witness": "w-loader",
+            "stage": "focused"
+          }
+        ],
+        "requirements": [
+          {
+            "id": "req-a",
+            "text": "Reject the malformed value.",
+            "write_paths": [
+              "wp-a"
+            ],
+            "completion_conditions": [
+              "cc-a"
+            ],
+            "acceptance_items": [
+              "ac-a"
+            ]
+          },
+          {
+            "id": "req-b",
+            "text": "Record the rejection.",
+            "write_paths": [
+              "wp-b"
+            ],
+            "completion_conditions": [
+              "cc-b"
+            ],
+            "acceptance_items": [
+              "ac-b"
+            ]
+          },
+          {
+            "id": "req-c",
+            "text": "Report the offending field.",
+            "write_paths": [
+              "wp-c"
+            ],
+            "completion_conditions": [
+              "cc-c"
+            ],
+            "acceptance_items": [
+              "ac-c"
+            ]
+          }
+        ],
+        "context_files": [
+          "docs/loader-notes.md"
+        ],
+        "target_json": [
+          "config/loader.json"
+        ],
+        "required_specs": [
+          ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ],
+        "validation": [
+          "git diff --check"
+        ],
+        "acceptance_focus": [
+          "Negative retry counts."
+        ],
+        "problem": [
+          "The loader accepts a configuration whose retry count is negative."
+        ],
+        "goal": [
+          "Reject that configuration and name the offending field."
+        ],
+        "implementation_instructions": [
+          "Validate the retry count in the loader.",
+          "Add one regression test."
+        ],
+        "decisions": [
+          "Reject at load time rather than at first use."
+        ],
+        "tasks": [
+          "Add the validation.",
+          "Add the regression test."
+        ]
+      }
+    },
+    {
+      "id": "holdout-duplicate-write-path-value",
+      "class": "edge",
+      "expect": "reject",
+      "expect_error_contains": "repeats the path",
+      "note": "Two identifiers may not name the same path, because the derived write scope would then be ambiguous about ownership.",
+      "input": {
+        "schema_version": 1,
+        "profile": "generated",
+        "lifecycle": "active",
+        "slug": "reject-negative-retry-count",
+        "summary": "Reject a negative retry count",
+        "summary_ja": "負の再試行回数を拒否する。",
+        "plan_purpose": "implementation",
+        "task_types": [
+          "environment_data_flow"
+        ],
+        "review_class": "B",
+        "human_design_required": "no",
+        "human_approval_status": "not_required",
+        "feasibility_evidence": [
+          {
+            "kind": "reproduced_defect",
+            "evidence": "The loader accepts a configuration whose retry count is negative."
+          }
+        ],
+        "witnesses": [
+          {
+            "id": "w-loader",
+            "command": "python3 tests/test_loader.py",
+            "claim": "Asserts that the loader rejects a negative retry count."
+          }
+        ],
+        "write_paths": [
+          {
+            "id": "wp-loader",
+            "path": "src/loader.py"
+          },
+          {
+            "id": "wp-test",
+            "path": "src/loader.py"
+          }
+        ],
+        "completion_conditions": [
+          {
+            "id": "cc-reject",
+            "text": "The loader rejects a negative retry count.",
+            "witness": "w-loader"
+          },
+          {
+            "id": "cc-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader"
+          }
+        ],
+        "acceptance_items": [
+          {
+            "id": "ac-reject",
+            "text": "A negative retry count is rejected before the loader returns.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader",
+            "stage": "focused"
+          }
+        ],
+        "requirements": [
+          {
+            "id": "req-reject",
+            "text": "Reject malformed loader configuration before use.",
+            "write_paths": [
+              "wp-loader",
+              "wp-test"
+            ],
+            "completion_conditions": [
+              "cc-reject",
+              "cc-name"
+            ],
+            "acceptance_items": [
+              "ac-reject",
+              "ac-name"
+            ]
+          }
+        ],
+        "context_files": [
+          "docs/loader-notes.md"
+        ],
+        "target_json": [
+          "config/loader.json"
+        ],
+        "required_specs": [
+          ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ],
+        "validation": [
+          "git diff --check"
+        ],
+        "acceptance_focus": [
+          "Negative retry counts."
+        ],
+        "problem": [
+          "The loader accepts a configuration whose retry count is negative."
+        ],
+        "goal": [
+          "Reject that configuration and name the offending field."
+        ],
+        "implementation_instructions": [
+          "Validate the retry count in the loader.",
+          "Add one regression test."
+        ],
+        "decisions": [
+          "Reject at load time rather than at first use."
+        ],
+        "tasks": [
+          "Add the validation.",
+          "Add the regression test."
+        ]
+      }
+    },
+    {
+      "id": "holdout-requirement-without-acceptance",
+      "class": "edge",
+      "expect": "reject",
+      "expect_error_contains": "acceptance_items",
+      "note": "A requirement that claims no acceptance item cannot be checked at completion.",
+      "input": {
+        "schema_version": 1,
+        "profile": "generated",
+        "lifecycle": "active",
+        "slug": "reject-negative-retry-count",
+        "summary": "Reject a negative retry count",
+        "summary_ja": "負の再試行回数を拒否する。",
+        "plan_purpose": "implementation",
+        "task_types": [
+          "environment_data_flow"
+        ],
+        "review_class": "B",
+        "human_design_required": "no",
+        "human_approval_status": "not_required",
+        "feasibility_evidence": [
+          {
+            "kind": "reproduced_defect",
+            "evidence": "The loader accepts a configuration whose retry count is negative."
+          }
+        ],
+        "witnesses": [
+          {
+            "id": "w-loader",
+            "command": "python3 tests/test_loader.py",
+            "claim": "Asserts that the loader rejects a negative retry count."
+          }
+        ],
+        "write_paths": [
+          {
+            "id": "wp-loader",
+            "path": "src/loader.py"
+          },
+          {
+            "id": "wp-test",
+            "path": "tests/test_loader.py"
+          }
+        ],
+        "completion_conditions": [
+          {
+            "id": "cc-reject",
+            "text": "The loader rejects a negative retry count.",
+            "witness": "w-loader"
+          },
+          {
+            "id": "cc-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader"
+          }
+        ],
+        "acceptance_items": [
+          {
+            "id": "ac-reject",
+            "text": "A negative retry count is rejected before the loader returns.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader",
+            "stage": "focused"
+          }
+        ],
+        "requirements": [
+          {
+            "id": "req-reject",
+            "text": "Reject the malformed value.",
+            "write_paths": [
+              "wp-loader",
+              "wp-test"
+            ],
+            "completion_conditions": [
+              "cc-reject",
+              "cc-name"
+            ],
+            "acceptance_items": []
+          }
+        ],
+        "context_files": [
+          "docs/loader-notes.md"
+        ],
+        "target_json": [
+          "config/loader.json"
+        ],
+        "required_specs": [
+          ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ],
+        "validation": [
+          "git diff --check"
+        ],
+        "acceptance_focus": [
+          "Negative retry counts."
+        ],
+        "problem": [
+          "The loader accepts a configuration whose retry count is negative."
+        ],
+        "goal": [
+          "Reject that configuration and name the offending field."
+        ],
+        "implementation_instructions": [
+          "Validate the retry count in the loader.",
+          "Add one regression test."
+        ],
+        "decisions": [
+          "Reject at load time rather than at first use."
+        ],
+        "tasks": [
+          "Add the validation.",
+          "Add the regression test."
+        ]
+      }
+    },
+    {
+      "id": "holdout-unclaimed-acceptance-item",
+      "class": "edge",
+      "expect": "reject",
+      "expect_error_contains": "claimed by no requirement",
+      "note": "An inherited acceptance item that no requirement serves is refused rather than silently carried.",
+      "input": {
+        "schema_version": 1,
+        "profile": "generated",
+        "lifecycle": "active",
+        "slug": "reject-negative-retry-count",
+        "summary": "Reject a negative retry count",
+        "summary_ja": "負の再試行回数を拒否する。",
+        "plan_purpose": "implementation",
+        "task_types": [
+          "environment_data_flow"
+        ],
+        "review_class": "B",
+        "human_design_required": "no",
+        "human_approval_status": "not_required",
+        "feasibility_evidence": [
+          {
+            "kind": "reproduced_defect",
+            "evidence": "The loader accepts a configuration whose retry count is negative."
+          }
+        ],
+        "witnesses": [
+          {
+            "id": "w-loader",
+            "command": "python3 tests/test_loader.py",
+            "claim": "Asserts that the loader rejects a negative retry count."
+          }
+        ],
+        "write_paths": [
+          {
+            "id": "wp-loader",
+            "path": "src/loader.py"
+          },
+          {
+            "id": "wp-test",
+            "path": "tests/test_loader.py"
+          }
+        ],
+        "completion_conditions": [
+          {
+            "id": "cc-reject",
+            "text": "The loader rejects a negative retry count.",
+            "witness": "w-loader"
+          },
+          {
+            "id": "cc-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader"
+          }
+        ],
+        "acceptance_items": [
+          {
+            "id": "ac-reject",
+            "text": "A negative retry count is rejected before the loader returns.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-extra",
+            "text": "The unrelated exporter keeps its output format.",
+            "witness": "w-loader",
+            "stage": "focused"
+          }
+        ],
+        "requirements": [
+          {
+            "id": "req-reject",
+            "text": "Reject malformed loader configuration before use.",
+            "write_paths": [
+              "wp-loader",
+              "wp-test"
+            ],
+            "completion_conditions": [
+              "cc-reject",
+              "cc-name"
+            ],
+            "acceptance_items": [
+              "ac-reject",
+              "ac-name"
+            ]
+          }
+        ],
+        "context_files": [
+          "docs/loader-notes.md"
+        ],
+        "target_json": [
+          "config/loader.json"
+        ],
+        "required_specs": [
+          ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ],
+        "validation": [
+          "git diff --check"
+        ],
+        "acceptance_focus": [
+          "Negative retry counts."
+        ],
+        "problem": [
+          "The loader accepts a configuration whose retry count is negative."
+        ],
+        "goal": [
+          "Reject that configuration and name the offending field."
+        ],
+        "implementation_instructions": [
+          "Validate the retry count in the loader.",
+          "Add one regression test."
+        ],
+        "decisions": [
+          "Reject at load time rather than at first use."
+        ],
+        "tasks": [
+          "Add the validation.",
+          "Add the regression test."
+        ]
+      }
+    },
+    {
+      "id": "holdout-write-scope-overlaps-context",
+      "class": "edge",
+      "expect": "reject",
+      "expect_error_contains": "overlap",
+      "note": "A read-only context file may not also be writable.",
+      "input": {
+        "schema_version": 1,
+        "profile": "generated",
+        "lifecycle": "active",
+        "slug": "reject-negative-retry-count",
+        "summary": "Reject a negative retry count",
+        "summary_ja": "負の再試行回数を拒否する。",
+        "plan_purpose": "implementation",
+        "task_types": [
+          "environment_data_flow"
+        ],
+        "review_class": "B",
+        "human_design_required": "no",
+        "human_approval_status": "not_required",
+        "feasibility_evidence": [
+          {
+            "kind": "reproduced_defect",
+            "evidence": "The loader accepts a configuration whose retry count is negative."
+          }
+        ],
+        "witnesses": [
+          {
+            "id": "w-loader",
+            "command": "python3 tests/test_loader.py",
+            "claim": "Asserts that the loader rejects a negative retry count."
+          }
+        ],
+        "write_paths": [
+          {
+            "id": "wp-loader",
+            "path": "src/loader.py"
+          },
+          {
+            "id": "wp-test",
+            "path": "tests/test_loader.py"
+          }
+        ],
+        "completion_conditions": [
+          {
+            "id": "cc-reject",
+            "text": "The loader rejects a negative retry count.",
+            "witness": "w-loader"
+          },
+          {
+            "id": "cc-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader"
+          }
+        ],
+        "acceptance_items": [
+          {
+            "id": "ac-reject",
+            "text": "A negative retry count is rejected before the loader returns.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader",
+            "stage": "focused"
+          }
+        ],
+        "requirements": [
+          {
+            "id": "req-reject",
+            "text": "Reject malformed loader configuration before use.",
+            "write_paths": [
+              "wp-loader",
+              "wp-test"
+            ],
+            "completion_conditions": [
+              "cc-reject",
+              "cc-name"
+            ],
+            "acceptance_items": [
+              "ac-reject",
+              "ac-name"
+            ]
+          }
+        ],
+        "context_files": [
+          "src/loader.py"
+        ],
+        "target_json": [
+          "config/loader.json"
+        ],
+        "required_specs": [
+          ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ],
+        "validation": [
+          "git diff --check"
+        ],
+        "acceptance_focus": [
+          "Negative retry counts."
+        ],
+        "problem": [
+          "The loader accepts a configuration whose retry count is negative."
+        ],
+        "goal": [
+          "Reject that configuration and name the offending field."
+        ],
+        "implementation_instructions": [
+          "Validate the retry count in the loader.",
+          "Add one regression test."
+        ],
+        "decisions": [
+          "Reject at load time rather than at first use."
+        ],
+        "tasks": [
+          "Add the validation.",
+          "Add the regression test."
+        ]
+      }
+    },
+    {
+      "id": "holdout-empty-requirements",
+      "class": "edge",
+      "expect": "reject",
+      "expect_error_contains": "requirements",
+      "note": "A plan with no stated requirement has nothing to derive its scope from.",
+      "input": {
+        "schema_version": 1,
+        "profile": "generated",
+        "lifecycle": "active",
+        "slug": "reject-negative-retry-count",
+        "summary": "Reject a negative retry count",
+        "summary_ja": "負の再試行回数を拒否する。",
+        "plan_purpose": "implementation",
+        "task_types": [
+          "environment_data_flow"
+        ],
+        "review_class": "B",
+        "human_design_required": "no",
+        "human_approval_status": "not_required",
+        "feasibility_evidence": [
+          {
+            "kind": "reproduced_defect",
+            "evidence": "The loader accepts a configuration whose retry count is negative."
+          }
+        ],
+        "witnesses": [
+          {
+            "id": "w-loader",
+            "command": "python3 tests/test_loader.py",
+            "claim": "Asserts that the loader rejects a negative retry count."
+          }
+        ],
+        "write_paths": [
+          {
+            "id": "wp-loader",
+            "path": "src/loader.py"
+          },
+          {
+            "id": "wp-test",
+            "path": "tests/test_loader.py"
+          }
+        ],
+        "completion_conditions": [
+          {
+            "id": "cc-reject",
+            "text": "The loader rejects a negative retry count.",
+            "witness": "w-loader"
+          },
+          {
+            "id": "cc-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader"
+          }
+        ],
+        "acceptance_items": [
+          {
+            "id": "ac-reject",
+            "text": "A negative retry count is rejected before the loader returns.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader",
+            "stage": "focused"
+          }
+        ],
+        "requirements": [],
+        "context_files": [
+          "docs/loader-notes.md"
+        ],
+        "target_json": [
+          "config/loader.json"
+        ],
+        "required_specs": [
+          ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ],
+        "validation": [
+          "git diff --check"
+        ],
+        "acceptance_focus": [
+          "Negative retry counts."
+        ],
+        "problem": [
+          "The loader accepts a configuration whose retry count is negative."
+        ],
+        "goal": [
+          "Reject that configuration and name the offending field."
+        ],
+        "implementation_instructions": [
+          "Validate the retry count in the loader.",
+          "Add one regression test."
+        ],
+        "decisions": [
+          "Reject at load time rather than at first use."
+        ],
+        "tasks": [
+          "Add the validation.",
+          "Add the regression test."
+        ]
+      }
+    },
+    {
+      "id": "holdout-wrong-profile-field",
+      "class": "edge",
+      "expect": "reject",
+      "expect_error_contains": "unknown key",
+      "note": "A generated-profile input may not carry a root-only field.",
+      "input": {
+        "schema_version": 1,
+        "profile": "generated",
+        "lifecycle": "active",
+        "slug": "reject-negative-retry-count",
+        "summary": "Reject a negative retry count",
+        "summary_ja": "負の再試行回数を拒否する。",
+        "plan_purpose": "implementation",
+        "task_types": [
+          "environment_data_flow"
+        ],
+        "review_class": "B",
+        "human_design_required": "no",
+        "human_approval_status": "not_required",
+        "feasibility_evidence": [
+          {
+            "kind": "reproduced_defect",
+            "evidence": "The loader accepts a configuration whose retry count is negative."
+          }
+        ],
+        "witnesses": [
+          {
+            "id": "w-loader",
+            "command": "python3 tests/test_loader.py",
+            "claim": "Asserts that the loader rejects a negative retry count."
+          }
+        ],
+        "write_paths": [
+          {
+            "id": "wp-loader",
+            "path": "src/loader.py"
+          },
+          {
+            "id": "wp-test",
+            "path": "tests/test_loader.py"
+          }
+        ],
+        "completion_conditions": [
+          {
+            "id": "cc-reject",
+            "text": "The loader rejects a negative retry count.",
+            "witness": "w-loader"
+          },
+          {
+            "id": "cc-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader"
+          }
+        ],
+        "acceptance_items": [
+          {
+            "id": "ac-reject",
+            "text": "A negative retry count is rejected before the loader returns.",
+            "witness": "w-loader",
+            "stage": "focused"
+          },
+          {
+            "id": "ac-name",
+            "text": "The rejection report names the offending field.",
+            "witness": "w-loader",
+            "stage": "focused"
+          }
+        ],
+        "requirements": [
+          {
+            "id": "req-reject",
+            "text": "Reject malformed loader configuration before use.",
+            "write_paths": [
+              "wp-loader",
+              "wp-test"
+            ],
+            "completion_conditions": [
+              "cc-reject",
+              "cc-name"
+            ],
+            "acceptance_items": [
+              "ac-reject",
+              "ac-name"
+            ]
+          }
+        ],
+        "context_files": [
+          "docs/loader-notes.md"
+        ],
+        "target_json": [
+          "config/loader.json"
+        ],
+        "required_specs": [
+          ".project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ],
+        "validation": [
+          "git diff --check"
+        ],
+        "acceptance_focus": [
+          "Negative retry counts."
+        ],
+        "problem": [
+          "The loader accepts a configuration whose retry count is negative."
+        ],
+        "goal": [
+          "Reject that configuration and name the offending field."
+        ],
+        "implementation_instructions": [
+          "Validate the retry count in the loader.",
+          "Add one regression test."
+        ],
+        "decisions": [
+          "Reject at load time rather than at first use."
+        ],
+        "tasks": [
+          "Add the validation.",
+          "Add the regression test."
+        ],
+        "primary_invariant": "The loader rejects malformed configuration."
+      }
+    }
+  ]
+}

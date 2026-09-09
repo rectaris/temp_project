@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import importlib.util
 from pathlib import Path
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
+from types import ModuleType
 
 
 class ValidationCommandError(ValueError):
@@ -31,12 +33,29 @@ PYTHON_SCRIPT_ARGUMENTS = {
     "scripts/plan_validation_commands.py": {("--self-test",)},
     "scripts/run-sandboxed-plan-worker.py": {("self-test",)},
     "scripts/check-copier-template.py": {()},
+    "scripts/restructure-plan.py": {("--verify",)},
+    "scripts/project_workflow/copier_fixture.py": {("--check", "tests/copier-update.sh")},
+    "scripts/project_workflow/copier_fixture_validator.py": {("--check", "tests/copier-update.sh")},
+    "tests/test-copier-fixture.py": {()},
+    "tests/test-shell-lexical.py": {()},
+    "tests/test-shell-functions.py": {()},
+    "tests/test-shell-execution.py": {()},
+    "tests/test-copier-fixture-validator.py": {()},
+    "tests/copier_fixture_validator/contract.py": {()},
+    "tests/copier_fixture_validator/inventory.py": {()},
+    "tests/copier_fixture_validator/execution.py": {()},
+    "tests/copier_fixture_validator/grammar.py": {()},
+    "tests/copier_fixture_validator/placement.py": {()},
     "tests/test-plan-restructure.py": {()},
     "tests/test-plan-execution-state.py": {()},
     "tests/test-sandboxed-plan-worker.py": {()},
     "tests/test-validation-tools.py": {()},
+    "tests/test-referent-contract.py": {()},
+    "tests/test-hooks.py": {()},
+    "tests/test-verify-copier-update.py": {()},
 }
 VALIDATE_CHANGES_FLAGS = frozenset({"--all", "--staged", "--print-only", "--json"})
+COPIER_FIXTURE_VALIDATOR_SELECTOR = "tests/select-copier-fixture-validator-tests.py"
 SHELL_SCRIPT_ARGUMENTS = {
     "scripts/lint-plan-docs.sh": {()},
     "scripts/format-plan-docs.sh": {("--check",)},
@@ -51,6 +70,52 @@ DIRECT_SCRIPT_ARGUMENTS = {
 }
 NPM_VALIDATION_SCRIPTS = frozenset({"build", "test", "test:unit", "lint", "typecheck", "verify"})
 PYTEST_PREFIXES = (("pytest",), ("python3", "-m", "pytest"), ("uv", "run", "pytest"))
+RECONSTRUCTED_PLAN_PYTHON_COMPILE = (
+    "python3",
+    "-m",
+    "py_compile",
+    "scripts/project_workflow/copier_fixture.py",
+    "tests/test-copier-fixture.py",
+)
+DECOMPOSED_LAYER_COMPILES: tuple[tuple[str, ...], ...] = (
+    (
+        "python3", "-m", "py_compile",
+        "scripts/project_workflow/shell_lexical.py",
+        "tests/test-shell-lexical.py",
+    ),
+    (
+        "python3", "-m", "py_compile",
+        "scripts/project_workflow/shell_functions.py",
+        "tests/test-shell-functions.py",
+    ),
+    (
+        "python3", "-m", "py_compile",
+        "scripts/project_workflow/shell_execution.py",
+        "tests/test-shell-execution.py",
+    ),
+    (
+        "python3", "-m", "py_compile",
+        "scripts/project_workflow/copier_fixture_validator.py",
+        "tests/test-copier-fixture-validator.py",
+    ),
+)
+DECOMPOSED_AGGREGATE_COMPILE = (
+    "python3", "-m", "py_compile",
+    "scripts/project_workflow/shell_lexical.py",
+    "tests/test-shell-lexical.py",
+    "scripts/project_workflow/shell_functions.py",
+    "tests/test-shell-functions.py",
+    "scripts/project_workflow/shell_execution.py",
+    "tests/test-shell-execution.py",
+    "scripts/project_workflow/copier_fixture_validator.py",
+    "tests/test-copier-fixture-validator.py",
+)
+_DECOMPOSED_PATHS = frozenset(
+    Path(p) for argv in DECOMPOSED_LAYER_COMPILES for p in argv[3:]
+)
+RECONSTRUCTED_PLAN_PYTHON_COMPILE_PATHS = frozenset(
+    Path(raw_path) for raw_path in RECONSTRUCTED_PLAN_PYTHON_COMPILE[3:]
+) | _DECOMPOSED_PATHS
 
 
 @dataclass(frozen=True)
@@ -119,6 +184,7 @@ def validate_argv(argv: tuple[str, ...], command: str) -> None:
             is_git_diff_check,
             is_python_script_check,
             is_validate_changes,
+            is_copier_fixture_validator_selector,
             is_shell_script_check,
             is_direct_script_check,
             is_npm_script_check,
@@ -160,6 +226,15 @@ def is_validate_changes(argv: tuple[str, ...]) -> bool:
     return not ({"--all", "--staged"} <= set(flags))
 
 
+def is_copier_fixture_validator_selector(argv: tuple[str, ...]) -> bool:
+    if argv[:2] != ("python3", COPIER_FIXTURE_VALIDATOR_SELECTOR):
+        return False
+    flags = argv[2:]
+    if len(flags) != len(set(flags)) or any(flag not in VALIDATE_CHANGES_FLAGS for flag in flags):
+        return False
+    return not ({"--all", "--staged"} <= set(flags))
+
+
 def is_shell_script_check(argv: tuple[str, ...]) -> bool:
     if len(argv) < 2 or argv[0] != "sh":
         return False
@@ -192,6 +267,12 @@ def is_script_syntax_check(argv: tuple[str, ...]) -> bool:
 def is_python_compile(argv: tuple[str, ...]) -> bool:
     if len(argv) < 4 or argv[:3] != ("python3", "-m", "py_compile"):
         return False
+    if RECONSTRUCTED_PLAN_PYTHON_COMPILE_PATHS.intersection(map(Path, argv[3:])):
+        return (
+            argv == RECONSTRUCTED_PLAN_PYTHON_COMPILE
+            or argv in DECOMPOSED_LAYER_COMPILES
+            or argv == DECOMPOSED_AGGREGATE_COMPILE
+        )
     for raw_path in argv[3:]:
         path = Path(raw_path)
         if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
@@ -223,8 +304,32 @@ def parse_validation_commands(commands: list[str]) -> list[ValidationCommand]:
     return [parse_validation_command(command) for command in commands]
 
 
+def load_planlib() -> ModuleType:
+    candidates = (
+        Path(__file__).with_name("planlib.py"),
+        Path(__file__).resolve().parents[1]
+        / "template/.project-agent-workflow/scripts/planlib.py",
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("plan_validation_commands_planlib", candidate)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    raise ValidationCommandError("could not locate managed planlib.py")
+
+
 def check_plan(path: Path) -> list[ValidationCommand]:
-    return parse_validation_commands(extract_validation_commands(path))
+    commands = parse_validation_commands(extract_validation_commands(path))
+    planlib = load_planlib()
+    try:
+        planlib.validate_validation_witness_map(planlib.parse_manifest(path), plan_path=path)
+    except ValueError as exc:
+        raise ValidationCommandError(str(exc)) from exc
+    return commands
 
 
 def run_plan(path: Path) -> None:

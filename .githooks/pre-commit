@@ -1,0 +1,83 @@
+#!/bin/sh
+# Judge the exact staged tree with the shipped plan completion gate.
+#
+# The gate owns every completion predicate. This hook only materializes the
+# view that belongs to this boundary: the complete index, expanded read-only
+# into a disposable directory, so unstaged plan bytes never change the result.
+set -eu
+
+top=$(git rev-parse --show-toplevel)
+
+# Every repository-changing task commits from its own task worktree. The guard
+# reports its own scope, so a repository that cannot carry a binding — one with
+# no canonical origin, or one that ships no guard — keeps its previous behavior
+# instead of refusing every commit.
+guard=
+for candidate in \
+  .project-agent-workflow/scripts/worktree_guard.py \
+  scripts/project_workflow/worktree_guard.py; do
+  if [ -f "$top/$candidate" ]; then
+    guard=$candidate
+    break
+  fi
+done
+if [ -n "$guard" ]; then
+  if ! refusal=$(cd "$top" && python3 "$guard" require --action "this commit" 2>&1); then
+    echo "pre-commit: $refusal" >&2
+    echo "Next: commit inside the task worktree above, then publish it. Bypass this local check with git commit --no-verify." >&2
+    exit 1
+  fi
+fi
+
+snapshot=$(mktemp -d "${TMPDIR:-/tmp}/project-agent-workflow-precommit.XXXXXX")
+trap 'rm -rf "$snapshot"' EXIT HUP INT TERM
+snapshot=$(CDPATH= cd -- "$snapshot" && pwd -P)
+
+# Expand the staged bytes themselves. Line-ending conversion would corrupt the
+# plan records the gate reads, and a configured filter driver would run an
+# arbitrary, possibly network-backed command once per file on every commit.
+set -- -c core.autocrlf=false -c core.eol=lf
+drivers=$(git -C "$top" config --name-only \
+  --get-regexp '^filter\..*\.(clean|smudge|process|required)$' 2>/dev/null |
+  sed -e 's/^filter\.//' -e 's/\.clean$//' -e 's/\.smudge$//' \
+    -e 's/\.process$//' -e 's/\.required$//' |
+  sort -u || true)
+if printf '%s\n' "$drivers" | grep -qv '^[A-Za-z0-9._-]*$'; then
+  echo "pre-commit: cannot neutralize a Git filter driver with an unusual name" >&2
+  echo "Next: rename the driver, or bypass this local check with git commit --no-verify." >&2
+  exit 1
+fi
+for driver in $drivers; do
+  set -- "$@" -c "filter.$driver.smudge=" -c "filter.$driver.process=" \
+    -c "filter.$driver.required=false"
+done
+
+# skip-worktree entries are staged content too, so a sparse checkout must not
+# hide a plan record from the judgment.
+if ! git -C "$top" "$@" checkout-index --all --force \
+  --ignore-skip-worktree-bits --prefix="$snapshot/"; then
+  echo "pre-commit: could not expand the staged tree for the plan completion gate" >&2
+  exit 1
+fi
+
+gate=
+for candidate in \
+  .project-agent-workflow/scripts/check-agent-completion.sh \
+  scripts/check-agent-completion.sh; do
+  if [ -f "$snapshot/$candidate" ]; then
+    gate=$candidate
+    break
+  fi
+done
+
+if [ -z "$gate" ]; then
+  echo "pre-commit: the staged tree ships no plan completion gate" >&2
+  echo "Next: stage .project-agent-workflow/scripts/check-agent-completion.sh or scripts/check-agent-completion.sh, or bypass this local check with git commit --no-verify." >&2
+  exit 1
+fi
+
+if ! (cd "$snapshot" && sh "$gate" --plans-only >/dev/null); then
+  echo "pre-commit: the staged tree does not pass the plan completion gate" >&2
+  echo "Next: resolve the plan lifecycle state above, then commit again." >&2
+  exit 1
+fi

@@ -1,6 +1,6 @@
 # Make pre-label referent staging visible in chat
 
-status: ready_to_archive
+status: checked
 task_type: template_workflow
 review_class: B
 human_design_required: no

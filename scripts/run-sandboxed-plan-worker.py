@@ -12,19 +12,41 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
+from urllib.parse import urlsplit
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, Sequence
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+WORKER_CONTRACT_SCHEMA_VERSION = 2
+WORKER_CONTRACT_MAX_BYTES = 65_536
+WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION = 2
+WORKER_COMPLETION_RECEIPT_MAX_BYTES = 65_536
+WORKER_COMPLETION_RECEIPT_VALUE_MAX_BYTES = 1_024
+WORKER_COMPLETION_RECEIPT_MAX_ITEMS = 64
+WORKER_COMPLETION_BLOCKER_CODES = frozenset({
+    "acceptance_evidence_mismatch", "candidate_not_derived", "command_failed",
+    "false_success_claim", "implementation_failed", "incomplete_change",
+    "invalid_completion_claims", "missing_completion_claims", "missing_input",
+    "out_of_scope_change_reported", "worker_failed",
+})
+WORKER_COMPLETION_RISK_CODES = frozenset({
+    "incomplete_change", "known_limitation", "parent_review_required", "validation_not_run",
+})
+WORKER_COMPLETION_DIAGNOSTIC_CODES = frozenset({"worker_failed"})
+WORKER_COMPLETION_EXIT_STATUS_MIN = -255
+WORKER_COMPLETION_EXIT_STATUS_MAX = 255
 DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1
 DEPENDENCY_SNAPSHOT_MAX_BYTES = 16_384
 DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
@@ -41,10 +63,19 @@ AVAILABILITY_STATE_MAX_MODEL_BYTES = 128
 ORCHESTRATION_RUN_ID_MAX_BYTES = 128
 TELEMETRY_SCHEMA_VERSION = 1
 TELEMETRY_MAX_DURATION_SECONDS = 31_536_000.0
-LIFECYCLE_STATE_SCHEMA_VERSION = 1
+LIFECYCLE_STATE_SCHEMA_VERSION = 2
 LIFECYCLE_STATE_MAX_BYTES = 8192
+PREFLIGHT_REPORT_SCHEMA_VERSION = 1
+PREFLIGHT_CLAIM_SCHEMA_VERSION = 1
+PREFLIGHT_DEFAULT_TIMEOUT_SECONDS = 60
+PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS = 120
+PREFLIGHT_OUTPUT_LIMIT_BYTES = 65_536
+PREFLIGHT_DRAIN_CHUNK_BYTES = 4096
+PREFLIGHT_DRAIN_JOIN_SECONDS = 5.0
+PREFLIGHT_LEDGER_READ_MAX_BYTES = 4_194_304
 CORRECTION_BRIEF_MAX_BYTES = 8192
-MAX_CORRECTION_ROUNDS = 2
+INDEPENDENT_REVIEW_LIMIT = 2
+MAX_CORRECTION_ROUNDS = INDEPENDENT_REVIEW_LIMIT - 1
 PLAN_PATTERN = re.compile(r"^docs/plan/active/\d{3}-[^/]+\.md$")
 STATUS_PATTERN = re.compile(r"^(?:\?\?|[ MARCUDT][ MD]) (.+)$")
 CODEX_ERROR_LINE = re.compile(r"^(?:ERROR|FATAL)(?::|\b)", re.IGNORECASE)
@@ -168,6 +199,13 @@ ARTIFACT_NAMES = (
     "worker-fallback.stderr",
     "worker-fallback-last-message.txt",
     "candidate.patch",
+    "worker-contract.json",
+    "worker-completion-receipt.json",
+    "worker-primary-completion-receipt.json",
+    "worker-fallback-completion-receipt.json",
+    "worker-process-result.json",
+    "worker-primary-process-result.json",
+    "worker-fallback-process-result.json",
     "manifest.json",
     "validation.json",
 )
@@ -188,6 +226,9 @@ RESERVED_WORKER_ENV = frozenset(
         f"{ENV_PREFIX}WORKER_REPO",
         f"{ENV_PREFIX}SCRATCH_DIR",
         f"{ENV_PREFIX}PLAN_PATH",
+        f"{ENV_PREFIX}WORKER_CONTRACT",
+        f"{ENV_PREFIX}COMPLETION_CLAIMS",
+        f"{ENV_PREFIX}NEW_FILE_ROOT",
         f"{ENV_PREFIX}CORRECTION_BRIEF",
     }
 )
@@ -402,6 +443,26 @@ def hash_file(path: Path) -> str:
         while chunk := handle.read(SHA256_BUFFER):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validation_failure_identity(
+    *, suite: str, kind: str, command_index: int, argv: Sequence[str], exit_status: int
+) -> dict[str, object]:
+    identity = {
+        "suite": suite,
+        "kind": kind,
+        "command_index": command_index,
+        "argv": list(argv),
+    }
+    operation_digest = "sha256:" + hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "kind": kind,
+        "command_index": command_index,
+        "operation_digest": operation_digest,
+        "observed_exit_status": exit_status,
+    }
 
 
 def digest_tree(
@@ -951,6 +1012,63 @@ def load_planlib() -> ModuleType:
     raise RunnerError("could not locate managed planlib.py")
 
 
+WORKTREE_GUARD_MODULE_NAME = "worktree_guard"
+WORKTREE_GUARD_CANDIDATES = (
+    "scripts/project_workflow/worktree_guard.py",
+    ".project-agent-workflow/scripts/worktree_guard.py",
+)
+
+
+def load_worktree_guard(repo_root: Path) -> ModuleType | None:
+    """Load the worktree guard this repository ships, once per process.
+
+    A repository that ships no guard is left with its previous behaviour. The
+    loaded instance is reused because the guard holds process-local lock state
+    that a second execution would silently duplicate, but only when it came from
+    this repository: a cache keyed by name alone would let one repository's
+    guard govern another that ships none.
+    """
+
+    resolved = None
+    for relative in WORKTREE_GUARD_CANDIDATES:
+        candidate = repo_root / relative
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            break
+    if resolved is None:
+        return None
+    cached = sys.modules.get(WORKTREE_GUARD_MODULE_NAME)
+    if cached is not None and Path(getattr(cached, "__file__", "") or "/").resolve() == resolved:
+        return cached
+    spec = importlib.util.spec_from_file_location(WORKTREE_GUARD_MODULE_NAME, resolved)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def require_plan_worktree(repo_root: Path, plan_rel: str | None, action: str) -> None:
+    """Require this runner operation to start from its bound plan worktree.
+
+    The runner clones the source repository for isolation, so its writes land in
+    the checkout it was started from. Starting it in the pre-existing checkout
+    would therefore apply an accepted candidate there, which is the boundary
+    this check keeps closed before any repository effect.
+    """
+
+    guard = load_worktree_guard(repo_root)
+    if guard is None:
+        return
+    try:
+        guard.require_task_worktree(
+            repo_root, kind=guard.PLAN_TASK, plan=plan_rel, action=action
+        )
+    except guard.GuardError as exc:
+        raise RunnerError(str(exc)) from exc
+
+
 def load_plan_validation_commands() -> ModuleType:
     script_dir = Path(__file__).resolve().parent
     candidates = (
@@ -993,6 +1111,128 @@ def run_subprocess(
         detail = stderr or stdout or f"exit {result.returncode}"
         raise RunnerError(f"command failed ({' '.join(argv)}): {detail}")
     return result
+
+
+def kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Kill the whole session started for one bounded command.
+
+    The command runs under Bubblewrap in its own session, so signalling the
+    group reaches the sandbox and every descendant it started.
+    """
+
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def run_bounded_subprocess(
+    argv: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout_seconds: float,
+    output_limit_bytes: int,
+) -> dict[str, Any]:
+    """Run one command under a hard time bound and a hard output bound.
+
+    Output is capped while it is read rather than after the command finishes,
+    so a flooding command cannot exhaust memory before the limit applies.
+    Reaching either bound kills the process group; neither bound is a retry
+    signal, and the caller records the reason with the bounded output.
+
+    A reader that cannot drain its pipe to completion fails closed. It kills
+    the process group and reports the failure, so a partially read capture is
+    never returned as if the command had simply produced little output.
+    """
+
+    process = subprocess.Popen(  # noqa: S603 - argv is parent-owned and fully resolved
+        list(argv),
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    lock = threading.Lock()
+    buffers: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
+    budget = {"remaining": max(0, int(output_limit_bytes)), "truncated": False}
+    read_failures: list[str] = []
+
+    def drain(stream: Any, key: str) -> None:
+        try:
+            while True:
+                chunk = stream.read(PREFLIGHT_DRAIN_CHUNK_BYTES)
+                if not chunk:
+                    return
+                with lock:
+                    room = budget["remaining"]
+                    if room:
+                        buffers[key] += chunk[:room]
+                        budget["remaining"] = room - min(room, len(chunk))
+                    overflowed = len(chunk) > room
+                    if overflowed:
+                        budget["truncated"] = True
+                if overflowed:
+                    kill_process_group(process)
+                    return
+        except (OSError, MemoryError) as exc:
+            with lock:
+                read_failures.append(f"{key} reader stopped early: {exc.__class__.__name__}")
+            kill_process_group(process)
+            return
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    threads = [
+        threading.Thread(target=drain, args=(process.stdout, "stdout"), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, "stderr"), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    timed_out = False
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill_process_group(process)
+        try:
+            process.wait(timeout=PREFLIGHT_DRAIN_JOIN_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    for thread in threads:
+        thread.join(timeout=PREFLIGHT_DRAIN_JOIN_SECONDS)
+    stalled = [thread for thread in threads if thread.is_alive()]
+    if stalled:
+        kill_process_group(process)
+        for thread in stalled:
+            thread.join(timeout=PREFLIGHT_DRAIN_JOIN_SECONDS)
+        with lock:
+            read_failures.append("a reader did not finish after the process group was killed")
+    with lock:
+        failures = sorted(set(read_failures))
+        truncated = budget["truncated"]
+        stdout = bytes(buffers["stdout"])
+        stderr = bytes(buffers["stderr"])
+    if failures:
+        raise RunnerError(
+            "bounded command output could not be read to completion: " + "; ".join(failures)
+        )
+    return {
+        "returncode": int(process.returncode if process.returncode is not None else -1),
+        "stdout": stdout,
+        "stderr": stderr,
+        "timed_out": timed_out,
+        "output_truncated": truncated,
+    }
 
 
 def require_executable(name: str, configured: str) -> str:
@@ -1323,15 +1563,13 @@ def parse_write_scope(entries: Sequence[str]) -> list[str]:
     for raw in entries:
         value, _ = normalize_repo_relpath(raw, allow_prefix=True, label="write_scope entry")
         if value in seen:
-            continue
+            raise RunnerError(f"write_scope must not contain duplicate entries: {value}")
         normalized.append(value)
         seen.add(value)
-    collapsed: list[str] = []
     for entry in normalized:
         if any(parent.endswith("/") and entry.startswith(parent) for parent in normalized if parent != entry):
-            continue
-        collapsed.append(entry)
-    return collapsed
+            raise RunnerError(f"write_scope must not contain overlapping entries: {entry}")
+    return normalized
 
 
 def scope_allows_path(scope_entries: Sequence[str], relative_path: str) -> bool:
@@ -1358,6 +1596,73 @@ def is_validation_authority_path(relative_path: str) -> bool:
     )
 
 
+def scope_entries_overlap(left: str, right: str) -> bool:
+    left_value, left_prefix = normalize_repo_relpath(left, allow_prefix=True, label="scope entry")
+    right_value, right_prefix = normalize_repo_relpath(right, allow_prefix=True, label="protected entry")
+    left_body = left_value[:-1] if left_prefix else left_value
+    right_body = right_value[:-1] if right_prefix else right_value
+    if left_body == right_body:
+        return True
+    if left_prefix and right_body.startswith(left_body + "/"):
+        return True
+    return right_prefix and left_body.startswith(right_body + "/")
+
+
+def normalized_contract_paths(entries: object, *, label: str) -> list[str]:
+    if not isinstance(entries, list):
+        raise RunnerError(f"plan {label} must be a list")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in entries:
+        if not isinstance(raw, str):
+            raise RunnerError(f"plan {label} entry must be text")
+        value, _ = normalize_repo_relpath(raw, label=f"{label} entry")
+        if value in seen:
+            raise RunnerError(f"plan {label} must not contain duplicate entries: {value}")
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def require_safe_delegated_write_scope(
+    repo_root: Path,
+    plan_rel: str,
+    values: dict[str, str | list[str]],
+    normalized_scope: Sequence[str],
+) -> None:
+    context_files = normalized_contract_paths(values.get("context_files"), label="context_files")
+    required_specs = normalized_contract_paths(values.get("required_specs"), label="required_specs")
+    declared_authority = values.get("validation_authority_scope", [])
+    if not isinstance(declared_authority, list):
+        raise RunnerError("plan validation_authority_scope must be a list")
+    normalized_declared_authority = parse_write_scope(declared_authority)
+    protected = [plan_rel, *context_files, *required_specs]
+    try:
+        protected.append(Path(__file__).resolve().relative_to(repo_root.resolve()).as_posix())
+    except ValueError:
+        pass
+    for entry in normalized_scope:
+        if entry.endswith("/"):
+            raise RunnerError(f"writable delegation requires one explicit file path, not a directory prefix: {entry}")
+        if any(scope_entries_overlap(entry, item) for item in protected):
+            raise RunnerError(f"write_scope overlaps a read-only plan, runner, context, or specification input: {entry}")
+        if is_validation_authority_path(entry) or any(
+            scope_entries_overlap(entry, item)
+            for item in (*VALIDATION_AUTHORITY_SCOPE, *normalized_declared_authority)
+        ):
+            raise RunnerError(f"write_scope reaches parent-owned validation authority: {entry}")
+        ensure_no_symlink_path_trick(repo_root, entry)
+        target = repo_root / entry
+        if target.exists() or target.is_symlink():
+            if not target.is_file() or target.is_symlink():
+                raise RunnerError(f"explicit write_scope target must be a regular file: {entry}")
+            continue
+        parent = target.parent
+        ensure_no_symlink_path_trick(repo_root, parent.relative_to(repo_root).as_posix())
+        if not parent.is_dir() or parent.is_symlink():
+            raise RunnerError(f"new explicit write_scope target requires an existing regular parent directory: {entry}")
+
+
 def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path, str, dict[str, str | list[str]], list[str]]:
     plan_rel = normalize_manifest_path(repo_root, plan_arg)
     if not PLAN_PATTERN.fullmatch(plan_rel):
@@ -1366,6 +1671,10 @@ def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path
     if not plan_path.is_file():
         raise RunnerError(f"missing active plan: {plan_rel}")
     values = planlib.require_manifest_fields(plan_path)
+    if values.get("implementation_mode") == "parent_direct":
+        raise RunnerError(
+            "parent-direct plans cannot start a sandboxed candidate worker"
+        )
     status = planlib.manifest_scalar(values, "status")
     if status != "in_progress":
         raise RunnerError(f"plan must be in_progress: {plan_rel}")
@@ -1375,7 +1684,776 @@ def load_plan(planlib: ModuleType, repo_root: Path, plan_arg: str) -> tuple[Path
     if not isinstance(write_scope, list):
         raise RunnerError(f"plan write_scope must be a list: {plan_rel}")
     normalized_scope = parse_write_scope(write_scope)
+    require_safe_delegated_write_scope(repo_root, plan_rel, values, normalized_scope)
+    require_primary_invariant(plan_path, values)
     return plan_path, plan_rel, values, normalized_scope
+
+
+def require_primary_invariant(plan_path: Path, values: dict[str, str | list[str]]) -> str:
+    """Require one explicit delegation boundary without tightening archival parsing."""
+    declarations = re.findall(
+        r"^primary_invariant:\s*(.*)$",
+        plan_path.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if len(declarations) != 1 or not declarations[0].strip():
+        raise RunnerError("writable delegated plan must declare exactly one nonblank primary_invariant")
+    value = values.get("primary_invariant")
+    if not isinstance(value, str) or value.strip() != declarations[0].strip():
+        raise RunnerError("plan primary_invariant is ambiguous")
+    return value.strip()
+
+
+def canonical_repository_origin(raw: str) -> str:
+    """Normalize one credential-free network origin without retaining the raw URL."""
+    if not raw or len(raw.encode("utf-8")) > 4096 or any(ord(char) < 0x20 for char in raw):
+        raise RunnerError("repository origin must be one bounded nonblank URL")
+    if "://" not in raw:
+        match = re.fullmatch(r"(?:[^@/:\s]+@)?([^/:\s]+):(.+)", raw)
+        if match is None:
+            raise RunnerError("repository origin must be a clone-portable network URL")
+        host = match.group(1).lower()
+        path = match.group(2)
+        port = ""
+    else:
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() not in {"https", "ssh", "git"} or parsed.hostname is None:
+            raise RunnerError("repository origin must use https, ssh, or git")
+        if parsed.query or parsed.fragment:
+            raise RunnerError("repository origin must not contain a query or fragment")
+        host = parsed.hostname.lower()
+        try:
+            parsed_port = parsed.port
+        except ValueError as exc:
+            raise RunnerError("repository origin has an invalid port") from exc
+        default_port = {"https": 443, "ssh": 22, "git": 9418}[parsed.scheme.lower()]
+        port = f":{parsed_port}" if parsed_port is not None and parsed_port != default_port else ""
+        path = parsed.path.lstrip("/")
+    path = path.rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if not host or not path or any(part in {"", ".", ".."} for part in PurePosixPath(path).parts):
+        raise RunnerError("repository origin has an invalid repository path")
+    return f"{host}{port}/{path}"
+
+
+def derive_repository_identity(repo_root: Path, git_bin: str) -> str:
+    result = git(repo_root, git_bin, "config", "--get", "remote.origin.url", check=False)
+    if result.returncode != 0:
+        raise RunnerError("worker execution contract requires a canonical remote.origin.url")
+    try:
+        origin = result.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise RunnerError("repository origin is not valid UTF-8") from exc
+    canonical = canonical_repository_origin(origin)
+    return "origin-sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def unique_contract_text_items(entries: object, *, label: str, require_nonempty: bool) -> list[str]:
+    if not isinstance(entries, list) or (require_nonempty and not entries):
+        qualifier = "a nonempty list" if require_nonempty else "a list"
+        raise RunnerError(f"plan {label} must be {qualifier} of nonblank text")
+    seen: set[str] = set()
+    validated: list[str] = []
+    for item in entries:
+        if not isinstance(item, str) or not item.strip():
+            raise RunnerError(f"plan {label} must be a list of nonblank text")
+        key = item.strip()
+        if key in seen:
+            raise RunnerError(f"plan {label} must not contain duplicate entries")
+        seen.add(key)
+        validated.append(item)
+    return validated
+
+
+def validate_contract_lineage(lineage: object) -> dict[str, object]:
+    if not isinstance(lineage, dict):
+        raise RunnerError("worker execution contract lineage must be an object")
+    kind = lineage.get("attempt_kind")
+    expected = {"attempt_kind", "correction_round", "attempt_label"}
+    if kind == "correction":
+        expected.update(
+            {"prior_manifest_digest", "prior_patch_digest", "correction_brief_digest"}
+        )
+    if set(lineage) != expected:
+        raise RunnerError("worker execution contract lineage has an invalid exact field shape")
+    round_value = lineage.get("correction_round")
+    if kind not in {"initial", "correction"} or isinstance(round_value, bool) or not isinstance(round_value, int):
+        raise RunnerError("worker execution contract lineage has invalid values")
+    if (kind == "initial" and round_value != 0) or (kind == "correction" and round_value < 1):
+        raise RunnerError("worker execution contract lineage has an invalid correction round")
+    if lineage.get("attempt_label") not in {"primary", "fallback", "custom"}:
+        raise RunnerError("worker execution contract lineage has an invalid attempt label")
+    if kind == "correction":
+        for key in ("prior_manifest_digest", "prior_patch_digest", "correction_brief_digest"):
+            value = lineage.get(key)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise RunnerError(f"worker execution contract lineage has an invalid digest: {key}")
+    return lineage
+
+
+def load_exact_json_object(content: bytes, *, label: str) -> dict[str, Any]:
+    def exact_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise RunnerError(f"{label} contains a duplicate field: {key}")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(content.decode("utf-8"), object_pairs_hook=exact_pairs)
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise RunnerError(f"{label} is not valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise RunnerError(f"{label} must contain one JSON object")
+    return value
+
+
+def prefixed_sha256(value: bytes | str) -> str:
+    payload = value.encode("utf-8") if isinstance(value, str) else value
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def require_receipt_digest(value: object, *, label: str, allow_origin: bool = False) -> str:
+    prefix = r"(?:origin-)?sha256" if allow_origin else "sha256"
+    if not isinstance(value, str) or re.fullmatch(prefix + r":[0-9a-f]{64}", value) is None:
+        raise RunnerError(f"worker completion receipt has an invalid {label}")
+    return value
+
+
+def require_receipt_code(value: object, *, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value.encode("utf-8")) > WORKER_COMPLETION_RECEIPT_VALUE_MAX_BYTES
+        or re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", value) is None
+    ):
+        raise RunnerError(f"worker completion receipt contains prohibited or oversized {label}")
+    return value
+
+
+def require_receipt_code_list(
+    value: object, *, label: str, allowed: frozenset[str]
+) -> list[str]:
+    if not isinstance(value, list) or len(value) > WORKER_COMPLETION_RECEIPT_MAX_ITEMS:
+        raise RunnerError(f"worker completion receipt has an invalid {label} list")
+    result = [require_receipt_code(item, label=label) for item in value]
+    if any(item not in allowed for item in result):
+        raise RunnerError(f"worker completion receipt contains a non-allowlisted {label}")
+    if len(result) != len(set(result)):
+        raise RunnerError(f"worker completion receipt has duplicate {label} entries")
+    return result
+
+
+def require_completion_exit_status(value: object, *, label: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not WORKER_COMPLETION_EXIT_STATUS_MIN <= value <= WORKER_COMPLETION_EXIT_STATUS_MAX
+    ):
+        raise RunnerError(f"worker completion receipt has an invalid or unbounded {label}")
+    return value
+
+
+def validate_worker_completion_claims(value: object) -> dict[str, Any]:
+    required = {
+        "attempt_result", "acceptance_evidence", "commands_attempted", "blockers",
+        "residual_risks", "out_of_scope_change",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        if isinstance(value, dict) and "out_of_scope_change" not in value:
+            raise RunnerError("worker completion receipt is missing the out-of-scope declaration")
+        raise RunnerError("worker completion receipt claims have unknown or missing fields")
+    if value["attempt_result"] not in {"success", "failure"}:
+        raise RunnerError("worker completion receipt has an invalid attempt result")
+    evidence = value["acceptance_evidence"]
+    if not isinstance(evidence, list) or len(evidence) > WORKER_COMPLETION_RECEIPT_MAX_ITEMS:
+        raise RunnerError("worker completion receipt has invalid acceptance evidence")
+    normalized_evidence: list[dict[str, str]] = []
+    seen_evidence: set[str] = set()
+    for item in evidence:
+        if not isinstance(item, dict) or set(item) != {"acceptance_digest", "claim"}:
+            raise RunnerError("worker completion receipt has invalid acceptance evidence")
+        digest = require_receipt_digest(item["acceptance_digest"], label="acceptance digest")
+        if digest in seen_evidence or item["claim"] not in {"satisfied", "not_satisfied"}:
+            raise RunnerError("worker completion receipt has invalid acceptance evidence")
+        seen_evidence.add(digest)
+        normalized_evidence.append({"acceptance_digest": digest, "claim": item["claim"]})
+    commands = value["commands_attempted"]
+    if not isinstance(commands, list) or len(commands) > WORKER_COMPLETION_RECEIPT_MAX_ITEMS:
+        raise RunnerError("worker completion receipt has invalid command evidence")
+    normalized_commands: list[dict[str, object]] = []
+    seen_commands: set[str] = set()
+    for index, item in enumerate(commands, start=1):
+        if not isinstance(item, dict) or set(item) != {"command_id", "exit_status"}:
+            raise RunnerError("worker completion receipt has invalid command evidence")
+        command_id = require_receipt_code(item["command_id"], label="command identifier")
+        if command_id != f"worker-check-{index}":
+            raise RunnerError("worker completion receipt contains a non-derived command identifier")
+        status = require_completion_exit_status(
+            item["exit_status"], label="command exit status"
+        )
+        if command_id in seen_commands:
+            raise RunnerError("worker completion receipt has invalid command evidence")
+        seen_commands.add(command_id)
+        normalized_commands.append({"command_id": command_id, "exit_status": status})
+    if not isinstance(value["out_of_scope_change"], bool):
+        raise RunnerError("worker completion receipt has an invalid out-of-scope declaration")
+    return {
+        "attempt_result": value["attempt_result"],
+        "acceptance_evidence": normalized_evidence,
+        "commands_attempted": normalized_commands,
+        "blockers": require_receipt_code_list(
+            value["blockers"], label="blocker", allowed=WORKER_COMPLETION_BLOCKER_CODES
+        ),
+        "residual_risks": require_receipt_code_list(
+            value["residual_risks"], label="residual risk", allowed=WORKER_COMPLETION_RISK_CODES
+        ),
+        "out_of_scope_change": value["out_of_scope_change"],
+    }
+
+
+def validate_receipt_attempt(value: object) -> dict[str, Any]:
+    required = {"attempt_id", "attempt_kind", "correction_round", "correction_lineage"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise RunnerError("worker completion receipt attempt has an invalid exact field shape")
+    attempt_id = require_receipt_code(value["attempt_id"], label="attempt identifier")
+    kind = value["attempt_kind"]
+    round_value = value["correction_round"]
+    lineage = value["correction_lineage"]
+    if kind not in {"initial", "correction"} or isinstance(round_value, bool) or not isinstance(round_value, int):
+        raise RunnerError("worker completion receipt attempt lineage is invalid")
+    if kind == "initial":
+        if round_value != 0 or lineage is not None:
+            raise RunnerError("worker completion receipt attempt lineage is invalid")
+    elif (
+        round_value < 1
+        or not isinstance(lineage, dict)
+        or set(lineage) != {"prior_manifest_digest"}
+    ):
+        raise RunnerError("worker completion receipt attempt lineage is invalid")
+    else:
+        lineage = {
+            "prior_manifest_digest": require_receipt_digest(
+                lineage["prior_manifest_digest"], label="prior manifest digest"
+            )
+        }
+    return {
+        "attempt_id": attempt_id,
+        "attempt_kind": kind,
+        "correction_round": round_value,
+        "correction_lineage": lineage,
+    }
+
+
+def validate_receipt_candidate(value: object) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"patch_digest", "changed_paths"}:
+        raise RunnerError("worker completion receipt candidate has an invalid exact field shape")
+    raw_paths = value["changed_paths"]
+    if not isinstance(raw_paths, list) or not raw_paths or len(raw_paths) > WORKER_COMPLETION_RECEIPT_MAX_ITEMS:
+        raise RunnerError("worker completion receipt changed paths are invalid")
+    paths: list[str] = []
+    for raw in raw_paths:
+        if not isinstance(raw, str):
+            raise RunnerError("worker completion receipt changed paths are invalid")
+        normalized, _ = normalize_repo_relpath(raw, label="worker completion receipt changed path")
+        paths.append(normalized)
+    if len(paths) != len(set(paths)) or paths != sorted(paths):
+        raise RunnerError("worker completion receipt changed paths are not unique and sorted")
+    return {
+        "patch_digest": require_receipt_digest(value["patch_digest"], label="patch digest"),
+        "changed_paths": paths,
+    }
+
+
+def validate_worker_completion_receipt(
+    value: object,
+    *,
+    expected: dict[str, object] | None = None,
+    consumed_attempt_ids: Sequence[str] = (),
+) -> dict[str, Any]:
+    required = {
+        "schema_version", "repository_identity", "source_head", "plan_path", "plan_digest",
+        "worker_contract_digest", "orchestration_run_id", "plan_execution_attempt_id",
+        "attempt", "candidate", "process", "claims",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise RunnerError("worker completion receipt has unknown or missing fields")
+    if value["schema_version"] != WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION:
+        raise RunnerError("worker completion receipt has an unsupported schema version")
+    repository_identity = require_receipt_digest(
+        value["repository_identity"], label="repository identity", allow_origin=True
+    )
+    source_head = value["source_head"]
+    if not isinstance(source_head, str) or re.fullmatch(r"[0-9a-f]{40}", source_head) is None:
+        raise RunnerError("worker completion receipt has an invalid source HEAD")
+    if not isinstance(value["plan_path"], str):
+        raise RunnerError("worker completion receipt plan path is invalid")
+    plan_path, _ = normalize_repo_relpath(
+        value["plan_path"], label="worker completion receipt plan path"
+    )
+    plan_digest = require_receipt_digest(value["plan_digest"], label="plan digest")
+    contract_digest = require_receipt_digest(
+        value["worker_contract_digest"], label="worker contract digest"
+    )
+    run_id = value["orchestration_run_id"]
+    validate_bounded_text(run_id, "worker completion receipt run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES)
+    plan_execution_attempt_id = require_receipt_code(
+        value["plan_execution_attempt_id"], label="plan execution attempt identifier"
+    )
+    attempt = validate_receipt_attempt(value["attempt"])
+    if attempt["attempt_id"] in consumed_attempt_ids:
+        raise RunnerError("worker completion receipt replays a consumed attempt")
+    candidate = validate_receipt_candidate(value["candidate"])
+    process = value["process"]
+    if not isinstance(process, dict) or set(process) != {"exit_status", "diagnostic_codes"}:
+        raise RunnerError("worker completion receipt process has an invalid exact field shape")
+    exit_status = require_completion_exit_status(
+        process["exit_status"], label="process exit status"
+    )
+    diagnostic_codes = require_receipt_code_list(
+        process["diagnostic_codes"],
+        label="diagnostic",
+        allowed=WORKER_COMPLETION_DIAGNOSTIC_CODES,
+    )
+    claims = validate_worker_completion_claims(value["claims"])
+    if claims["attempt_result"] == "success" and exit_status != 0:
+        raise RunnerError("worker completion receipt makes a false success claim")
+    if claims["attempt_result"] == "success" and any(
+        item["claim"] != "satisfied" for item in claims["acceptance_evidence"]
+    ):
+        raise RunnerError("worker completion receipt success has unsatisfied acceptance evidence")
+    if candidate is not None and exit_status != 0:
+        raise RunnerError("worker completion receipt binds a candidate to a failed process")
+    if (exit_status == 0) != (not diagnostic_codes):
+        raise RunnerError("worker completion receipt diagnostics differ from process status")
+    if claims["attempt_result"] == "success" and (candidate is None or not claims["acceptance_evidence"]):
+        raise RunnerError("worker completion receipt success lacks candidate evidence")
+    if candidate is None and claims["acceptance_evidence"]:
+        raise RunnerError("worker completion receipt has evidence without a candidate")
+    if candidate is not None and not claims["acceptance_evidence"]:
+        raise RunnerError("worker completion receipt candidate lacks acceptance evidence")
+    normalized = {
+        "schema_version": WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION,
+        "repository_identity": repository_identity,
+        "source_head": source_head,
+        "plan_path": plan_path,
+        "plan_digest": plan_digest,
+        "worker_contract_digest": contract_digest,
+        "orchestration_run_id": run_id,
+        "plan_execution_attempt_id": plan_execution_attempt_id,
+        "attempt": attempt,
+        "candidate": candidate,
+        "process": {"exit_status": exit_status, "diagnostic_codes": diagnostic_codes},
+        "claims": claims,
+    }
+    if expected is not None:
+        for field, error in (
+            ("repository_identity", "repository identity mismatch"),
+            ("source_head", "stale receipt source HEAD"),
+            ("plan_path", "receipt plan path mismatch"),
+            ("plan_digest", "receipt plan digest mismatch"),
+            ("worker_contract_digest", "receipt worker contract digest mismatch"),
+            ("orchestration_run_id", "receipt orchestration run mismatch"),
+            ("plan_execution_attempt_id", "receipt plan execution attempt mismatch"),
+            ("attempt", "receipt attempt lineage mismatch"),
+        ):
+            if field in expected and normalized[field] != expected[field]:
+                raise RunnerError(error)
+        if "candidate" in expected:
+            expected_candidate = expected["candidate"]
+            if normalized["candidate"] is None or not isinstance(expected_candidate, dict):
+                if normalized["candidate"] != expected_candidate:
+                    raise RunnerError("receipt candidate mismatch")
+            else:
+                if normalized["candidate"]["patch_digest"] != expected_candidate.get("patch_digest"):
+                    raise RunnerError("receipt patch digest mismatch")
+                if normalized["candidate"]["changed_paths"] != expected_candidate.get("changed_paths"):
+                    raise RunnerError("receipt changed paths mismatch")
+        if "acceptance_digests" in expected:
+            expected_digests = expected["acceptance_digests"]
+            observed_digests = [
+                item["acceptance_digest"] for item in normalized["claims"]["acceptance_evidence"]
+            ]
+            if not isinstance(expected_digests, list) or set(observed_digests) != set(expected_digests):
+                raise RunnerError("receipt acceptance evidence differs from the worker contract")
+    return normalized
+
+
+def serialize_worker_completion_receipt(value: object) -> bytes:
+    normalized = validate_worker_completion_receipt(value)
+    content = (json.dumps(normalized, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(content) > WORKER_COMPLETION_RECEIPT_MAX_BYTES:
+        raise RunnerError("worker completion receipt exceeds the byte bound")
+    return content
+
+
+def load_worker_completion_receipt(content: bytes) -> dict[str, Any]:
+    if len(content) > WORKER_COMPLETION_RECEIPT_MAX_BYTES:
+        raise RunnerError("worker completion receipt exceeds the byte bound")
+    return validate_worker_completion_receipt(
+        load_exact_json_object(content, label="worker completion receipt")
+    )
+
+
+def verify_worker_completion_receipt_path(attempt_output: Path, relative_path: str) -> Path:
+    normalized, _ = normalize_repo_relpath(relative_path, label="worker completion receipt path")
+    if normalized != "worker-completion-receipt.json":
+        raise RunnerError("worker completion receipt path must use the fixed attempt output name")
+    path = attempt_output / normalized
+    ensure_no_symlink_components(path)
+    if path.is_symlink():
+        raise RunnerError("worker completion receipt path must not be a symlink")
+    return path
+
+
+def receipt_attempt_from_contract_lineage(
+    lineage: dict[str, object], *, attempt_id: str | None = None
+) -> dict[str, Any]:
+    validated = validate_contract_lineage(lineage)
+    kind = validated["attempt_kind"]
+    round_value = int(validated["correction_round"])
+    label = str(validated["attempt_label"])
+    return {
+        "attempt_id": attempt_id or f"{kind}-{round_value}-{label}",
+        "attempt_kind": kind,
+        "correction_round": round_value,
+        "correction_lineage": None if kind == "initial" else {
+            "prior_manifest_digest": "sha256:" + str(validated["prior_manifest_digest"])
+        },
+    }
+
+
+def safe_failure_claims(code: str) -> dict[str, Any]:
+    if code not in WORKER_COMPLETION_BLOCKER_CODES:
+        raise RunnerError("safe worker completion blocker is not allowlisted")
+    return {
+        "attempt_result": "failure",
+        "acceptance_evidence": [],
+        "commands_attempted": [],
+        "blockers": [require_receipt_code(code, label="blocker")],
+        "residual_risks": ["parent_review_required"],
+        "out_of_scope_change": False,
+    }
+
+
+def load_attempt_completion_claims(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not path.exists() and not path.is_symlink():
+        return None, "missing_completion_claims"
+    try:
+        content = read_bounded_regular_file(
+            path, WORKER_COMPLETION_RECEIPT_MAX_BYTES, "worker completion claims"
+        )
+        claims = validate_worker_completion_claims(
+            load_exact_json_object(content, label="worker completion claims")
+        )
+    except RunnerError:
+        return None, "invalid_completion_claims"
+    return claims, None
+
+
+def completion_receipt_artifact_key(label: str) -> str:
+    return (
+        "worker-completion-receipt.json"
+        if label == "custom"
+        else f"worker-{label}-completion-receipt.json"
+    )
+
+
+def process_result_artifact_key(label: str) -> str:
+    return "worker-process-result.json" if label == "custom" else f"worker-{label}-process-result.json"
+
+
+def validate_attempt_process_result(value: object) -> dict[str, Any]:
+    required = {
+        "schema_version", "attempt_id", "exit_status", "diagnostic_codes",
+        "stdout_digest", "stderr_digest",
+    }
+    if not isinstance(value, dict) or set(value) != required or value["schema_version"] != 1:
+        raise RunnerError("worker process result has an invalid exact schema")
+    attempt_id = require_receipt_code(value["attempt_id"], label="attempt identifier")
+    exit_status = require_completion_exit_status(
+        value["exit_status"], label="process exit status"
+    )
+    diagnostic_codes = require_receipt_code_list(
+        value["diagnostic_codes"],
+        label="diagnostic",
+        allowed=WORKER_COMPLETION_DIAGNOSTIC_CODES,
+    )
+    if (exit_status == 0) != (not diagnostic_codes):
+        raise RunnerError("worker process result diagnostics differ from exit status")
+    stdout_digest = require_receipt_digest(value["stdout_digest"], label="stdout digest")
+    stderr_digest = require_receipt_digest(value["stderr_digest"], label="stderr digest")
+    return {
+        "schema_version": 1,
+        "attempt_id": attempt_id,
+        "exit_status": exit_status,
+        "diagnostic_codes": diagnostic_codes,
+        "stdout_digest": stdout_digest,
+        "stderr_digest": stderr_digest,
+    }
+
+
+def write_attempt_process_result(
+    *,
+    label: str,
+    attempt_id: str,
+    result: subprocess.CompletedProcess[bytes],
+    stdout_digest: str,
+    stderr_digest: str,
+    reserved_artifacts: dict[str, Path],
+) -> tuple[Path, str, dict[str, Any]]:
+    payload = validate_attempt_process_result(
+        {
+            "schema_version": 1,
+            "attempt_id": attempt_id,
+            "exit_status": result.returncode,
+            "diagnostic_codes": [] if result.returncode == 0 else ["worker_failed"],
+            "stdout_digest": "sha256:" + stdout_digest,
+            "stderr_digest": "sha256:" + stderr_digest,
+        }
+    )
+    content = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    path = reserved_artifacts[process_result_artifact_key(label)]
+    path.write_bytes(content)
+    return path, prefixed_sha256(content), payload
+
+
+def write_attempt_completion_receipt(
+    attempt: dict[str, Any],
+    *,
+    reserved_artifacts: dict[str, Path],
+    candidate: dict[str, Any] | None,
+    final: bool,
+) -> dict[str, Any]:
+    contract = load_exact_json_object(
+        attempt["contract_bytes"], label="worker execution contract"
+    )
+    result: subprocess.CompletedProcess[bytes] = attempt["result"]
+    claims = attempt["completion_claims"]
+    claims_error = attempt["completion_claims_error"]
+    diagnostic_codes = [] if result.returncode == 0 else ["worker_failed"]
+    if claims_error is not None:
+        selected_claims = safe_failure_claims(claims_error)
+        selected_candidate = None
+    elif result.returncode != 0 and claims["attempt_result"] == "success":
+        selected_claims = safe_failure_claims("false_success_claim")
+        selected_candidate = None
+        attempt["completion_claims_error"] = "false_success_claim"
+    elif not final:
+        selected_claims = safe_failure_claims("candidate_not_derived")
+        selected_candidate = None
+    else:
+        expected_acceptance_list = [
+            prefixed_sha256(item) for item in contract["acceptance"]
+        ]
+        expected_acceptance = set(expected_acceptance_list)
+        observed_acceptance = {
+            item["acceptance_digest"] for item in claims["acceptance_evidence"]
+        }
+        bounded_failure_evidence = [
+            {"acceptance_digest": digest, "claim": "not_satisfied"}
+            for digest in expected_acceptance_list
+        ]
+        if claims["attempt_result"] == "failure":
+            selected_claims = {
+                **claims,
+                "acceptance_evidence": (
+                    bounded_failure_evidence if candidate is not None else []
+                ),
+            }
+            selected_candidate = candidate
+        elif observed_acceptance != expected_acceptance:
+            selected_claims = {
+                **safe_failure_claims("acceptance_evidence_mismatch"),
+                "acceptance_evidence": bounded_failure_evidence,
+            }
+            selected_candidate = candidate
+            attempt["completion_claims_error"] = "acceptance_evidence_mismatch"
+        elif claims["out_of_scope_change"]:
+            selected_claims = {
+                **safe_failure_claims("out_of_scope_change_reported"),
+                "acceptance_evidence": bounded_failure_evidence,
+            }
+            selected_candidate = candidate
+            attempt["completion_claims_error"] = "out_of_scope_change_reported"
+        else:
+            selected_claims = claims
+            selected_candidate = candidate
+    receipt = {
+        "schema_version": WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION,
+        "repository_identity": contract["repository_identity"],
+        "source_head": contract["source_head"],
+        "plan_path": contract["plan_path"],
+        "plan_digest": "sha256:" + contract["plan_digest"],
+        "worker_contract_digest": prefixed_sha256(attempt["contract_bytes"]),
+        "orchestration_run_id": contract["orchestration_run_id"],
+        "plan_execution_attempt_id": contract["plan_execution_attempt_id"],
+        "attempt": receipt_attempt_from_contract_lineage(
+            contract["attempt_lineage"], attempt_id=attempt["attempt_id"]
+        ),
+        "candidate": selected_candidate,
+        "process": {
+            "exit_status": result.returncode,
+            "diagnostic_codes": diagnostic_codes,
+        },
+        "claims": selected_claims,
+    }
+    content = serialize_worker_completion_receipt(receipt)
+    receipt_path = verify_worker_completion_receipt_path(
+        attempt["scratch_dir"], "worker-completion-receipt.json"
+    )
+    receipt_path.write_bytes(content)
+    artifact_path = reserved_artifacts[completion_receipt_artifact_key(attempt["record"]["label"])]
+    artifact_path.write_bytes(content)
+    receipt_digest = prefixed_sha256(content)
+    attempt["record"]["completion_receipt_path"] = str(artifact_path)
+    attempt["record"]["completion_receipt_digest"] = receipt_digest
+    attempt["record"]["completion_claims_valid"] = attempt["completion_claims_error"] is None
+    attempt["record"]["completion_receipt_valid"] = True
+    attempt["completion_receipt"] = receipt
+    attempt["completion_receipt_path"] = artifact_path
+    attempt["completion_receipt_digest"] = receipt_digest
+    return receipt
+
+
+def derive_worker_contract(
+    *,
+    repo_root: Path,
+    git_bin: str,
+    head: str,
+    plan_path: Path,
+    plan_rel: str,
+    plan_digest: str,
+    values: dict[str, str | list[str]],
+    normalized_scope: Sequence[str],
+    run_id: str,
+    plan_execution_attempt_id: str,
+    lineage: dict[str, object],
+) -> bytes:
+    """Project authoritative plan fields into one bounded, read-only worker input."""
+    primary_invariant = require_primary_invariant(plan_path, values)
+    context_files = normalized_contract_paths(values.get("context_files"), label="context_files")
+    required_specs = normalized_contract_paths(values.get("required_specs"), label="required_specs")
+    acceptance = unique_contract_text_items(values.get("acceptance"), label="acceptance", require_nonempty=True)
+    focused_validation = unique_contract_text_items(
+        values.get("focused_validation", []), label="focused_validation", require_nonempty=False
+    )
+    validated_lineage = validate_contract_lineage(lineage)
+    require_safe_delegated_write_scope(repo_root, plan_rel, values, normalized_scope)
+    for relative in [*context_files, *required_specs]:
+        ensure_no_symlink_path_trick(repo_root, relative)
+        target = repo_root / relative
+        if not target.is_file() or target.is_symlink():
+            raise RunnerError(f"worker contract input must be an existing regular file: {relative}")
+    if hash_file(plan_path) != plan_digest:
+        raise RunnerError("active plan changed while deriving the worker contract")
+    if git(repo_root, git_bin, "show", f"{head}:{plan_rel}").stdout != plan_path.read_bytes():
+        raise RunnerError("worker execution contract requires the exact committed active-plan bytes")
+    contract = {
+        "schema_version": WORKER_CONTRACT_SCHEMA_VERSION,
+        "repository_identity": derive_repository_identity(repo_root, git_bin),
+        "source_head": head,
+        "plan_path": plan_rel,
+        "plan_digest": plan_digest,
+        "orchestration_run_id": run_id,
+        "plan_execution_attempt_id": plan_execution_attempt_id,
+        "attempt_lineage": validated_lineage,
+        "primary_invariant": primary_invariant,
+        "write_scope": list(normalized_scope),
+        "context_files": context_files,
+        "required_specs": required_specs,
+        "acceptance": acceptance,
+        "focused_validation": focused_validation,
+        "explicit_exclusions": [
+            "prompts", "worker_output", "environment_values", "credentials",
+            "absolute_paths", "raw_logs", "undeclared_files",
+        ],
+        "hard_stop_conditions": [
+            "plan_or_contract_mismatch", "unknown_or_duplicate_field",
+            "path_escape_or_symlink", "authority_widening", "out_of_scope_change",
+        ],
+    }
+    content = (
+        json.dumps(contract, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if len(content) > WORKER_CONTRACT_MAX_BYTES:
+        raise RunnerError("worker execution contract exceeds the byte bound")
+    return content
+
+
+def verify_worker_contract(
+    *,
+    repo_root: Path,
+    git_bin: str,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    plan_path: Path,
+    plan_rel: str,
+    values: dict[str, str | list[str]],
+    normalized_scope: Sequence[str],
+) -> None:
+    raw_path = manifest.get("worker_contract_path")
+    digest = manifest.get("worker_contract_digest")
+    if not isinstance(raw_path, str) or not isinstance(digest, str):
+        raise RunnerError("candidate manifest is missing the worker execution contract binding")
+    contract_path = Path(raw_path)
+    if not contract_path.is_absolute() or contract_path.parent != manifest_path.parent:
+        raise RunnerError("worker execution contract must be a sibling of the candidate manifest")
+    content = read_bounded_regular_file(
+        contract_path, WORKER_CONTRACT_MAX_BYTES, "worker execution contract"
+    )
+    if hash_file(contract_path) != digest:
+        raise RunnerError("worker execution contract digest no longer matches the candidate manifest")
+    contract = load_exact_json_object(content, label="worker execution contract")
+    expected_fields = {
+        "schema_version", "repository_identity", "source_head", "plan_path", "plan_digest",
+        "orchestration_run_id", "plan_execution_attempt_id", "attempt_lineage",
+        "primary_invariant", "write_scope",
+        "context_files", "required_specs", "acceptance", "focused_validation",
+        "explicit_exclusions", "hard_stop_conditions",
+    }
+    if set(contract) != expected_fields or contract.get("schema_version") != WORKER_CONTRACT_SCHEMA_VERSION:
+        raise RunnerError("worker execution contract has unknown or missing fields")
+    lineage = validate_contract_lineage(contract.get("attempt_lineage"))
+    attempt_label = manifest.get("worker_attempt_label")
+    if attempt_label not in {"primary", "fallback", "custom"}:
+        raise RunnerError("candidate manifest has an invalid worker attempt label")
+    manifest_lineage = manifest.get("correction_lineage")
+    expected_lineage = (
+        {
+            "attempt_kind": "initial",
+            "correction_round": 0,
+            "attempt_label": attempt_label,
+        }
+        if manifest_lineage is None
+        else {
+            "attempt_kind": "correction",
+            **manifest_lineage,
+            "attempt_label": attempt_label,
+        }
+    )
+    if any(lineage.get(key) != value for key, value in expected_lineage.items()):
+        raise RunnerError("worker execution contract lineage differs from the candidate manifest")
+    if contract.get("plan_execution_attempt_id") != manifest.get("plan_execution_attempt_id"):
+        raise RunnerError("worker execution contract plan attempt differs from the candidate manifest")
+    fresh = derive_worker_contract(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        head=str(manifest["source_head"]),
+        plan_path=plan_path,
+        plan_rel=plan_rel,
+        plan_digest=str(manifest["plan_digest"]),
+        values=values,
+        normalized_scope=normalized_scope,
+        run_id=str(manifest["orchestration_run_id"]),
+        plan_execution_attempt_id=str(manifest["plan_execution_attempt_id"]),
+        lineage=lineage,
+    )
+    if content != fresh:
+        raise RunnerError("worker execution contract does not equal a fresh derivation")
 
 
 def implementation_classification(values: dict[str, str | list[str]], key: str) -> str:
@@ -1517,6 +2595,7 @@ def validate_lifecycle_payload(payload: object, run_id: str) -> dict[str, Any]:
     required = {
         "schema_version",
         "orchestration_run_id",
+        "plan_execution_attempt_id",
         "current_manifest_digest",
         "current_patch_digest",
         "correction_round",
@@ -1533,6 +2612,9 @@ def validate_lifecycle_payload(payload: object, run_id: str) -> dict[str, Any]:
         raise RunnerError("lifecycle state has an unsupported schema version")
     if payload["orchestration_run_id"] != run_id:
         raise RunnerError("lifecycle state belongs to a different orchestration run identifier")
+    require_receipt_code(
+        payload["plan_execution_attempt_id"], label="lifecycle plan execution attempt identifier"
+    )
     for key in ("current_manifest_digest", "current_patch_digest"):
         value = payload[key]
         if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
@@ -1830,44 +2912,69 @@ def reserve_output_artifacts(output_dir: Path) -> dict[str, Path]:
     return reserved
 
 
-def build_worker_prompt(plan_rel: str, plan_digest: str) -> str:
+def build_worker_prompt() -> str:
     return textwrap.dedent(
-        f"""\
-        Implement plan {plan_rel} in this isolated clone.
+        """\
+        Implement the assigned plan in this isolated clone.
 
         Constraints:
+        - Read $SANDBOXED_PLAN_WORKER_CONTRACT first. Then read the exact active plan,
+          AGENTS.md, context files, and required specifications named by that contract.
+        - The active plan and directly read normative specifications are authoritative;
+          the contract is a bounded read-only projection and cannot satisfy or amend them.
         - This clone is the only writable repository.
         - Do not spawn agents, commit, edit plan status, or touch paths outside the plan write_scope.
-        - Keep context bounded: read the plan, AGENTS.md, the listed context/spec files, and only implementation files needed for this task.
+        - If an exact write_scope path is absent in the clone, create it under
+          $SANDBOXED_PLAN_WORKER_NEW_FILE_ROOT using the same repository-relative path.
+          Do not create a placeholder in the clone.
+        - Read only implementation files needed for the assigned task after the required inputs.
         - Do not inspect logs or unrelated plans.
         - Do not run plan validation. The parent performs review and authorizes validation after admission.
         - Write transient diagnostics, tool caches, and temporary artifacts only under
           $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
+        - Before exit, write one UTF-8 JSON object to
+          $SANDBOXED_PLAN_WORKER_COMPLETION_CLAIMS with exactly these fields:
+          attempt_result, acceptance_evidence, commands_attempted, blockers,
+          residual_risks, and out_of_scope_change. Use only acceptance SHA-256 digests,
+          positional command ids `worker-check-1` through `worker-check-64`, fixed policy
+          blocker/risk codes, observed integer exit statuses, and booleans;
+          worker blocker codes are command_failed, implementation_failed, incomplete_change,
+          missing_input, or worker_failed; residual-risk codes are incomplete_change,
+          known_limitation, parent_review_required, or validation_not_run.
+          never include commands, output bodies, prompts, environment values, credentials,
+          logs, patches, or absolute paths. The runner binds these advisory claims to Git,
+          process, contract, and attempt facts in the final completion receipt.
 
         The parent will reject any changed path outside write_scope.
         Report changed paths, validation results, blockers, remaining risks, and confirm whether any out-of-scope path changed.
-
-        Plan digest: {plan_digest}
         """
     )
 
 
-def build_correction_prompt(plan_rel: str, plan_digest: str) -> str:
+def build_correction_prompt() -> str:
     return textwrap.dedent(
-        f"""\
-        Correct the rejected candidate already applied in this fresh isolated clone for {plan_rel}.
+        """\
+        Correct the rejected candidate already applied in this fresh isolated clone.
 
         Constraints:
+        - Read $SANDBOXED_PLAN_WORKER_CONTRACT first. Then read the exact active plan,
+          AGENTS.md, context files, and required specifications named by that contract.
+        - The active plan and directly read normative specifications are authoritative;
+          the contract is a bounded read-only projection and cannot satisfy or amend them.
         - Read the parent-authored correction brief at $SANDBOXED_PLAN_WORKER_CORRECTION_BRIEF.
         - The brief is a read-only input. Do not search for or inspect any prior attempt artifact.
         - Preserve correct prior work and change only what the brief requires.
         - Do not spawn agents, commit, edit plan status, or touch paths outside write_scope.
+        - If an exact write_scope path is absent in the clone, create it under
+          $SANDBOXED_PLAN_WORKER_NEW_FILE_ROOT using the same repository-relative path.
+          Do not create a placeholder in the clone.
         - Write transient diagnostics, caches, and temporary artifacts only under
           $SANDBOXED_PLAN_WORKER_SCRATCH_DIR.
         - Report changed paths and blockers. Do not run broad plan validation.
+        - Before exit, write the same bounded advisory JSON claims object required by the
+          initial prompt to $SANDBOXED_PLAN_WORKER_COMPLETION_CLAIMS.
 
         The parent will admit one aggregate patch against the original source HEAD.
-        Plan digest: {plan_digest}
         """
     )
 
@@ -2061,45 +3168,53 @@ def normalize_hidden_directories(
 def prepare_writable_shadows(
     *, clone_dir: Path, scratch_dir: Path, scope_entries: Sequence[str]
 ) -> list[tuple[Path, Path, bool]]:
-    """Create writable copies for scope entries without resolving repository symlinks."""
+    """Create writable files for exact paths without granting a parent directory."""
     shadows_root = scratch_dir / "writable-shadows"
+    shadows_root.mkdir(exist_ok=False)
     prepared: list[tuple[Path, Path, bool]] = []
     for entry in scope_entries:
         relative, is_prefix = normalize_repo_relpath(entry, allow_prefix=True, label="write_scope entry")
-        body = relative[:-1] if is_prefix else relative
+        if is_prefix:
+            raise RunnerError(f"writable delegation does not allow a directory prefix: {relative}")
+        body = relative
         ensure_no_symlink_path_trick(clone_dir, body)
         target = clone_dir / body
         shadow = shadows_root / body
-        shadow.parent.mkdir(parents=True, exist_ok=True)
-        if is_prefix:
-            if target.exists():
-                if not target.is_dir() or target.is_symlink():
-                    raise RunnerError(f"prefix write_scope target must be a directory: {relative}")
-                shutil.copytree(target, shadow, symlinks=True)
-            else:
-                target.mkdir(parents=True, exist_ok=False)
-                shadow.mkdir()
-        else:
+        target_existed = target.exists() or target.is_symlink()
+        if target_existed:
+            shadow.parent.mkdir(parents=True, exist_ok=True)
             if not target.is_file() or target.is_symlink():
-                raise RunnerError(f"exact write_scope target must be an existing regular file: {relative}")
+                raise RunnerError(f"exact write_scope target must be a regular file: {relative}")
             shutil.copy2(target, shadow, follow_symlinks=False)
-        prepared.append((shadow, target, is_prefix))
+        else:
+            if not target.parent.is_dir() or target.parent.is_symlink():
+                raise RunnerError(f"new exact write_scope target requires an existing parent: {relative}")
+            shadow.parent.mkdir(parents=True, exist_ok=True)
+        prepared.append((shadow, target, target_existed))
     return prepared
 
 
-def materialize_writable_shadows(shadows: Sequence[tuple[Path, Path, bool]]) -> None:
+def materialize_writable_shadows(
+    shadows: Sequence[tuple[Path, Path, bool]], shadows_root: Path
+) -> None:
     """Copy only scope-shadow results back into the disposable candidate clone."""
-    for shadow, target, is_prefix in shadows:
-        if is_prefix:
-            if target.exists() or target.is_symlink():
-                if target.is_symlink() or not target.is_dir():
-                    raise RunnerError(f"prefix write_scope target changed shape: {target}")
-                shutil.rmtree(target)
-            shutil.copytree(shadow, target, symlinks=True)
-        else:
-            if not target.is_file() or target.is_symlink():
-                raise RunnerError(f"exact write_scope target changed shape: {target}")
-            shutil.copy2(shadow, target, follow_symlinks=False)
+    if not shadows_root.is_dir() or shadows_root.is_symlink():
+        raise RunnerError("writable shadow root changed shape")
+    for shadow, target, target_existed in shadows:
+        if not target_existed and not shadow.exists() and not shadow.is_symlink():
+            continue
+        try:
+            shadow_rel = shadow.relative_to(shadows_root).as_posix()
+        except ValueError as exc:
+            raise RunnerError("writable shadow escaped its staging root") from exc
+        ensure_no_symlink_path_trick(shadows_root, shadow_rel)
+        if target_existed and (not target.is_file() or target.is_symlink()):
+            raise RunnerError(f"exact write_scope target changed shape: {target}")
+        if not target_existed and (target.exists() or target.is_symlink()):
+            raise RunnerError(f"new exact write_scope target unexpectedly exists: {target}")
+        if not shadow.is_file() or shadow.is_symlink():
+            raise RunnerError(f"writable shadow changed shape: {shadow}")
+        shutil.copy2(shadow, target, follow_symlinks=False)
 
 def git_c_quote_path(path: Path) -> str:
     """Quote one object path for Git's colon-separated alternate list."""
@@ -2245,6 +3360,12 @@ def stage_codex_home(scratch_dir: Path) -> Path:
 
 def host_codex_home_path() -> Path:
     return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
+
+
+def host_codex_home_hidden() -> tuple[Path, ...]:
+    """Hide the host Codex home only when the account has one; an absent home holds no credentials."""
+    path = host_codex_home_path()
+    return (path,) if path.exists() else ()
 
 
 def prepare_worker_environment(
@@ -2394,6 +3515,10 @@ def execute_isolated_attempt(
     head: str,
     plan_rel: str,
     plan_digest: str,
+    values: dict[str, str | list[str]],
+    run_id: str,
+    plan_execution_attempt_id: str,
+    attempt_lineage: dict[str, object],
     normalized_scope: Sequence[str],
     bwrap_bin: str,
     git_bin: str,
@@ -2407,11 +3532,32 @@ def execute_isolated_attempt(
     prior_patch: bytes | None = None,
     correction_brief: bytes | None = None,
 ) -> dict[str, Any]:
+    validated_attempt_lineage = validate_contract_lineage(attempt_lineage)
+    attempt_id = (
+        f"{validated_attempt_lineage['attempt_kind']}-"
+        f"{validated_attempt_lineage['correction_round']}-{label}-{secrets.token_hex(16)}"
+    )
     attempt_root = workspace / label
     clone_dir = attempt_root / "clone"
     scratch_dir = attempt_root / "scratch"
     scratch_dir.mkdir(parents=True, exist_ok=False)
     clone_at_head(repo_root, git_bin, head, clone_dir)
+    contract_bytes = derive_worker_contract(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        head=head,
+        plan_path=repo_root / plan_rel,
+        plan_rel=plan_rel,
+        plan_digest=plan_digest,
+        values=values,
+        normalized_scope=normalized_scope,
+        run_id=run_id,
+        plan_execution_attempt_id=plan_execution_attempt_id,
+        lineage=validated_attempt_lineage,
+    )
+    contract_path = scratch_dir / "worker-contract.json"
+    contract_path.write_bytes(contract_bytes)
+    contract_path.chmod(0o400)
     initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
     if prior_patch is not None:
         run_subprocess(
@@ -2427,7 +3573,7 @@ def execute_isolated_attempt(
     include_codex_home = custom_command is None
     stdin: bytes | None = None
     last_message_path = scratch_dir / "worker-last-message.txt"
-    read_only_inputs: list[Path] = []
+    read_only_inputs: list[Path] = [contract_path]
     correction_brief_path: Path | None = None
     if correction_brief is not None:
         correction_brief_path = scratch_dir / "correction-brief.txt"
@@ -2458,9 +3604,9 @@ def execute_isolated_attempt(
             reasoning=reasoning,
         )
         stdin = (
-            build_correction_prompt(plan_rel, plan_digest)
+            build_correction_prompt()
             if correction_brief is not None
-            else build_worker_prompt(plan_rel, plan_digest)
+            else build_worker_prompt()
         ).encode("utf-8")
     else:
         command = [custom_command[0]]
@@ -2483,8 +3629,27 @@ def execute_isolated_attempt(
         extra_env=extra_env,
         include_codex_home=include_codex_home,
     )
+    env_vars[f"{ENV_PREFIX}WORKER_CONTRACT"] = str(contract_path)
+    completion_claims_path = scratch_dir / "worker-completion-claims.json"
+    env_vars[f"{ENV_PREFIX}COMPLETION_CLAIMS"] = str(completion_claims_path)
+    env_vars[f"{ENV_PREFIX}NEW_FILE_ROOT"] = str(scratch_dir / "writable-shadows")
     if correction_brief_path is not None:
         env_vars[f"{ENV_PREFIX}CORRECTION_BRIEF"] = str(correction_brief_path)
+    fresh_contract = derive_worker_contract(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        head=head,
+        plan_path=repo_root / plan_rel,
+        plan_rel=plan_rel,
+        plan_digest=plan_digest,
+        values=values,
+        normalized_scope=normalized_scope,
+        run_id=run_id,
+        plan_execution_attempt_id=plan_execution_attempt_id,
+        lineage=validated_attempt_lineage,
+    )
+    if fresh_contract != contract_bytes or contract_path.read_bytes() != contract_bytes:
+        raise RunnerError("worker execution contract does not equal a fresh derivation")
     attempt_started = time.monotonic()
     result = run_subprocess(
         build_bwrap_command(
@@ -2493,7 +3658,9 @@ def execute_isolated_attempt(
             scratch_dir=scratch_dir,
             command=command,
             env_vars=env_vars,
-            writable_shadows=[(shadow, target) for shadow, target, _is_prefix in shadows],
+            writable_shadows=[
+                (shadow, target) for shadow, target, target_existed in shadows if target_existed
+            ],
             hidden_directories=normalize_hidden_directories(
                 hidden_directories,
                 visible_paths=(clone_dir, scratch_dir),
@@ -2513,6 +3680,7 @@ def execute_isolated_attempt(
     stdout_digest = write_bytes(stdout_path, result.stdout)
     stderr_digest = write_bytes(stderr_path, result.stderr)
     record: dict[str, Any] = {
+        "attempt_id": attempt_id,
         "label": label,
         "model": model,
         "reasoning_effort": reasoning,
@@ -2524,13 +3692,26 @@ def execute_isolated_attempt(
         "stderr_digest": stderr_digest,
         "selected": False,
     }
+    process_result_path, process_result_digest, process_result = write_attempt_process_result(
+        label=label,
+        attempt_id=attempt_id,
+        result=result,
+        stdout_digest=stdout_digest,
+        stderr_digest=stderr_digest,
+        reserved_artifacts=reserved_artifacts,
+    )
+    record["process_result_path"] = str(process_result_path)
+    record["process_result_digest"] = process_result_digest
     attempt_last_message: Path | None = None
     if result.returncode == 0 and last_message_path.is_file():
         attempt_last_message = reserved_artifacts[f"{artifact_prefix}-last-message.txt"]
         attempt_last_message.write_bytes(last_message_path.read_bytes())
         record["last_message_path"] = str(attempt_last_message)
         record["last_message_digest"] = hash_file(attempt_last_message)
-    return {
+    completion_claims, completion_claims_error = load_attempt_completion_claims(
+        completion_claims_path
+    )
+    attempt = {
         "clone_dir": clone_dir,
         "attempt_root": attempt_root,
         "scratch_dir": scratch_dir,
@@ -2541,7 +3722,21 @@ def execute_isolated_attempt(
         "result": result,
         "record": record,
         "last_message_path": attempt_last_message,
+        "contract_bytes": contract_bytes,
+        "attempt_id": attempt_id,
+        "process_result": process_result,
+        "process_result_path": process_result_path,
+        "process_result_digest": process_result_digest,
+        "completion_claims": completion_claims,
+        "completion_claims_error": completion_claims_error,
     }
+    write_attempt_completion_receipt(
+        attempt,
+        reserved_artifacts=reserved_artifacts,
+        candidate=None,
+        final=result.returncode != 0,
+    )
+    return attempt
 
 
 def select_attempt_artifacts(
@@ -2568,7 +3763,50 @@ def select_attempt_artifacts(
     return worker_result
 
 
-def enforce_plan_execution_gate(args: argparse.Namespace, *, plan: str | None = None) -> None:
+def enforce_parallel_group_gate(
+    plan: str,
+    operation: str,
+    *,
+    group_permit: str | None = None,
+    group_state: str | None = None,
+) -> None:
+    """Admit an enrolled group member only through verified group authority.
+
+    An ungrouped plan is unaffected. An enrolled member reaches this worker
+    only with the grouped execution adapter installed and its exact current
+    member permit bound to the live group execution record. The permit never
+    grants source-write authority: the worker still produces one isolated
+    candidate inside its disposable clone.
+    """
+
+    authority = Path(__file__).with_name("parallel-plan-state.py")
+    if not authority.is_file():
+        raise RunnerError("parallel plan group authority is unavailable")
+    spec = importlib.util.spec_from_file_location(
+        "sandboxed_worker_parallel_group", authority
+    )
+    if spec is None or spec.loader is None:
+        raise RunnerError("could not load the parallel plan group authority")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        module.require_group_permit(
+            module.repository_root(),
+            plan,
+            operation,
+            permit=group_permit,
+            state=group_state,
+        )
+    except module.GroupError as exc:
+        raise RunnerError(str(exc)) from exc
+
+
+def enforce_plan_execution_gate(
+    args: argparse.Namespace,
+    *,
+    plan: str | None = None,
+    open_attempt_id: str | None = None,
+) -> None:
     state = args.plan_execution_state
     checker = Path(__file__).with_name("plan-execution-state.py")
     if not checker.is_file():
@@ -2585,10 +3823,82 @@ def enforce_plan_execution_gate(args: argparse.Namespace, *, plan: str | None = 
     ]
     if plan is not None:
         command.extend(("--plan", plan))
+    if open_attempt_id is not None:
+        command.extend(("--open-attempt-id", open_attempt_id))
     completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", "replace").strip()
         raise RunnerError(detail or "plan execution state gate rejected the operation")
+
+
+def begin_plan_execution_attempt(
+    args: argparse.Namespace,
+    *,
+    attempt_kind: str,
+    prior_candidate_digest: str | None = None,
+) -> None:
+    checker = Path(__file__).with_name("plan-execution-state.py")
+    if not checker.is_file():
+        raise RunnerError("plan execution state checker is unavailable")
+    attempt_id = f"attempt-{secrets.token_hex(16)}"
+    command = [
+        sys.executable,
+        str(checker),
+        "start",
+        args.plan_execution_state,
+        "--run-id",
+        args.orchestration_run_id,
+        "--plan",
+        args.plan,
+        "--attempt-id",
+        attempt_id,
+        "--attempt-kind",
+        attempt_kind,
+        "--lifecycle-state",
+        args.lifecycle_state,
+    ]
+    predecessor_state = getattr(args, "predecessor_plan_execution_state", None)
+    predecessor_checkpoint = getattr(args, "predecessor_session_checkpoint", None)
+    root_session_manifest = getattr(args, "root_session_manifest", None)
+    reviewer_registry = getattr(args, "reviewer_registry", None)
+    if (
+        predecessor_checkpoint
+        or root_session_manifest
+        or reviewer_registry
+    ) and not predecessor_state:
+        raise RunnerError(
+            "session checkpoint controls require --predecessor-plan-execution-state"
+        )
+    if predecessor_state:
+        command.extend(("--predecessor-state", predecessor_state))
+        if len([
+            item for item in (
+                predecessor_checkpoint,
+                root_session_manifest,
+                reviewer_registry,
+            )
+            if item
+        ]) not in {0, 3}:
+            raise RunnerError(
+                "predecessor session checkpoint, root session manifest, and reviewer "
+                "registry must be supplied together"
+            )
+        if predecessor_checkpoint:
+            command.extend((
+                "--predecessor-checkpoint",
+                predecessor_checkpoint,
+                "--root-session-manifest",
+                root_session_manifest,
+                "--reviewer-registry",
+                reviewer_registry,
+            ))
+    if prior_candidate_digest is not None:
+        command.extend(("--prior-candidate-digest", prior_candidate_digest))
+    completed = subprocess.run(command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise RunnerError(detail or "plan execution state rejected the writable attempt start")
+    args.execution_attempt_id = attempt_id
 
 
 def plan_execution_lease(args: argparse.Namespace):
@@ -2608,16 +3918,21 @@ def plan_execution_lease(args: argparse.Namespace):
 def run_worker(args: argparse.Namespace) -> int:
     runner_started = time.monotonic()
     git_bin = require_executable("git", args.git_bin)
-    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
-    ensure_bwrap_usable(bwrap_bin)
     repo_root = detect_repo_root(git_bin)
     os.chdir(repo_root)
     planlib = load_planlib()
     ensure_clean_worktree(repo_root, git_bin)
     plan_path, plan_rel, values, normalized_scope = load_plan(planlib, repo_root, args.plan)
+    require_plan_worktree(repo_root, plan_rel, "running a sandboxed plan worker")
     implementation_risk = implementation_classification(values, "implementation_risk")
     implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
     selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
+    with open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    ) as lifecycle_state:
+        if lifecycle_state.data is not None:
+            raise RunnerError("lifecycle state is already initialized for this orchestration run")
+    begin_plan_execution_attempt(args, attempt_kind="initial")
     head = git_text(repo_root, git_bin, "rev-parse", "HEAD")
     plan_digest = hash_file(plan_path)
     output_dir = materialize_output_dir(repo_root, args.output_dir)
@@ -2635,9 +3950,14 @@ def run_worker(args: argparse.Namespace) -> int:
         repo_root, args.lifecycle_state, args.orchestration_run_id
     )
 
-    with lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
+    with plan_execution_lease(args), lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
         prefix="sandboxed-plan-worker-workspace-"
     ) as workspace_tmp:
+        enforce_plan_execution_gate(
+            args, plan=plan_rel, open_attempt_id=args.execution_attempt_id
+        )
+        bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+        ensure_bwrap_usable(bwrap_bin)
         if lifecycle_state.data is not None:
             raise RunnerError("lifecycle state is already initialized for this orchestration run")
         workspace = Path(workspace_tmp)
@@ -2679,12 +3999,16 @@ def run_worker(args: argparse.Namespace) -> int:
                     head=head,
                     plan_rel=plan_rel,
                     plan_digest=plan_digest,
+                    values=values,
+                    run_id=args.orchestration_run_id,
+                    plan_execution_attempt_id=args.execution_attempt_id,
+                    attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "primary"},
                     normalized_scope=normalized_scope,
                     bwrap_bin=bwrap_bin,
                     git_bin=git_bin,
                     reserved_artifacts=reserved_artifacts,
                     extra_env=args.worker_env,
-                    hidden_directories=(output_dir, host_codex_home_path()),
+                    hidden_directories=(output_dir, *host_codex_home_hidden()),
                     codex_bin=codex_bin,
                     model=primary_model,
                     reasoning=primary_reasoning,
@@ -2720,7 +4044,7 @@ def run_worker(args: argparse.Namespace) -> int:
                 if known_fallback_reason is not None:
                     skipped_known_unavailable_starts += 1
                     raise RunnerError("fallback model is already recorded unavailable for this orchestration run")
-                hidden_attempt_state = [output_dir, host_codex_home_path()]
+                hidden_attempt_state = [output_dir, *host_codex_home_hidden()]
                 if primary is not None:
                     hidden_attempt_state.append(primary["attempt_root"])
                 fallback = execute_isolated_attempt(
@@ -2730,6 +4054,10 @@ def run_worker(args: argparse.Namespace) -> int:
                     head=head,
                     plan_rel=plan_rel,
                     plan_digest=plan_digest,
+                    values=values,
+                    run_id=args.orchestration_run_id,
+                    plan_execution_attempt_id=args.execution_attempt_id,
+                    attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "fallback"},
                     normalized_scope=normalized_scope,
                     bwrap_bin=bwrap_bin,
                     git_bin=git_bin,
@@ -2762,6 +4090,10 @@ def run_worker(args: argparse.Namespace) -> int:
                 head=head,
                 plan_rel=plan_rel,
                 plan_digest=plan_digest,
+                values=values,
+                run_id=args.orchestration_run_id,
+                plan_execution_attempt_id=args.execution_attempt_id,
+                attempt_lineage={"attempt_kind": "initial", "correction_round": 0, "attempt_label": "custom"},
                 normalized_scope=normalized_scope,
                 bwrap_bin=bwrap_bin,
                 git_bin=git_bin,
@@ -2776,7 +4108,16 @@ def run_worker(args: argparse.Namespace) -> int:
                     f"worker exited with {selected['result'].returncode}; stdout/stderr saved under {output_dir}"
                 )
 
+        if selected["completion_claims_error"] is not None:
+            raise RunnerError(
+                "worker completion claims were rejected; process diagnostics and a safe failure receipt "
+                f"were saved under {output_dir}"
+            )
+
         worker_result = select_attempt_artifacts(selected, reserved_artifacts)
+        contract_path = reserved_artifacts["worker-contract.json"]
+        contract_path.write_bytes(selected["contract_bytes"])
+        contract_digest = hash_file(contract_path)
         worker_result["kind"] = worker_kind
         if attempts:
             worker_result["attempts"] = attempts
@@ -2784,7 +4125,9 @@ def run_worker(args: argparse.Namespace) -> int:
         if fallback_reason is not None:
             worker_result["fallback_reason"] = fallback_reason
 
-        materialize_writable_shadows(selected["shadows"])
+        materialize_writable_shadows(
+            selected["shadows"], selected["scratch_dir"] / "writable-shadows"
+        )
 
         patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
             bwrap_bin=bwrap_bin,
@@ -2800,8 +4143,7 @@ def run_worker(args: argparse.Namespace) -> int:
         if not patch_bytes:
             raise RunnerError("worker produced no candidate changes")
 
-        patch_path = reserved_artifacts["candidate.patch"]
-        patch_digest = write_bytes(patch_path, patch_bytes)
+        patch_digest = hashlib.sha256(patch_bytes).hexdigest()
         changed_paths = normalize_changed_paths(
             derive_changed_paths_from_patch(repo_root, git_bin, patch_bytes, head),
             repo_root,
@@ -2811,6 +4153,28 @@ def run_worker(args: argparse.Namespace) -> int:
         disallowed = [path for path in changed_paths if not scope_allows_path(normalized_scope, path)]
         if disallowed:
             raise RunnerError(f"worker changed paths outside write_scope: {', '.join(disallowed)}")
+
+        receipt_candidate = {
+            "patch_digest": "sha256:" + patch_digest,
+            "changed_paths": sorted(changed_paths),
+        }
+        completion_receipt = write_attempt_completion_receipt(
+            selected,
+            reserved_artifacts=reserved_artifacts,
+            candidate=receipt_candidate,
+            final=True,
+        )
+        patch_path = reserved_artifacts["candidate.patch"]
+        if write_bytes(patch_path, patch_bytes) != patch_digest:
+            raise RunnerError("candidate patch changed while it was published")
+        if completion_receipt["claims"]["attempt_result"] != "success":
+            raise RunnerError(
+                "worker completion receipt reports failure; candidate was not admitted"
+            )
+        completion_receipt_path = selected["completion_receipt_path"]
+        completion_receipt_digest = selected["completion_receipt_digest"]
+        process_result_path = selected["process_result_path"]
+        process_result_digest = selected["process_result_digest"]
 
         telemetry_attempts = attempts if worker_kind == "codex" else [selected["record"]]
         telemetry = {
@@ -2838,11 +4202,20 @@ def run_worker(args: argparse.Namespace) -> int:
             "source_head": head,
             "plan_path": plan_rel,
             "plan_digest": plan_digest,
+            "worker_contract_path": str(contract_path),
+            "worker_contract_digest": contract_digest,
+            "worker_completion_receipt_path": str(completion_receipt_path),
+            "worker_completion_receipt_digest": completion_receipt_digest.removeprefix("sha256:"),
+            "worker_process_result_path": str(process_result_path),
+            "worker_process_result_digest": process_result_digest.removeprefix("sha256:"),
+            "worker_attempt_label": selected["record"]["label"],
+            "worker_attempt_id": selected["attempt_id"],
             "allowed_write_scope": normalized_scope,
             "changed_paths": changed_paths,
             "patch_path": str(patch_path),
             "patch_digest": patch_digest,
             "orchestration_run_id": args.orchestration_run_id,
+            "plan_execution_attempt_id": args.execution_attempt_id,
             "lifecycle_state_path": str(Path(args.lifecycle_state).expanduser().absolute()),
             "worker_result": worker_result,
             "telemetry": telemetry,
@@ -2854,6 +4227,7 @@ def run_worker(args: argparse.Namespace) -> int:
             {
                 "schema_version": LIFECYCLE_STATE_SCHEMA_VERSION,
                 "orchestration_run_id": args.orchestration_run_id,
+                "plan_execution_attempt_id": args.execution_attempt_id,
                 "current_manifest_digest": hash_file(manifest_path),
                 "current_patch_digest": patch_digest,
                 "correction_round": 0,
@@ -2886,7 +4260,9 @@ def read_bounded_regular_file(path: Path, maximum_bytes: int, label: str) -> byt
         path = (Path.cwd() / path).absolute()
     ensure_no_symlink_components(path)
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        descriptor = os.open(
+            path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+        )
     except OSError as exc:
         raise RunnerError(f"{label} must be a regular non-symlink file") from exc
     try:
@@ -2921,6 +4297,9 @@ def verify_candidate_manifest(
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise RunnerError(f"unsupported manifest schema version: {manifest.get('schema_version')}")
     run_id = manifest.get("orchestration_run_id")
+    plan_execution_attempt_id = require_receipt_code(
+        manifest.get("plan_execution_attempt_id"), label="manifest plan execution attempt identifier"
+    )
     lifecycle_path = manifest.get("lifecycle_state_path")
     validate_bounded_text(run_id, "manifest orchestration run identifier", ORCHESTRATION_RUN_ID_MAX_BYTES)
     if not isinstance(lifecycle_path, str) or not Path(lifecycle_path).is_absolute():
@@ -2946,6 +4325,16 @@ def verify_candidate_manifest(
     normalized_manifest_scope = parse_write_scope(manifest_scope)
     if normalized_manifest_scope != normalized_scope:
         raise RunnerError("candidate manifest write scope differs from the current plan")
+    verify_worker_contract(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        plan_path=plan_path,
+        plan_rel=plan_rel,
+        values=values,
+        normalized_scope=normalized_scope,
+    )
     patch_path_raw = manifest.get("patch_path")
     if not isinstance(patch_path_raw, str):
         raise RunnerError("manifest patch_path must be a string")
@@ -2970,6 +4359,108 @@ def verify_candidate_manifest(
     ]
     if changed_paths != normalized_manifest_changed:
         raise RunnerError("candidate patch changed paths do not match the worker manifest")
+    receipt_path_raw = manifest.get("worker_completion_receipt_path")
+    receipt_digest = manifest.get("worker_completion_receipt_digest")
+    if not isinstance(receipt_path_raw, str) or not isinstance(receipt_digest, str):
+        raise RunnerError("candidate manifest is missing the worker completion receipt binding")
+    receipt_path = Path(receipt_path_raw).expanduser()
+    if not receipt_path.is_absolute():
+        receipt_path = (manifest_path.parent / receipt_path).absolute()
+    if receipt_path.parent != manifest_path.parent or receipt_path.name not in {
+        "worker-completion-receipt.json",
+        "worker-primary-completion-receipt.json",
+        "worker-fallback-completion-receipt.json",
+    }:
+        raise RunnerError("worker completion receipt must be one fixed sibling of the candidate manifest")
+    receipt_bytes = read_bounded_regular_file(
+        receipt_path, WORKER_COMPLETION_RECEIPT_MAX_BYTES, "worker completion receipt"
+    )
+    if hashlib.sha256(receipt_bytes).hexdigest() != receipt_digest:
+        raise RunnerError("worker completion receipt digest no longer matches the candidate manifest")
+    receipt = load_worker_completion_receipt(receipt_bytes)
+    attempt_label = manifest.get("worker_attempt_label")
+    if attempt_label not in {"primary", "fallback", "custom"}:
+        raise RunnerError("candidate manifest has an invalid worker attempt label")
+    attempt_id = require_receipt_code(
+        manifest.get("worker_attempt_id"), label="manifest attempt identifier"
+    )
+    process_path_raw = manifest.get("worker_process_result_path")
+    process_digest = manifest.get("worker_process_result_digest")
+    if not isinstance(process_path_raw, str) or not isinstance(process_digest, str):
+        raise RunnerError("candidate manifest is missing the worker process result binding")
+    process_path = Path(process_path_raw).expanduser()
+    if not process_path.is_absolute():
+        process_path = (manifest_path.parent / process_path).absolute()
+    if process_path.parent != manifest_path.parent or process_path.name not in {
+        "worker-process-result.json",
+        "worker-primary-process-result.json",
+        "worker-fallback-process-result.json",
+    }:
+        raise RunnerError("worker process result must be one fixed sibling of the candidate manifest")
+    process_bytes = read_bounded_regular_file(
+        process_path, WORKER_COMPLETION_RECEIPT_MAX_BYTES, "worker process result"
+    )
+    if hashlib.sha256(process_bytes).hexdigest() != process_digest:
+        raise RunnerError("worker process result digest no longer matches the candidate manifest")
+    process_result = validate_attempt_process_result(
+        load_exact_json_object(process_bytes, label="worker process result")
+    )
+    correction_lineage = manifest.get("correction_lineage")
+    if correction_lineage is None:
+        expected_attempt = {
+            "attempt_id": attempt_id,
+            "attempt_kind": "initial",
+            "correction_round": 0,
+            "correction_lineage": None,
+        }
+    else:
+        if not isinstance(correction_lineage, dict):
+            raise RunnerError("candidate manifest correction lineage is invalid")
+        expected_attempt = {
+            "attempt_id": attempt_id,
+            "attempt_kind": "correction",
+            "correction_round": correction_lineage.get("correction_round"),
+            "correction_lineage": {
+                "prior_manifest_digest": "sha256:" + str(
+                    correction_lineage.get("prior_manifest_digest")
+                )
+            },
+        }
+    expected_receipt = {
+        "repository_identity": derive_repository_identity(repo_root, git_bin),
+        "source_head": current_head,
+        "plan_path": plan_rel,
+        "plan_digest": "sha256:" + current_plan_digest,
+        "worker_contract_digest": "sha256:" + str(manifest.get("worker_contract_digest")),
+        "orchestration_run_id": run_id,
+        "plan_execution_attempt_id": plan_execution_attempt_id,
+        "attempt": expected_attempt,
+        "candidate": {
+            "patch_digest": "sha256:" + patch_digest,
+            "changed_paths": changed_paths,
+        },
+        "acceptance_digests": [
+            prefixed_sha256(item)
+            for item in unique_contract_text_items(
+                values.get("acceptance"), label="acceptance", require_nonempty=True
+            )
+        ],
+    }
+    receipt = validate_worker_completion_receipt(receipt, expected=expected_receipt)
+    worker_result = manifest.get("worker_result")
+    expected_process = {
+        "exit_status": process_result["exit_status"],
+        "diagnostic_codes": process_result["diagnostic_codes"],
+    }
+    if (
+        not isinstance(worker_result, dict)
+        or process_result["attempt_id"] != attempt_id
+        or receipt["process"] != expected_process
+        or process_result["exit_status"] != worker_result.get("returncode")
+        or process_result["stdout_digest"] != "sha256:" + str(worker_result.get("stdout_digest"))
+        or process_result["stderr_digest"] != "sha256:" + str(worker_result.get("stderr_digest"))
+    ):
+        raise RunnerError("worker completion receipt process status differs from preserved worker diagnostics")
     disallowed = [path for path in changed_paths if not scope_allows_path(normalized_scope, path)]
     if disallowed:
         raise RunnerError(f"candidate patch changes paths outside the current write_scope: {', '.join(disallowed)}")
@@ -2998,6 +4489,12 @@ def verify_candidate_manifest(
         "patch_bytes": patch_bytes,
         "patch_digest": patch_digest,
         "changed_paths": changed_paths,
+        "worker_completion_receipt": receipt,
+        "worker_completion_receipt_path": receipt_path,
+        "worker_completion_receipt_digest": receipt_digest,
+        "worker_process_result": process_result,
+        "worker_process_result_path": process_path,
+        "worker_process_result_digest": process_digest,
     }
 
 
@@ -3029,13 +4526,399 @@ def next_correction_lineage(
                 raise RunnerError(f"prior correction lineage has an invalid digest: {key}")
     correction_round = prior_round + 1
     if correction_round > MAX_CORRECTION_ROUNDS:
-        raise RunnerError("correction budget exhausted after two isolated corrections")
+        raise RunnerError("correction budget exhausted after one isolated correction")
     return {
         "prior_manifest_digest": prior_manifest_digest,
         "prior_patch_digest": prior_patch_digest,
         "correction_round": correction_round,
         "correction_brief_digest": correction_brief_digest,
     }
+
+
+def execute_validation_operation(
+    *,
+    repo_root: Path,
+    git_bin: str,
+    bwrap_bin: str,
+    verified: dict[str, Any],
+    workspace: Path,
+    index: int,
+    command: Any,
+    private_dependency_tree: Path | None,
+    private_node_runtime: dict[str, Any] | None,
+    output_dir: Path,
+    manifest_path: Path,
+    bounds: tuple[float, int] | None = None,
+    capture_sink: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], Path, bytes]:
+    """Prepare and run one planned validation operation without mutating the source checkout."""
+    command_root = workspace / f"command-{index}"
+    clone_dir = command_root / "review-clone"
+    scratch_dir = command_root / "scratch"
+    scratch_dir.mkdir(parents=True)
+    clone_at_head(repo_root, git_bin, verified["head"], clone_dir)
+    initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
+    run_subprocess(
+        (git_bin, "apply", "--check", "--binary", "-"),
+        cwd=clone_dir,
+        stdin=verified["patch_bytes"],
+    )
+    run_subprocess(
+        (git_bin, "apply", "--binary", "-"), cwd=clone_dir, stdin=verified["patch_bytes"]
+    )
+    read_only_shadows: list[tuple[Path, Path]] = []
+    writable_shadows: list[tuple[Path, Path]] = []
+    dependency_target: Path | None = None
+    if private_dependency_tree is not None:
+        dependency_target = clone_dir / "node_modules"
+        dependency_target.mkdir()
+        read_only_shadows.append((private_dependency_tree, dependency_target))
+        writable_shadows.extend(
+            dependency_cache_shadows(private_dependency_tree, dependency_target, scratch_dir)
+        )
+    env_vars = prepare_worker_environment(
+        source_repo=repo_root,
+        clone_dir=clone_dir,
+        scratch_dir=scratch_dir,
+        plan_rel=verified["plan_rel"],
+        extra_env=(),
+        include_codex_home=False,
+    )
+    env_vars["PATH"] = (
+        f"{private_node_runtime['runtime_root'] / 'bin'}:{DEFAULT_PATH}"
+        if command.argv[0] == "npm" and private_node_runtime is not None
+        else DEFAULT_PATH
+    )
+    playwright_browsers = (
+        private_dependency_tree / ".playwright-browsers"
+        if private_dependency_tree is not None
+        else None
+    )
+    if playwright_browsers is not None and (
+        playwright_browsers.exists() or playwright_browsers.is_symlink()
+    ):
+        if playwright_browsers.is_symlink() or not playwright_browsers.is_dir():
+            raise RunnerError("private Playwright browser snapshot changed shape")
+        assert dependency_target is not None
+        env_vars["PLAYWRIGHT_BROWSERS_PATH"] = str(
+            dependency_target / ".playwright-browsers"
+        )
+    validation_hidden = [output_dir, manifest_path.parent, *host_codex_home_hidden()]
+    host_home = Path.home().resolve()
+    if host_home.is_dir():
+        validation_hidden.append(host_home)
+    command_argv = (
+        (
+            str(private_node_runtime["node_path"]),
+            str(private_node_runtime["npm_cli_path"]),
+            *command.argv[1:],
+        )
+        if command.argv[0] == "npm" and private_node_runtime is not None
+        else (require_validation_executable(command.argv[0], clone_dir), *command.argv[1:])
+    )
+    started = time.monotonic()
+    sandbox_argv = build_bwrap_command(
+        bwrap_bin=bwrap_bin,
+        clone_dir=clone_dir,
+        scratch_dir=scratch_dir,
+        command=command_argv,
+        env_vars=env_vars,
+        writable_clone=True,
+        writable_shadows=writable_shadows,
+        hidden_directories=normalize_hidden_directories(
+            validation_hidden,
+            visible_paths=(clone_dir, scratch_dir),
+        ),
+        read_only_shadows=read_only_shadows,
+        network_enabled=False,
+    )
+    if bounds is None:
+        result = run_subprocess(
+            sandbox_argv,
+            cwd=repo_root,
+            env=sanitize_process_env(),
+            check=False,
+        )
+        returncode = result.returncode
+        stdout_bytes = result.stdout
+        stderr_bytes = result.stderr
+    else:
+        timeout_seconds, output_limit_bytes = bounds
+        bounded = run_bounded_subprocess(
+            sandbox_argv,
+            cwd=repo_root,
+            env=sanitize_process_env(),
+            timeout_seconds=timeout_seconds,
+            output_limit_bytes=output_limit_bytes,
+        )
+        returncode = bounded["returncode"]
+        stdout_bytes = bounded["stdout"]
+        stderr_bytes = bounded["stderr"]
+        if capture_sink is not None:
+            capture_sink.update(bounded)
+    return (
+        {
+            "index": index,
+            "argv": list(command.argv),
+            "duration_seconds": bounded_duration(started, time.monotonic()),
+            "returncode": returncode,
+            "stdout_digest": hashlib.sha256(stdout_bytes).hexdigest(),
+            "stderr_digest": hashlib.sha256(stderr_bytes).hexdigest(),
+        },
+        clone_dir,
+        initial_refs,
+    )
+
+
+def preflight_execution_genesis(state_path: str) -> str:
+    """Read the execution genesis identity from the parent-owned ledger.
+
+    The read is bounded and does not interpret ledger history; the claim only
+    needs the identity that distinguishes this execution from another one.
+    """
+
+    path = Path(state_path).expanduser()
+    try:
+        content = read_bounded_regular_file(
+            path, PREFLIGHT_LEDGER_READ_MAX_BYTES, "plan execution state"
+        )
+    except RunnerError:
+        raise
+    except OSError as exc:
+        raise RunnerError(f"could not read the plan execution state: {exc}") from exc
+    payload = load_exact_json_object(content, label="plan execution state")
+    genesis = payload.get("genesis_digest")
+    if not isinstance(genesis, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", genesis):
+        raise RunnerError("plan execution state has no usable execution genesis identity")
+    return genesis
+
+
+def require_preflight_claim_directory(raw: str, repo_root: Path) -> Path:
+    """Return the parent-owned claim directory, refusing an unsafe location."""
+
+    directory = Path(raw).expanduser()
+    if not directory.is_absolute():
+        raise RunnerError("preflight claim directory must be an absolute path")
+    if directory.is_symlink():
+        raise RunnerError("preflight claim directory must not be a symlink")
+    if not directory.is_dir():
+        raise RunnerError(f"preflight claim directory does not exist: {directory}")
+    resolved = directory.resolve()
+    if path_is_within(repo_root, resolved) or resolved == repo_root:
+        raise RunnerError("preflight claim directory must live outside the repository")
+    metadata = resolved.stat()
+    if metadata.st_uid != os.getuid():
+        raise RunnerError("preflight claim directory must be owned by the parent")
+    if stat.S_IMODE(metadata.st_mode) & (stat.S_IRWXG | stat.S_IRWXO):
+        raise RunnerError("preflight claim directory must not be group or world accessible")
+    return resolved
+
+
+def claim_single_preflight(claim_dir: Path, payload: dict[str, Any]) -> Path:
+    """Claim the one preflight allowed for this candidate, or refuse.
+
+    The claim is created exclusively, so a duplicate, concurrent, or replayed
+    request cannot start a second process. An existing claim is never reused
+    or repaired: incomplete evidence from an earlier crash keeps the candidate
+    closed rather than granting another run.
+    """
+
+    claim_path = claim_dir / f"{payload['candidate_manifest_digest']}.json"
+    content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        descriptor = os.open(
+            claim_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+    except FileExistsError as exc:
+        raise RunnerError(
+            "this candidate has already claimed its one preflight; a further attempt is refused "
+            f"even after failure: {claim_path}"
+        ) from exc
+    except OSError as exc:
+        raise RunnerError(f"could not claim the preflight: {exc}") from exc
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return claim_path
+
+
+def preflight_candidate(args: argparse.Namespace) -> int:
+    """Run one bounded diagnostic command against an admitted candidate.
+
+    This is parent-owned diagnostic feedback, not validation. It never records
+    a validation event, never advances the lifecycle phase, never changes a
+    counter, and never satisfies an acceptance witness. Its only permitted use
+    is as evidence for the single correction the run already allows.
+    """
+
+    if not args.parent_diff_approved or not args.critical_invariants_approved:
+        raise RunnerError(
+            "candidate preflight requires explicit parent diff and critical-invariant approval"
+        )
+    preflight_started = time.monotonic()
+    timeout_seconds = int(args.timeout_seconds)
+    if not 1 <= timeout_seconds <= PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS:
+        raise RunnerError(
+            f"preflight timeout must be between 1 and {PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS} seconds"
+        )
+    git_bin = require_executable("git", args.git_bin)
+    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+    ensure_bwrap_usable(bwrap_bin)
+    repo_root = detect_repo_root(git_bin)
+    os.chdir(repo_root)
+    planlib = load_planlib()
+    validation_commands = load_plan_validation_commands()
+    ensure_clean_worktree(repo_root, git_bin)
+    claim_dir = require_preflight_claim_directory(args.preflight_claim_dir, repo_root)
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    verified = verify_candidate_manifest(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        planlib=planlib,
+        manifest_path=manifest_path,
+    )
+    require_plan_worktree(repo_root, verified["plan_rel"], "running a candidate preflight")
+    enforce_plan_execution_gate(
+        args,
+        plan=verified["plan_rel"],
+        open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+    )
+    if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
+        raise RunnerError("preflight run identifier differs from the verified manifest")
+    if Path(args.lifecycle_state).expanduser().absolute() != Path(
+        verified["manifest"]["lifecycle_state_path"]
+    ):
+        raise RunnerError("preflight lifecycle state path differs from the verified manifest")
+    raw_commands = verified["values"].get("focused_validation", [])
+    if not isinstance(raw_commands, list):
+        raise RunnerError("plan focused_validation must be a list")
+    try:
+        commands = validation_commands.parse_validation_commands(raw_commands)
+    except ValueError as exc:
+        raise RunnerError(f"plan focused_validation contains an invalid command: {exc}") from exc
+    if not commands:
+        raise RunnerError("this plan has no focused validation stage to select a preflight from")
+    index = int(args.command_index)
+    if not 0 <= index < len(commands):
+        raise RunnerError(
+            f"preflight command index must select one declared focused command in 0..{len(commands) - 1}"
+        )
+    command = commands[index]
+    if command.argv[:2] == ("npm", "run"):
+        raise RunnerError(
+            "preflight provisions no npm dependency tree; select another declared focused command"
+        )
+    output_dir = materialize_output_dir(repo_root, args.output_dir)
+    report_path = output_dir / "preflight.json"
+    if report_path.exists() or report_path.is_symlink():
+        raise RunnerError(f"preflight report path is already present: {report_path}")
+    genesis = preflight_execution_genesis(args.plan_execution_state)
+    capture: dict[str, Any] = {}
+    lifecycle_context = open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    )
+    with lifecycle_context as lifecycle_state, tempfile.TemporaryDirectory(
+        prefix="sandboxed-plan-worker-preflight-"
+    ) as workspace_tmp:
+        workspace = Path(workspace_tmp)
+        lifecycle = lifecycle_state.require_existing()
+        if (
+            lifecycle["current_manifest_digest"] != verified["manifest_digest"]
+            or lifecycle["current_patch_digest"] != verified["patch_digest"]
+            or lifecycle["plan_execution_attempt_id"]
+            != verified["manifest"]["plan_execution_attempt_id"]
+        ):
+            raise RunnerError("preflight manifest is not the current lifecycle leaf")
+        if lifecycle["phase"] != "admitted":
+            raise RunnerError(
+                "preflight runs on an admitted candidate before validation, not after it"
+            )
+        enforce_plan_execution_gate(
+            args,
+            plan=verified["plan_rel"],
+            open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+        )
+        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            raise RunnerError("source HEAD changed before the preflight claim")
+        claim_payload = {
+            "schema_version": PREFLIGHT_CLAIM_SCHEMA_VERSION,
+            "record_type": "candidate_preflight_claim",
+            "plan_path": verified["plan_rel"],
+            "plan_execution_attempt_id": verified["manifest"]["plan_execution_attempt_id"],
+            "orchestration_run_id": args.orchestration_run_id,
+            "execution_genesis_digest": genesis,
+            "candidate_manifest_digest": verified["manifest_digest"],
+            "candidate_patch_digest": verified["patch_digest"],
+            "command_digest": prefixed_sha256("\u0000".join(command.argv)),
+            "command_index": index,
+            "source_head": verified["head"],
+        }
+        claim_path = claim_single_preflight(claim_dir, claim_payload)
+        try:
+            record, _clone_dir, _initial_refs = execute_validation_operation(
+                repo_root=repo_root,
+                git_bin=git_bin,
+                bwrap_bin=bwrap_bin,
+                verified=verified,
+                workspace=workspace,
+                index=index,
+                command=command,
+                private_dependency_tree=None,
+                private_node_runtime=None,
+                output_dir=output_dir,
+                manifest_path=manifest_path,
+                bounds=(float(timeout_seconds), PREFLIGHT_OUTPUT_LIMIT_BYTES),
+                capture_sink=capture,
+            )
+        except (RunnerError, OSError) as exc:
+            raise RunnerError(f"preflight execution failed to start or complete: {exc}") from exc
+        ensure_clean_worktree(repo_root, git_bin)
+        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            raise RunnerError("source HEAD changed during the candidate preflight")
+    timed_out = bool(capture.get("timed_out"))
+    truncated = bool(capture.get("output_truncated"))
+    status = (
+        "timed_out" if timed_out else "output_limit_exceeded" if truncated else "completed"
+    )
+    report = {
+        "schema_version": PREFLIGHT_REPORT_SCHEMA_VERSION,
+        "record_type": "candidate_preflight_diagnostic",
+        "evidence_class": "diagnostic",
+        "is_validation_evidence": False,
+        "plan_path": verified["plan_rel"],
+        "plan_digest": "sha256:" + verified["plan_digest"],
+        "plan_execution_attempt_id": verified["manifest"]["plan_execution_attempt_id"],
+        "execution_genesis_digest": genesis,
+        "candidate_manifest_digest": verified["manifest_digest"],
+        "candidate_patch_digest": verified["patch_digest"],
+        "source_head": verified["head"],
+        "claim_path_digest": prefixed_sha256(str(claim_path)),
+        "command_index": index,
+        "command_argv": list(command.argv),
+        "command_digest": claim_payload["command_digest"],
+        "timeout_seconds": timeout_seconds,
+        "output_limit_bytes": PREFLIGHT_OUTPUT_LIMIT_BYTES,
+        "status": status,
+        "timed_out": timed_out,
+        "output_truncated": truncated,
+        "exit_status": record["returncode"],
+        "passed": status == "completed" and record["returncode"] == 0,
+        "stdout_digest": record["stdout_digest"],
+        "stderr_digest": record["stderr_digest"],
+        "stdout": capture.get("stdout", b"").decode("utf-8", errors="replace"),
+        "stderr": capture.get("stderr", b"").decode("utf-8", errors="replace"),
+        "duration_seconds": bounded_duration(preflight_started, time.monotonic()),
+    }
+    report_descriptor = os.open(
+        report_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(report_descriptor, "wb") as handle:
+        handle.write((json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    print(str(report_path))
+    return 0
 
 
 def validate_candidate(args: argparse.Namespace) -> int:
@@ -3059,7 +4942,12 @@ def validate_candidate(args: argparse.Namespace) -> int:
         planlib=planlib,
         manifest_path=manifest_path,
     )
-    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
+    require_plan_worktree(repo_root, verified["plan_rel"], "validating a sandboxed worker candidate")
+    enforce_plan_execution_gate(
+        args,
+        plan=verified["plan_rel"],
+        open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+    )
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("validation run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -3128,6 +5016,7 @@ def validate_candidate(args: argparse.Namespace) -> int:
     reserved = reserve_output_artifacts(output_dir)
     records: list[dict[str, Any]] = []
     failed = False
+    failure: dict[str, object] | None = None
     lifecycle_context = open_lifecycle_state(
         repo_root, args.lifecycle_state, args.orchestration_run_id
     )
@@ -3152,7 +5041,9 @@ def validate_candidate(args: argparse.Namespace) -> int:
         lifecycle = lifecycle_state.require_existing()
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
-        ] != verified["patch_digest"]:
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
             raise RunnerError("validation manifest is not the current lifecycle leaf")
         expected_phase = (
             "focused_passed"
@@ -3179,106 +5070,54 @@ def validate_candidate(args: argparse.Namespace) -> int:
         )
         suite_error: RunnerError | None = None
         for index, command in enumerate(commands):
-            command_root = workspace / f"command-{index}"
-            clone_dir = command_root / "review-clone"
-            scratch_dir = command_root / "scratch"
-            scratch_dir.mkdir(parents=True)
-            clone_at_head(repo_root, git_bin, verified["head"], clone_dir)
-            initial_refs = git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout
-            run_subprocess(
-                (git_bin, "apply", "--check", "--binary", "-"),
-                cwd=clone_dir,
-                stdin=verified["patch_bytes"],
-            )
-            run_subprocess(
-                (git_bin, "apply", "--binary", "-"), cwd=clone_dir, stdin=verified["patch_bytes"]
-            )
-            read_only_shadows: list[tuple[Path, Path]] = []
-            writable_shadows: list[tuple[Path, Path]] = []
-            if private_dependency_tree is not None:
-                dependency_target = clone_dir / "node_modules"
-                dependency_target.mkdir()
-                read_only_shadows.append((private_dependency_tree, dependency_target))
-                writable_shadows.extend(
-                    dependency_cache_shadows(
-                        private_dependency_tree, dependency_target, scratch_dir
-                    )
-                )
-            env_vars = prepare_worker_environment(
-                source_repo=repo_root,
-                clone_dir=clone_dir,
-                scratch_dir=scratch_dir,
-                plan_rel=verified["plan_rel"],
-                extra_env=(),
-                include_codex_home=False,
-            )
-            env_vars["PATH"] = (
-                f"{private_node_runtime['runtime_root'] / 'bin'}:{DEFAULT_PATH}"
-                if command.argv[0] == "npm" and private_node_runtime is not None
-                else DEFAULT_PATH
-            )
-            playwright_browsers = (
-                private_dependency_tree / ".playwright-browsers"
-                if private_dependency_tree is not None
-                else None
-            )
-            if playwright_browsers is not None and (
-                playwright_browsers.exists() or playwright_browsers.is_symlink()
-            ):
-                if playwright_browsers.is_symlink() or not playwright_browsers.is_dir():
-                    raise RunnerError("private Playwright browser snapshot changed shape")
-                env_vars["PLAYWRIGHT_BROWSERS_PATH"] = str(
-                    dependency_target / ".playwright-browsers"
-                )
-            validation_hidden = [output_dir, manifest_path.parent, host_codex_home_path()]
-            host_home = Path.home().resolve()
-            if host_home.is_dir():
-                validation_hidden.append(host_home)
-            command_argv = (
-                (
-                    str(private_node_runtime["node_path"]),
-                    str(private_node_runtime["npm_cli_path"]),
-                    *command.argv[1:],
-                )
-                if command.argv[0] == "npm" and private_node_runtime is not None
-                else (
-                    require_validation_executable(command.argv[0], clone_dir),
-                    *command.argv[1:],
-                )
-            )
             started = time.monotonic()
-            result = run_subprocess(
-                build_bwrap_command(
+            try:
+                record, clone_dir, initial_refs = execute_validation_operation(
+                    repo_root=repo_root,
+                    git_bin=git_bin,
                     bwrap_bin=bwrap_bin,
-                    clone_dir=clone_dir,
-                    scratch_dir=scratch_dir,
-                    command=command_argv,
-                    env_vars=env_vars,
-                    writable_clone=True,
-                    writable_shadows=writable_shadows,
-                    hidden_directories=normalize_hidden_directories(
-                        validation_hidden,
-                        visible_paths=(clone_dir, scratch_dir),
-                    ),
-                    read_only_shadows=read_only_shadows,
-                    network_enabled=False,
-                ),
-                cwd=repo_root,
-                env=sanitize_process_env(),
-                check=False,
-            )
-            records.append(
-                {
+                    verified=verified,
+                    workspace=workspace,
+                    index=index,
+                    command=command,
+                    private_dependency_tree=private_dependency_tree,
+                    private_node_runtime=private_node_runtime,
+                    output_dir=output_dir,
+                    manifest_path=manifest_path,
+                )
+            except (RunnerError, OSError) as exc:
+                failed = True
+                suite_error = exc if isinstance(exc, RunnerError) else RunnerError(
+                    "validation operation setup failed"
+                )
+                record = {
                     "index": index,
                     "argv": list(command.argv),
                     "duration_seconds": bounded_duration(started, time.monotonic()),
-                    "returncode": result.returncode,
-                    "stdout_digest": hashlib.sha256(result.stdout).hexdigest(),
-                    "stderr_digest": hashlib.sha256(result.stderr).hexdigest(),
+                    "returncode": 0,
+                    "stdout_digest": hashlib.sha256(b"").hexdigest(),
+                    "stderr_digest": hashlib.sha256(b"").hexdigest(),
                 }
-            )
-            if result.returncode != 0:
+                records.append(record)
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="runner_setup",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=1,
+                )
+                break
+            records.append(record)
+            result_status = record["returncode"]
+            if result_status != 0:
                 failed = True
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="command",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=int(result_status),
+                )
                 break
             if dependency_snapshot is not None:
                 try:
@@ -3290,6 +5129,13 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 except RunnerError as exc:
                     failed = True
                     suite_error = exc
+                    failure = validation_failure_identity(
+                        suite=args.suite,
+                        kind="dependency_integrity",
+                        command_index=index,
+                        argv=command.argv,
+                        exit_status=1,
+                    )
                     break
             if node_runtime is not None:
                 try:
@@ -3297,23 +5143,82 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 except RunnerError as exc:
                     failed = True
                     suite_error = exc
+                    failure = validation_failure_identity(
+                        suite=args.suite,
+                        kind="runtime_integrity",
+                        command_index=index,
+                        argv=command.argv,
+                        exit_status=1,
+                    )
                     break
-            if git_text(clone_dir, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            try:
+                observed_clone_head = git_text(clone_dir, git_bin, "rev-parse", "HEAD")
+                observed_clone_refs = git(
+                    clone_dir, git_bin, "show-ref", "--head", "--dereference"
+                ).stdout
+            except RunnerError as exc:
+                failed = True
+                suite_error = exc
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="runner_setup",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=1,
+                )
+                break
+            if observed_clone_head != verified["head"]:
                 failed = True
                 suite_error = RunnerError("validation command changed review-clone HEAD")
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="head_immutability",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=1,
+                )
                 break
-            if git(clone_dir, git_bin, "show-ref", "--head", "--dereference").stdout != initial_refs:
+            if observed_clone_refs != initial_refs:
                 failed = True
                 suite_error = RunnerError("validation command changed review-clone refs")
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="ref_immutability",
+                    command_index=index,
+                    argv=command.argv,
+                    exit_status=1,
+                )
                 break
-        ensure_clean_worktree(repo_root, git_bin)
-        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
-            raise RunnerError("source HEAD changed during candidate validation")
+        try:
+            ensure_clean_worktree(repo_root, git_bin)
+            if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+                raise RunnerError("source HEAD changed during candidate validation")
+        except RunnerError as exc:
+            if not records:
+                raise
+            if failed:
+                suite_error = suite_error or exc
+            else:
+                failed = True
+                suite_error = exc
+                source_index = len(records) - 1
+                source_command = commands[source_index]
+                failure = validation_failure_identity(
+                    suite=args.suite,
+                    kind="source_integrity",
+                    command_index=source_index,
+                    argv=source_command.argv,
+                    exit_status=1,
+                )
         report = {
             "schema_version": 1,
             "candidate_manifest_digest": verified["manifest_digest"],
             "candidate_patch_digest": verified["patch_digest"],
+            "plan_execution_attempt_id": verified["manifest"]["plan_execution_attempt_id"],
             "plan_path": verified["plan_rel"],
+            "plan_digest": "sha256:" + verified["plan_digest"],
+            "source_head": verified["head"],
+            "implementation_mode": "candidate",
             "suite": args.suite,
             "parent_diff_approved": True,
             "critical_invariants_approved": True,
@@ -3340,6 +5245,7 @@ def validate_candidate(args: argparse.Namespace) -> int:
                 else None
             ),
             "passed": not failed,
+            "failure": failure,
             "telemetry": {
                 "duration_seconds": bounded_duration(validation_started, time.monotonic()),
                 "focused_validation_count": focused_count,
@@ -3368,13 +5274,12 @@ def validate_candidate(args: argparse.Namespace) -> int:
 def correct_worker(args: argparse.Namespace) -> int:
     runner_started = time.monotonic()
     git_bin = require_executable("git", args.git_bin)
-    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
-    ensure_bwrap_usable(bwrap_bin)
     repo_root = detect_repo_root(git_bin)
     os.chdir(repo_root)
     planlib = load_planlib()
     ensure_clean_worktree(repo_root, git_bin)
     plan_rel = normalize_manifest_path(repo_root, args.plan)
+    require_plan_worktree(repo_root, plan_rel, "requesting a sandboxed worker correction")
     prior_manifest_path = Path(args.prior_manifest).expanduser()
     if not prior_manifest_path.is_absolute():
         prior_manifest_path = (Path.cwd() / prior_manifest_path).absolute()
@@ -3414,6 +5319,30 @@ def correct_worker(args: argparse.Namespace) -> int:
     reserved_artifacts = reserve_output_artifacts(output_dir)
     if args.availability_state is not None and args.orchestration_run_id is None:
         raise RunnerError("availability state requires an orchestration run identifier")
+    hidden_prior = {
+        prior_manifest_path.parent.resolve(),
+        verified["patch_path"].parent.resolve(),
+        brief_path.parent.resolve(),
+    }
+    with open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    ) as lifecycle_state:
+        lifecycle = lifecycle_state.require_existing()
+        if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
+            "current_patch_digest"
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
+            raise RunnerError("correction prior manifest is not the current lifecycle leaf")
+        if lifecycle["phase"] not in {"admitted", "focused_passed"}:
+            raise RunnerError("correction is not allowed after validation failure or final acceptance")
+        if lifecycle["correction_round"] != lineage["correction_round"] - 1:
+            raise RunnerError("correction lineage does not match the run-bound lifecycle round")
+    begin_plan_execution_attempt(
+        args,
+        attempt_kind="correction",
+        prior_candidate_digest="sha256:" + verified["manifest_digest"],
+    )
     state_context = (
         open_availability_state(repo_root, args.availability_state, args.orchestration_run_id)
         if args.availability_state is not None and args.orchestration_run_id is not None
@@ -3422,18 +5351,20 @@ def correct_worker(args: argparse.Namespace) -> int:
     lifecycle_context = open_lifecycle_state(
         repo_root, args.lifecycle_state, args.orchestration_run_id
     )
-    hidden_prior = {
-        prior_manifest_path.parent.resolve(),
-        verified["patch_path"].parent.resolve(),
-        brief_path.parent.resolve(),
-    }
-    with lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
+    with plan_execution_lease(args), lifecycle_context as lifecycle_state, state_context as availability_state, tempfile.TemporaryDirectory(
         prefix="sandboxed-plan-worker-correction-workspace-"
     ) as workspace_tmp:
+        enforce_plan_execution_gate(
+            args, plan=verified["plan_rel"], open_attempt_id=args.execution_attempt_id
+        )
+        bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+        ensure_bwrap_usable(bwrap_bin)
         lifecycle = lifecycle_state.require_existing()
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
-        ] != verified["patch_digest"]:
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
             raise RunnerError("correction prior manifest is not the current lifecycle leaf")
         if lifecycle["phase"] not in {"admitted", "focused_passed"}:
             raise RunnerError("correction is not allowed after validation failure or final acceptance")
@@ -3450,6 +5381,9 @@ def correct_worker(args: argparse.Namespace) -> int:
             "head": verified["head"],
             "plan_rel": verified["plan_rel"],
             "plan_digest": verified["plan_digest"],
+            "values": values,
+            "run_id": args.orchestration_run_id,
+            "plan_execution_attempt_id": args.execution_attempt_id,
             "normalized_scope": verified["normalized_scope"],
             "bwrap_bin": bwrap_bin,
             "git_bin": git_bin,
@@ -3463,6 +5397,7 @@ def correct_worker(args: argparse.Namespace) -> int:
             selected = execute_isolated_attempt(
                 **common,
                 label="custom",
+                attempt_lineage={"attempt_kind": "correction", **lineage, "attempt_label": "custom"},
                 hidden_directories=tuple({output_dir.resolve(), *hidden_prior}),
                 custom_command=[worker_binary, *args.worker_arg],
             )
@@ -3497,7 +5432,8 @@ def correct_worker(args: argparse.Namespace) -> int:
                 primary = execute_isolated_attempt(
                     **common,
                     label="primary",
-                    hidden_directories=tuple({output_dir.resolve(), host_codex_home_path(), *hidden_prior}),
+                    attempt_lineage={"attempt_kind": "correction", **lineage, "attempt_label": "primary"},
+                    hidden_directories=tuple({output_dir.resolve(), *host_codex_home_hidden(), *hidden_prior}),
                     codex_bin=codex_bin,
                     model=primary_model,
                     reasoning=primary_reasoning,
@@ -3525,10 +5461,11 @@ def correct_worker(args: argparse.Namespace) -> int:
                 fallback = execute_isolated_attempt(
                     **common,
                     label="fallback",
+                    attempt_lineage={"attempt_kind": "correction", **lineage, "attempt_label": "fallback"},
                     hidden_directories=tuple(
                         {
                             output_dir.resolve(),
-                            host_codex_home_path(),
+                            *host_codex_home_hidden(),
                             *hidden_prior,
                             *([primary["attempt_root"]] if primary is not None else []),
                         }
@@ -3550,14 +5487,24 @@ def correct_worker(args: argparse.Namespace) -> int:
                         f"fallback correction worker exited with {fallback['result'].returncode}; stdout/stderr saved under {output_dir}"
                     )
                 selected = fallback
+        if selected["completion_claims_error"] is not None:
+            raise RunnerError(
+                "correction completion claims were rejected; process diagnostics and a safe failure "
+                f"receipt were saved under {output_dir}"
+            )
         worker_result = select_attempt_artifacts(selected, reserved_artifacts)
+        contract_path = reserved_artifacts["worker-contract.json"]
+        contract_path.write_bytes(selected["contract_bytes"])
+        contract_digest = hash_file(contract_path)
         worker_result["kind"] = worker_kind
         if attempts:
             worker_result["attempts"] = attempts
             worker_result["selected_attempt"] = selected["record"]["label"]
         if fallback_reason is not None:
             worker_result["fallback_reason"] = fallback_reason
-        materialize_writable_shadows(selected["shadows"])
+        materialize_writable_shadows(
+            selected["shadows"], selected["scratch_dir"] / "writable-shadows"
+        )
         patch_bytes, clone_head_after_worker, refs_after_worker = collect_candidate_patch_in_sandbox(
             bwrap_bin=bwrap_bin,
             git_bin=git_bin,
@@ -3571,8 +5518,7 @@ def correct_worker(args: argparse.Namespace) -> int:
             raise RunnerError("correction worker changed clone refs")
         if not patch_bytes:
             raise RunnerError("correction produced no aggregate candidate changes")
-        patch_path = reserved_artifacts["candidate.patch"]
-        patch_digest = write_bytes(patch_path, patch_bytes)
+        patch_digest = hashlib.sha256(patch_bytes).hexdigest()
         changed_paths = normalize_changed_paths(
             derive_changed_paths_from_patch(repo_root, git_bin, patch_bytes, verified["head"]),
             repo_root,
@@ -3594,17 +5540,47 @@ def correct_worker(args: argparse.Namespace) -> int:
         ensure_clean_worktree(repo_root, git_bin)
         if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
             raise RunnerError("source HEAD changed during correction admission")
+        receipt_candidate = {
+            "patch_digest": "sha256:" + patch_digest,
+            "changed_paths": sorted(changed_paths),
+        }
+        completion_receipt = write_attempt_completion_receipt(
+            selected,
+            reserved_artifacts=reserved_artifacts,
+            candidate=receipt_candidate,
+            final=True,
+        )
+        patch_path = reserved_artifacts["candidate.patch"]
+        if write_bytes(patch_path, patch_bytes) != patch_digest:
+            raise RunnerError("correction patch changed while it was published")
+        if completion_receipt["claims"]["attempt_result"] != "success":
+            raise RunnerError(
+                "correction completion receipt reports failure; candidate was not admitted"
+            )
+        completion_receipt_path = selected["completion_receipt_path"]
+        completion_receipt_digest = selected["completion_receipt_digest"]
+        process_result_path = selected["process_result_path"]
+        process_result_digest = selected["process_result_digest"]
         telemetry_attempts = attempts if worker_kind == "codex" else [selected["record"]]
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "source_head": verified["head"],
             "plan_path": verified["plan_rel"],
             "plan_digest": verified["plan_digest"],
+            "worker_contract_path": str(contract_path),
+            "worker_contract_digest": contract_digest,
+            "worker_completion_receipt_path": str(completion_receipt_path),
+            "worker_completion_receipt_digest": completion_receipt_digest.removeprefix("sha256:"),
+            "worker_process_result_path": str(process_result_path),
+            "worker_process_result_digest": process_result_digest.removeprefix("sha256:"),
+            "worker_attempt_label": selected["record"]["label"],
+            "worker_attempt_id": selected["attempt_id"],
             "allowed_write_scope": verified["normalized_scope"],
             "changed_paths": changed_paths,
             "patch_path": str(patch_path),
             "patch_digest": patch_digest,
             "orchestration_run_id": args.orchestration_run_id,
+            "plan_execution_attempt_id": args.execution_attempt_id,
             "lifecycle_state_path": str(Path(args.lifecycle_state).expanduser().absolute()),
             "correction_lineage": lineage,
             "worker_result": worker_result,
@@ -3634,6 +5610,7 @@ def correct_worker(args: argparse.Namespace) -> int:
         lifecycle_state.persist(
             {
                 **lifecycle,
+                "plan_execution_attempt_id": args.execution_attempt_id,
                 "current_manifest_digest": hash_file(manifest_path),
                 "current_patch_digest": patch_digest,
                 "correction_round": lineage["correction_round"],
@@ -3662,7 +5639,12 @@ def apply_worker_result(args: argparse.Namespace) -> int:
         planlib=planlib,
         manifest_path=manifest_path,
     )
-    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
+    require_plan_worktree(repo_root, verified["plan_rel"], "applying a sandboxed worker candidate")
+    enforce_plan_execution_gate(
+        args,
+        plan=verified["plan_rel"],
+        open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+    )
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("apply run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -3676,7 +5658,9 @@ def apply_worker_result(args: argparse.Namespace) -> int:
         lifecycle = lifecycle_state.require_existing()
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
-        ] != verified["patch_digest"]:
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
             raise RunnerError("apply manifest is not the current lifecycle leaf")
         if lifecycle["phase"] != "authoritative_passed" or lifecycle[
             "authoritative_validation_count"
@@ -3713,7 +5697,12 @@ def finalize_apply(args: argparse.Namespace) -> int:
         require_clean=False,
         allow_applied_symlink_targets=True,
     )
-    enforce_plan_execution_gate(args, plan=verified["plan_rel"])
+    require_plan_worktree(repo_root, verified["plan_rel"], "finalizing a sandboxed worker apply")
+    enforce_plan_execution_gate(
+        args,
+        plan=verified["plan_rel"],
+        open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+    )
     if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
         raise RunnerError("finalize-apply run identifier differs from the verified manifest")
     if Path(args.lifecycle_state).expanduser().absolute() != Path(
@@ -3728,7 +5717,9 @@ def finalize_apply(args: argparse.Namespace) -> int:
             raise RunnerError("finalize-apply requires an applying lifecycle state")
         if lifecycle["current_manifest_digest"] != verified["manifest_digest"] or lifecycle[
             "current_patch_digest"
-        ] != verified["patch_digest"]:
+        ] != verified["patch_digest"] or lifecycle["plan_execution_attempt_id"] != verified[
+            "manifest"
+        ]["plan_execution_attempt_id"]:
             raise RunnerError("finalize-apply manifest is not the current lifecycle leaf")
         if collect_worktree_patch(repo_root, git_bin, verified["head"]) != verified["patch_bytes"]:
             raise RunnerError("source worktree does not exactly match the verified applied patch")
@@ -3744,6 +5735,8 @@ def write_self_test_worker(path: Path) -> None:
             #!/usr/bin/env python3
             from __future__ import annotations
 
+            import hashlib
+            import json
             import os
             from pathlib import Path
 
@@ -3752,11 +5745,13 @@ def write_self_test_worker(path: Path) -> None:
             worker_repo = Path(os.environ[prefix + "WORKER_REPO"])
             source_repo = Path(os.environ[prefix + "SOURCE_REPO"])
             scratch_dir = Path(os.environ[prefix + "SCRATCH_DIR"])
+            new_file_root = Path(os.environ[prefix + "NEW_FILE_ROOT"])
             outside_probe = Path(os.environ[prefix + "OUTSIDE_PROBE"])
 
             (worker_repo / "allowed.txt").write_text("changed in clone\\n", encoding="utf-8")
-            (worker_repo / "dir" / "new.txt").parent.mkdir(parents=True, exist_ok=True)
-            (worker_repo / "dir" / "new.txt").write_text("new file\\n", encoding="utf-8")
+            new_target = new_file_root / "dir" / "new.txt"
+            new_target.parent.mkdir(parents=True, exist_ok=True)
+            new_target.write_text("new file\\n", encoding="utf-8")
             (scratch_dir / "scratch-ok.txt").write_text("scratch ok\\n", encoding="utf-8")
 
             denied = []
@@ -3772,6 +5767,34 @@ def write_self_test_worker(path: Path) -> None:
                     raise SystemExit(f"unexpected write success: {{label}}")
             if denied != ["source", "outside"]:
                 raise SystemExit(f"unexpected denied set: {{denied}}")
+
+            contract = json.loads(
+                Path(os.environ[prefix + "WORKER_CONTRACT"]).read_text(encoding="utf-8")
+            )
+            acceptance_evidence = [
+                {{
+                    "acceptance_digest": "sha256:"
+                    + hashlib.sha256(item.encode()).hexdigest(),
+                    "claim": "satisfied",
+                }}
+                for item in contract["acceptance"]
+            ]
+            Path(os.environ[prefix + "COMPLETION_CLAIMS"]).write_text(
+                json.dumps(
+                    {{
+                        "attempt_result": "success",
+                        "acceptance_evidence": acceptance_evidence,
+                        "commands_attempted": [],
+                        "blockers": [],
+                        "residual_risks": [],
+                        "out_of_scope_change": False,
+                    }},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\\n",
+                encoding="utf-8",
+            )
             """
         ),
         encoding="utf-8",
@@ -3783,13 +5806,22 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
     run_subprocess((git_bin, "init", "-q", "-b", "main"), cwd=repo_root)
     run_subprocess((git_bin, "config", "user.email", "self-test@example.invalid"), cwd=repo_root)
     run_subprocess((git_bin, "config", "user.name", "Self Test"), cwd=repo_root)
+    run_subprocess(
+        (git_bin, "remote", "add", "origin", "https://example.invalid/self-test.git"),
+        cwd=repo_root,
+    )
     (repo_root / "AGENTS.md").write_text("sandboxed worker self-test\n", encoding="utf-8")
     (repo_root / "docs/plan/active").mkdir(parents=True, exist_ok=True)
+    (repo_root / "docs/agent").mkdir(parents=True, exist_ok=True)
+    (repo_root / "docs/agent/SPEC_USER_COMMUNICATION.md").write_text("self-test\n", encoding="utf-8")
+    (repo_root / "docs/agent/SPEC_PLAN_WORKFLOW.md").write_text("self-test\n", encoding="utf-8")
     (repo_root / "docs/plan/plan.md").write_text(
         "# Active Plan\n\nid\tpath\tstatus\n001\tdocs/plan/active/001-self-test.md\tin_progress\n",
         encoding="utf-8",
     )
     (repo_root / "allowed.txt").write_text("original\n", encoding="utf-8")
+    (repo_root / "dir").mkdir()
+    (repo_root / "dir/existing.txt").write_text("keep parent\n", encoding="utf-8")
     plan = repo_root / "docs/plan/active/001-self-test.md"
     plan.write_text(
         textwrap.dedent(
@@ -3804,9 +5836,10 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
             human_approval_status: not_required
             implementation_risk: low
             implementation_ambiguity: low
+            primary_invariant: self-test changes remain inside explicit file paths
             write_scope:
               - allowed.txt
-              - dir/
+              - dir/new.txt
             context_files:
               - docs/agent/SPEC_USER_COMMUNICATION.md
             required_specs:
@@ -3832,7 +5865,6 @@ def init_self_test_repo(repo_root: Path, git_bin: str) -> str:
 def run_self_test(args: argparse.Namespace) -> int:
     git_bin = require_executable("git", args.git_bin)
     ensure_bwrap_usable(require_executable("bwrap", args.bwrap_bin))
-    normalize_repo_relpath("dir/", allow_prefix=True, label="self-test prefix")
     try:
         normalize_repo_relpath("../bad", label="self-test invalid path")
     except RunnerError:
@@ -3870,7 +5902,9 @@ def run_self_test(args: argparse.Namespace) -> int:
                     "--source-head",
                     source_head,
                     "--primary-invariant-digest",
-                    "sha256:" + hashlib.sha256(b"legacy candidate invariant").hexdigest(),
+                    "sha256:" + hashlib.sha256(
+                        b"self-test changes remain inside explicit file paths"
+                    ).hexdigest(),
                     "--lifecycle-state",
                     str(lifecycle_path),
                     "--implementation-mode",
@@ -3891,6 +5925,7 @@ def run_self_test(args: argparse.Namespace) -> int:
                     availability_state=None,
                     orchestration_run_id=run_id,
                     lifecycle_state=str(lifecycle_path),
+                    plan_execution_state=str(execution_state_path),
                     output_dir=str(output_dir),
                     plan=plan_rel,
                     worker_binary=str(require_executable("python3", sys.executable)),
@@ -3928,6 +5963,8 @@ def run_self_test(args: argparse.Namespace) -> int:
             )
             if (repo_root / "allowed.txt").read_text(encoding="utf-8") != "changed in clone\n":
                 raise RunnerError("self-test apply did not update the source repository")
+            if (repo_root / "dir/new.txt").read_text(encoding="utf-8") != "new file\n":
+                raise RunnerError("self-test apply did not create the declared new file")
         finally:
             os.chdir(original_cwd)
     print("sandboxed plan worker self-test passed")
@@ -3945,6 +5982,7 @@ def build_parser() -> argparse.ArgumentParser:
               run      execute a writable worker inside Bubblewrap and emit a candidate patch manifest
               correct  repair a verified candidate in a fresh isolated clone and emit an aggregate patch
               validate run a parent-authorized suite in a fresh review clone after candidate admission
+              preflight run one bounded diagnostic command against an admitted candidate; never validation
               apply    re-check and apply a previously emitted candidate patch manifest
               self-test run a deterministic local end-to-end check without contacting Codex
             """
@@ -3968,6 +6006,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="run a sandboxed worker against one active plan")
     run_parser.add_argument("plan", help="repository-relative active plan path")
+    run_parser.add_argument(
+        "--group-permit",
+        default=None,
+        help="exclusive execution group member permit issued by the group authority",
+    )
+    run_parser.add_argument(
+        "--group-state",
+        default=None,
+        help="parent-owned group execution state record that binds the member permit",
+    )
     run_parser.add_argument("--output-dir", help="directory outside the source repository for patch artifacts")
     run_parser.add_argument("--git-bin", default="git", help="git executable to use")
     run_parser.add_argument("--bwrap-bin", default="bwrap", help="Bubblewrap executable to use")
@@ -4006,6 +6054,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--lifecycle-state", required=True)
     run_parser.add_argument("--plan-execution-state", required=True)
+    run_parser.add_argument(
+        "--predecessor-plan-execution-state",
+        help="accepted predecessor execution ledger bound into this dependent plan run",
+    )
+    run_parser.add_argument(
+        "--predecessor-session-checkpoint",
+        help="verified terminal checkpoint emitted by the accepted predecessor root session",
+    )
+    run_parser.add_argument(
+        "--root-session-manifest",
+        help="run manifest containing the directly observed root-session identity",
+    )
+    run_parser.add_argument(
+        "--reviewer-registry",
+        help="external append-only reviewer session registry bound to checkpoint claims",
+    )
     run_parser.add_argument("--worker-binary", help="override the default Codex worker with a custom executable")
     run_parser.add_argument("--worker-arg", action="append", default=[], help="append one argument for --worker-binary")
     run_parser.add_argument(
@@ -4020,6 +6084,16 @@ def build_parser() -> argparse.ArgumentParser:
         "correct", help="correct a verified candidate in a fresh isolated clone"
     )
     correction_parser.add_argument("plan", help="repository-relative active plan path")
+    correction_parser.add_argument(
+        "--group-permit",
+        default=None,
+        help="exclusive execution group member permit issued by the group authority",
+    )
+    correction_parser.add_argument(
+        "--group-state",
+        default=None,
+        help="parent-owned group execution state record that binds the member permit",
+    )
     correction_parser.add_argument("prior_manifest", help="prior candidate manifest rejected by parent review")
     correction_parser.add_argument("correction_brief", help="bounded parent-authored correction brief outside the repository")
     correction_parser.add_argument("--output-dir", help="directory outside the source repository for patch artifacts")
@@ -4061,6 +6135,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validation_parser.set_defaults(handler=validate_candidate)
 
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        help="run one bounded parent-owned diagnostic command against an admitted candidate",
+    )
+    preflight_parser.add_argument("manifest", help="verified candidate manifest")
+    preflight_parser.add_argument(
+        "--command-index",
+        type=int,
+        required=True,
+        help="zero-based index of the plan's declared focused_validation command to run",
+    )
+    preflight_parser.add_argument("--parent-diff-approved", action="store_true")
+    preflight_parser.add_argument("--critical-invariants-approved", action="store_true")
+    preflight_parser.add_argument("--output-dir", required=True)
+    preflight_parser.add_argument(
+        "--preflight-claim-dir",
+        required=True,
+        help="parent-owned claim directory outside the repository",
+    )
+    preflight_parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=PREFLIGHT_DEFAULT_TIMEOUT_SECONDS,
+        help=f"hard time bound, at most {PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS} seconds",
+    )
+    preflight_parser.add_argument("--orchestration-run-id", required=True)
+    preflight_parser.add_argument("--lifecycle-state", required=True)
+    preflight_parser.add_argument("--plan-execution-state", required=True)
+    preflight_parser.add_argument("--git-bin", default="git")
+    preflight_parser.add_argument("--bwrap-bin", default="bwrap")
+    preflight_parser.set_defaults(handler=preflight_candidate)
+
     apply_parser = subparsers.add_parser("apply", help="apply a previously emitted candidate patch manifest")
     apply_parser.add_argument("manifest", help="path to manifest.json emitted by the run command")
     apply_parser.add_argument("--orchestration-run-id", required=True)
@@ -4092,10 +6198,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command in {"run", "correct"}:
+            enforce_parallel_group_gate(
+                args.plan,
+                "run" if args.command == "run" else "correct",
+                group_permit=getattr(args, "group_permit", None),
+                group_state=getattr(args, "group_state", None),
+            )
+            enforce_plan_execution_gate(args, plan=args.plan)
+            return int(args.handler(args))
         with plan_execution_lease(args):
             if args.command not in {"self-test", "prepare-dependencies"}:
-                plan = args.plan if args.command in {"run", "correct"} else None
-                enforce_plan_execution_gate(args, plan=plan)
+                if args.command not in {"run", "correct"}:
+                    enforce_plan_execution_gate(args)
             return int(args.handler(args))
     except RunnerError as exc:
         fail(str(exc))

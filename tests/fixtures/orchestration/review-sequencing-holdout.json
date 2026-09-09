@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "used_for_tuning": false,
+  "scenarios": [
+    {
+      "id": "holdout-accepted-predecessor-proof-substitution",
+      "input": "a different accepted predecessor ledger is supplied after the dependent ledger is bound",
+      "expected": "dependent_start_rejected"
+    }
+  ]
+}

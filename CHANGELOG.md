@@ -2,6 +2,35 @@
 
 ## 未リリース
 
+## 2026-09-09 v1.4.5
+
+- 受入条件と最も早い検証witnessの対応付けを、root と生成 project の双方で同じ規定として固定しました。
+  witness map の方針文を AGENTS と orchestration の各文書で一意に特定し、段階名、静的witnessの述語、`authoritative_only_reason`、最終検証suiteを弱めない条件を marker として検査したうえで、root と生成側の一致を求めます。
+  witness enforcement を運ぶ生成 source を Copier 更新の単一 inventory へ結び付け、生成 project が map なしの統合lane と、限定検証で証明できるのに最終検証だけを最初のwitnessとする定義を拒否することを smoke で確認します。
+
+- チーム共有用の HTML 報告を、project 所有の Git 追跡先 `docs/human-report/<report-id>/` へ明示コマンドで公開できるようにしました。
+  公開は `human_report_shared_mode` で選択し、構造化 source を review 対象、HTML をそこから決定的に導出する公開物として扱います。
+  公開コマンドは stage も commit もせず、上書きは明示 supersede だけを受け付けます。
+  `verify-shared` は記録した source hash、決定的再生成、公開ゲート、merge conflict 標識を照合して、陳腐化や改変を fail-closed で停止します。
+
+- 旧形式 witness の移行境界を、1 回だけ使える migration 所有の provenance 記録へ結合しました。
+  clean commit から作った snapshot と Git-local の試行状態を、生存する元 guardian の capability 証明、repository 識別、source commit、socket 経路で束ね、更新後段は 同じ snapshot の再現と新しい challenge-response の成立を求めます。
+  失効、複製、再送、guardian 交代、confine されていない socket は fail-closed で拒否し、snapshot と試行状態は単独では製品の受入証拠にも検証 witness にもなりません。
+- plan境界で本文を含まないsession checkpointを発行し、異なる観測済みroot sessionから一度だけ後続planを開始するstaged経路を追加しました。
+  agent log manifestにはprovider観測tokenと決定的proxy countを分離して保存し、独立reviewは継承turn 0の限定packetと1回の再review上限へ結合します。
+- 権威検証の失敗後は、失敗した操作と終了statusを実行台帳へ固定し、読み取り専用の再現証拠が一つの影響対象invariantを確認するまで修復planの作成を拒否するようにしました。
+- 進行中の統合planでは全受入条件を最初の静的検査、限定検証、または最終検証へdigestで対応付け、限定検証を飛ばす定義と理由のない最終検証専用定義を実行前に拒否するようにしました。
+- Copier更新fixtureのsource copyとGit stagingを単一inventoryから生成し、重複、欠落、および再度の二重管理を検出する回帰検証を追加しました。
+- 登録済みの linked worktree を local Git の ancestry、upstream、clean 状態、保護設定で scan し、固定 manifest を effect 直前に再検証して、明示確認がある場合だけ通常の worktree・branch 削除を行う local retirement workflow を追加しました。生成 project は safe-disabled で開始し、Copier 更新では project-owned 設定を保持します。
+- 外部 provider の認証確認を、実際の provider、コマンド実行境界、credential source へ結合し、sandbox 内外や provider 切替時の認証事実を別の呼び出しへ流用しないようにしました。
+- 書き込み可能な逐次workerを、commit済みplanから毎回生成する読み取り専用の実行契約へ結合し、曖昧なdirectory範囲、保護対象、検証権限への書き込みを起動前に拒否するようにしました。
+- 事前に固定した通常scenarioと独立holdoutを同じworker契約評価器で実行し、観測結果をfixture、runner、元planの受入条件digestへ結合する統合証拠を追加しました。
+- worker完了受領書を契約、試行、process結果、候補差分へ結合し、通常case、既知の回帰case、独立holdoutの観測結果を元planの受入条件digestへ結び付ける統合証拠を追加しました。
+- 対象とテンプレートの元リポジトリを変更せず、固定したGit commit間のCopier更新、安全性、製品検証、冪等性を一時cloneで証明してローカルmanifestへ記録するスキルを追加しました。
+- 独立して修復できる局所障害では元planを置換せず、該当する実行だけを停止して修復planの完了後に新しい実行として再開するようにしました。
+- 依存する書き込みplanの開始を、前planの親受理済み候補、適用commit、終了event、および一度だけ消費できる後続claimへ結合し、一つの依存chainで試行が重ならないようにしました。
+  plan・sourceの基準と試行IDを契約、受領書、manifest、lifecycleで再照合し、却下と修正依頼は具体的な指摘を台帳外に保ったまま親の固定理由codeとreview証拠digestだけを追記します。
+
 ## 2026-08-15 v1.4.4
 
 - `npm ci` が生成する Workerd の hardlink を単一 link の私有依存スナップショットへ正規化し、コピー中の source tree 変更を拒否するようにしました。

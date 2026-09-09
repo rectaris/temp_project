@@ -113,43 +113,56 @@ def render_profile(text: str, model: str, effort: str) -> str:
         raise ProfileError("agent TOML is missing a string name")
 
     lines = text.splitlines()
+    raw_lines = text.splitlines(keepends=True)
     assignments = root_assignments(lines)
-    expected = {"model": model, "model_reasoning_effort": effort}
+    defaults = {"model": model, "model_reasoning_effort": effort}
     missing: list[tuple[str, str]] = []
-    insertion_indent = ""
-    for field, value in expected.items():
+    for field, value in defaults.items():
         matches = assignments[field]
         if len(matches) > 1:
             raise ProfileError(f"agent TOML defines {field} more than once")
         if matches:
-            index, indent = matches[0]
-            lines[index] = f'{indent}{field} = "{value}"'
-            if not insertion_indent:
-                insertion_indent = indent
+            # The project owns a field it already declares. Filling only what is
+            # absent keeps an update non-destructive; an existing value that
+            # happens to equal an older seed is still the project's value.
+            if not isinstance(parsed.get(field), str):
+                raise ProfileError(f"agent TOML must declare {field} as a string")
         else:
             missing.append((field, value))
 
-    if missing:
-        description_anchor = next((index for index, _ in assignments["description"]), None)
-        name_anchor = next((index for index, _ in assignments["name"]), None)
-        insert_after = description_anchor if description_anchor is not None else name_anchor
-        if insert_after is None:
-            raise ProfileError("agent TOML is missing name or description anchor")
+    if not missing:
+        return text
 
-        anchor = "description" if description_anchor is not None else "name"
-        insertion_indent = assignments[anchor][0][1]
+    description_anchor = next((index for index, _ in assignments["description"]), None)
+    name_anchor = next((index for index, _ in assignments["name"]), None)
+    insert_after = description_anchor if description_anchor is not None else name_anchor
+    if insert_after is None:
+        raise ProfileError("agent TOML is missing name or description anchor")
 
-        for field, value in reversed(missing):
-            lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"')
+    anchor = "description" if description_anchor is not None else "name"
+    insertion_indent = assignments[anchor][0][1]
 
-    rendered = "\n".join(lines).rstrip() + "\n"
+    # Insertion works on the line list that still carries its own terminators,
+    # so every byte outside the added assignments survives the render: the
+    # file's newline style, its trailing whitespace, and its final blank lines.
+    terminator = raw_lines[insert_after][len(lines[insert_after]):]
+    if not terminator:
+        terminator = "\r\n" if "\r\n" in text else "\n"
+        raw_lines[insert_after] += terminator
+    for field, value in reversed(missing):
+        raw_lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"{terminator}')
+
+    rendered = "".join(raw_lines)
     try:
         normalized = tomllib.loads(rendered)
     except tomllib.TOMLDecodeError as exc:
         raise ProfileError(f"agent TOML did not remain valid TOML after normalization: {exc}") from exc
-    for field, value in expected.items():
-        if normalized.get(field) != value:
-            raise ProfileError(f"agent TOML did not normalize {field}")
+    inserted = dict(missing)
+    for field in defaults:
+        previous = parsed.get(field)
+        wanted = inserted[field] if field in inserted else previous
+        if normalized.get(field) != wanted:
+            raise ProfileError(f"agent TOML did not preserve {field}")
     return rendered
 
 
@@ -158,7 +171,7 @@ def write_atomic(path: Path, text: str) -> None:
     temporary = Path(temporary_name)
     try:
         os.fchmod(descriptor, stat.S_IMODE(path.stat().st_mode))
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
         temporary.replace(path)
     finally:
@@ -170,11 +183,19 @@ def normalize_destination(destination: Path, *, check: bool = False) -> list[Pat
     for name, (model, effort) in PROFILES.items():
         relative = Path(".codex/agents") / f"{name}.toml"
         path = destination / relative
-        if path.is_symlink():
-            raise ProfileError(f"refusing to replace symlinked agent profile: {relative}")
+        # A symlinked profile is not the only way out of the destination: a
+        # symlinked parent redirects every profile at once, so each component
+        # between the destination and the file is checked before any read.
+        for component in (*reversed(relative.parents[:-1]), relative):
+            candidate = destination / component
+            if candidate.is_symlink():
+                raise ProfileError(f"refusing to follow symlinked agent path: {component}")
         if not path.is_file():
             raise ProfileError(f"missing built-in agent profile: {relative}")
-        original = path.read_text(encoding="utf-8")
+        if path.resolve() != (destination.resolve() / relative):
+            raise ProfileError(f"agent profile resolves outside the destination: {relative}")
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            original = handle.read()
         try:
             rendered = render_profile(original, model, effort)
         except ProfileError as exc:

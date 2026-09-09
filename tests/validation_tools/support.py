@@ -28,6 +28,10 @@ SECURITY_CHECK_MODULE = ROOT / "template/.project-agent-workflow/scripts/securit
 LEGACY_MIGRATOR = ROOT / "template/.project-agent-workflow/scripts/migrate-legacy-template-files.py"
 ROOT_EXTERNAL_SERVICE_CHECK = ROOT / "scripts/check-external-service-policy.py"
 PLANLIB = ROOT / "template/.project-agent-workflow/scripts/planlib.py"
+PLAN_AUTHORING_MODULES = (
+    ROOT / "scripts/project_workflow/plan_authoring.py",
+    ROOT / "template/.project-agent-workflow/scripts/plan_authoring.py",
+)
 
 
 def load_module(path: Path, name: str) -> ModuleType:

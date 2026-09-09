@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -15,12 +16,93 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
+ROOT_ADMISSION_BOUNDARY_PLAN_ID = 264
+ADMISSION_FIELDS = (
+    "plan_purpose",
+    "feasibility_evidence",
+    "completion_conditions",
+    "completion_witness_map",
+)
+PLAN_PURPOSE_VALUES = {"implementation"}
+FEASIBILITY_EVIDENCE_KINDS = {
+    "reproduced_defect",
+    "existing_mechanism",
+    "bounded_prototype",
+    "mechanical_transformation",
+}
+MAX_FEASIBILITY_EVIDENCE = 8
+MAX_COMPLETION_CONDITIONS = 8
+FEASIBILITY_EVIDENCE_MAX_BYTES = 400
+COMPLETION_CONDITION_MAX_BYTES = 400
+ADMISSION_PLACEHOLDER_VALUES = {
+    "-",
+    "?",
+    "n/a",
+    "na",
+    "none",
+    "pending",
+    "placeholder",
+    "t.b.d.",
+    "tbd",
+    "todo",
+    "unknown",
+    "xxx",
+}
+ADMISSION_LIFECYCLE_PREFIXES = (
+    "docs/plan/",
+    ".agent-logs/",
+    ".agent-artifacts/",
+)
+ADMISSION_SCALAR_KEYS = {"status", "plan_purpose", "execution_group", "implementation_tier"}
+ADMISSION_LIST_KEYS = {
+    "acceptance",
+    "write_scope",
+    "focused_validation",
+    "feasibility_evidence",
+    "completion_conditions",
+    "completion_witness_map",
+}
+TIER_ONE_VALUE = "1"
+PLAN_FILE_RE = re.compile(r"([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
 MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[:：]")
 APPROACH_MARKERS = {"A", "B", "C"}
 RATIONALE_MARKERS = {"推奨", "理由", "Recommended", "Reason"}
 MATRIX_WINDOW_LINES = 20
+REVIEW_FINDING_BUDGETS_HEADING = "### Review-Finding Budgets"
+REVIEW_CONTINUATION_CLAUSE_PREFIX = (
+    "- A review-budget-exhausted `descope_pending` run with reason "
+    "`parent_remediation_budget_exhausted`"
+)
+REVIEW_CONTINUATION_CLAUSE = (
+    REVIEW_CONTINUATION_CLAUSE_PREFIX
+    + ", no open writable attempt, and exactly one or two prior formal reviews may "
+    "receive one owner-authorized same-plan continuation. Never reopen or modify "
+    "the stopped ledger. Create a fresh ledger with `plan-execution-state.py "
+    "continue`, bind the complete predecessor-ledger digest and event-chain leaf, "
+    "exact unchanged plan path and digest, source HEAD, primary invariant, "
+    "implementation mode, and a mode-0600 authorization record."
+)
+MCP_SCENARIO_IDS = {
+    "same-context-success",
+    "sandbox-credential-failure-host-success",
+    "authenticated-provider-permission-denial",
+    "provider-change-after-preflight",
+    "command-boundary-change-after-preflight",
+    "account-change-after-preflight",
+    "credential-source-change-after-preflight",
+    "saved-prefix-without-task-authorization",
+    "host-preflight-without-project-authorization",
+    "identity-read-with-authenticated-premise",
+    "identity-read-prerequisite-write-reuse",
+    "identity-read-exact-source-mismatch",
+    "unavailable-fallback",
+    "duplicate-write-prevention",
+    "credential-persistence-attempt",
+}
 
 REQUIRED_ROOT_FILES = [
     ".codex/config.toml",
@@ -48,6 +130,7 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/linear-ops/agents/openai.yaml",
     ".codex/skills/mcp-ops/SKILL.md",
     ".codex/skills/mcp-ops/agents/openai.yaml",
+    ".codex/skills/mcp-ops/references/provider-call-execution-context.md",
     ".codex/skills/plan-archive/SKILL.md",
     ".codex/skills/plan-archive/agents/openai.yaml",
     ".codex/skills/sequential-plan-orchestrator/SKILL.md",
@@ -57,8 +140,17 @@ REQUIRED_ROOT_FILES = [
     ".codex/skills/browser-ops/SKILL.md",
     ".codex/skills/browser-ops/agents/openai.yaml",
     ".codex/skills/browser-ops/references/browser-run-policy.md",
+    ".codex/skills/natural-japanese/SKILL.md",
+    ".codex/skills/natural-japanese/agents/openai.yaml",
+    ".codex/skills/natural-japanese/references/workflow.md",
+    ".codex/skills/natural-japanese/references/upstream-adaptation.md",
+    ".codex/skills/natural-japanese/scripts/check-japanese-prose.py",
+    ".codex/skills/natural-japanese/LICENSE",
+    ".agents/skills/natural-japanese/SKILL.md",
     ".codex/agents/sequential_plan_worker.toml",
     "docs/agent/spec-index.yaml",
+    "docs/agent/SPEC_GIT_RETIREMENT.md",
+    "docs/agent/git-retirement.yaml",
     "docs/agent/SPEC_EXTERNAL_SERVICES.md",
     "docs/agent/external-services.yaml",
     "docs/agent/SPEC_AGENT_LOGGING.md",
@@ -88,6 +180,12 @@ REQUIRED_ROOT_FILES = [
     "tests/test-plan-execution-state.py",
     "tests/test-agent-model-profiles.py",
     "tests/fixtures/write-for-reader/scenarios.json",
+    "tests/fixtures/mcp-ops/scenarios.json",
+    "tests/fixtures/natural-japanese/scenarios.json",
+    "tests/fixtures/natural-japanese/evaluator-prompt.md",
+    "tests/fixtures/natural-japanese/evaluation-results.json",
+    "scripts/natural-japanese-evaluation.py",
+    "tests/test-natural-japanese.py",
 ]
 
 REUSABLE_SKILLS = (
@@ -97,10 +195,88 @@ REUSABLE_SKILLS = (
     "implementation-guidelines",
     "linear-ops",
     "mcp-ops",
+    "natural-japanese",
     "plan-archive",
     "sequential-plan-orchestrator",
     "write-for-reader",
 )
+
+# --- decision-reuse routing: expectations are owned here, never by the fixture ---
+DECISION_REUSE_FIXTURE = "tests/fixtures/agent-policy-routing/scenarios.json"
+DECISION_REUSE_REFERENCE = ".codex/skills/decision-audit/references/implementation-preflight.md"
+DECISION_REUSE_GENERATED_REFERENCE = (
+    ".project-agent-workflow/skills/decision-audit/references/implementation-preflight.md"
+)
+DECISION_REUSE_AUTHORIZATIONS = (
+    "reuse_accepted_decision",
+    "require_explicit_authorization",
+    "stop_before_repair_classification",
+    "stop_for_owner_decision",
+)
+DECISION_REUSE_SECTIONS = (
+    "## Accepted Decision Reuse",
+    "## Requirement, Scope, Condition, And Witness Preflight",
+    "## Exact Failure Reproduction",
+)
+DECISION_REUSE_INSUFFICIENT_RECORD = (
+    "If the decision record cannot establish any one of these four conditions, "
+    "do not reuse the decision; treat it as not yet made and run the decision audit."
+)
+# Each required case binds one fixed authorization expectation and the policy
+# file that decides it. Neither may be renegotiated by editing the fixture.
+DECISION_REUSE_REQUIRED_CASES = {
+    "reuse-unchanged-authorized-work": (
+        "reuse_accepted_decision",
+        ("docs/agent/SPEC_DECISION_AUDIT.md",),
+    ),
+    "reauthorize-changed-requirements": (
+        "require_explicit_authorization",
+        ("docs/agent/SPEC_PLAN_WORKFLOW.md",),
+    ),
+    "reauthorize-changed-safety-conditions": (
+        "require_explicit_authorization",
+        ("docs/agent/SPEC_SECURITY.md",),
+    ),
+    "reauthorize-expanded-external-effects": (
+        "require_explicit_authorization",
+        ("docs/agent/SPEC_SECURITY.md",),
+    ),
+    "reproduce-before-formal-diagnosis": (
+        "stop_before_repair_classification",
+        ("docs/agent/SPEC_PLAN_WORKFLOW.md",),
+    ),
+    "stop-on-exhausted-review-budget": (
+        "stop_for_owner_decision",
+        ("docs/agent/SPEC_PLAN_WORKFLOW.md",),
+    ),
+}
+DECISION_REUSE_REQUIRED_POLICY_REFERENCES = (
+    "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "docs/agent/SPEC_SECURITY.md",
+    "docs/agent/SPEC_DECISION_AUDIT.md",
+)
+# The routed instruction itself, not just the path. Each entry must appear as a
+# whole line, including its exact leading indentation, so neither a negated
+# instruction nor a re-indented one that Markdown reads as a code block or as
+# foreign list content can satisfy it.
+DECISION_REUSE_SKILL_INSTRUCTIONS = {
+    ".codex/skills/decision-audit/SKILL.md": (
+        "Read `references/implementation-preflight.md` when the audit is about to become"
+        " work: when a settled decision would be reopened, before writing long plan prose,"
+        " or after a formal validation failure.",
+    ),
+    ".codex/skills/implementation-guidelines/SKILL.md": (
+        "- Read `{reference}` before reopening an already accepted decision and before"
+        " writing long plan prose.",
+        "- After a formal validation failure, reproduce the exact failure as described in"
+        " `{reference}` before proposing a repair.",
+    ),
+    ".codex/skills/sequential-plan-orchestrator/SKILL.md": (
+        "   Read `{reference}` before classifying a repair, before reopening a settled"
+        " decision, and before asking for approval that the unchanged authorization"
+        " already covers.",
+    ),
+}
 
 REQUIRED_AGENT_RULES = [
     "docs/agent/spec-index.yaml",
@@ -114,10 +290,197 @@ REQUIRED_AGENT_RULES = [
     "docs/agent/SPEC_REFERENT_FIRST.md",
     "docs/agent/SPEC_SKILL_AUTHORING.md",
     "docs/agent/SPEC_USER_COMMUNICATION.md",
+    "docs/agent/SPEC_GIT_RETIREMENT.md",
+    "docs/agent/git-retirement.yaml",
     "*.backup",
     "decision audit",
     "docs/plan/active",
 ]
+
+VALIDATION_WITNESS_MIGRATION_MARKER = (
+    "validation-witness-migration-provenance-schema: 1"
+)
+VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS = (
+    "original live guardian",
+    "256-bit capability",
+    "capability commitment",
+    "challenge-response",
+    "`prepared`",
+    "`pending`",
+    "`consumed`",
+    "`recovering`",
+    "same live guardian",
+    "one-hour",
+    "pre-boundary",
+    "socket pathname is not identity evidence",
+    "expiry rejects after-stage authorization",
+    "verified pre-boundary recovery",
+    "product acceptance evidence",
+    "validation witness by itself",
+    "copying repository and git-local files without the original live guardian fails",
+    "unrestricted same-user actor",
+)
+
+# The always-loaded entrypoints route to the guardian rule instead of repeating
+# it. The route is what an agent reads first, so it must name its destination,
+# require the read before the migration step, and refuse a summary substitute.
+VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER = (
+    "validation-witness migration guardian rule"
+)
+VALIDATION_WITNESS_MIGRATION_ROUTE_MARKERS = (
+    "before any copier v1.4.5 before-update or after-update migration step",
+    "read the whole",
+    "follow it there",
+    "no summary of it authorizes an update",
+)
+VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS = {
+    "AGENTS.md": "references/orchestration.md",
+    "template/.project-agent-workflow/AGENTS.md.jinja": (
+        ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+    ),
+}
+# A route long enough to restate the rule would reintroduce the duplicate the
+# relocation removed, so the entrypoint route is capped.
+VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES = 300
+
+# Markers and root/generated equality accept a weakening that is applied to
+# both sides at once, so the reviewed route and the reviewed guardian statement
+# are pinned by digest. Changing either text is intended to fail here and be
+# re-reviewed before the digest is re-pinned.
+VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256 = (
+    "f74585e0aeeecec3ef344bc6867f72f8d565fa808e055b59b53292351c5cdacd"
+)
+VALIDATION_WITNESS_MIGRATION_POLICY_SHA256 = (
+    "9d4234176cb97bd911ceea0f5795524fac81f6c4128d68a5d9d1b1ab17cceb51"
+)
+
+# The activation baseline of plan 275. The entrypoints are always loaded, so
+# each one is held at or below its reduced size rather than allowed to drift
+# back toward the duplicated form.
+AGENTS_BASELINE_BYTES = {
+    "AGENTS.md": 23719,
+    "template/.project-agent-workflow/AGENTS.md.jinja": 21072,
+}
+AGENTS_MINIMUM_BYTE_REDUCTION = 1000
+
+VALIDATION_WITNESS_MAP_MARKER = "validation_witness_map"
+
+# Markers every witness-map policy statement must carry, whatever depth the
+# owning document states the policy at.
+VALIDATION_WITNESS_MAP_SHARED_MARKERS = (
+    "validation_witness_schema: 1",
+    "a new or materially updated",
+    "earliest parent-owned",
+    "pre-schema project-owned integration plan",
+    "replan contract",
+    "`replanned`",
+    "narrower safe preflight",
+)
+
+# The AGENTS statement is the short rule an agent reads first, so it must keep
+# the three witness stages and the refusals that make the map fail closed.
+VALIDATION_WITNESS_MAP_AGENTS_MARKERS = (
+    "static, focused, or authoritative witness",
+    "static witness only for its named enforced predicate",
+    "reject missing coverage",
+    "a focused command labeled authoritative",
+    "authoritative-only witness without one bounded reason",
+    "never remove or weaken the authoritative `validation` suite",
+)
+
+# The orchestration statement is the detailed contract, so it must keep the
+# exact witness names and fields the plan command enforces.
+VALIDATION_WITNESS_MAP_ORCHESTRATION_MARKERS = (
+    "field absence alone never proves legacy provenance",
+    "`resolved-context-files`",
+    "`focused_validation`",
+    "`authoritative_only_reason`",
+    "reject missing, duplicate, reordered, stale, unknown, unrelated-static, "
+    "or late mappings before candidate execution",
+    "never removes, reorders, or weakens the authoritative suite",
+)
+
+TIER_ZERO_PAIR_SPECS = (
+    "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+)
+
+# The mirrored-pair exception counts two physical files as one Tier 0 change,
+# so the base Tier 0 conditions must survive it unchanged.
+TIER_ZERO_BASE_CONDITIONS = (
+    "- tier 0: one file, reversible, already covered by an existing validation "
+    "command, with no new external effect and an unchanged security boundary."
+)
+
+TIER_ZERO_PAIR_MARKERS = (
+    "count one exact mirrored pair as one tier 0 file",
+    "every remaining tier 0 condition holds for both files",
+    "already exists and is already checked mechanically",
+    "is not evidence",
+    "require both files to stay covered by an existing validation command",
+    "unchanged validation authority, and unchanged meaning",
+)
+
+# Each exclusion names one way a mirrored edit stops being mechanical. Dropping
+# any of them would silently widen the exception, so all are required.
+TIER_ZERO_PAIR_EXCLUSION_MARKERS = (
+    "a behavior change",
+    "two independent edits carried in one change",
+    "reaches only one side or differs in shape between the sides",
+    "a counterpart-only branch",
+    "a change to a validation definition",
+    "a change to what a rule means",
+    "escalate every excluded case to the tier it already takes",
+    "lowers no review, validation, or security requirement",
+)
+
+# The markers above are fragments, so a reworded or inverted sentence could keep
+# every one of them while permitting what it must forbid. The whole exception is
+# therefore pinned as exact contiguous text, including the escalation bullet that
+# closes it, so an inserted, inverted, or qualified sentence fails the check.
+TIER_ZERO_PAIR_BLOCK_LINES = (
+    "count one exact mirrored pair as one tier 0 file. a single mechanical edit "
+    "and the same edit in that file's established counterpart, such as a source "
+    "document and its generated copy, stay tier 0 together when every remaining "
+    "tier 0 condition holds for both files.",
+    "",
+    "- admit the pair only on a counterpart relation that already exists and is "
+    "already checked mechanically. a correspondence asserted for this change, or "
+    "a human claim that two files are the same, is not evidence.",
+    "- require both files to stay covered by an existing validation command, with "
+    "an unchanged security boundary, unchanged validation authority, and "
+    "unchanged meaning. a typo fix, a comment fix, and a formatting fix that "
+    "leaves meaning unchanged are the qualifying examples.",
+    "- exclude a behavior change, two independent edits carried in one change, an "
+    "edit that reaches only one side or differs in shape between the sides, a "
+    "change to a counterpart-only branch, a change to a validation definition, "
+    "and a change to what a rule means.",
+    "- escalate every excluded case to the tier it already takes. the pair "
+    "exception widens no other tier 0 condition and lowers no review, validation, "
+    "or security requirement.",
+    "",
+    "- escalate a tier as soon as new evidence crosses its boundary, and treat "
+    "the escalation as a plan update rather than a stop.",
+)
+TIER_ZERO_PAIR_BLOCK = "\n".join(TIER_ZERO_PAIR_BLOCK_LINES)
+
+# Every Tier 0 statement the section may make is accounted for above: the base
+# bullet, the three mentions in the exception paragraph, the exception's own
+# no-widening clause, and the restructuring-contract bullet. The two remaining
+# whole-file mentions are the plan-file exemption and the descope routing rule
+# in the Rules section, so a new Tier 0 sentence anywhere in either tier policy
+# must be reviewed against this exception before these budgets move.
+TIER_ZERO_SECTION_MENTIONS = 6
+TIER_ZERO_FILE_MENTIONS = 8
+
+# Substring pinning bounds only the text it names, so prose placed after the
+# exception could still qualify it. The exact section bytes are therefore
+# digest-bound: any addition, reordering, or rewording inside the tier policy
+# fails until it is re-reviewed here. Both specs share one digest because this
+# section carries no command path for the generated rewrite to change.
+TIER_ZERO_SECTION_DIGEST = (
+    "sha256:734d9a1632c0c54710229919359dfc5baf9430f243b07da489ca975501572779"
+)
 
 
 def fail(message: str) -> None:
@@ -173,6 +536,222 @@ def check_agents_rules() -> None:
     for required in REQUIRED_AGENT_RULES:
         if required not in text:
             fail(f"AGENTS.md missing root policy reference: {required}")
+
+
+def validation_witness_migration_policy_statement(relative: str) -> str:
+    # Only the line ending is removed. Leading indentation stays inside the
+    # digest so that nesting a top-level mandatory bullet under other content
+    # cannot keep the pin green.
+    matches = [
+        line.rstrip()
+        for line in read(relative).splitlines()
+        if VALIDATION_WITNESS_MIGRATION_MARKER in line
+    ]
+    if len(matches) != 1:
+        fail(
+            f"{relative} must contain exactly one validation-witness migration "
+            "policy statement"
+        )
+    statement = matches[0]
+    lowered = statement.lower()
+    for marker in VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS:
+        if marker not in lowered:
+            fail(f"{relative} missing validation-witness migration marker: {marker}")
+    # The digest covers the exact reviewed bytes; lowercasing before hashing
+    # would accept a synchronized change to a case-sensitive lifecycle token.
+    digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
+    if digest != VALIDATION_WITNESS_MIGRATION_POLICY_SHA256:
+        fail(
+            f"{relative} validation-witness migration policy changed without "
+            f"re-reviewing the pinned statement: {digest}"
+        )
+    return statement
+
+
+def validation_witness_migration_route(relative: str) -> str:
+    text = read(relative)
+    if VALIDATION_WITNESS_MIGRATION_MARKER in text:
+        fail(
+            f"{relative} must route to the validation-witness migration policy "
+            "instead of restating it"
+        )
+    matches = [
+        line.rstrip()
+        for line in text.splitlines()
+        if VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER in line.lower()
+    ]
+    if len(matches) != 1:
+        fail(
+            f"{relative} must contain exactly one validation-witness migration "
+            "route"
+        )
+    route = matches[0]
+    size = len(route.encode("utf-8"))
+    if size > VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES:
+        fail(
+            f"{relative} validation-witness migration route is {size} bytes, "
+            f"over {VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES}"
+        )
+    destination = VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS[relative]
+    if destination not in route:
+        fail(
+            f"{relative} validation-witness migration route does not name "
+            f"{destination}"
+        )
+    lowered = route.lower()
+    for marker in VALIDATION_WITNESS_MIGRATION_ROUTE_MARKERS:
+        if marker not in lowered:
+            fail(
+                f"{relative} missing validation-witness migration route marker: "
+                f"{marker}"
+            )
+    # Only the exact case-sensitive destination is substituted, so a route that
+    # names an unreachable variant of the path fails instead of normalizing away.
+    normalized = route.replace(destination, "<destination>")
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    if digest != VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256:
+        fail(
+            f"{relative} validation-witness migration route changed without "
+            f"re-reviewing the pinned route: {digest}"
+        )
+    return normalized
+
+
+def check_agents_entrypoint_size() -> None:
+    for relative, baseline in AGENTS_BASELINE_BYTES.items():
+        size = len(read(relative).encode("utf-8"))
+        allowed = baseline - AGENTS_MINIMUM_BYTE_REDUCTION
+        if size > allowed:
+            fail(
+                f"{relative} is {size} bytes; the routed entrypoint must stay at "
+                f"or below {allowed}"
+            )
+
+
+def check_validation_witness_migration_policy() -> None:
+    root_agents = validation_witness_migration_route("AGENTS.md")
+    template_agents = validation_witness_migration_route(
+        "template/.project-agent-workflow/AGENTS.md.jinja"
+    )
+    if root_agents != template_agents:
+        fail("root/generated AGENTS validation-witness migration route differs")
+
+    root_orchestration = validation_witness_migration_policy_statement(
+        "references/orchestration.md"
+    )
+    template_orchestration = validation_witness_migration_policy_statement(
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+    )
+    if root_orchestration != template_orchestration:
+        fail("root/generated orchestration validation-witness migration policy differs")
+
+
+def validation_witness_map_policy_statement(
+    relative: str, markers: tuple[str, ...]
+) -> str:
+    matches = [
+        line.strip().lower()
+        for line in read(relative).splitlines()
+        if VALIDATION_WITNESS_MAP_MARKER in line
+    ]
+    if len(matches) != 1:
+        fail(
+            f"{relative} must contain exactly one validation-witness map policy statement"
+        )
+    statement = matches[0]
+    for marker in (*VALIDATION_WITNESS_MAP_SHARED_MARKERS, *markers):
+        if marker not in statement:
+            fail(f"{relative} missing validation-witness map marker: {marker}")
+    return statement
+
+
+def check_validation_witness_map_policy() -> None:
+    """Keep the root and generated witness-map policy one statement.
+
+    The generated policy is already bound by `check-copier-template.py`, and
+    the root policy is only searched for a few loose markers. Nothing compared
+    the two, so either side could drop the refusals that make the map fail
+    closed while every check still passed. Isolating the single statement in
+    each document and comparing it makes that drift a validation failure.
+    """
+
+    root_agents = validation_witness_map_policy_statement(
+        "AGENTS.md", VALIDATION_WITNESS_MAP_AGENTS_MARKERS
+    )
+    template_agents = validation_witness_map_policy_statement(
+        "template/.project-agent-workflow/AGENTS.md.jinja",
+        VALIDATION_WITNESS_MAP_AGENTS_MARKERS,
+    )
+    if root_agents != template_agents:
+        fail("root/generated AGENTS validation-witness map policy differs")
+
+    root_orchestration = validation_witness_map_policy_statement(
+        "references/orchestration.md",
+        VALIDATION_WITNESS_MAP_ORCHESTRATION_MARKERS,
+    )
+    template_orchestration = validation_witness_map_policy_statement(
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+        VALIDATION_WITNESS_MAP_ORCHESTRATION_MARKERS,
+    )
+    if root_orchestration != template_orchestration:
+        fail("root/generated orchestration validation-witness map policy differs")
+
+
+def implementation_tiers_section(relative: str) -> str:
+    matches = re.findall(
+        r"^#{2,3} Implementation Tiers\n(.*?)(?=^#{2,3} |\Z)",
+        read(relative),
+        re.MULTILINE | re.DOTALL,
+    )
+    if len(matches) != 1:
+        fail(f"{relative} must contain exactly one Implementation Tiers section")
+    return matches[0]
+
+
+def check_tier_zero_pair_policy() -> None:
+    """Keep the mirrored Tier 0 exception bounded in both tier policies.
+
+    Root policy requires every root change to be mirrored into its template
+    counterpart, so a one-file Tier 0 bound would push a typo fix into a full
+    plan. The exception counts one exact mirrored pair as one file, which only
+    stays safe while its eligibility conditions and its exclusions both hold.
+    Marker presence alone would accept an inverted or qualified restatement, and
+    pinned prose alone would accept a widening sentence placed after it, so the
+    whole section is digest-bound and Tier 0 mentions are budgeted. The named
+    markers stay because they report which condition or exclusion was lost.
+
+    A paraphrase that never writes "Tier 0" is outside what any text check can
+    decide; the budget bounds literal restatements, not prose in general.
+    """
+
+    for relative in TIER_ZERO_PAIR_SPECS:
+        raw = implementation_tiers_section(relative)
+        section = raw.lower()
+        if section.count(TIER_ZERO_BASE_CONDITIONS) != 1:
+            fail(f"{relative} lost the unchanged Tier 0 base conditions")
+        for marker in TIER_ZERO_PAIR_MARKERS:
+            if section.count(marker) != 1:
+                fail(f"{relative} missing Tier 0 mirrored-pair condition: {marker}")
+        for marker in TIER_ZERO_PAIR_EXCLUSION_MARKERS:
+            if section.count(marker) != 1:
+                fail(f"{relative} missing Tier 0 mirrored-pair exclusion: {marker}")
+        if section.count(TIER_ZERO_PAIR_BLOCK) != 1:
+            fail(f"{relative} must state the Tier 0 mirrored-pair exception exactly")
+        mentions = section.count("tier 0")
+        if mentions != TIER_ZERO_SECTION_MENTIONS:
+            fail(
+                f"{relative} states {mentions} Tier 0 rules in its tier policy, "
+                f"not the reviewed {TIER_ZERO_SECTION_MENTIONS}"
+            )
+        file_mentions = read(relative).lower().count("tier 0")
+        if file_mentions != TIER_ZERO_FILE_MENTIONS:
+            fail(
+                f"{relative} states {file_mentions} Tier 0 rules in total, "
+                f"not the reviewed {TIER_ZERO_FILE_MENTIONS}"
+            )
+        digest = "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if digest != TIER_ZERO_SECTION_DIGEST:
+            fail(f"{relative} tier policy changed without re-reviewing the Tier 0 pair")
 
 
 def check_agent_model_profiles() -> None:
@@ -272,15 +851,44 @@ def check_sandboxed_worker_fallback() -> None:
         "load_plan_validation_commands",
         '"focused_validation_count"',
         '"authoritative_validation_count"',
+        "def validation_failure_identity",
+        '"failure": failure',
         "network_enabled=False",
         '"prepare-dependencies"',
         '"--dependency-snapshot"',
         "def verify_dependency_snapshot",
         "read_only_shadows",
+        "WORKER_CONTRACT_SCHEMA_VERSION",
+        "def derive_worker_contract",
+        "def verify_worker_contract",
+        "def derive_repository_identity",
+        "worker_attempt_label",
+        "require_safe_delegated_write_scope",
+        "NEW_FILE_ROOT",
+        "SANDBOXED_PLAN_WORKER_CONTRACT first",
     )
     for marker in runner_markers:
         if marker not in runner:
             fail(f"sandboxed plan worker missing model fallback marker: {marker}")
+
+    execution_state = read("scripts/plan-execution-state.py")
+    for marker in (
+        '"diagnosis_required"', "MAX_DIAGNOSIS_ATTEMPTS",
+        '"authoritative_failure"', '"failure_diagnosis"',
+        "def load_authoritative_failure", "def load_diagnosis_evidence",
+        '"diagnosis_read"', '"repair_plan"',
+        "def review_candidate_identity_digest", "def candidate_review_identity",
+        '"--candidate-manifest"',
+        "checked parent-direct diff differs from the reviewed target",
+        "def initialize_reviewer_registry", "def admit_reviewer_session",
+        '"registry-init"', '"--reviewer-registry"',
+        '"reviewer_registry"', '"event_chain_digest"',
+        '"execution_genesis_digest"', '"predecessor_checkpoint_bound"',
+        '"migrate-checkpoint"', '"session_checkpoint_migrated"',
+        "MAX_MIGRATION_COMPATIBILITY_EVENTS", "reserved event capacity",
+    ):
+        if marker not in execution_state:
+            fail(f"plan execution state missing confirmed-diagnosis marker: {marker}")
 
     for relative in (
         "AGENTS.md",
@@ -291,22 +899,783 @@ def check_sandboxed_worker_fallback() -> None:
         for marker in ("gpt-5.3-codex-spark", "gpt-5.6-luna", "max", "usage limit", "rate limit"):
             if marker not in text:
                 fail(f"{relative} missing sandboxed model fallback policy marker: {marker}")
+        for marker in (
+            "admitted patch digest", "mutable lifecycle",
+            "reviewer session registry", "event-chain digest", "execution genesis",
+            "schema-1 checkpoint",
+        ):
+            if marker not in text:
+                fail(f"{relative} missing candidate review identity marker: {marker}")
+    for relative in (
+        "references/orchestration.md",
+        ".codex/skills/sequential-plan-orchestrator/SKILL.md",
+    ):
+        text = read(relative).lower()
+        for marker in (
+            "active-plan index",
+            "index/file status mismatch",
+            "duplicate ids or paths",
+            "immutable identities and archive ordering",
+            "lower-numbered deferred plan does not block",
+        ):
+            if marker not in text:
+                fail(f"{relative} missing runnable-plan selection marker: {marker}")
 
 
 def check_reusable_skill_parity() -> None:
     for skill in REUSABLE_SKILLS:
-        for relative in ("SKILL.md", "agents/openai.yaml"):
+        relative_files = ["SKILL.md", "agents/openai.yaml"]
+        if skill == "mcp-ops":
+            relative_files.append("references/provider-call-execution-context.md")
+        if skill == "decision-audit":
+            relative_files.append("references/implementation-preflight.md")
+        if skill == "natural-japanese":
+            relative_files.extend(
+                [
+                    "references/workflow.md",
+                    "references/upstream-adaptation.md",
+                    "scripts/check-japanese-prose.py",
+                    "LICENSE",
+                ]
+            )
+        for relative in relative_files:
             root_path = ROOT / ".codex" / "skills" / skill / relative
             template_path = ROOT / "template" / ".project-agent-workflow" / "skills" / skill / relative
             if not root_path.is_file() or not template_path.is_file():
                 fail(f"missing reusable skill file for parity: {skill}/{relative}")
-            template_text = (
-                template_path.read_text(encoding="utf-8")
-                .replace(".project-agent-workflow/", "")
-                .replace(".agents/skills/", ".codex/skills/")
-            )
+            template_text = template_path.read_text(encoding="utf-8")
+            if skill == "natural-japanese":
+                template_text = template_text.replace(
+                    ".project-agent-workflow/skills/natural-japanese/",
+                    ".codex/skills/natural-japanese/",
+                )
+            template_text = template_text.replace(
+                ".project-agent-workflow/skills/", ".codex/skills/"
+            ).replace(
+                ".project-agent-workflow/", ""
+            ).replace(".agents/skills/", ".codex/skills/")
             if root_path.read_text(encoding="utf-8") != template_text:
                 fail(f"root/template reusable skill drift: {skill}/{relative}")
+
+
+def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str, ...]:
+    return tuple(
+        instruction.format(reference=reference)
+        for instruction in DECISION_REUSE_SKILL_INSTRUCTIONS[relative]
+    )
+
+
+# A routed instruction only counts when Markdown renders it as an instruction.
+# Deciding that from the surrounding document failed repeatedly, because both
+# block context and inline context can carry across lines: a fence indented
+# inside a list item, raw HTML opened as list content, and a two-backtick code
+# span spanning several lines each hid a byte-identical route. Enumerating
+# hiding places is therefore the wrong shape. A file that carries a routed
+# instruction is instead required to be plain prose, which means it may not
+# contain the constructs that can extend past the line they start on. Each rule
+# below names one such carrier, and together they leave no way for a later line
+# to be anything but text.
+MARKDOWN_FENCE_TOKEN_RE = re.compile(r"`{3,}|~{3,}")
+MARKDOWN_BACKTICK_RUN_RE = re.compile(r"`+")
+# A backslash decides whether the character after it is a delimiter, and it is
+# read differently inside and outside code, so any attempt to account for it
+# reproduces the parser. The material is refused instead of interpreted.
+MARKDOWN_BACKSLASH = "\\"
+# An inline link carries a destination and an optional quoted title, either of
+# which may continue on following lines, so the whole form is refused rather
+# than parsed for a closing parenthesis.
+MARKDOWN_LINK_DESTINATION_RE = re.compile(r"\]\(")
+# A list container shifts the margin, so a definition can sit at any depth and
+# behind any number of list or quote markers.
+MARKDOWN_LINK_DEFINITION_RE = re.compile(r"^ *\[[^\]]*\]:")
+MARKDOWN_CONTAINER_PREFIX_RE = re.compile(r"^ *(?:> ?|(?:[-*+]|\d{1,9}[.)])(?: +|$))")
+
+
+def markdown_block_content(line: str) -> str:
+    """Return the line with its blockquote and list markers removed."""
+
+    current = line
+    while True:
+        match = MARKDOWN_CONTAINER_PREFIX_RE.match(current)
+        if match is None:
+            return current
+        current = current[match.end():]
+
+
+def markdown_code_spans(line: str) -> tuple[list[tuple[int, int]], bool]:
+    """Return the line's closed code spans and whether one is left open.
+
+    CommonMark closes a code span with the next backtick run of the same
+    length. A run with no partner would continue onto the following lines, so
+    the caller refuses the file rather than guess where the span ends.
+    """
+
+    runs = [(match.start(), match.end()) for match in MARKDOWN_BACKTICK_RUN_RE.finditer(line)]
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(runs):
+        length = runs[index][1] - runs[index][0]
+        partner = index + 1
+        while partner < len(runs) and runs[partner][1] - runs[partner][0] != length:
+            partner += 1
+        if partner == len(runs):
+            return spans, True
+        spans.append((runs[index][0], runs[partner][1]))
+        index = partner + 1
+    return spans, False
+
+
+def markdown_outside_code(line: str, spans: list[tuple[int, int]]) -> str:
+    """Return the line with its closed code spans removed."""
+
+    parts: list[str] = []
+    previous = 0
+    for start, end in spans:
+        parts.append(line[previous:start])
+        previous = end
+    parts.append(line[previous:])
+    return "".join(parts)
+
+
+def markdown_prose_defects(text: str) -> list[str]:
+    """Report the constructs that stop this text from being plain prose.
+
+    Six rounds of review each defeated a rule that tried to decide how a line
+    parses, because deciding that correctly means being the parser. Each rule
+    below refuses a material instead. Without a tab no indentation is
+    ambiguous. Without a fence token no fenced block exists in any container.
+    Without a backslash no character changes meaning between the checker's
+    reading and the parser's. Without an unclosed backtick run no code span
+    reaches the next line. Without an angle bracket outside code no raw HTML
+    block, inline tag, comment, or autolink starts. Without an unclosed label,
+    an inline link, or a link reference definition, no label, destination, or
+    quoted title runs on. What remains renders every line as text, so a line
+    that matches an expected instruction is that instruction.
+    """
+
+    defects: list[str] = []
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.rstrip()
+        if "\t" in raw:
+            defects.append(f"line {number} contains a tab, which shifts block indentation")
+        if MARKDOWN_FENCE_TOKEN_RE.search(line):
+            defects.append(f"line {number} contains a code fence token")
+        if MARKDOWN_BACKSLASH in line:
+            defects.append(f"line {number} contains a backslash, which changes how the next character is read")
+        spans, unclosed = markdown_code_spans(line)
+        if unclosed:
+            defects.append(f"line {number} leaves a code span open")
+            continue
+        outside = markdown_outside_code(line, spans)
+        if "<" in outside:
+            defects.append(f"line {number} contains an angle bracket outside code")
+        if outside.count("[") != outside.count("]"):
+            defects.append(f"line {number} leaves a link or image label open")
+        if MARKDOWN_LINK_DESTINATION_RE.search(outside):
+            defects.append(f"line {number} contains an inline link, whose destination or title can run on")
+        if MARKDOWN_LINK_DEFINITION_RE.match(markdown_block_content(line)):
+            defects.append(f"line {number} is a link reference definition")
+    return defects
+
+
+def markdown_prose_lines(text: str) -> set[str]:
+    """Return the lines of a text already proven to be plain prose.
+
+    Only trailing whitespace is normalized. Leading indentation stays part of
+    the line because Markdown gives it meaning.
+    """
+
+    return {line.rstrip() for line in text.splitlines()}
+
+
+def require_markdown_prose(relative: str, text: str) -> None:
+    for defect in markdown_prose_defects(text):
+        fail(f"{relative} must stay plain Markdown prose to carry a routed instruction: {defect}")
+
+
+def require_decision_reuse_instructions(relative: str, reference: str) -> None:
+    text = read(relative)
+    require_markdown_prose(relative, text)
+    lines = markdown_prose_lines(text)
+    for instruction in decision_reuse_instruction_lines(relative, reference):
+        if instruction not in lines:
+            fail(f"{relative} does not carry the routed preflight instruction: {instruction}")
+
+
+def has_insufficient_record_action(content: str) -> bool:
+    in_reuse = False
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        if line.startswith("## "):
+            in_reuse = line == "## Accepted Decision Reuse"
+        if in_reuse and line == DECISION_REUSE_INSUFFICIENT_RECORD:
+            return True
+    return False
+
+
+def check_decision_reuse_scenarios() -> None:
+    """Check the fixed decision-reuse fixture against checker-owned expectations.
+
+    The fixture supplies cases; it never supplies the expectations those cases
+    are judged against. These are structural predicates about the fixture and
+    the routed instructions. They do not measure how an agent behaves.
+    """
+
+    relative = DECISION_REUSE_FIXTURE
+    path = ROOT / relative
+    if not path.is_file():
+        fail(f"missing decision-reuse scenario fixture: {relative}")
+    try:
+        fixture = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        fail(f"{relative} is not readable JSON: {error}")
+    if not isinstance(fixture, dict):
+        fail(f"{relative} must be a JSON object")
+    scenarios = fixture.get("scenarios")
+    if not isinstance(scenarios, list) or not scenarios:
+        fail(f"{relative} must declare a non-empty scenarios list")
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            fail(f"{relative} scenario {index} is not an object")
+        if not isinstance(scenario.get("id"), str) or not scenario["id"].strip():
+            fail(f"{relative} scenario {index} needs a non-empty string id")
+
+    block = fixture.get("decision_reuse")
+    if not isinstance(block, dict):
+        fail(f"{relative} must declare a decision_reuse block")
+
+    declared = {
+        "reference": DECISION_REUSE_REFERENCE,
+        "generated_reference": DECISION_REUSE_GENERATED_REFERENCE,
+    }
+    for key, expected in declared.items():
+        if block.get(key) != expected:
+            fail(f"{relative} decision_reuse {key} must be {expected}")
+    declared_sets = {
+        "authorization_values": set(DECISION_REUSE_AUTHORIZATIONS),
+        "required_case_ids": set(DECISION_REUSE_REQUIRED_CASES),
+        "required_policy_references": set(DECISION_REUSE_REQUIRED_POLICY_REFERENCES),
+        "linking_skills": set(DECISION_REUSE_SKILL_INSTRUCTIONS),
+    }
+    for key, expected_set in declared_sets.items():
+        value = block.get(key)
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) for item in value
+        ):
+            fail(f"{relative} decision_reuse {key} must be a list of strings")
+        if set(value) != expected_set:
+            fail(
+                f"{relative} decision_reuse {key} must be exactly "
+                f"{sorted(expected_set)}"
+            )
+
+    cases: dict[str, dict] = {}
+    for scenario in scenarios:
+        if scenario.get("kind") != "decision-reuse":
+            continue
+        case_id = scenario["id"]
+        if case_id in cases:
+            fail(f"{relative} declares duplicate decision-reuse case: {case_id}")
+        cases[case_id] = scenario
+    missing = sorted(set(DECISION_REUSE_REQUIRED_CASES) - set(cases))
+    if missing:
+        fail(f"{relative} missing required decision-reuse cases: {', '.join(missing)}")
+
+    for case_id, scenario in sorted(cases.items()):
+        authorization = scenario.get("authorization")
+        if authorization not in DECISION_REUSE_AUTHORIZATIONS:
+            fail(
+                f"{relative} case {case_id} has an unknown authorization expectation: "
+                f"{authorization!r}"
+            )
+        for key in ("task", "expected"):
+            if not isinstance(scenario.get(key), str) or not scenario[key].strip():
+                fail(f"{relative} case {case_id} missing {key}")
+        for key in ("required_before_action", "critical_failures", "policy_references"):
+            value = scenario.get(key)
+            if not isinstance(value, list) or not value:
+                fail(f"{relative} case {case_id} missing {key}")
+            if not all(isinstance(item, str) and item.strip() for item in value):
+                fail(f"{relative} case {case_id} has a malformed {key} entry")
+        for policy in scenario["policy_references"]:
+            if not (ROOT / policy).is_file():
+                fail(f"{relative} case {case_id} names an unresolved policy reference: {policy}")
+
+    for case_id, (authorization, policies) in sorted(DECISION_REUSE_REQUIRED_CASES.items()):
+        scenario = cases[case_id]
+        if scenario["authorization"] != authorization:
+            fail(
+                f"{relative} case {case_id} must expect {authorization}, "
+                f"not {scenario['authorization']}"
+            )
+        absent = [policy for policy in policies if policy not in scenario["policy_references"]]
+        if absent:
+            fail(
+                f"{relative} case {case_id} must cite {', '.join(absent)} as its "
+                "deciding policy"
+            )
+
+    for target in (DECISION_REUSE_REFERENCE, "template/" + DECISION_REUSE_GENERATED_REFERENCE):
+        if not (ROOT / target).is_file():
+            fail(f"missing implementation preflight reference: {target}")
+        content = read(target)
+        require_markdown_prose(target, content)
+        if not has_insufficient_record_action(content):
+            fail(f"{target} missing insufficient-record action in Accepted Decision Reuse")
+    preflight = read(DECISION_REUSE_REFERENCE)
+    require_markdown_prose(DECISION_REUSE_REFERENCE, preflight)
+    preflight_lines = markdown_prose_lines(preflight)
+    for section in DECISION_REUSE_SECTIONS:
+        if section not in preflight_lines:
+            fail(f"{DECISION_REUSE_REFERENCE} missing section: {section}")
+
+    for skill in sorted(DECISION_REUSE_SKILL_INSTRUCTIONS):
+        if not (ROOT / skill).is_file():
+            fail(f"missing decision-reuse linking skill: {skill}")
+        require_decision_reuse_instructions(skill, DECISION_REUSE_REFERENCE)
+
+
+def check_natural_japanese_contract() -> None:
+    agents = read("AGENTS.md")
+    for marker in (
+        ".codex/skills/natural-japanese/SKILL.md",
+        "Japanese replies",
+        "facts, quotations, uncertainty",
+        "requested form",
+        "document purpose",
+    ):
+        if marker not in agents:
+            fail(f"AGENTS.md missing natural-japanese routing marker: {marker}")
+
+    bridge = read(".agents/skills/natural-japanese/SKILL.md")
+    if ".codex/skills/natural-japanese/SKILL.md" not in bridge:
+        fail("root natural-japanese discovery bridge does not point at the managed skill")
+
+    workflow = read(".codex/skills/natural-japanese/references/workflow.md")
+    for marker in (
+        "## Short Reply",
+        "Do not run a subprocess.",
+        "## Japanese File Work",
+        "at most once per draft",
+        "## Important Long-Form Prose",
+        "independent reader review",
+        "## Protected Content",
+        "Never invent experience",
+        "## Non-Use Boundary",
+        "code-only changes",
+    ):
+        if marker not in workflow:
+            fail(f"natural-japanese workflow missing marker: {marker}")
+
+    provenance = read(".codex/skills/natural-japanese/references/upstream-adaptation.md")
+    for marker in (
+        "https://github.com/coji/natural-japanese",
+        "v1.5.0",
+        "21e632661a910bf97289c501089ad11eb8b4d85f",
+        "License: MIT",
+        "runtime downloads",
+        "future upstream update requires an explicit review",
+    ):
+        if marker not in provenance:
+            fail(f"natural-japanese provenance missing marker: {marker}")
+
+    if "Copyright (c) 2026 coji" not in read(".codex/skills/natural-japanese/LICENSE"):
+        fail("natural-japanese upstream MIT notice is missing")
+    helper = ROOT / ".codex/skills/natural-japanese/scripts/check-japanese-prose.py"
+    if helper.stat().st_mode & 0o111 == 0:
+        fail("natural-japanese lint helper must be executable")
+    helper_text = helper.read_text(encoding="utf-8").lower()
+    for forbidden in ("subprocess", "urllib", "requests", "sudachi"):
+        if forbidden in helper_text:
+            fail(f"natural-japanese lint helper must remain dependency-free: {forbidden}")
+
+
+def _mcp_exact_mapping(value: object, keys: set[str], label: str) -> dict:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError(f"{label} must contain exactly: {', '.join(sorted(keys))}")
+    return value
+
+
+def _mcp_nonblank(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _mcp_identity_project_authorized(value: object) -> tuple[bool, dict]:
+    authorization = _mcp_exact_mapping(
+        value,
+        {
+            "provider", "access", "operation", "target", "payload", "effects",
+            "current_task_requires", "authenticated_result_required", "prerequisite_scope",
+        },
+        "identity_read_project_authorization",
+    )
+    authorized = (
+        _mcp_nonblank(authorization["provider"])
+        and authorization["access"] == "read"
+        and authorization["operation"] == "identity.read"
+        and _mcp_nonblank(authorization["target"])
+        and _mcp_nonblank(authorization["payload"])
+        and authorization["effects"] == ["ordinary"]
+        and authorization["current_task_requires"] is True
+        and authorization["authenticated_result_required"] is False
+        and authorization["prerequisite_scope"] == "identity-read-only"
+    )
+    return authorized, authorization
+
+
+def _mcp_host_execution_approved(value: object) -> bool:
+    approval = _mcp_exact_mapping(
+        value,
+        {"required", "approved", "authorizes_provider_effects"},
+        "identity_read_host_execution_approval",
+    )
+    return (
+        approval["authorizes_provider_effects"] is False
+        and (approval["required"] is False or approval["approved"] is True)
+    )
+
+
+def _evaluate_mcp_identity_read(conditions: dict) -> str:
+    host_variant = "sandbox_local_credential_source" in conditions
+    expected_keys = {
+        "identity_read_project_authorization",
+        "identity_read_host_execution_approval",
+        "identity_read_result",
+        "intended_call_authorization_request",
+    }
+    if host_variant:
+        expected_keys.update({
+            "sandbox_local_credential_source", "user_reports_login_elsewhere",
+            "host_credential_source",
+        })
+    else:
+        expected_keys.add("local_credential_source")
+    _mcp_exact_mapping(conditions, expected_keys, "identity-read scenario conditions")
+
+    project_authorized, authorization = _mcp_identity_project_authorized(
+        conditions["identity_read_project_authorization"]
+    )
+    if not project_authorized or not _mcp_host_execution_approved(
+        conditions["identity_read_host_execution_approval"]
+    ):
+        return "deny_provider_preflight"
+
+    source_keys = {"exact_binding", "class", "available", "credential_material_read"}
+    if host_variant:
+        sandbox_source = _mcp_exact_mapping(
+            conditions["sandbox_local_credential_source"], source_keys, "sandbox credential source"
+        )
+        if (
+            sandbox_source["available"] is not False
+            or sandbox_source["credential_material_read"] is not False
+            or conditions["user_reports_login_elsewhere"] is not True
+        ):
+            return "fail_closed_report_credential_unavailable"
+        selected_source = _mcp_exact_mapping(
+            conditions["host_credential_source"], source_keys, "host credential source"
+        )
+    else:
+        selected_source = _mcp_exact_mapping(
+            conditions["local_credential_source"], source_keys, "local credential source"
+        )
+    if selected_source["credential_material_read"] is not False:
+        return "deny_credential_persistence"
+    if selected_source["available"] is not True:
+        return "fail_closed_report_credential_unavailable"
+    if not _mcp_nonblank(selected_source["exact_binding"]) or not _mcp_nonblank(selected_source["class"]):
+        return "fail_closed_report_context_binding_missing"
+
+    result = _mcp_exact_mapping(
+        conditions["identity_read_result"],
+        {"provider_authenticated", "account", "evidence_context"},
+        "identity_read_result",
+    )
+    if result["provider_authenticated"] is not True:
+        return "fail_closed_report_authentication_inconclusive"
+    if not _mcp_nonblank(result["account"]):
+        return "fail_closed_report_context_binding_missing"
+    evidence = _mcp_exact_mapping(
+        result["evidence_context"],
+        {"provider", "command_boundary", "exact_credential_source", "credential_source_class"},
+        "identity read evidence context",
+    )
+    intended = _mcp_exact_mapping(
+        conditions["intended_call_authorization_request"],
+        {
+            "provider", "operation", "target", "payload", "effects", "current_task_requires",
+            "command_boundary", "exact_credential_source",
+        },
+        "intended_call_authorization_request",
+    )
+    concrete_bindings = (
+        evidence["provider"],
+        evidence["command_boundary"],
+        evidence["exact_credential_source"],
+        evidence["credential_source_class"],
+        intended["provider"],
+        intended["command_boundary"],
+        intended["exact_credential_source"],
+    )
+    if any(not _mcp_nonblank(value) for value in concrete_bindings):
+        return "fail_closed_report_context_binding_missing"
+    context_matches = (
+        evidence["provider"] == authorization["provider"] == intended["provider"]
+        and evidence["command_boundary"] == intended["command_boundary"]
+        and evidence["exact_credential_source"]
+        == selected_source["exact_binding"]
+        == intended["exact_credential_source"]
+        and evidence["credential_source_class"] == selected_source["class"]
+    )
+    if not context_matches:
+        return "repeat_preflight_and_fresh_authorization"
+    if (
+        not _mcp_nonblank(intended["operation"])
+        or not _mcp_nonblank(intended["target"])
+        or not _mcp_nonblank(intended["payload"])
+        or intended["effects"] != ["ordinary"]
+        or intended["current_task_requires"] is not True
+    ):
+        return "deny_intended_call"
+    return "run_fresh_authorization_then_call"
+
+
+def evaluate_mcp_scenario(scenario: object) -> str:
+    item = _mcp_exact_mapping(
+        scenario,
+        {"id", "class", "used_for_tuning", "conditions", "expected"},
+        "mcp scenario",
+    )
+    scenario_id = item["id"]
+    conditions = item["conditions"]
+    if not isinstance(conditions, dict):
+        raise ValueError("mcp scenario conditions must be a mapping")
+    if scenario_id in {
+        "same-context-success",
+        "sandbox-credential-failure-host-success",
+        "identity-read-exact-source-mismatch",
+    }:
+        return _evaluate_mcp_identity_read(conditions)
+    if scenario_id in {
+        "host-preflight-without-project-authorization",
+        "identity-read-with-authenticated-premise",
+        "identity-read-prerequisite-write-reuse",
+    }:
+        _mcp_exact_mapping(
+            conditions,
+            {"identity_read_project_authorization", "identity_read_host_execution_approval"},
+            f"{scenario_id} conditions",
+        )
+        authorized, _ = _mcp_identity_project_authorized(
+            conditions["identity_read_project_authorization"]
+        )
+        host_approved = _mcp_host_execution_approved(
+            conditions["identity_read_host_execution_approval"]
+        )
+        return "run_provider_identity_read" if authorized and host_approved else "deny_provider_preflight"
+    if scenario_id == "authenticated-provider-permission-denial":
+        _mcp_exact_mapping(
+            conditions,
+            {"credential_available", "provider_authenticated", "provider_permission", "fallback_evidence_available"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "report_provider_permission_denial"
+            if conditions["credential_available"] is True
+            and conditions["provider_authenticated"] is True
+            and conditions["provider_permission"] == "denied"
+            else "classify_authentication_failure"
+        )
+    if scenario_id == "provider-change-after-preflight":
+        _mcp_exact_mapping(
+            conditions,
+            {"preflight_provider", "call_provider", "account_changed", "exact_credential_source_changed", "command_boundary_changed"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "repeat_preflight_and_fresh_authorization"
+            if conditions.get("preflight_provider") != conditions.get("call_provider")
+            else "continue_context_check"
+        )
+    if scenario_id == "command-boundary-change-after-preflight":
+        _mcp_exact_mapping(
+            conditions,
+            {"provider_changed", "account_changed", "exact_credential_source_changed", "preflight_command_boundary", "call_command_boundary"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "repeat_preflight_and_fresh_authorization"
+            if conditions.get("preflight_command_boundary") != conditions.get("call_command_boundary")
+            else "continue_context_check"
+        )
+    if scenario_id == "account-change-after-preflight":
+        _mcp_exact_mapping(
+            conditions,
+            {"provider_changed", "preflight_account", "call_account", "exact_credential_source_changed", "command_boundary_changed"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "repeat_preflight_and_fresh_authorization"
+            if conditions.get("preflight_account") != conditions.get("call_account")
+            else "continue_context_check"
+        )
+    if scenario_id == "credential-source-change-after-preflight":
+        _mcp_exact_mapping(
+            conditions,
+            {"provider_changed", "account_changed", "preflight_exact_credential_source", "call_exact_credential_source", "credential_source_class", "command_boundary_changed"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "repeat_preflight_and_fresh_authorization"
+            if conditions.get("preflight_exact_credential_source")
+            != conditions.get("call_exact_credential_source")
+            else "continue_context_check"
+        )
+    if scenario_id == "saved-prefix-without-task-authorization":
+        _mcp_exact_mapping(
+            conditions,
+            {"host_execution_approved", "saved_command_prefix_approved", "task_authorized", "access"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "deny_external_write"
+            if conditions == {
+                "host_execution_approved": True,
+                "saved_command_prefix_approved": True,
+                "task_authorized": False,
+                "access": "write",
+            }
+            else "evaluate_exact_external_call"
+        )
+    if scenario_id == "unavailable-fallback":
+        _mcp_exact_mapping(
+            conditions,
+            {"provider_backend_configured", "configured_fallback_available"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "fail_closed_report_backend_unavailable"
+            if conditions.get("provider_backend_configured") is False
+            and conditions.get("configured_fallback_available") is False
+            else "use_configured_fallback"
+        )
+    if scenario_id == "duplicate-write-prevention":
+        _mcp_exact_mapping(
+            conditions,
+            {"prior_write_result", "exact_remote_state_read_supported", "intended_state_already_exists"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "skip_duplicate_write"
+            if conditions.get("prior_write_result") == "uncertain"
+            and conditions.get("exact_remote_state_read_supported") is True
+            and conditions.get("intended_state_already_exists") is True
+            else "do_not_retry_write"
+        )
+    if scenario_id == "credential-persistence-attempt":
+        _mcp_exact_mapping(
+            conditions,
+            {"diagnostic_contains_credential_material", "persist_to_fixture_or_log", "task_authorized"},
+            f"{scenario_id} conditions",
+        )
+        return (
+            "deny_credential_persistence"
+            if conditions.get("diagnostic_contains_credential_material") is True
+            or conditions.get("persist_to_fixture_or_log") is True
+            else "continue_sanitized_diagnostic"
+        )
+    raise ValueError(f"unknown mcp scenario: {scenario_id}")
+
+
+def validate_mcp_blank_binding_mutations(scenarios: list[object]) -> None:
+    median = next(
+        (item for item in scenarios if isinstance(item, dict) and item.get("id") == "same-context-success"),
+        None,
+    )
+    if median is None:
+        raise ValueError("same-context-success is required for blank-binding mutations")
+    paths = (
+        ("local_credential_source", "exact_binding"),
+        ("local_credential_source", "class"),
+        ("identity_read_result", "account"),
+        ("identity_read_result", "evidence_context", "provider"),
+        ("identity_read_result", "evidence_context", "command_boundary"),
+        ("identity_read_result", "evidence_context", "exact_credential_source"),
+        ("identity_read_result", "evidence_context", "credential_source_class"),
+        ("intended_call_authorization_request", "provider"),
+        ("intended_call_authorization_request", "command_boundary"),
+        ("intended_call_authorization_request", "exact_credential_source"),
+    )
+    for path in paths:
+        mutated = copy.deepcopy(median)
+        cursor = mutated["conditions"]
+        for part in path[:-1]:
+            cursor = cursor[part]
+        cursor[path[-1]] = ""
+        action = evaluate_mcp_scenario(mutated)
+        if action != "fail_closed_report_context_binding_missing":
+            raise ValueError(f"blank binding did not fail closed: {'.'.join(path)} -> {action}")
+
+
+def check_mcp_execution_context() -> None:
+    skill = read(".codex/skills/mcp-ops/SKILL.md")
+    reference = read(".codex/skills/mcp-ops/references/provider-call-execution-context.md")
+    specification = read("docs/agent/SPEC_EXTERNAL_SERVICES.md")
+    for marker in (
+        "references/provider-call-execution-context.md",
+        "Do not claim `runtime_configured`",
+        "exact provider, account, command boundary, and credential source",
+    ):
+        if marker not in skill:
+            fail(f"root mcp-ops Skill missing execution-context marker: {marker}")
+    for marker in (
+        "provider, command execution boundary, and credential source",
+        "This decision excludes host execution approval",
+        "cannot pass the normal `authorize` command",
+        "exact selected credential source",
+        "saved command-prefix approval",
+        "credential-source unavailability",
+        "provider-permission denial",
+        "provider unavailability",
+        "read the exact remote state",
+        "Never read, print, persist, fixture, log, or send token values",
+    ):
+        if marker not in reference:
+            fail(f"root mcp-ops execution-context reference missing marker: {marker}")
+    for marker in (
+        "provider-call execution context",
+        "would make that check circular",
+        "this approval grants no provider operation, target, payload, or effect",
+        "must not expose the exact credential-source binding",
+        "saved command-prefix approval is never external-write authorization",
+        "Distinguish a process that cannot obtain credentials",
+        "read the exact remote state before retrying",
+        "Schema version 2 and project-owned schema version 1 policies remain unchanged",
+    ):
+        if marker not in specification:
+            fail(f"root external-service specification missing execution-context marker: {marker}")
+
+    fixture = json.loads(read("tests/fixtures/mcp-ops/scenarios.json"))
+    requirements = fixture.get("requirements", [])
+    scenarios = fixture.get("scenarios", [])
+    if not requirements or any(item.get("critical") is not True for item in requirements):
+        fail("mcp-ops scenarios must keep every declared requirement critical")
+    try:
+        observed_ids = [item["id"] for item in scenarios]
+        if len(observed_ids) != len(set(observed_ids)) or set(observed_ids) != MCP_SCENARIO_IDS:
+            raise ValueError("mcp scenario identifiers differ from the accepted set")
+        for item in scenarios:
+            if evaluate_mcp_scenario(item) != item["expected"]:
+                raise ValueError(f"incorrect condition-to-action mapping: {item['id']}")
+        validate_mcp_blank_binding_mutations(scenarios)
+    except (KeyError, TypeError, ValueError) as exc:
+        fail(f"mcp-ops scenario evaluation failed: {exc}")
+    if {item.get("class") for item in scenarios} != {"median", "edge", "negative", "holdout"}:
+        fail("mcp-ops scenarios must cover median, edge, negative, and holdout classes")
+    holdouts = [item for item in scenarios if item.get("class") == "holdout"]
+    if len(holdouts) != 1 or holdouts[0].get("used_for_tuning") is not False:
+        fail("mcp-ops holdout scenario must remain outside tuning")
+    if any(item.get("used_for_tuning") is not True for item in scenarios if item.get("class") != "holdout"):
+        fail("mcp-ops non-holdout scenarios must remain tuned inputs")
 
 
 def check_browser_routing() -> None:
@@ -431,6 +1800,77 @@ def check_external_service_policy() -> None:
         fail("root external-service entrypoint must delegate with the fixed root policy")
 
 
+def check_git_retirement_policy() -> None:
+    index = read("docs/agent/spec-index.yaml")
+    for marker in (
+        "  git_retirement:",
+        "docs/agent/SPEC_GIT_RETIREMENT.md",
+        "docs/agent/SPEC_SECURITY.md",
+    ):
+        if marker not in index:
+            fail(f"root Git-retirement route missing: {marker}")
+
+    root_spec = read("docs/agent/SPEC_GIT_RETIREMENT.md")
+    generated_spec = read("template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md")
+    normalized_generated_spec = generated_spec.replace(
+        "`.project-agent-workflow/scripts/retire-merged-worktrees.py",
+        "`scripts/retire-merged-worktrees.py",
+    ).replace(
+        "`.project-agent-workflow/scripts/manage-plan-worktrees.py",
+        "`scripts/manage-plan-worktrees.py",
+    )
+    if root_spec != normalized_generated_spec:
+        fail("root/generated Git-retirement specifications differ beyond the command path")
+    for marker in (
+        "docs/agent/git-retirement.yaml",
+        "`scan` enumerates registered worktrees with Git plumbing.",
+        "Every `apply-local` invocation requires a current explicit operator action.",
+        "`git worktree remove`",
+        "`git branch -d`",
+        "must not run `apply-local`",
+        "remote branch deletion",
+    ):
+        if marker not in root_spec:
+            fail(f"Git-retirement specification missing marker: {marker}")
+    if "`.project-agent-workflow/scripts/retire-merged-worktrees.py scan`" not in generated_spec:
+        fail("generated Git-retirement specification names the wrong command path")
+
+    try:
+        root_config = yaml.safe_load(read("docs/agent/git-retirement.yaml"))
+        generated_config = yaml.safe_load(read("template/docs/agent/git-retirement.yaml.jinja"))
+    except yaml.YAMLError as exc:
+        fail(f"invalid Git-retirement configuration YAML: {exc}")
+    expected_root_config = {
+        "version": 1,
+        "enabled": True,
+        "merge_target_refs": ["refs/heads/dev"],
+        "protected_local_branch_refs": ["refs/heads/main", "refs/heads/dev"],
+    }
+    expected_generated_config = {
+        "version": 1,
+        "enabled": False,
+        "merge_target_refs": [],
+        "protected_local_branch_refs": [],
+    }
+    if root_config != expected_root_config:
+        fail("root Git-retirement configuration differs from the exact enabled profile")
+    if generated_config != expected_generated_config:
+        fail("generated Git-retirement configuration differs from the exact safe-disabled profile")
+
+    root_agents = read("AGENTS.md")
+    generated_agents = read("template/.project-agent-workflow/AGENTS.md.jinja")
+    if "docs/agent/SPEC_GIT_RETIREMENT.md" not in root_agents:
+        fail("root AGENTS.md does not route local Git retirement")
+    if ".project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md" not in generated_agents:
+        fail("generated AGENTS.md does not route local Git retirement")
+
+    ownership = read("template/.project-agent-workflow/ownership.yaml")
+    if "  - .project-agent-workflow/**" not in ownership:
+        fail("generated Git-retirement specification lacks managed ownership")
+    if "  - docs/agent/**" not in ownership:
+        fail("generated Git-retirement configuration lacks project-owned classification")
+
+
 def check_user_communication_contract() -> None:
     root_spec = read("docs/agent/SPEC_USER_COMMUNICATION.md")
     template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_USER_COMMUNICATION.md")
@@ -453,6 +1893,39 @@ def check_user_communication_contract() -> None:
         fail("write-for-reader scenarios need median, edge, and holdout cases")
     if any(item.get("used_for_tuning") is not False for item in scenarios if item.get("class") == "holdout"):
         fail("write-for-reader holdout scenarios must remain outside tuning")
+
+
+def check_review_turn_zero_contract() -> None:
+    required = {
+        "docs/agent/SPEC_AGENT_LOGGING.md": (
+            "ReviewPacketStart",
+            "SessionStart` alone",
+            "inherited turn count",
+        ),
+        "docs/agent/SPEC_CONTEXT_COMPRESSION.md": (
+            "cannot establish staged-review turn zero",
+            "ReviewPacketStart",
+        ),
+        ".project-agent-workflow/hooks/agent_log_event.py": (
+            '"review_packet_digest"',
+            '"inherited_turns"',
+            '"ReviewPacketStart"',
+        ),
+        "template/.project-agent-workflow/scripts/import-codex-transcript.py": (
+            '"review_packet_start"',
+            '"review_packet_digest"',
+            '"inherited_turns"',
+        ),
+        "scripts/plan-execution-state.py": (
+            "review_turn_zero_from_manifest",
+            "--review-resource-manifest",
+        ),
+    }
+    for relative, markers in required.items():
+        text = read(relative)
+        for marker in markers:
+            if marker not in text:
+                fail(f"{relative} missing review turn-zero marker: {marker}")
 
 
 def check_namespaced_documentation_targets() -> None:
@@ -516,6 +1989,7 @@ def require_current_plan_manifest_reference(planning: str) -> None:
         "target_json",
         "acceptance_focus",
         "completion_deferred_reason",
+        "implementation_tier",
         "primary_invariant",
         "integration_gates",
         "replan_source",
@@ -690,9 +2164,25 @@ def validate_paired_runner_evidence(
                     "allowed_write_scope", "changed_paths", "patch_path", "patch_digest",
                     "orchestration_run_id", "lifecycle_state_path", "worker_result", "telemetry",
                 }
-                if not isinstance(manifest, dict) or frozenset(manifest) not in {
-                    frozenset(manifest_fields), frozenset(manifest_fields | {"correction_lineage"})
-                }:
+                contract_fields = {
+                    "worker_contract_path", "worker_contract_digest", "worker_attempt_label",
+                }
+                receipt_fields = {
+                    "worker_completion_receipt_path", "worker_completion_receipt_digest",
+                    "worker_process_result_path", "worker_process_result_digest",
+                    "worker_attempt_id",
+                }
+                accepted_manifest_shapes = {
+                    frozenset(manifest_fields),
+                    frozenset(manifest_fields | {"correction_lineage"}),
+                    frozenset(manifest_fields | contract_fields),
+                    frozenset(manifest_fields | contract_fields | {"correction_lineage"}),
+                    frozenset(manifest_fields | contract_fields | receipt_fields),
+                    frozenset(
+                        manifest_fields | contract_fields | receipt_fields | {"correction_lineage"}
+                    ),
+                }
+                if not isinstance(manifest, dict) or frozenset(manifest) not in accepted_manifest_shapes:
                     raise ValueError("captured manifest is not an exact runner candidate manifest")
                 run_id = manifest.get("orchestration_run_id")
                 telemetry = manifest.get("telemetry")
@@ -834,13 +2324,14 @@ def check_plan_restructuring_scenarios() -> None:
     if fixture["schema_version"] != 1 or fixture["holdout_file"] != holdout_path.name:
         fail("plan restructuring fixture has an unsupported schema or holdout")
     requirements = fixture["requirements"]
-    if not isinstance(requirements, list) or len(requirements) != 4:
-        fail("plan restructuring fixture must preserve four critical requirements")
+    if not isinstance(requirements, list) or len(requirements) != 5:
+        fail("plan restructuring fixture must preserve five critical requirements")
     requirement_markers = {
         "P1": ("hard trigger", "stops", "implementation", "validation", "apply", "finalize"),
         "P2": ("atomic restructuring", "every source acceptance", "integration plan"),
         "P3": ("requirement replacement", "explicit user authorization", "clarification", "acceptance mapping"),
         "P4": ("elapsed time is telemetry only", "scope", "specification", "security", "correction", "review"),
+        "P5": ("independently repairable defect", "source-plan scope", "validation authority", "invariant boundaries", "current execution run", "source plan as deferred", "without rewriting acceptance", "separate bounded repair plan", "fresh execution run"),
     }
     observed_requirements: set[str] = set()
     for requirement in requirements:
@@ -866,6 +2357,13 @@ def check_plan_restructuring_scenarios() -> None:
         "negative-specification-drift": ("negative", ["P1", "P2", "P4"], {"event": "spec_drift"}, "spec_drift", "atomic_restructure", "replan_required"),
         "negative-security-boundary-drift": ("negative", ["P1", "P2", "P4"], {"event": "security_boundary_drift"}, "security_boundary_drift", "atomic_restructure", "replan_required"),
         "negative-post-authoritative-design-change": ("negative", ["P1", "P2", "P4"], {"event": "post_authoritative_design_change", "authoritative_validation_count": 1}, "post_authoritative_design_change", "atomic_restructure", "replan_required"),
+        "median-plan119-independent-validation-authorization-repair": ("median", ["P1", "P4", "P5"], {"event": "repair_classification", "affected_invariant_count": 1, "bounded_write_and_validation_scope": True, "source_scope_changed": False, "validation_authority_changed": False, "invariant_boundaries_changed": False, "source_acceptance_changed": False, "safety_boundary_changed": False, "external_authority_changed": False}, "independent_repair_required", "defer_source_and_create_bounded_repair_plan", "repair_required"),
+        "edge-repair-required-run-cannot-continue": ("edge", ["P1", "P5"], {"operation": "continue_same_execution_run", "execution_state": "repair_required"}, "independent_repair_required", "reject_transition", "repair_required"),
+        "edge-checked-repair-resumes-source-with-fresh-run": ("edge", ["P5"], {"repair_plan_status": "checked", "source_plan_status": "deferred", "source_scope_changed": False, "validation_authority_changed": False, "invariant_boundaries_changed": False, "requirements_changed": False, "safety_boundary_changed": False, "external_authority_changed": False, "execution_run": "fresh"}, "repair_prerequisite_satisfied", "resume_source_with_fresh_execution", "in_progress"),
+        "negative-independent-repair-with-source-scope-drift": ("negative", ["P1", "P2", "P5"], {"event": "repair_classification", "source_scope_changed": True}, "scope_drift", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-validation-authority-drift": ("negative", ["P1", "P2", "P5"], {"event": "repair_classification", "validation_authority_changed": True}, "spec_drift", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-invariant-boundary-drift": ("negative", ["P1", "P2", "P5"], {"event": "repair_classification", "invariant_boundaries_changed": True}, "multiple_independent_invariants", "reject_repair_and_atomic_restructure", "replan_required"),
+        "negative-independent-repair-with-altered-authority": ("negative", ["P1", "P2", "P3", "P5"], {"event": "repair_classification", "external_authority_changed": True}, "security_boundary_drift", "reject_repair_and_atomic_restructure", "replan_required"),
         "negative-unauthorized-requirement-replacement": ("negative", ["P3"], {"operation": "replace_source_acceptance_text", "explicit_user_authorization": False}, "requirement_change_not_authorized", "reject_transition", "pending_user_authorization"),
     }
     scenarios = fixture["scenarios"]
@@ -888,22 +2386,540 @@ def check_plan_restructuring_scenarios() -> None:
     if observed_cases != set(expected_cases):
         fail("plan restructuring scenario set differs from the accepted contract")
 
-    expected_holdout = {
+    expected_holdout = [{
         "id": "holdout-security-drift-with-dirty-product-path",
         "class": "holdout",
         "used_for_tuning": False,
         "requirements": ["P1", "P2", "P4"],
         "input": {"event": "security_boundary_drift", "dirty_product_path": "config/project-owned.yaml"},
         "expected": {"state": "replan_required", "reason_code": "security_boundary_drift", "next_action": "atomic_restructure_preserving_dirty_path"},
-    }
+    }, {
+        "id": "holdout-independent-repair-rejects-stopped-run-reuse",
+        "class": "holdout",
+        "used_for_tuning": False,
+        "requirements": ["P1", "P5"],
+        "input": {"source_plan_status": "deferred", "repair_plan_status": "checked", "execution_run": "stopped_repair_required_run"},
+        "expected": {"state": "repair_required", "reason_code": "independent_repair_required", "next_action": "reject_transition_and_initialize_fresh_run"},
+    }]
     if set(holdout) != {"schema_version", "scenarios"} or holdout.get("schema_version") != 1:
         fail("plan restructuring holdout has an invalid exact shape")
-    if holdout.get("scenarios") != [expected_holdout]:
+    if holdout.get("scenarios") != expected_holdout:
         fail("plan restructuring holdout must remain fixed and outside tuning scenarios")
+
+
+def check_review_sequencing_scenarios(*, include_holdout: bool) -> None:
+    fixture_path = ROOT / "tests/fixtures/orchestration/review-sequencing-scenarios.json"
+    holdout_path = ROOT / "tests/fixtures/orchestration/review-sequencing-holdout.json"
+    try:
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"invalid review sequencing fixture: {exc}")
+    if not isinstance(fixture, dict) or set(fixture) != {
+        "schema_version", "used_for_tuning", "requirements", "scenarios"
+    }:
+        fail("review sequencing fixture has an invalid exact shape")
+    if fixture["schema_version"] != 1 or fixture["used_for_tuning"] is not True:
+        fail("review sequencing fixture has an invalid identity")
+    requirements = fixture["requirements"]
+    if not isinstance(requirements, list) or len(requirements) != 4 or any(
+        not isinstance(item, str) or not item for item in requirements
+    ):
+        fail("review sequencing requirements are incomplete")
+    expected = {
+        "median-accepted-two-plan-chain": ("median", "dependent_start_admitted"),
+        "edge-independent-read-only-helper": ("edge", "ledger_unchanged"),
+        "negative-rejected-predecessor": ("negative", "dependent_start_rejected"),
+        "negative-overlapping-starts": ("negative", "second_start_rejected"),
+        "negative-repeated-reason": ("negative", "replan_required"),
+        "edge-changed-reason": ("edge", "next_correction_admitted"),
+        "negative-unknown-reason": ("negative", "closure_rejected"),
+        "negative-worker-authored-reason": ("negative", "closure_rejected"),
+        "negative-missing-review-evidence": ("negative", "closure_rejected"),
+        "negative-replay-and-history-rewrite": ("negative", "ledger_rejected"),
+        "edge-crash-recovery": ("edge", "failed_attempt_closed"),
+        "negative-stale-predecessor-digest": ("negative", "dependent_start_rejected"),
+        "negative-correction-budget-exhausted": ("negative", "replan_required"),
+        "negative-multiple-invariants-coupled": ("negative", "replan_required"),
+        "negative-global-lock-or-shared-write": ("negative", "policy_rejected"),
+    }
+    scenarios = fixture["scenarios"]
+    if not isinstance(scenarios, list) or len(scenarios) != len(expected):
+        fail("review sequencing scenario count differs from the accepted set")
+    observed: dict[str, tuple[str, str]] = {}
+    for scenario in scenarios:
+        if not isinstance(scenario, dict) or set(scenario) != {"id", "class", "expected"}:
+            fail("review sequencing scenario has an invalid exact shape")
+        scenario_id = scenario["id"]
+        if not isinstance(scenario_id, str) or scenario_id in observed:
+            fail("review sequencing scenario identifier is invalid")
+        observed[scenario_id] = (scenario["class"], scenario["expected"])
+    if observed != expected:
+        fail("review sequencing scenarios differ from the accepted outcomes")
+    if not include_holdout:
+        return
+    if not isinstance(holdout, dict) or set(holdout) != {
+        "schema_version", "used_for_tuning", "scenarios"
+    }:
+        fail("review sequencing holdout has an invalid exact shape")
+    if holdout["schema_version"] != 1 or holdout["used_for_tuning"] is not False:
+        fail("review sequencing holdout must remain untuned")
+    if holdout["scenarios"] != [{
+        "id": "holdout-accepted-predecessor-proof-substitution",
+        "input": "a different accepted predecessor ledger is supplied after the dependent ledger is bound",
+        "expected": "dependent_start_rejected",
+    }]:
+        fail("review sequencing holdout differs from its sealed outcome")
+
+
+def check_worker_contract_scenarios(*, include_holdout: bool) -> None:
+    scenario_path = ROOT / "tests/fixtures/orchestration/worker-contract-scenarios.json"
+    holdout_path = ROOT / "tests/fixtures/orchestration/worker-contract-holdout.json"
+    evidence_path = ROOT / "tests/fixtures/orchestration/worker-contract-evidence.json"
+    try:
+        scenario_bytes = scenario_path.read_bytes()
+        scenarios = json.loads(scenario_bytes.decode("utf-8"))
+        holdout_bytes = holdout_path.read_bytes()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-contract fixture: {exc}")
+    if hashlib.sha256(scenario_bytes).hexdigest() != "ff31f769bc13867be4eb3c66a86decff44c31d58aa6d523515c3ec0b19f55ebf":
+        fail("worker-contract tuned scenario bytes differ from the preimplementation seal")
+    if set(scenarios) != {"schema_version", "suite", "used_for_tuning", "holdout_file", "base", "cases"}:
+        fail("worker-contract scenarios have an invalid exact shape")
+    if (
+        scenarios["schema_version"] != 1
+        or scenarios["suite"] != "worker-execution-contract"
+        or scenarios["used_for_tuning"] is not True
+        or scenarios["holdout_file"] != holdout_path.name
+    ):
+        fail("worker-contract scenarios have an unsupported identity or holdout link")
+    cases = scenarios["cases"]
+    if not isinstance(cases, list) or not cases:
+        fail("worker-contract scenarios must not be empty")
+    if {case.get("class") for case in cases if isinstance(case, dict)} != {"median", "edge", "negative"}:
+        fail("worker-contract scenarios must preserve median, edge, and negative classes")
+    if any(not isinstance(case, dict) or case.get("used_for_tuning") is not True for case in cases):
+        fail("worker-contract scenarios must remain tuned inputs")
+    expected_coverage = {
+        "exact_derivation", "lineage_binding", "explicit_new_non_authority_path",
+        "source_plan_mutation", "digest_mismatch", "lineage_mismatch",
+        "missing_primary_invariant", "duplicate_field", "unknown_field",
+        "path_traversal", "symlink_escape", "oversized_input", "contract_mutation",
+        "read_only_mount", "authority_widening", "directory_prefix_scope",
+    }
+    observed_coverage = {
+        marker
+        for case in cases
+        for marker in (case.get("covers", []) if isinstance(case, dict) else [])
+    }
+    if observed_coverage != expected_coverage:
+        fail("worker-contract scenarios do not cover the accepted preimplementation boundary")
+    if hashlib.sha256(holdout_bytes).hexdigest() != "a3f6fba464ecb20f6505a0537e37457d4f41783bb6ca2616158c1de69cedaa27":
+        fail("worker-contract holdout bytes differ from the preimplementation seal")
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-contract integration evidence: {exc}")
+    evidence_fields = {
+        "schema_version", "suite", "implementation_commit", "tuned_fixture",
+        "holdout_fixture", "runner_sha256", "template_runner_sha256",
+        "observations", "source_acceptance",
+    }
+    if not isinstance(evidence, dict) or set(evidence) != evidence_fields:
+        fail("worker-contract evidence has an invalid exact shape")
+    if evidence["schema_version"] != 1 or evidence["suite"] != "worker-execution-contract-integration":
+        fail("worker-contract evidence has an unsupported identity")
+    expected_fixture_records = (
+        evidence.get("tuned_fixture") == {
+            "path": "tests/fixtures/orchestration/worker-contract-scenarios.json",
+            "sha256": hashlib.sha256(scenario_bytes).hexdigest(),
+        }
+        and evidence.get("holdout_fixture") == {
+            "path": "tests/fixtures/orchestration/worker-contract-holdout.json",
+            "sha256": hashlib.sha256(holdout_bytes).hexdigest(),
+        }
+    )
+    if not expected_fixture_records:
+        fail("worker-contract evidence fixture bindings differ")
+    implementation_commit = evidence.get("implementation_commit")
+    if not isinstance(implementation_commit, str) or re.fullmatch(r"[0-9a-f]{40}", implementation_commit) is None:
+        fail("worker-contract evidence implementation commit is invalid")
+    committed_runner = subprocess.run(
+        ["git", "show", f"{implementation_commit}:scripts/run-sandboxed-plan-worker.py"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if committed_runner.returncode != 0:
+        fail("worker-contract evidence implementation commit is unavailable")
+    committed_template_runner = subprocess.run(
+        [
+            "git", "show",
+            f"{implementation_commit}:template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if committed_template_runner.returncode != 0:
+        fail("worker-contract evidence template implementation commit is unavailable")
+    root_runner_digest = hashlib.sha256((ROOT / "scripts/run-sandboxed-plan-worker.py").read_bytes()).hexdigest()
+    template_runner_digest = hashlib.sha256(
+        (ROOT / "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py").read_bytes()
+    ).hexdigest()
+    if (
+        hashlib.sha256(committed_runner.stdout).hexdigest() != evidence.get("runner_sha256")
+        or hashlib.sha256(committed_template_runner.stdout).hexdigest()
+        != evidence.get("template_runner_sha256")
+        or evidence.get("runner_sha256") != evidence.get("template_runner_sha256")
+        or root_runner_digest != template_runner_digest
+    ):
+        fail("worker-contract evidence runner bindings differ")
+    expected_observations = [
+        {
+            "id": case["id"],
+            "class": case["class"],
+            "used_for_tuning": case["used_for_tuning"],
+            **case["expected"],
+        }
+        for fixture in (scenarios, json.loads(holdout_bytes.decode("utf-8")))
+        for case in fixture["cases"]
+    ]
+    if evidence.get("observations") != expected_observations:
+        fail("worker-contract evidence observations differ from the sealed expectations")
+    replan_contract = json.loads(
+        (ROOT / "docs/plan/replanned/contracts/113-generate-plan-bound-worker-contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_acceptance = [
+        {"digest": item["digest"].removeprefix("sha256:"), "result": "passed"}
+        for item in replan_contract["source"]["acceptance"]
+    ]
+    if evidence.get("source_acceptance") != expected_acceptance:
+        fail("worker-contract evidence source acceptance bindings differ")
+    if not include_holdout:
+        return
+    try:
+        holdout = json.loads(holdout_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-contract holdout fixture: {exc}")
+    if set(holdout) != {"schema_version", "suite", "used_for_tuning", "base", "cases"}:
+        fail("worker-contract holdout has an invalid exact shape")
+    if holdout["schema_version"] != 1 or holdout["suite"] != "worker-execution-contract" or holdout["used_for_tuning"] is not False:
+        fail("worker-contract holdout has an unsupported identity")
+    holdout_cases = holdout["cases"]
+    if not isinstance(holdout_cases, list) or len(holdout_cases) != 1:
+        fail("worker-contract holdout must contain one independent case")
+    holdout_case = holdout_cases[0]
+    if (
+        not isinstance(holdout_case, dict)
+        or holdout_case.get("class") != "holdout"
+        or holdout_case.get("used_for_tuning") is not False
+        or holdout_case.get("id") != "holdout-missing-parent-new-package-manifest"
+    ):
+        fail("worker-contract holdout identity differs from the sealed case")
+    test_path = ROOT / "tests/test-sandboxed-plan-worker.py"
+    spec = importlib.util.spec_from_file_location("worker_contract_behavior_evaluator", test_path)
+    if spec is None or spec.loader is None:
+        fail("could not load the generic worker-contract evaluator")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        tuned_observations = module.evaluate_selected_worker_contract_fixture(
+            scenario_path, used_for_tuning=True
+        )
+        holdout_observations = module.evaluate_selected_worker_contract_fixture(
+            holdout_path, used_for_tuning=False
+        )
+    except Exception as exc:
+        fail(f"worker-contract behavior evaluation failed: {exc}")
+    if len(tuned_observations) != len(cases) or holdout_observations != [{
+        "id": "holdout-missing-parent-new-package-manifest",
+        "observed": {"result": "rejected", "error_code": "validation_authority_write"},
+    }]:
+        fail("worker-contract behavior observations differ from the sealed scenarios")
+    actual_observations = []
+    for fixture, observations in (
+        (scenarios, tuned_observations),
+        (holdout, holdout_observations),
+    ):
+        observed_by_id = {item["id"]: item["observed"] for item in observations}
+        actual_observations.extend(
+            {
+                "id": case["id"],
+                "class": case["class"],
+                "used_for_tuning": case["used_for_tuning"],
+                **observed_by_id[case["id"]],
+            }
+            for case in fixture["cases"]
+        )
+    if actual_observations != evidence["observations"]:
+        fail("worker-contract execution differs from the recorded integration evidence")
+
+
+def check_worker_completion_receipt_scenarios(*, include_holdout: bool) -> None:
+    scenario_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
+    holdout_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+    replacement_holdout_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
+    try:
+        scenario_bytes = scenario_path.read_bytes()
+        scenarios = json.loads(scenario_bytes.decode("utf-8"))
+        holdout_bytes = holdout_path.read_bytes()
+        replacement_holdout_bytes = replacement_holdout_path.read_bytes()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-completion-receipt fixture: {exc}")
+    if hashlib.sha256(scenario_bytes).hexdigest() != "264462e6276aa4ab6da320e4773b570ac90353a793bb83abccc01993af21793a":
+        fail("worker-completion-receipt tuned scenario bytes differ from the preimplementation seal")
+    if set(scenarios) != {"schema_version", "suite", "used_for_tuning", "holdout_file", "base", "cases"}:
+        fail("worker-completion-receipt scenarios have an invalid exact shape")
+    if (
+        scenarios.get("schema_version") != 1
+        or scenarios.get("suite") != "worker-completion-receipt"
+        or scenarios.get("used_for_tuning") is not True
+        or scenarios.get("holdout_file") != holdout_path.name
+    ):
+        fail("worker-completion-receipt scenarios have an unsupported identity or holdout link")
+    cases = scenarios.get("cases")
+    if not isinstance(cases, list) or not cases:
+        fail("worker-completion-receipt scenarios must not be empty")
+    if {case.get("class") for case in cases if isinstance(case, dict)} != {"median", "edge", "negative"}:
+        fail("worker-completion-receipt scenarios must preserve median, edge, and negative classes")
+    if any(not isinstance(case, dict) or case.get("used_for_tuning") is not True for case in cases):
+        fail("worker-completion-receipt scenarios must remain tuned inputs")
+    expected_coverage = {
+        "successful_attempt", "failed_attempt", "initial_attempt", "correction_attempt",
+        "failure_before_candidate", "partial_command_execution", "stale_receipt",
+        "replayed_receipt", "plan_mismatch", "contract_mismatch", "patch_mismatch",
+        "changed_path_mismatch", "false_success_claim", "missing_out_of_scope_declaration",
+        "unknown_field", "duplicate_field", "oversized_receipt", "oversized_value",
+        "path_traversal", "symlink_escape", "secret_inclusion", "raw_output_inclusion",
+    }
+    observed_coverage = {
+        marker
+        for case in cases
+        for marker in (case.get("covers", []) if isinstance(case, dict) else [])
+    }
+    if observed_coverage != expected_coverage:
+        fail("worker-completion-receipt scenarios do not cover the accepted preimplementation boundary")
+    if hashlib.sha256(holdout_bytes).hexdigest() != "4473bf88c87cc99b16b3817d2d57169d2f3a5266ba08ece0758811d7644b3f76":
+        fail("worker-completion-receipt holdout bytes differ from the preimplementation seal")
+    if hashlib.sha256(replacement_holdout_bytes).hexdigest() != "ddbbedb5c65cfe16ae48763b403c1beb16c241b7a77ab9379a88f98c8dd0f8de":
+        fail("worker-completion-receipt replacement holdout bytes differ from the independent seal")
+    test_path = ROOT / "tests/test-sandboxed-plan-worker.py"
+    spec = importlib.util.spec_from_file_location("worker_completion_receipt_fixture_evaluator", test_path)
+    if spec is None or spec.loader is None:
+        fail("could not load the generic worker-completion-receipt evaluator")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        evaluator = module.SandboxedPlanWorkerTests(
+            methodName="test_tuned_worker_completion_receipt_fixture_is_frozen_and_evaluator_is_generic"
+        ).evaluate_worker_completion_receipt_case
+        observations = module.evaluate_worker_completion_receipt_fixture(
+            scenario_path,
+            evaluator,
+            used_for_tuning=True,
+        )
+    except Exception as exc:
+        fail(f"worker-completion-receipt fixture evaluation failed: {exc}")
+    if len(observations) != len(cases):
+        fail("worker-completion-receipt tuned observations are incomplete")
+    try:
+        exposed_holdout = json.loads(holdout_bytes.decode("utf-8"))
+        exposed_observations = module.evaluate_worker_completion_receipt_fixture(
+            holdout_path,
+            evaluator,
+            used_for_tuning=False,
+        )
+    except Exception as exc:
+        fail(f"worker-completion-receipt exposed holdout regression failed: {exc}")
+    if (
+        exposed_holdout.get("used_for_tuning") is not False
+        or exposed_observations
+        != [
+            {
+                "id": "holdout-host-path-raw-output-in-residual-risk",
+                "observed": {
+                    "result": "rejected",
+                    "error_code": "prohibited_receipt_content",
+                },
+            }
+        ]
+    ):
+        fail("worker-completion-receipt exposed holdout observations differ")
+    evidence_path = ROOT / "tests/fixtures/orchestration/worker-completion-receipt-evidence.json"
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"invalid worker-completion-receipt integration evidence: {exc}")
+    if set(evidence) != {
+        "schema_version", "suite", "implementation_commit", "tuned_fixture",
+        "exposed_holdout_fixture", "replacement_holdout_fixture", "runner_sha256",
+        "template_runner_sha256", "observations", "source_acceptance",
+    }:
+        fail("worker-completion-receipt integration evidence has an invalid exact shape")
+    if (
+        evidence.get("schema_version") != 1
+        or evidence.get("suite") != "worker-completion-receipt-integration"
+        or evidence.get("tuned_fixture") != {
+            "path": str(scenario_path.relative_to(ROOT)),
+            "sha256": hashlib.sha256(scenario_bytes).hexdigest(),
+        }
+        or evidence.get("exposed_holdout_fixture") != {
+            "path": str(holdout_path.relative_to(ROOT)),
+            "sha256": hashlib.sha256(holdout_bytes).hexdigest(),
+            "evidence_status": "known_regression_after_initial_failure",
+        }
+        or evidence.get("replacement_holdout_fixture") != {
+            "path": str(replacement_holdout_path.relative_to(ROOT)),
+            "sha256": hashlib.sha256(replacement_holdout_bytes).hexdigest(),
+            "evidence_status": "untuned_holdout",
+        }
+    ):
+        fail("worker-completion-receipt evidence fixture bindings differ")
+    implementation_commit = evidence.get("implementation_commit")
+    if not isinstance(implementation_commit, str) or re.fullmatch(r"[0-9a-f]{40}", implementation_commit) is None:
+        fail("worker-completion-receipt evidence implementation commit is invalid")
+    committed_runner_digests = []
+    for relative in (
+        "scripts/run-sandboxed-plan-worker.py",
+        "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py",
+    ):
+        result = subprocess.run(
+            ["git", "show", f"{implementation_commit}:{relative}"],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            fail("worker-completion-receipt evidence implementation commit is unavailable")
+        committed_runner_digests.append(hashlib.sha256(result.stdout).hexdigest())
+    if (
+        evidence.get("runner_sha256") != committed_runner_digests[0]
+        or evidence.get("template_runner_sha256") != committed_runner_digests[1]
+        or committed_runner_digests[0] != committed_runner_digests[1]
+    ):
+        fail("worker-completion-receipt evidence runner bindings differ")
+    source_contract = json.loads(
+        (ROOT / "docs/plan/replanned/contracts/114-validate-structured-worker-completion.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_acceptance = [
+        {"digest": item["digest"].removeprefix("sha256:"), "result": "passed"}
+        for item in source_contract["source"]["acceptance"]
+    ]
+    if evidence.get("source_acceptance") != expected_acceptance:
+        fail("worker-completion-receipt evidence acceptance bindings differ")
+    expected_known_observations = [
+        {
+            "id": case["id"],
+            "class": case["class"],
+            "used_for_tuning": case["used_for_tuning"],
+            **case["expected"],
+        }
+        for fixture in (scenarios, exposed_holdout)
+        for case in fixture["cases"]
+    ]
+    observations = evidence.get("observations")
+    if (
+        not isinstance(observations, list)
+        or observations[:-1] != expected_known_observations
+        or observations[-1:] != [{
+            "id": "holdout-host-path-in-completion-risk",
+            "class": "holdout",
+            "used_for_tuning": False,
+            "result": "rejected",
+            "error_code": "prohibited_receipt_content",
+        }]
+    ):
+        fail("worker-completion-receipt recorded observations differ")
+    if not include_holdout:
+        return
+    try:
+        replacement_holdout = json.loads(replacement_holdout_bytes.decode("utf-8"))
+        replacement_observations = module.evaluate_worker_completion_receipt_fixture(
+            replacement_holdout_path,
+            evaluator,
+            used_for_tuning=False,
+        )
+    except Exception as exc:
+        fail(f"worker-completion-receipt replacement holdout evaluation failed: {exc}")
+    actual_observations = []
+    for fixture, fixture_observations in (
+        (scenarios, observations[:len(cases)]),
+        (exposed_holdout, exposed_observations),
+        (replacement_holdout, replacement_observations),
+    ):
+        observed_by_id = {item["id"]: item.get("observed", item) for item in fixture_observations}
+        actual_observations.extend(
+            {
+                "id": case["id"],
+                "class": case["class"],
+                "used_for_tuning": case["used_for_tuning"],
+                **observed_by_id[case["id"]],
+            }
+            for case in fixture["cases"]
+        )
+    if actual_observations != evidence["observations"]:
+        fail("worker-completion-receipt execution differs from integration evidence")
+
+
+def has_exact_review_continuation_clause(policy: str) -> bool:
+    lines = policy.splitlines()
+    headings = [
+        index
+        for index, line in enumerate(lines)
+        if line == REVIEW_FINDING_BUDGETS_HEADING.lower()
+    ]
+    if len(headings) != 1:
+        return False
+    start = headings[0] + 1
+    end = next(
+        (
+            index
+            for index in range(start, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    candidates = [
+        line
+        for line in lines[start:end]
+        if line.startswith(REVIEW_CONTINUATION_CLAUSE_PREFIX.lower())
+    ]
+    return candidates == [REVIEW_CONTINUATION_CLAUSE.lower()]
+
+
+def check_review_continuation_clause(policy: str) -> None:
+    if not has_exact_review_continuation_clause(policy):
+        fail(
+            "SPEC_PLAN_WORKFLOW.md review-finding budget section does not contain "
+            "the exact one-or-two-review continuation clause"
+        )
+    old_clause = REVIEW_CONTINUATION_CLAUSE.replace(
+        "exactly one or two prior formal reviews",
+        "exactly two prior formal reviews",
+    )
+    decoy = "<!-- exactly one or two prior formal reviews -->"
+    mutated = policy.replace(
+        REVIEW_CONTINUATION_CLAUSE.lower(),
+        f"{old_clause.lower()}\n{decoy}",
+        1,
+    )
+    if has_exact_review_continuation_clause(mutated):
+        fail("review-continuation clause self-test accepted detached decoy wording")
 
 
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     check_plan_restructuring_scenarios()
+    check_review_sequencing_scenarios(include_holdout=include_holdout)
+    check_worker_contract_scenarios(include_holdout=include_holdout)
+    check_worker_completion_receipt_scenarios(include_holdout=include_holdout)
     policy = read("references/orchestration.md").lower()
     shared_markers = (
         "per-task user instruction",
@@ -918,6 +2934,13 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "proactively",
         "short deterministic",
         "cost",
+        "select the runnable active plan",
+        "index/file status mismatch",
+        "zero runnable rows",
+        "multiple runnable rows",
+        "duplicate ids or paths",
+        "immutable identities and archive ordering only",
+        "lower-numbered deferred plan does not block",
         "external writes",
         "context files read-only",
         "advisory",
@@ -941,25 +2964,53 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "skipped known-unavailable starts",
         "finite and nonnegative",
         "prompts, raw output, environment values, or credentials",
+        "worker completion receipt",
+        "consumed-attempt replay rejection",
+        "receipt claims are advisory only",
         "run-sandboxed-plan-worker.py correct",
         "aggregate patch",
-        "at most two correction rounds",
+        "at most one correction round",
+        "independent_review_limit` is two",
+        "third review request is refused",
         "rejected patch never touches the source",
         "candidate generation and correction do not run plan validation",
         "parent diff review",
         "critical-invariant review",
         "focused_validation",
         "validation_authority_scope",
+        "validation_witness_map",
+        "validation_witness_schema: 1",
+        "resolved-context-files",
+        "authoritative_only_reason",
+        "earliest parent-owned witness",
         "network-isolated review clone",
         "authoritative",
         "bounded parent implementation",
         "independent change review",
+        "diagnosis_required",
+        "failed-operation digest",
+        "observed exit status",
+        "inconclusive",
+        "disputed",
+        "repair_required",
+        "repair-evidence",
+        "fresh plan digest",
         "replan_required",
         "requirement change needs separate explicit user authorization",
         "elapsed time is telemetry",
         "plan-execution-state.py",
         "independent-review receipt",
         "--plan-execution-state",
+        "--predecessor-plan-execution-state",
+        "predecessor_acceptance",
+        "writable_attempt_started",
+        "attempt_closed",
+        "successor_claimed",
+        "review_evidence_digest",
+        "acceptance_unmet",
+        "multiple_invariants_coupled",
+        "global task lock",
+        "plan_execution_attempt_id",
         "at least 30 percent lower median",
         "p95 time no more than 10 percent worse",
     )
@@ -983,9 +3034,89 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
         "per-task user instruction",
         "main session",
         "advisory",
+        "worker completion receipt",
+        "validation_witness_map",
+        "authoritative-only witness",
+        "diagnosis_required",
+        "confirmed",
+        "inconclusive",
+        "disputed",
+        "repair_required",
+        "source-plan scope",
+        "validation authority",
+        "invariant boundaries",
+        "source plan `deferred`",
+        "fresh run",
+        "never reopen a stopped ledger run",
+        "never relabel requirement, authority, or security-boundary drift",
+        "implementation-start authorization",
+        "plan_purpose: implementation",
+        "feasibility_evidence",
+        "completion_conditions",
+        "completion_witness_map",
+        "outside plan-lifecycle records",
+        "identifier is 264 or higher",
+        "run-wide independent review budget is exhausted",
+        "owner_continuation_authorization",
+        "schema 4",
+        "a third review is refused",
     ):
         if marker not in agents:
             fail(f"AGENTS.md missing orchestration ownership marker: {marker}")
+
+    plan_workflow = read("docs/agent/SPEC_PLAN_WORKFLOW.md").lower()
+    for marker in (
+        "plan admission contract",
+        "plan_purpose",
+        "feasibility_evidence",
+        "completion_conditions",
+        "completion_witness_map",
+        "reproduced_defect",
+        "existing_mechanism",
+        "bounded_prototype",
+        "mechanical_transformation",
+        "independent_review_limit` is two",
+        "owner_continuation_authorization",
+        "identifier is 264 or higher",
+        "independent repair prerequisite",
+        "diagnosis_required",
+        "failed-operation digest",
+        "observed exit status",
+        "confirmed",
+        "inconclusive",
+        "disputed",
+        "repair_required",
+        "one observed defect",
+        "source-plan scope",
+        "validation authority",
+        "invariant boundaries",
+        "unchanged source acceptance",
+        "external-effect authority",
+        "separate numbered active repair plan",
+        "do not create a replan contract",
+        "fresh source-plan digest",
+        "security-boundary change is not an independent repair",
+    ):
+        if marker not in plan_workflow:
+            fail(f"SPEC_PLAN_WORKFLOW.md missing independent-repair marker: {marker}")
+    check_review_continuation_clause(plan_workflow)
+
+    diagnosis_fixture = json.loads(
+        read("tests/fixtures/orchestration/failure-diagnosis-scenarios.json")
+    )
+    expected_diagnosis_ids = {
+        "confirmed-single-invariant",
+        "inconclusive-read-only-stop",
+        "disputed-read-only-stop",
+        "receipt-replay-rejected",
+        "failure-identity-mutation-rejected",
+        "validation-authority-drift-rejected",
+    }
+    if diagnosis_fixture.get("schema_version") != 1 or {
+        item.get("id") for item in diagnosis_fixture.get("scenarios", [])
+        if isinstance(item, dict)
+    } != expected_diagnosis_ids:
+        fail("failure-diagnosis scenarios do not preserve the exact confirmation boundary")
 
     try:
         fixture = json.loads((ROOT / "tests/fixtures/orchestration/proactive-bounded-subagents.json").read_text(encoding="utf-8"))
@@ -1313,6 +3444,316 @@ def check_orchestration_policy(*, include_holdout: bool = False) -> None:
                 fail(f"staged orchestration exceeds the p95 regression threshold: {metric}")
 
 
+def parse_plan_manifest(text: str) -> dict[str, str | list[str]]:
+    """Read the bounded leading manifest of a root plan file."""
+
+    values: dict[str, str | list[str]] = {key: [] for key in ADMISSION_LIST_KEYS}
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("## "):
+            break
+        if not line.strip():
+            continue
+        if ":" in line and not line.startswith(" "):
+            key, rest = line.split(":", 1)
+            key = key.strip()
+            rest = rest.strip()
+            current = None
+            if key in ADMISSION_SCALAR_KEYS:
+                values[key] = rest
+            elif key in ADMISSION_LIST_KEYS:
+                current = key
+                if rest:
+                    values[key].append(rest)  # type: ignore[union-attr]
+            continue
+        if current and line.lstrip().startswith("- "):
+            values[current].append(line.lstrip()[2:].strip())  # type: ignore[union-attr]
+    return values
+
+
+def admission_placeholder(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    return stripped.lower().strip(" .") in ADMISSION_PLACEHOLDER_VALUES
+
+
+def bounded_admission_text(value: object, maximum_bytes: int) -> bool:
+    return (
+        isinstance(value, str)
+        and value == value.strip()
+        and not admission_placeholder(value)
+        and len(value.encode("utf-8")) <= maximum_bytes
+        and all(ord(char) >= 0x20 for char in value)
+    )
+
+
+def admission_digest(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def check_plan_admission(relative: str, values: dict[str, str | list[str]]) -> None:
+    """Require one bounded implementation-start authorization for a numbered plan."""
+
+    purpose = values.get("plan_purpose", "")
+    if purpose not in PLAN_PURPOSE_VALUES:
+        fail(f"{relative} must declare plan_purpose: implementation")
+    evidence_items = values["feasibility_evidence"]
+    conditions = values["completion_conditions"]
+    raw_map = values["completion_witness_map"]
+    focused = values["focused_validation"]
+    write_scope = values["write_scope"]
+    assert isinstance(evidence_items, list) and isinstance(conditions, list)
+    assert isinstance(raw_map, list) and isinstance(focused, list)
+    assert isinstance(write_scope, list)
+
+    if (
+        not evidence_items
+        or len(evidence_items) > MAX_FEASIBILITY_EVIDENCE
+        or len(evidence_items) != len(set(evidence_items))
+    ):
+        fail(f"{relative} feasibility_evidence must be a bounded unique non-empty list")
+    for index, raw in enumerate(evidence_items, start=1):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            fail(f"{relative} feasibility_evidence entry {index} is not valid JSON")
+        if not isinstance(record, dict) or set(record) != {"kind", "evidence"}:
+            fail(
+                f"{relative} feasibility_evidence entry {index} must declare exactly "
+                "kind and evidence"
+            )
+        if record["kind"] not in FEASIBILITY_EVIDENCE_KINDS:
+            fail(f"{relative} feasibility_evidence entry {index} has an unsupported kind")
+        if not bounded_admission_text(record["evidence"], FEASIBILITY_EVIDENCE_MAX_BYTES):
+            fail(
+                f"{relative} feasibility_evidence entry {index} must be bounded "
+                "non-placeholder text"
+            )
+
+    if (
+        not conditions
+        or len(conditions) > MAX_COMPLETION_CONDITIONS
+        or len(conditions) != len(set(conditions))
+    ):
+        fail(f"{relative} completion_conditions must be a bounded unique non-empty list")
+    for index, condition in enumerate(conditions, start=1):
+        if not bounded_admission_text(condition, COMPLETION_CONDITION_MAX_BYTES):
+            fail(
+                f"{relative} completion_conditions entry {index} must be bounded "
+                "non-placeholder text"
+            )
+
+    mapped: list[str] = []
+    for index, raw in enumerate(raw_map, start=1):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            fail(f"{relative} completion_witness_map entry {index} is not valid JSON")
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"condition_sha256", "witness"}
+            or not all(isinstance(value, str) for value in record.values())
+        ):
+            fail(
+                f"{relative} completion_witness_map entry {index} must declare exactly "
+                "condition_sha256 and witness"
+            )
+        witness = record["witness"]
+        if not witness or witness != witness.strip() or witness not in focused:
+            fail(
+                f"{relative} completion_witness_map entry {index} witness is not a "
+                "declared focused_validation command"
+            )
+        mapped.append(record["condition_sha256"])
+    if mapped != [admission_digest(condition) for condition in conditions]:
+        fail(
+            f"{relative} completion_witness_map must cover completion_conditions "
+            "exactly once and in source order"
+        )
+
+    if not [
+        path
+        for path in write_scope
+        if not admission_placeholder(path)
+        and not path.startswith(ADMISSION_LIFECYCLE_PREFIXES)
+    ]:
+        fail(
+            f"{relative} plan_purpose: implementation requires a write_scope path "
+            "outside plan-lifecycle records"
+        )
+
+    if values.get("implementation_tier", "") == TIER_ONE_VALUE:
+        acceptance = values["acceptance"]
+        assert isinstance(acceptance, list)
+        if len(acceptance) != 1:
+            fail(
+                f"{relative} implementation_tier: 1 requires exactly one acceptance "
+                f"item, not {len(acceptance)}; a plan that needs several acceptance "
+                "items is Tier 2"
+            )
+
+
+def check_plan_admission_boundary() -> None:
+    """Admit new root plans only as bounded implementation authorizations."""
+
+    for directory in ("docs/plan/active", "docs/plan/backlog"):
+        plan_dir = ROOT / directory
+        if not plan_dir.is_dir():
+            continue
+        for path in sorted(plan_dir.glob("[0-9][0-9][0-9]-*.md")):
+            match = PLAN_FILE_RE.fullmatch(path.name)
+            if match is None:
+                fail(f"{directory}/{path.name} is not a normalized plan filename")
+            if int(match.group(1)) < ROOT_ADMISSION_BOUNDARY_PLAN_ID:
+                continue
+            relative = str(path.relative_to(ROOT))
+            check_plan_admission(relative, parse_plan_manifest(path.read_text(encoding="utf-8")))
+
+
+def load_parallel_group_module():
+    """Load the shared group-description authority used by root and generated lint."""
+
+    path = ROOT / "scripts/parallel-plan-state.py"
+    if not path.is_file():
+        fail("scripts/parallel-plan-state.py is required for execution group policy")
+    spec = importlib.util.spec_from_file_location("root_parallel_group", path)
+    if spec is None or spec.loader is None:
+        fail("could not load the parallel plan group authority")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def execution_group_members() -> dict[str, str]:
+    """Return every enrolled member plan path mapped to its group description."""
+
+    module = load_parallel_group_module()
+    try:
+        groups = module.load_group_descriptions(ROOT)
+    except module.GroupError as exc:
+        fail(f"invalid execution group description: {exc}")
+    enrolled: dict[str, str] = {}
+    for label, group in groups.items():
+        for plan_path in group["members"]:
+            enrolled[plan_path] = label
+    return enrolled
+
+
+def check_execution_groups() -> None:
+    directory = ROOT / "docs/plan/execution-groups"
+    if directory.is_dir():
+        for path in sorted(directory.iterdir()):
+            if path.is_dir() or path.suffix != ".json":
+                fail(
+                    "docs/plan/execution-groups may contain only group description "
+                    f"JSON files: {path.relative_to(ROOT)}"
+                )
+    enrolled = execution_group_members()
+    active_dir = ROOT / "docs/plan/active"
+    if active_dir.is_dir():
+        for path in sorted(active_dir.glob("[0-9][0-9][0-9]-*.md")):
+            relative = str(path.relative_to(ROOT))
+            values = parse_plan_manifest(path.read_text(encoding="utf-8"))
+            declared = values.get("execution_group", "")
+            assert isinstance(declared, str)
+            if not declared:
+                continue
+            if enrolled.get(relative) != declared:
+                fail(
+                    f"{relative} declares execution_group {declared!r}, which does "
+                    "not name a validated group description enrolling this plan"
+                )
+    for plan_path in sorted(enrolled):
+        if not (ROOT / plan_path).is_file():
+            fail(f"execution group enrolls a missing plan: {plan_path}")
+
+
+# --- active plan index grammar: keep byte-identical across enforcing commands ---
+ACTIVE_INDEX_TITLE = "# Active Plan"
+ACTIVE_INDEX_EMPTY_BODY = "No active development items."
+ACTIVE_INDEX_HEADER = "id\tpath\tstatus"
+ACTIVE_INDEX_STATUSES = ("in_progress", "ready_to_archive", "deferred", "replan_required")
+ACTIVE_INDEX_ID_RE = re.compile(r"[0-9]{3}")
+ACTIVE_INDEX_ROW_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
+
+
+class ActiveIndexError(ValueError):
+    """Raised when the active plan index is not one accepted representation."""
+
+
+def read_active_index(path: Path) -> str:
+    """Read one active plan index without newline translation."""
+
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ActiveIndexError(f"active plan index is not UTF-8 text: {exc}") from exc
+
+
+def parse_active_index(text: str) -> list[tuple[str, str, str]]:
+    """Return the rows of one exact accepted active plan index document.
+
+    The empty representation is the title, one blank line, and the empty
+    marker. The populated representation is the title, one blank line, the
+    actual-tab header, and one or more actual-tab rows. Every other nonempty
+    document is rejected whole instead of being partially parsed.
+    """
+
+    if "\r" in text or not text.endswith("\n") or text.endswith("\n\n"):
+        raise ActiveIndexError("active plan index must end with exactly one trailing newline")
+    lines = text.split("\n")[:-1]
+    if lines[:2] != [ACTIVE_INDEX_TITLE, ""]:
+        raise ActiveIndexError("active plan index must start with its title and one blank line")
+    body = lines[2:]
+    if not body:
+        raise ActiveIndexError("active plan index must hold the empty marker or the header")
+    if body[0] == ACTIVE_INDEX_EMPTY_BODY:
+        if len(body) > 1:
+            raise ActiveIndexError("empty active plan index must hold no other content")
+        return []
+    if body[0] != ACTIVE_INDEX_HEADER:
+        raise ActiveIndexError(f"active plan index needs the exact tab header: {body[0]!r}")
+    if len(body) == 1:
+        raise ActiveIndexError("active plan index header must be followed by at least one row")
+    rows: list[tuple[str, str, str]] = []
+    for line in body[1:]:
+        columns = line.split("\t")
+        if len(columns) != 3:
+            raise ActiveIndexError(f"active plan index row needs three tab columns: {line!r}")
+        plan_id, path, status = columns
+        if ACTIVE_INDEX_ID_RE.fullmatch(plan_id) is None:
+            raise ActiveIndexError(f"active plan index row needs a three-digit id: {line!r}")
+        match = ACTIVE_INDEX_ROW_PATH_RE.fullmatch(path)
+        if match is None:
+            raise ActiveIndexError(f"active plan index row needs a normalized path: {line!r}")
+        if match.group(1) != plan_id:
+            raise ActiveIndexError(f"active plan index row id does not match its file: {line!r}")
+        if status not in ACTIVE_INDEX_STATUSES:
+            raise ActiveIndexError(f"active plan index row status is not allowed: {line!r}")
+        if any(plan_id == row[0] for row in rows):
+            raise ActiveIndexError(f"duplicate active plan index id: {plan_id}")
+        if any(path == row[1] for row in rows):
+            raise ActiveIndexError(f"duplicate active plan index path: {path}")
+        rows.append((plan_id, path, status))
+    return rows
+
+
+def render_active_index(rows: list[tuple[str, str, str]]) -> str:
+    """Serialize fully parsed rows as the single canonical representation."""
+
+    if rows:
+        body = "\n".join("\t".join(row) for row in rows)
+        text = f"{ACTIVE_INDEX_TITLE}\n\n{ACTIVE_INDEX_HEADER}\n{body}\n"
+    else:
+        text = f"{ACTIVE_INDEX_TITLE}\n\n{ACTIVE_INDEX_EMPTY_BODY}\n"
+    if parse_active_index(text) != rows:
+        raise ActiveIndexError("canonical active plan index serialization failed")
+    return text
+# --- end active plan index grammar ---
+
+
 def check_active_plans() -> None:
     active_dir = ROOT / "docs/plan/active"
     if not active_dir.exists():
@@ -1321,8 +3762,62 @@ def check_active_plans() -> None:
         if contains_option_matrix(path.read_text(encoding="utf-8")):
             fail(f"{path.relative_to(ROOT)} contains an option-analysis matrix")
 
+    index_path = ROOT / "docs/plan/plan.md"
+    if not index_path.exists():
+        return
+    try:
+        rows = parse_active_index(read_active_index(index_path))
+    except ActiveIndexError as exc:
+        fail(str(exc))
+    runnable_rows: list[str] = []
+    runnable_paths: list[str] = []
+    for row_id, row_path, row_status in rows:
+        plan_file = ROOT / row_path
+        if not plan_file.exists():
+            fail(f"active index references missing plan file: {row_path}")
+        plan_text = plan_file.read_text(encoding="utf-8")
+        file_status = None
+        for plan_line in plan_text.splitlines():
+            if plan_line.startswith("status:"):
+                file_status = plan_line.split(":", 1)[1].strip()
+                break
+        if file_status is not None and file_status != row_status:
+            fail(f"active index status '{row_status}' does not match plan file status '{file_status}' for {row_path}")
+        if row_status == "in_progress":
+            runnable_rows.append(row_id)
+            runnable_paths.append(row_path)
+    if len(runnable_rows) > 1:
+        enrolled = execution_group_members()
+        groups = {enrolled.get(path) for path in runnable_paths}
+        if None in groups or len(groups) != 1:
+            fail(
+                "multiple runnable plans in active index: "
+                + ", ".join(runnable_rows)
+            )
+        label = groups.pop()
+        members = {path for path, group in enrolled.items() if group == label}
+        if set(runnable_paths) != members:
+            fail(
+                "runnable plans do not match the exact membership of "
+                f"{label}: {', '.join(runnable_rows)}"
+            )
+
 
 def self_test() -> None:
+    reuse_heading = "## Accepted Decision Reuse\n\n"
+    action = DECISION_REUSE_INSUFFICIENT_RECORD
+    if not has_insufficient_record_action(reuse_heading + action + "\n"):
+        fail("self-test rejected the insufficient-record action")
+    for content in (
+        reuse_heading,
+        action + "\n" + reuse_heading,
+        reuse_heading + "## Another Section\n\n" + action,
+        reuse_heading + "Do not follow this: " + action,
+        reuse_heading + "    " + action,
+        reuse_heading + "> " + action,
+    ):
+        if has_insufficient_record_action(content):
+            fail("self-test accepted a missing or misplaced insufficient-record action")
     good = "review_class: B\n\n## Decisions\n\n1. Use final decisions only.\n"
     bad = """## Decision Audit
 
@@ -1589,21 +4084,54 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--include-holdout", action="store_true")
+    parser.add_argument(
+        "--check-plan-admission",
+        metavar="PLAN",
+        help="check one root plan file against the numbered-plan admission boundary",
+    )
     args = parser.parse_args()
+
+    if args.check_plan_admission:
+        path = Path(args.check_plan_admission)
+        if not path.is_file():
+            fail(f"{args.check_plan_admission} is not a readable plan file")
+        match = PLAN_FILE_RE.fullmatch(path.name)
+        if match is None:
+            fail(f"{path.name} is not a normalized plan filename")
+        if int(match.group(1)) < ROOT_ADMISSION_BOUNDARY_PLAN_ID:
+            print(f"{args.check_plan_admission} predates the admission boundary")
+            return 0
+        check_plan_admission(
+            args.check_plan_admission,
+            parse_plan_manifest(path.read_text(encoding="utf-8")),
+        )
+        print(f"{args.check_plan_admission} admission check passed")
+        return 0
 
     if args.self_test:
         self_test()
     check_required_files()
     check_gitignore()
     check_agents_rules()
+    check_agents_entrypoint_size()
+    check_validation_witness_migration_policy()
+    check_validation_witness_map_policy()
+    check_tier_zero_pair_policy()
     check_agent_model_profiles()
     check_sandboxed_worker_fallback()
     check_reusable_skill_parity()
+    check_decision_reuse_scenarios()
+    check_natural_japanese_contract()
+    check_mcp_execution_context()
     check_browser_routing()
     check_external_service_policy()
+    check_git_retirement_policy()
     check_user_communication_contract()
+    check_review_turn_zero_contract()
     check_namespaced_documentation_targets()
     check_orchestration_policy(include_holdout=args.include_holdout)
+    check_plan_admission_boundary()
+    check_execution_groups()
     check_active_plans()
     print("root agent policy check passed")
     return 0

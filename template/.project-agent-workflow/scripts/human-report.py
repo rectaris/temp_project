@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
-"""Assess and render ignored local-only developer reports."""
+"""Assess and render ignored local reports and Git-tracked shared reports."""
 
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
+import datetime as dt
 import hashlib
 import html
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
+import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any
+from typing import Any, TextIO
 
 import security_rules
 
 
 CONFIG_PATH = Path(".project-agent-workflow/human-report.json")
 OUTPUT_ROOT = Path(".agent-artifacts/human-reports")
+SHARED_ROOT = Path("docs/human-report")
+SHARED_SOURCE_NAME = "report.json"
+SHARED_HTML_NAME = "index.html"
+GENERATOR_VERSION = 1
+CONFLICT_OPEN = "<<<<<<< "
+CONFLICT_CLOSE = ">>>>>>> "
 REPORT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 THRESHOLD = 3
 MAX_ITEMS = 100
@@ -217,11 +229,30 @@ def load_json(path: Path) -> Any:
         raise ReportError(f"could not read JSON file {path}: {exc}") from exc
 
 
-def load_mode() -> str:
-    config = require_object(load_json(CONFIG_PATH), "human report config", {"version", "mode"})
-    if config["version"] != 1:
+def load_config() -> dict[str, str]:
+    raw = load_json(CONFIG_PATH)
+    if not isinstance(raw, dict):
+        raise ReportError("human report config must be an object")
+    unknown = set(raw) - {"version", "mode", "shared_mode"}
+    missing = {"version", "mode"} - set(raw)
+    if unknown or missing:
+        raise ReportError(
+            f"human report config keys differ: missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
+    if raw["version"] != 1:
         raise ReportError("human report config version must equal 1")
-    return require_enum(config["mode"], "human report config mode", {"agent_select_local", "disabled"})
+    return {
+        "mode": require_enum(raw["mode"], "human report config mode", {"agent_select_local", "disabled"}),
+        "shared_mode": require_enum(
+            raw.get("shared_mode", "disabled"),
+            "human report config shared_mode",
+            {"disabled", "explicit_publish"},
+        ),
+    }
+
+
+def load_mode() -> str:
+    return load_config()["mode"]
 
 
 def source_path(path_text: str, root: Path) -> Path:
@@ -351,7 +382,11 @@ def render_list(items: list[str]) -> str:
 
 
 def render_html(
-    report: dict[str, Any], assessment: dict[str, Any], sources: list[dict[str, str]], commit: str
+    report: dict[str, Any],
+    assessment: dict[str, Any],
+    sources: list[dict[str, str]],
+    commit: str,
+    provenance: dict[str, Any] | None = None,
 ) -> str:
     fact_rows = "".join(
         "<tr>"
@@ -411,6 +446,24 @@ def render_html(
         for item in sources
     )
     reason_items = render_list(assessment["reasons"])
+    if provenance is None:
+        provenance_meta = ""
+        derivation = (
+            "This local HTML view is derived. The repository sources listed below remain authoritative."
+        )
+    else:
+        provenance_meta = (
+            f"<li>Report id: <code>{escape(provenance['report_id'])}</code></li>"
+            f"<li>Generator version: {escape(provenance['generator_version'])}</li>"
+            f"<li>Generated at: <time datetime=\"{escape(provenance['generated_at'])}\">"
+            f"{escape(provenance['generated_at'])}</time></li>"
+        )
+        derivation = (
+            "This shared HTML view is derived from the reviewed structured source "
+            f"<code>{escape((SHARED_ROOT / provenance['report_id'] / SHARED_SOURCE_NAME).as_posix())}</code>. "
+            "The repository sources listed below remain authoritative, and the freshness validator "
+            "fails once their recorded hashes no longer match the current repository bytes."
+        )
     return f"""<!doctype html>
 <html lang="{escape(report['language'])}">
 <head>
@@ -443,8 +496,9 @@ def render_html(
       <li>Purpose: {escape(report['purpose'])}</li>
       <li>Git commit: <code>{escape(commit)}</code></li>
       <li>Assessment score: {escape(assessment['score'])}/{escape(assessment['threshold'])}</li>
+      {provenance_meta}
     </ul>
-    <p>This local HTML view is derived. The repository sources listed below remain authoritative.</p>
+    <p>{derivation}</p>
   </header>
   <main>
     <section><h2>Generation reasons</h2>{reason_items}</section>
@@ -460,7 +514,284 @@ def render_html(
 """
 
 
-def atomic_write(path: Path, content: str) -> None:
+class HtmlSafetyParser(HTMLParser):
+    """Collect the publication-relevant shape of a rendered report."""
+
+    FORBIDDEN_TAGS = frozenset(
+        {
+            "applet",
+            "audio",
+            "base",
+            "embed",
+            "form",
+            "frame",
+            "frameset",
+            "iframe",
+            "img",
+            "link",
+            "meta_refresh",
+            "object",
+            "script",
+            "source",
+            "track",
+            "video",
+        }
+    )
+    REFERENCE_ATTRIBUTES = frozenset(
+        {"action", "background", "cite", "data", "formaction", "href", "poster", "src", "srcset"}
+    )
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.failures: list[str] = []
+        self.tags: set[str] = set()
+        self.document_language = ""
+        self.scoped_header_count = 0
+        self.style_text: list[str] = []
+        self._in_style = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.tags.add(tag)
+        attributes = {name.lower(): (value or "") for name, value in attrs}
+        if tag in self.FORBIDDEN_TAGS:
+            self.failures.append(f"rendered HTML contains a forbidden <{tag}> element")
+        if tag == "style":
+            self._in_style = True
+        if tag == "html":
+            self.document_language = attributes.get("lang", "").strip()
+        if tag == "th" and attributes.get("scope", "").strip():
+            self.scoped_header_count += 1
+        if tag == "meta" and attributes.get("http-equiv", "").strip().lower() == "refresh":
+            self.failures.append("rendered HTML contains a meta refresh redirect")
+        for name, value in attributes.items():
+            if name.startswith("on"):
+                self.failures.append(f"rendered HTML contains the event-handler attribute {name}")
+            if name == "style" and "url(" in value.lower():
+                self.failures.append("rendered HTML contains an inline style that loads a resource")
+            if name in self.REFERENCE_ATTRIBUTES:
+                self.failures.append(f"rendered HTML contains the external reference attribute {name}")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "style":
+            self._in_style = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_style:
+            self.style_text.append(data)
+
+
+def html_publication_failures(rendered: str) -> list[str]:
+    parser = HtmlSafetyParser()
+    parser.feed(rendered)
+    parser.close()
+    failures = list(parser.failures)
+    style = "".join(parser.style_text)
+    if "script" in parser.tags or "javascript:" in rendered.lower():
+        failures.append("rendered HTML must not carry executable script")
+    if not parser.document_language:
+        failures.append("rendered HTML must declare a document language on the root element")
+    if "h1" not in parser.tags:
+        failures.append("rendered HTML must declare a top-level heading")
+    if not parser.style_text:
+        failures.append("rendered HTML must embed its own stylesheet")
+    if parser.scoped_header_count < 1:
+        failures.append("rendered HTML must mark row headers with a scope attribute")
+    if "thead" not in parser.tags:
+        failures.append("rendered HTML must declare table column headers")
+    if "@media print" not in style:
+        failures.append("rendered HTML must carry a print layout")
+    if "url(" in style.lower() or "@import" in style.lower():
+        failures.append("embedded stylesheet must not load an external resource")
+    return sorted(set(failures))
+
+
+def secret_failures(text: str, context: str) -> list[str]:
+    return [f"{description} was detected in the {context}" for pattern, description in SECRET_PATTERNS if pattern.search(text)]
+
+
+def conflict_failures(text: str, context: str) -> list[str]:
+    lines = text.splitlines()
+    opened = any(line.startswith(CONFLICT_OPEN) for line in lines)
+    closed = any(line.startswith(CONFLICT_CLOSE) for line in lines)
+    if opened and closed:
+        return [f"an unresolved Git merge conflict marker is present in the {context}"]
+    return []
+
+
+def publication_failures(document: dict[str, Any], rendered: str) -> list[str]:
+    report = document["report"]
+    safety = report["content_safety"]
+    failures: list[str] = []
+    if not safety["reviewed"]:
+        failures.append("content safety review is not recorded")
+    if safety["contains_raw_logs"]:
+        failures.append("raw logs are not accepted as shared report input")
+    if safety["contains_unredacted_sensitive_data"]:
+        failures.append("unredacted sensitive data is present")
+    failures.extend(secret_failures(json_text(document), "structured source"))
+    failures.extend(secret_failures(rendered, "rendered HTML"))
+    failures.extend(html_publication_failures(rendered))
+    return sorted(set(failures))
+
+
+def shared_document(report_id: str, report: dict[str, Any], sources: list[dict[str, str]], root: Path) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "report_id": report_id,
+        "generator_version": GENERATOR_VERSION,
+        "generated_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "source_commit": git_commit(root),
+        "sources": sources,
+        "report": report,
+    }
+
+
+def validate_shared_document(raw: Any) -> dict[str, Any]:
+    document = require_object(
+        raw,
+        "shared report document",
+        {
+            "schema_version",
+            "report_id",
+            "generator_version",
+            "generated_at",
+            "source_commit",
+            "sources",
+            "report",
+        },
+    )
+    if document["schema_version"] != 1:
+        raise ReportError("shared report schema_version must equal 1")
+    if document["generator_version"] != GENERATOR_VERSION:
+        raise ReportError(f"shared report generator_version must equal {GENERATOR_VERSION}")
+    report_id = require_string(document["report_id"], "shared report report_id")
+    if not REPORT_ID_RE.fullmatch(report_id):
+        raise ReportError("shared report report_id must use 1-64 lowercase letters, digits, or hyphens")
+    generated_at = require_string(document["generated_at"], "shared report generated_at")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", generated_at):
+        raise ReportError("shared report generated_at must be a UTC timestamp such as 2026-01-01T00:00:00Z")
+    require_string(document["source_commit"], "shared report source_commit")
+    sources = require_list(document["sources"], "shared report sources")
+    if not sources:
+        raise ReportError("shared report sources must record at least one repository file")
+    for index, item in enumerate(sources):
+        record = require_object(item, f"shared report sources[{index}]", {"path", "sha256"})
+        require_string(record["path"], f"shared report sources[{index}].path")
+        digest = require_string(record["sha256"], f"shared report sources[{index}].sha256")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ReportError(f"shared report sources[{index}].sha256 must be a SHA-256 hex digest")
+    document["report"] = validate_report(document["report"])
+    if [item["path"] for item in document["sources"]] != list(document["report"]["sources"]):
+        raise ReportError("shared report sources must match the report sources in order")
+    return document
+
+
+def render_shared_html(document: dict[str, Any]) -> str:
+    assessment = assess(document["report"], "agent_select_local")
+    return render_html(
+        document["report"],
+        assessment,
+        document["sources"],
+        document["source_commit"],
+        {
+            "report_id": document["report_id"],
+            "generator_version": document["generator_version"],
+            "generated_at": document["generated_at"],
+        },
+    )
+
+
+def freshness_failures(document: dict[str, Any], root: Path) -> list[str]:
+    failures: list[str] = []
+    for record in document["sources"]:
+        try:
+            resolved = source_path(record["path"], root)
+        except ReportError as exc:
+            failures.append(f"recorded source is no longer publishable: {exc}")
+            continue
+        current = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        if current != record["sha256"]:
+            failures.append(
+                f"recorded source {record['path']} changed: published {record['sha256']}, current {current}"
+            )
+    return failures
+
+
+@contextmanager
+def shared_directory_access(
+    report_id: str, root: Path, *, create: bool
+) -> Iterator[tuple[int, Callable[[], None], bool]]:
+    """Retain no-follow directory descriptors through verification and publication."""
+    if not REPORT_ID_RE.fullmatch(report_id):
+        raise ReportError("report id must use 1-64 lowercase letters, digits, or hyphens")
+    descriptors = []
+    links = []
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(root, flags)
+        descriptors.append(descriptor)
+        links.append((None, root, os.fstat(descriptor)))
+        created = False
+        for part in (*SHARED_ROOT.parts, report_id):
+            created = False
+            if create:
+                try:
+                    os.mkdir(part, dir_fd=descriptor)
+                    created = True
+                except FileExistsError:
+                    pass
+            child = os.open(part, flags, dir_fd=descriptor)
+            descriptors.append(child)
+            links.append((descriptor, part, os.fstat(child)))
+            descriptor = child
+
+        def check() -> None:
+            for parent, name, original in links:
+                current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if not stat.S_ISDIR(current.st_mode) or (
+                    current.st_dev, current.st_ino
+                ) != (original.st_dev, original.st_ino):
+                    raise ReportError("shared report directory changed during publication")
+
+        check()
+        yield descriptor, check, created
+        check()
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def published_report_ids(root: Path) -> list[str]:
+    shared_root = root / SHARED_ROOT
+    if not shared_root.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in shared_root.iterdir()
+        if entry.is_dir() and not entry.is_symlink() and REPORT_ID_RE.fullmatch(entry.name)
+    )
+
+
+def atomic_write(path: Path, content: str, *, directory_fd: int | None = None) -> None:
+    if directory_fd is not None:
+        try:
+            existing = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and (not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1):
+            raise ReportError(f"refusing unsafe output: {path.name}")
+        temporary = f".{path.name}.{secrets.token_hex(16)}.tmp"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory_fd)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(temporary, path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+        return
     if path.is_symlink():
         raise ReportError(f"refusing symlink output: {path}")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -564,6 +895,164 @@ def command_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_publish(args: argparse.Namespace) -> int:
+    root = Path.cwd().resolve()
+    config = load_config()
+    if config["shared_mode"] != "explicit_publish":
+        print(
+            "shared human report publication is disabled by project configuration "
+            "(set human_report_shared_mode to explicit_publish)",
+            file=sys.stderr,
+        )
+        return 4
+    report = validate_report(load_json(Path(args.report)))
+    sources = source_records(report, root)
+    assessment = assess(report, "agent_select_local")
+    if assessment["decision"] != "generate":
+        print(json_text(assessment), file=sys.stderr, end="")
+        return 3
+    document = shared_document(args.report_id, report, sources, root)
+    rendered = render_shared_html(document)
+    failures = publication_failures(document, rendered)
+    if failures:
+        print("shared human report publication is blocked:", file=sys.stderr)
+        for failure in failures:
+            print(f"- {failure}", file=sys.stderr)
+        return 4
+    destination = root / SHARED_ROOT / args.report_id
+    with (
+        ExitStack() as handles,
+        shared_directory_access(args.report_id, root, create=True) as (directory_fd, check, created),
+    ):
+        if not created and not args.supersede:
+            print(
+                f"shared human report already exists: {(SHARED_ROOT / args.report_id).as_posix()}; "
+                "pass --supersede to replace it in an explicit supersede commit, or remove it in an explicit removal commit",
+                file=sys.stderr,
+            )
+            return 4
+        unchanged = False
+        snapshots: dict[str, tuple[TextIO, os.stat_result]] = {}
+        if not created:
+            previous, existing_failures = stored_pair_integrity(
+                args.report_id, root, directory_fd=directory_fd, snapshots=snapshots, handles=handles
+            )
+            if existing_failures:
+                print("existing shared human report supersede is blocked:", file=sys.stderr)
+                for failure in existing_failures:
+                    print(f"- {failure}", file=sys.stderr)
+                return 4
+            assert previous is not None
+            previous_without_time = {
+                key: value for key, value in previous.items() if key != "generated_at"
+            }
+            document_without_time = {
+                key: value for key, value in document.items() if key != "generated_at"
+            }
+            unchanged = json_text(document_without_time) == json_text(previous_without_time)
+        check()
+        for name, (handle, original) in snapshots.items():
+            for current in (os.fstat(handle.fileno()), os.stat(name, dir_fd=directory_fd, follow_symlinks=False)):
+                if any(getattr(current, field) != getattr(original, field) for field in (
+                    "st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"
+                )):
+                    raise ReportError("published file changed during supersede validation")
+        if not unchanged:
+            atomic_write(destination / SHARED_SOURCE_NAME, json_text(document), directory_fd=directory_fd)
+            check()
+            atomic_write(destination / SHARED_HTML_NAME, rendered, directory_fd=directory_fd)
+    for name in (SHARED_SOURCE_NAME, SHARED_HTML_NAME):
+        print((destination / name).relative_to(root).as_posix())
+    print(
+        "review, stage, and commit these files yourself; publication never stages or commits",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def stored_pair_integrity(
+    report_id: str,
+    root: Path,
+    *,
+    directory_fd: int | None = None,
+    snapshots: dict[str, tuple[TextIO, os.stat_result]] | None = None,
+    handles: ExitStack | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    if handles is None:
+        with ExitStack() as opened:
+            return stored_pair_integrity(report_id, root, directory_fd=directory_fd, snapshots=snapshots, handles=opened)
+    if directory_fd is None:
+        with shared_directory_access(report_id, root, create=False) as (descriptor, _check, _created):
+            return stored_pair_integrity(report_id, root, directory_fd=descriptor, snapshots=snapshots, handles=handles)
+    failures: list[str] = []
+    texts: dict[str, str] = {}
+    for name, context in ((SHARED_SOURCE_NAME, "structured source"), (SHARED_HTML_NAME, "rendered HTML")):
+        try:
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+            handle = handles.enter_context(os.fdopen(descriptor, "r", encoding="utf-8"))
+            original = os.fstat(handle.fileno())
+            if not stat.S_ISREG(original.st_mode) or original.st_nlink != 1:
+                raise ReportError(f"missing published {context}: unsafe file type or links")
+            texts[name] = handle.read()
+            current = os.fstat(handle.fileno())
+            if any(getattr(current, field) != getattr(original, field) for field in (
+                "st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"
+            )):
+                raise ReportError(f"published {context} changed while reading")
+            if snapshots is not None:
+                snapshots[name] = (handle, original)
+        except (OSError, UnicodeError, ReportError) as exc:
+            failures.append(f"missing published {context}: {exc}")
+            continue
+        failures.extend(conflict_failures(texts[name], f"published {context}"))
+    if failures:
+        return None, failures
+    try:
+        document = validate_shared_document(json.loads(texts[SHARED_SOURCE_NAME]))
+    except (ReportError, json.JSONDecodeError) as exc:
+        return None, [f"published structured source is invalid: {exc}"]
+    if document["report_id"] != report_id:
+        return None, [f"published structured source records report id {document['report_id']}, not {report_id}"]
+    for record in document["sources"]:
+        try:
+            source_path(record["path"], root)
+        except ReportError as exc:
+            failures.append(f"recorded source is no longer publishable: {exc}")
+    rendered = render_shared_html(document)
+    if texts[SHARED_HTML_NAME] != rendered:
+        failures.append("published HTML is not the deterministic rendering of its structured source")
+    failures.extend(publication_failures(document, rendered))
+    failures.extend(secret_failures(texts[SHARED_HTML_NAME], "published rendered HTML"))
+    failures.extend(html_publication_failures(texts[SHARED_HTML_NAME]))
+    return document, sorted(set(failures))
+
+
+def verify_shared_report(report_id: str, root: Path) -> list[str]:
+    document, failures = stored_pair_integrity(report_id, root)
+    if document is not None:
+        failures.extend(freshness_failures(document, root))
+    return sorted(set(failures))
+
+
+def command_verify_shared(args: argparse.Namespace) -> int:
+    root = Path.cwd().resolve()
+    report_ids = [args.report_id] if args.report_id else published_report_ids(root)
+    if not report_ids:
+        print(f"no shared human report is published below {SHARED_ROOT.as_posix()}")
+        return 0
+    stale = 0
+    for report_id in report_ids:
+        failures = verify_shared_report(report_id, root)
+        if failures:
+            stale += 1
+            print(f"stale or blocked shared human report: {(SHARED_ROOT / report_id).as_posix()}", file=sys.stderr)
+            for failure in failures:
+                print(f"- {failure}", file=sys.stderr)
+            continue
+        print(f"fresh shared human report: {(SHARED_ROOT / report_id).as_posix()}")
+    return 4 if stale else 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
@@ -576,6 +1065,18 @@ def parser() -> argparse.ArgumentParser:
     render_parser.add_argument("report", help="path to the structured report JSON")
     render_parser.add_argument("--report-id", required=True, help="lowercase stable identifier for the local output directory")
     render_parser.set_defaults(handler=command_render)
+    publish_parser = commands.add_parser("publish", help="publish a shared report below docs/human-report")
+    publish_parser.add_argument("report", help="path to the structured report JSON")
+    publish_parser.add_argument("--report-id", required=True, help="lowercase stable identifier for the shared report")
+    publish_parser.add_argument(
+        "--supersede",
+        action="store_true",
+        help="replace an already published shared report in an explicit supersede commit",
+    )
+    publish_parser.set_defaults(handler=command_publish)
+    verify_parser = commands.add_parser("verify-shared", help="check published shared reports against current sources")
+    verify_parser.add_argument("--report-id", help="verify only this shared report instead of every published report")
+    verify_parser.set_defaults(handler=command_verify_shared)
     return result
 
 

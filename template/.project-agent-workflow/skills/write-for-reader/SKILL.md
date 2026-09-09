@@ -14,6 +14,6 @@ write-for-reader is the Codex skill that drafts and reviews user-facing progress
 5. Put the reader-relevant outcome first, then include only the detail needed to understand, verify, decide, or continue.
 6. Review every substantive user-facing message against the specification before submitting it.
 
-For Japanese text, also follow `.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md`.
+For Japanese text, follow `.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md` first, then use `.agents/skills/natural-japanese/SKILL.md` at the depth appropriate to the message.
 
 Do not use this skill as a substitute for validation evidence or the stricter referent contract required by `SPEC_REFERENT_FIRST.md`.

@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "suite": "worker-completion-receipt",
+  "used_for_tuning": true,
+  "holdout_file": "worker-completion-receipt-holdout.json",
+  "base": {
+    "receipt_relative_path": "worker-completion-receipt.json",
+    "repository_identity": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "source_head": "2222222222222222222222222222222222222222",
+    "plan_path": "docs/plan/active/001-worker-completion-receipt-fixture.md",
+    "plan_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "worker_contract_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "orchestration_run_id": "worker-completion-receipt-fixture-run",
+    "attempt": {
+      "attempt_id": "initial-primary-1",
+      "attempt_kind": "initial",
+      "correction_round": 0,
+      "correction_lineage": null
+    },
+    "candidate": {
+      "patch_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "changed_paths": ["product/allowed.txt"]
+    },
+    "process": {
+      "exit_status": 0,
+      "diagnostic_codes": []
+    },
+    "claims": {
+      "attempt_result": "success",
+      "acceptance_evidence": [
+        {
+          "acceptance_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "claim": "satisfied"
+        }
+      ],
+      "commands_attempted": [
+        {
+          "command_id": "worker-check-1",
+          "exit_status": 0
+        }
+      ],
+      "blockers": [],
+      "residual_risks": [],
+      "out_of_scope_change": false
+    }
+  },
+  "cases": [
+    {
+      "id": "median-successful-initial-attempt",
+      "class": "median",
+      "used_for_tuning": true,
+      "covers": ["successful_attempt", "initial_attempt"],
+      "operation": "derive_twice",
+      "input": {},
+      "expected": {"result": "accepted", "error_code": null}
+    },
+    {
+      "id": "edge-failed-initial-before-candidate",
+      "class": "edge",
+      "used_for_tuning": true,
+      "covers": ["failed_attempt", "initial_attempt", "failure_before_candidate"],
+      "operation": "derive_failure_before_candidate",
+      "input": {"exit_status": 71, "diagnostic_codes": ["worker_failed"]},
+      "expected": {"result": "accepted", "error_code": null}
+    },
+    {
+      "id": "edge-failed-correction-attempt",
+      "class": "edge",
+      "used_for_tuning": true,
+      "covers": ["failed_attempt", "correction_attempt"],
+      "operation": "derive_correction_failure",
+      "input": {
+        "attempt_id": "correction-1",
+        "correction_round": 1,
+        "prior_manifest_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+        "exit_status": 72
+      },
+      "expected": {"result": "accepted", "error_code": null}
+    },
+    {
+      "id": "edge-successful-correction-attempt",
+      "class": "edge",
+      "used_for_tuning": true,
+      "covers": ["successful_attempt", "correction_attempt"],
+      "operation": "derive_correction_success",
+      "input": {
+        "attempt_id": "correction-2",
+        "correction_round": 2,
+        "prior_manifest_digest": "sha256:7878787878787878787878787878787878787878787878787878787878787878",
+        "patch_digest": "sha256:7979797979797979797979797979797979797979797979797979797979797979",
+        "changed_paths": ["product/corrected.txt"]
+      },
+      "expected": {"result": "accepted", "error_code": null}
+    },
+    {
+      "id": "edge-partial-command-execution",
+      "class": "edge",
+      "used_for_tuning": true,
+      "covers": ["partial_command_execution", "failed_attempt"],
+      "operation": "derive_partial_commands",
+      "input": {
+        "commands_attempted": [
+          {"command_id": "worker-check-1", "exit_status": 0},
+          {"command_id": "worker-check-2", "exit_status": 9}
+        ],
+        "blockers": ["command_failed"],
+        "exit_status": 9
+      },
+      "expected": {"result": "accepted", "error_code": null}
+    },
+    {
+      "id": "negative-stale-source-head",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["stale_receipt"],
+      "operation": "verify_identity_mismatch",
+      "input": {"field": "source_head", "value": "8888888888888888888888888888888888888888"},
+      "expected": {"result": "rejected", "error_code": "stale_receipt"}
+    },
+    {
+      "id": "negative-replayed-attempt",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["replayed_receipt"],
+      "operation": "verify_replay",
+      "input": {"consumed_attempt_id": "initial-primary-1"},
+      "expected": {"result": "rejected", "error_code": "replayed_receipt"}
+    },
+    {
+      "id": "negative-plan-digest-mismatch",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["plan_mismatch"],
+      "operation": "verify_identity_mismatch",
+      "input": {"field": "plan_digest", "value": "sha256:9999999999999999999999999999999999999999999999999999999999999999"},
+      "expected": {"result": "rejected", "error_code": "plan_mismatch"}
+    },
+    {
+      "id": "negative-contract-digest-mismatch",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["contract_mismatch"],
+      "operation": "verify_identity_mismatch",
+      "input": {"field": "worker_contract_digest", "value": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "expected": {"result": "rejected", "error_code": "contract_mismatch"}
+    },
+    {
+      "id": "negative-patch-digest-mismatch",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["patch_mismatch"],
+      "operation": "verify_candidate_mismatch",
+      "input": {"field": "patch_digest", "value": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      "expected": {"result": "rejected", "error_code": "patch_mismatch"}
+    },
+    {
+      "id": "negative-changed-path-mismatch",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["changed_path_mismatch"],
+      "operation": "verify_candidate_mismatch",
+      "input": {"field": "changed_paths", "value": ["product/unreported.txt"]},
+      "expected": {"result": "rejected", "error_code": "changed_path_mismatch"}
+    },
+    {
+      "id": "negative-false-success-claim",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["false_success_claim"],
+      "operation": "verify_false_success",
+      "input": {"process_exit_status": 5, "attempt_result": "success"},
+      "expected": {"result": "rejected", "error_code": "false_success_claim"}
+    },
+    {
+      "id": "negative-missing-out-of-scope-declaration",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["missing_out_of_scope_declaration"],
+      "operation": "verify_receipt_mutation",
+      "input": {"mutation": {"kind": "remove_claim_field", "name": "out_of_scope_change"}},
+      "expected": {"result": "rejected", "error_code": "missing_out_of_scope_declaration"}
+    },
+    {
+      "id": "negative-unknown-receipt-field",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["unknown_field"],
+      "operation": "verify_receipt_mutation",
+      "input": {"mutation": {"kind": "add_top_field", "name": "worker_accepts_patch", "value": true}},
+      "expected": {"result": "rejected", "error_code": "unknown_receipt_field"}
+    },
+    {
+      "id": "negative-duplicate-receipt-field",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["duplicate_field"],
+      "operation": "verify_serialized_receipt",
+      "input": {"json_prefix": "{\"schema_version\":1,\"schema_version\":1,"},
+      "expected": {"result": "rejected", "error_code": "duplicate_receipt_field"}
+    },
+    {
+      "id": "negative-oversized-receipt",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["oversized_receipt"],
+      "operation": "verify_serialized_receipt",
+      "input": {"byte_count": 65537, "fill_byte": "x"},
+      "expected": {"result": "rejected", "error_code": "receipt_too_large"}
+    },
+    {
+      "id": "negative-oversized-residual-risk",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["oversized_value"],
+      "operation": "verify_receipt_mutation",
+      "input": {"mutation": {"kind": "oversized_claim_value", "field": "residual_risks", "byte_count": 1025}},
+      "expected": {"result": "rejected", "error_code": "receipt_value_too_large"}
+    },
+    {
+      "id": "negative-receipt-path-traversal",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["path_traversal"],
+      "operation": "verify_output_path",
+      "input": {"path": "../worker-completion-receipt.json"},
+      "expected": {"result": "rejected", "error_code": "receipt_path_traversal"}
+    },
+    {
+      "id": "negative-receipt-symlink-escape",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["symlink_escape"],
+      "operation": "verify_output_path",
+      "input": {"path": "worker-completion-receipt.json", "symlink_target": "../../outside-receipt.json"},
+      "expected": {"result": "rejected", "error_code": "receipt_symlink_escape"}
+    },
+    {
+      "id": "negative-attempted-secret-inclusion",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["secret_inclusion"],
+      "operation": "verify_prohibited_content",
+      "input": {"field": "blockers", "value": "CREDENTIAL_SENTINEL"},
+      "expected": {"result": "rejected", "error_code": "prohibited_receipt_content"}
+    },
+    {
+      "id": "negative-attempted-raw-output-inclusion",
+      "class": "negative",
+      "used_for_tuning": true,
+      "covers": ["raw_output_inclusion"],
+      "operation": "verify_prohibited_content",
+      "input": {"field": "residual_risks", "value": "RAW_STDERR_SENTINEL"},
+      "expected": {"result": "rejected", "error_code": "prohibited_receipt_content"}
+    }
+  ]
+}

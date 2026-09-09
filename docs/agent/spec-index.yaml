@@ -32,6 +32,8 @@ task_types:
         when: raw local logs or large artifacts are kept as evidence for template work.
       - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
         when: large generated logs, CI logs, or local evidence need compressed views.
+      - path: references/orchestration.md
+        when: a Copier v1.4.5 before-update or after-update validation-witness migration step is in scope.
 
   security:
     summary: Secrets, credentials, permissions, hooks, logs, external access, dependency execution, or CI write behavior.
@@ -42,6 +44,23 @@ task_types:
         when: agent logs, transcripts, redaction, manifests, or local evidence are in scope.
       - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
         when: compressed logs or derived evidence are in scope.
+
+  git_retirement:
+    summary: Read-only inventory or explicit local removal of linked worktrees and their checked-out local branches.
+    required:
+      - docs/agent/SPEC_GIT_RETIREMENT.md
+      - docs/agent/SPEC_SECURITY.md
+    conditional: []
+
+  task_worktrees:
+    summary: Preparing, resuming, publishing, or gating the task-bound linked worktree that every repository-changing task writes in.
+    required:
+      - docs/agent/SPEC_PLAN_WORKFLOW.md
+      - docs/agent/SPEC_GIT_RETIREMENT.md
+      - docs/agent/SPEC_SECURITY.md
+    conditional:
+      - path: references/orchestration.md
+        when: delegated implementation, worker clones, or grouped member dispatch are in scope.
 
   external_services:
     summary: MCP, Linear, graph memory, GitHub, external issue sync, or external write policy.
@@ -90,6 +109,7 @@ task_types:
     summary: Japanese README text, documentation, plans, prompts, issues, review comments, or prose.
     required:
       - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
+      - .codex/skills/natural-japanese/SKILL.md
 
 rules:
   - Start with AGENTS.md and the smallest set of routes that covers the task.

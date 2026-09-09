@@ -3,6 +3,7 @@ project_slug: quoted-project
 project_purpose: Preserve quoted YAML scalars safely.
 primary_language: mixed
 human_report_mode: agent_select_local
+human_report_shared_mode: disabled
 codex_hooks_mode: install_templates
 skillspector_mode: disabled
 external_access_profile: restricted

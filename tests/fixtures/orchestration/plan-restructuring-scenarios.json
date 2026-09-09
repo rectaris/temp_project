@@ -20,6 +20,11 @@
       "id": "P4",
       "critical": true,
       "text": "Elapsed time is telemetry only; scope, specification, security, invariant, correction, review, and post-authoritative evidence determine restructuring."
+    },
+    {
+      "id": "P5",
+      "critical": true,
+      "text": "One independently repairable defect has unchanged source-plan scope, validation authority, and invariant boundaries; stops the current execution run; preserves the source plan as deferred without rewriting acceptance; requires a separate bounded repair plan; and resumes only through a fresh execution run after that repair is checked."
     }
   ],
   "holdout_file": "plan-restructuring-holdout.json",
@@ -124,6 +129,125 @@
         "state": "replan_required",
         "reason_code": "post_authoritative_design_change",
         "next_action": "atomic_restructure"
+      }
+    },
+    {
+      "id": "median-plan119-independent-validation-authorization-repair",
+      "class": "median",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P4", "P5"],
+      "input": {
+        "event": "repair_classification",
+        "affected_invariant_count": 1,
+        "bounded_write_and_validation_scope": true,
+        "source_scope_changed": false,
+        "validation_authority_changed": false,
+        "invariant_boundaries_changed": false,
+        "source_acceptance_changed": false,
+        "safety_boundary_changed": false,
+        "external_authority_changed": false
+      },
+      "expected": {
+        "state": "repair_required",
+        "reason_code": "independent_repair_required",
+        "next_action": "defer_source_and_create_bounded_repair_plan"
+      }
+    },
+    {
+      "id": "edge-repair-required-run-cannot-continue",
+      "class": "edge",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P5"],
+      "input": {
+        "operation": "continue_same_execution_run",
+        "execution_state": "repair_required"
+      },
+      "expected": {
+        "state": "repair_required",
+        "reason_code": "independent_repair_required",
+        "next_action": "reject_transition"
+      }
+    },
+    {
+      "id": "edge-checked-repair-resumes-source-with-fresh-run",
+      "class": "edge",
+      "used_for_tuning": true,
+      "requirements": ["P5"],
+      "input": {
+        "repair_plan_status": "checked",
+        "source_plan_status": "deferred",
+        "source_scope_changed": false,
+        "validation_authority_changed": false,
+        "invariant_boundaries_changed": false,
+        "requirements_changed": false,
+        "safety_boundary_changed": false,
+        "external_authority_changed": false,
+        "execution_run": "fresh"
+      },
+      "expected": {
+        "state": "in_progress",
+        "reason_code": "repair_prerequisite_satisfied",
+        "next_action": "resume_source_with_fresh_execution"
+      }
+    },
+    {
+      "id": "negative-independent-repair-with-source-scope-drift",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P5"],
+      "input": {
+        "event": "repair_classification",
+        "source_scope_changed": true
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "scope_drift",
+        "next_action": "reject_repair_and_atomic_restructure"
+      }
+    },
+    {
+      "id": "negative-independent-repair-with-validation-authority-drift",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P5"],
+      "input": {
+        "event": "repair_classification",
+        "validation_authority_changed": true
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "spec_drift",
+        "next_action": "reject_repair_and_atomic_restructure"
+      }
+    },
+    {
+      "id": "negative-independent-repair-with-invariant-boundary-drift",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P5"],
+      "input": {
+        "event": "repair_classification",
+        "invariant_boundaries_changed": true
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "multiple_independent_invariants",
+        "next_action": "reject_repair_and_atomic_restructure"
+      }
+    },
+    {
+      "id": "negative-independent-repair-with-altered-authority",
+      "class": "negative",
+      "used_for_tuning": true,
+      "requirements": ["P1", "P2", "P3", "P5"],
+      "input": {
+        "event": "repair_classification",
+        "external_authority_changed": true
+      },
+      "expected": {
+        "state": "replan_required",
+        "reason_code": "security_boundary_drift",
+        "next_action": "reject_repair_and_atomic_restructure"
       }
     },
     {

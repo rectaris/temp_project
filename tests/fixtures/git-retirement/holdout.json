@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "suite": "local-git-retirement-apply-holdout",
+  "used_for_tuning": false,
+  "scenarios": [
+    {
+      "id": "accepted-exact-pair",
+      "class": "accepted",
+      "test": "test_apply_removes_exact_pair_and_repeated_apply_reports_absence",
+      "conditions": ["manifest_digest_valid", "all_pinned_facts_unchanged", "current_confirmation"],
+      "expected": "remove_exact_worktree_then_exact_local_branch"
+    },
+    {
+      "id": "state-change-between-effects",
+      "class": "state-change",
+      "test": "test_state_change_between_effects_stops_branch_deletion",
+      "conditions": ["worktree_removed", "merge_target_oid_changed_before_branch_delete"],
+      "expected": "stop_before_branch_delete"
+    },
+    {
+      "id": "path-boundary-symlink",
+      "class": "path-boundary",
+      "test": "test_apply_rejects_symlink_target_and_unsupported_operations",
+      "conditions": ["target_argument_contains_symlink_component"],
+      "expected": "reject_without_effect"
+    },
+    {
+      "id": "unsupported-force-or-remote",
+      "class": "unsupported-operation",
+      "test": "test_apply_rejects_symlink_target_and_unsupported_operations",
+      "conditions": ["force_or_remote_or_destructive_prune_requested"],
+      "expected": "command_not_exposed"
+    },
+    {
+      "id": "idempotent-exact-absence",
+      "class": "idempotency",
+      "test": "test_apply_removes_exact_pair_and_repeated_apply_reports_absence",
+      "conditions": ["exact_manifest_path_absent", "exact_manifest_branch_absent", "path_not_replaced"],
+      "expected": "report_already_absent_exact_pair"
+    }
+  ]
+}

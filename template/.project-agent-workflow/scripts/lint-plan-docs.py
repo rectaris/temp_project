@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import json
+import os
 import re
 import subprocess
 import sys
@@ -18,8 +21,17 @@ PLAN = planlib.PLAN
 CHECKED = planlib.CHECKED
 REPLANNED = planlib.REPLANNED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
+IMPLEMENTATION_TIER_VALUES = {"0", "1", "2"}
 HUMAN_APPROVAL_VALUES = {"not_required", "pending", "approved"}
-OPEN_STATUS_VALUES = {"in_progress", "deferred", "replan_required", "ready_to_archive", "backlog"}
+OPEN_STATUS_VALUES = {
+    "in_progress",
+    "deferred",
+    "replan_required",
+    "ready_to_archive",
+    "backlog",
+    "shelved",
+}
+SHELVED_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 # Copier updates must continue to read archives produced before checked became
 # the terminal manifest value. New finalization is tested to emit checked.
 CLOSED_STATUS_VALUES = {"checked", "completed", "ready_to_archive"}
@@ -62,39 +74,22 @@ def next_id() -> str:
 def lint_plan_index() -> None:
     if not PLAN.is_file():
         fail("missing docs/plan/plan.md")
-    text = PLAN.read_text(encoding="utf-8")
-    if not text.startswith("# Active Plan\n"):
-        fail("docs/plan/plan.md must start with '# Active Plan'")
-    if "No active development items." in text:
-        return
-    if "id\tpath\tstatus" not in text:
-        fail("active plan index must contain TSV header: id path status")
-    seen_ids: set[str] = set()
-    seen_paths: set[str] = set()
-    for line in text.splitlines():
-        if re.match(r"^\d{3}\t", line):
-            parts = line.split("\t")
-            if len(parts) != 3:
-                fail(f"bad active index row: {line}")
-            if parts[0] in seen_ids:
-                fail(f"duplicate active index id: {parts[0]}")
-            if parts[1] in seen_paths:
-                fail(f"duplicate active index path: {parts[1]}")
-            seen_ids.add(parts[0])
-            seen_paths.add(parts[1])
-            if not Path(parts[1]).name.startswith(parts[0] + "-"):
-                fail(f"active index id does not match filename: {line}")
-            indexed_path = ROOT / parts[1]
-            if indexed_path.parent != planlib.ACTIVE_DIR:
-                fail(f"active index path is outside active plan directory: {parts[1]}")
-            if not indexed_path.is_file():
-                fail(f"active index points to missing file: {parts[1]}")
-            try:
-                values = planlib.parse_manifest(indexed_path)
-            except planlib.PlanError as exc:
-                fail(str(exc))
-            if planlib.manifest_scalar(values, "status") != parts[2]:
-                fail(f"active index status does not match manifest: {parts[1]}")
+    try:
+        rows = planlib.parse_active_index(planlib.read_active_index(PLAN))
+    except planlib.ActiveIndexError as exc:
+        fail(str(exc))
+    for plan_id, path, status in rows:
+        indexed_path = ROOT / path
+        if indexed_path.parent != planlib.ACTIVE_DIR:
+            fail(f"active index path is outside active plan directory: {path}")
+        if not indexed_path.is_file():
+            fail(f"active index points to missing file: {path}")
+        try:
+            values = planlib.parse_manifest(indexed_path)
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        if planlib.manifest_scalar(values, "status") != status:
+            fail(f"active index status does not match manifest: {path}")
 
 
 def lint_checked_index() -> None:
@@ -206,6 +201,9 @@ def lint_manifest(path: Path) -> None:
     design_value = planlib.manifest_scalar(values, "human_design_required")
     if design_value not in HUMAN_DESIGN_VALUES:
         fail(f"{path} human_design_required must be yes or no")
+    tier_value = planlib.manifest_scalar(values, "implementation_tier").strip()
+    if tier_value and tier_value not in IMPLEMENTATION_TIER_VALUES:
+        fail(f"{path} implementation_tier must be 0, 1, or 2")
     if is_legacy_checked:
         task_types = [planlib.manifest_scalar(values, "task_type")]
     else:
@@ -251,6 +249,17 @@ def lint_manifest(path: Path) -> None:
         )
     if path.parent == planlib.BACKLOG_DIR and status_value not in {"backlog", "deferred"}:
         fail(f"{path} backlog plan status must be backlog or deferred")
+    if path.parent == planlib.SHELVED_DIR and status_value != "shelved":
+        fail(f"{path} shelved plan status must be shelved")
+    if status_value == "shelved":
+        if path.parent != planlib.SHELVED_DIR:
+            fail(f"{path} status: shelved is written only under docs/plan/shelved")
+        if not planlib.manifest_scalar(values, "shelved_reason").strip():
+            fail(f"{path} status: shelved requires shelved_reason")
+        if not SHELVED_DATE_RE.fullmatch(
+            planlib.manifest_scalar(values, "shelved_at").strip()
+        ):
+            fail(f"{path} status: shelved requires shelved_at as YYYY-MM-DD")
     if not is_legacy_checked and review_value == "C" and approval_value not in {"pending", "approved"}:
         fail(f"{path} class C plan requires human_approval_status: pending or approved")
     if review_value == "C" and status_value in {"in_progress", "ready_to_archive"} and approval_value != "approved":
@@ -259,6 +268,10 @@ def lint_manifest(path: Path) -> None:
         fail(f"{path} human_design_required: yes requires review_class: C")
     if status_value == "deferred" and not planlib.manifest_scalar(values, "completion_deferred_reason").strip():
         fail(f"{path} status: deferred requires completion_deferred_reason")
+    try:
+        planlib.validate_predecessor_list(values, str(path))
+    except planlib.PlanError as exc:
+        fail(str(exc))
     lint_replan_fields(path, values, status_value)
     if not is_checked and not is_replanned:
         try:
@@ -283,6 +296,38 @@ def lint_manifest(path: Path) -> None:
             fail(f"{path} write_scope and context_files overlap: {', '.join(overlap)}")
     if not planlib.manifest_scalar(values, "checked_summary_ja").strip():
         fail(f"{path} checked_summary_ja must be non-empty")
+    if not is_checked and not is_replanned and planlib.has_admission_record(values):
+        try:
+            planlib.validate_admission_record(values)
+        except planlib.PlanError as exc:
+            fail(f"{path} admission record is invalid: {exc}")
+
+
+ADMISSION_REVISION_HINT = (
+    "revise the plan in place to declare plan_purpose: implementation, bounded "
+    "feasibility_evidence, completion_conditions, and a completion_witness_map "
+    "bound to declared focused_validation commands; do not create another plan "
+    "to carry that metadata"
+)
+
+
+def check_admission(path: Path) -> None:
+    """Refuse to admit a numbered plan that cannot start bounded implementation."""
+
+    if not path.is_absolute():
+        path = planlib.ROOT / path
+    try:
+        values = planlib.parse_manifest(path)
+    except planlib.PlanError as exc:
+        fail(str(exc))
+    if not planlib.has_admission_record(values):
+        fail(
+            f"{path} has no executable admission record: {ADMISSION_REVISION_HINT}"
+        )
+    try:
+        planlib.validate_admission_record(values)
+    except planlib.PlanError as exc:
+        fail(f"{path} admission record is invalid: {exc}; {ADMISSION_REVISION_HINT}")
 
 
 def lint_replan_fields(
@@ -374,6 +419,65 @@ def lint_active_plan_body(path: Path) -> None:
             fail(f"{path} contains an option-analysis matrix; keep full deliberation outside active plans")
 
 
+def load_parallel_group_module():
+    """Load the shared group-description authority used by root and generated lint."""
+
+    path = Path(__file__).with_name("parallel-plan-state.py")
+    if not path.is_file():
+        fail("parallel-plan-state.py is required for execution group policy")
+    spec = importlib.util.spec_from_file_location("generated_parallel_group", path)
+    if spec is None or spec.loader is None:
+        fail("could not load the parallel plan group authority")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def execution_group_members() -> dict[str, str]:
+    """Return every enrolled member plan path mapped to its group description."""
+
+    module = load_parallel_group_module()
+    try:
+        groups = module.load_group_descriptions(ROOT)
+    except module.GroupError as exc:
+        fail(f"invalid execution group description: {exc}")
+    enrolled: dict[str, str] = {}
+    for label, group in groups.items():
+        for plan_path in group["members"]:
+            enrolled[plan_path] = label
+    return enrolled
+
+
+def lint_execution_groups() -> None:
+    directory = ROOT / "docs/plan/execution-groups"
+    if directory.is_dir():
+        for path in sorted(directory.iterdir()):
+            if path.is_dir() or path.suffix != ".json":
+                fail(
+                    "docs/plan/execution-groups may contain only group description "
+                    f"JSON files: {path.relative_to(ROOT)}"
+                )
+    enrolled = execution_group_members()
+    if planlib.ACTIVE_DIR.exists():
+        for path in sorted(planlib.ACTIVE_DIR.glob("[0-9][0-9][0-9]-*.md")):
+            relative = str(path.relative_to(ROOT))
+            try:
+                values = planlib.parse_manifest(path)
+            except planlib.PlanError as exc:
+                fail(str(exc))
+            declared = planlib.manifest_scalar(values, "execution_group")
+            if not declared:
+                continue
+            if enrolled.get(relative) != declared:
+                fail(
+                    f"{relative} declares execution_group {declared!r}, which does "
+                    "not name a validated group description enrolling this plan"
+                )
+    for plan_path in sorted(enrolled):
+        if not (ROOT / plan_path).is_file():
+            fail(f"execution group enrolls a missing plan: {plan_path}")
+
+
 def lint_manifests() -> None:
     for directory in planlib.OPEN_PLAN_DIRS:
         if not directory.exists():
@@ -390,14 +494,95 @@ def lint_manifests() -> None:
             lint_manifest(path)
 
 
+def render_admission_block() -> str:
+    """Render the admission manifest block from bounded environment inputs."""
+
+    def entries(name: str) -> list[str]:
+        raw = os.environ.get(name, "")
+        return [line for line in raw.split("\n") if line.strip()]
+
+    purpose = os.environ.get("PLAN_ADMISSION_PURPOSE", "").strip()
+    if purpose not in planlib.PLAN_PURPOSE_VALUES:
+        fail("plan creation requires --purpose implementation")
+    write_scope = entries("PLAN_ADMISSION_WRITE_SCOPE")
+    completions = entries("PLAN_ADMISSION_COMPLETIONS")
+    witnesses = entries("PLAN_ADMISSION_WITNESSES")
+    feasibility = entries("PLAN_ADMISSION_FEASIBILITY")
+    if len(completions) != len(witnesses):
+        fail("each --completion condition needs exactly one --witness command")
+
+    evidence_records: list[dict[str, str]] = []
+    for item in feasibility:
+        kind, separator, evidence = item.partition(":")
+        if not separator:
+            fail(f"--feasibility must use <kind>:<evidence>: {item}")
+        evidence_records.append({"kind": kind.strip(), "evidence": evidence.strip()})
+
+    values: dict[str, str | list[str]] = {
+        "plan_purpose": purpose,
+        "write_scope": write_scope,
+        "focused_validation": list(dict.fromkeys(witnesses)),
+        "feasibility_evidence": [
+            json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            for record in evidence_records
+        ],
+        "completion_conditions": completions,
+        "completion_witness_map": [
+            json.dumps(
+                {
+                    "condition_sha256": planlib.acceptance_digest(condition),
+                    "witness": witness,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for condition, witness in zip(completions, witnesses)
+        ],
+    }
+    try:
+        planlib.validate_admission_record(values)
+    except planlib.PlanError as exc:
+        fail(f"plan creation admission inputs are invalid: {exc}")
+
+    lines = [f"plan_purpose: {purpose}"]
+    for field in (
+        "write_scope",
+        "focused_validation",
+        "feasibility_evidence",
+        "completion_conditions",
+        "completion_witness_map",
+    ):
+        lines.append(f"{field}:")
+        items = values[field]
+        assert isinstance(items, list)
+        lines.extend(f"  - {item}" for item in items)
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--next-id", action="store_true", help="print the next available plan id")
     parser.add_argument("--check-manifest", metavar="PLAN", help="validate one plan manifest")
+    parser.add_argument(
+        "--render-admission",
+        action="store_true",
+        help="render the admission manifest block from bounded environment inputs",
+    )
+    parser.add_argument(
+        "--check-admission",
+        metavar="PLAN",
+        help="require the executable admission record of one plan",
+    )
     parser.add_argument("--print-context", metavar="PLAN", help="print shell context for a plan manifest")
     parser.add_argument("--add-active", nargs=2, metavar=("ID", "PATH"), help="add or replace an active index row")
     parser.add_argument("--remove-active", metavar="ID", help="remove an active index row")
     parser.add_argument("--append-checked", nargs=2, metavar=("ID", "PATH"), help="append a checked index row")
+    parser.add_argument(
+        "--check-active-index",
+        action="store_true",
+        help="validate the whole active plan index document",
+    )
     parser.add_argument("--check-active-mapping", nargs=3, metavar=("ID", "PATH", "STATUS"))
     parser.add_argument("--set-active-status", nargs=4, metavar=("ID", "PATH", "OLD", "NEW"))
     parser.add_argument("--check-promotion", nargs=3, metavar=("ID", "SOURCE", "DESTINATION"))
@@ -405,12 +590,23 @@ def main() -> int:
     parser.add_argument("--rewrite-status", nargs=2, metavar=("PATH", "STATUS"))
     parser.add_argument("--copy-status-exclusive", nargs=3, metavar=("SOURCE", "DESTINATION", "STATUS"))
     parser.add_argument("--complete-transition", nargs=3, metavar=("ID", "PATH", "OLD_STATUS"))
+    parser.add_argument(
+        "--check-execution-groups",
+        action="store_true",
+        help="validate committed parallel execution group descriptions",
+    )
     args = parser.parse_args()
     if args.next_id:
         print(next_id())
         return 0
     if args.check_manifest:
         lint_manifest(Path(args.check_manifest))
+        return 0
+    if args.render_admission:
+        print(render_admission_block())
+        return 0
+    if args.check_admission:
+        check_admission(Path(args.check_admission))
         return 0
     if args.print_context:
         try:
@@ -420,14 +616,26 @@ def main() -> int:
             return 1
         return 0
     if args.add_active:
-        planlib.add_active(args.add_active[0], args.add_active[1])
+        try:
+            planlib.add_active(args.add_active[0], args.add_active[1])
+        except planlib.PlanError as exc:
+            fail(str(exc))
         return 0
     if args.remove_active:
-        planlib.remove_active(args.remove_active)
+        try:
+            planlib.remove_active(args.remove_active)
+        except planlib.PlanError as exc:
+            fail(str(exc))
         return 0
     if args.append_checked:
         try:
             planlib.append_checked(args.append_checked[0], args.append_checked[1])
+        except planlib.PlanError as exc:
+            fail(str(exc))
+        return 0
+    if args.check_active_index:
+        try:
+            planlib.read_active_rows()
         except planlib.PlanError as exc:
             fail(str(exc))
         return 0
@@ -474,10 +682,19 @@ def main() -> int:
         except planlib.PlanError as exc:
             fail(str(exc))
         return 0
+    if args.check_execution_groups:
+        lint_execution_groups()
+        print("execution group lint passed")
+        return 0
     lint_plan_index()
     lint_checked_index()
     lint_replanned_index()
     lint_manifests()
+    lint_execution_groups()
+    try:
+        planlib.validate_active_plan_predecessors()
+    except planlib.PlanError as exc:
+        fail(str(exc))
     print("plan docs lint passed")
     return 0
 

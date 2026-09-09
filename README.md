@@ -21,7 +21,7 @@ Copier が更新する汎用ファイルは、生成先の `.project-agent-workf
 ルートの `AGENTS.md`、`README.md`、`docs/agent/`、`docs/plan/` など、開発中に変更するファイルは初回だけ生成し、以後の `copier update` では上書きしません。
 `.agents/skills/` には管理対象の汎用 Skill 用ブリッジを置き、予約名と衝突しないプロジェクト固有 Skill も追加できます。
 `.codex/` と `.github/` には、ホストが検出するための小さな橋渡しファイルまたは専用の統合ファイルだけを置きます。
-`.codex/agents/*.toml` はプロジェクト所有ですが、`model` と `model_reasoning_effort` だけはテンプレートが固定し、copy/update 後の task で正規化します。
+`.codex/agents/*.toml` はプロジェクト所有です。`model` と `model_reasoning_effort` は、copy/update 後の task が欠けている場合だけ既定値で補い、すでに書かれている値はそのまま残します。
 agent の説明、指示、sandbox 設定など、ほかのフィールドは変更しません。
 
 このテンプレートは、対応する Copier の copy/update 経路で、生成先が所有する製品コード、規則、設定、計画履歴、検証処理を削除または上書きしないことを開発要件とします。
@@ -31,6 +31,8 @@ Copier 管理ファイルと、固定対象である agent model の2項目は�
 ローカル agent ログは生成先の `.agent-logs/` と `.agent-artifacts/` に保存する方針を常に生成します。
 これらは Git 管理外の情報資産として扱い、`docs/plan` には raw log ではなく要約、判断、検証結果、必要な run id を残します。
 大きなログを読み返す場合は `.project-agent-workflow/docs/agent/spec-index.yaml` のルーティング、manifest、検索、抜粋、`.project-agent-workflow/scripts/context-compress.sh` を使います。
+記録済みの実行から観測値だけを読み出す場合は `scripts/summarize-agent-run.py <記録ファイル>...` を使います。
+このコマンドは指定したローカルファイルだけを読み、結果を標準出力へ表示します。入力を書き換えず、外部サービスへ接続せず、観測されていない値は `not_observed` のまま残します。
 Headroom は PATH 上にある場合だけ任意 backend として使い、テンプレートの必須依存にはしません。
 
 外部サービスを opt-in した生成先には、`.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md` が生成されます。
@@ -55,10 +57,10 @@ copier copy --trust https://github.com/rectaris/temp_project.git /path/to/repo
 
 Copier のバージョン選択の詳細は、公式文書の [Templates versions](https://copier.readthedocs.io/en/stable/generating/#templates-versions) を参照してください。
 
-導入する版を現在の最新安定版である `v1.4.4` に固定する場合：
+導入する版を現在の最新安定版である `v1.4.5` に固定する場合：
 
 ```sh
-copier copy --trust --vcs-ref v1.4.4 https://github.com/rectaris/temp_project.git /path/to/repo
+copier copy --trust --vcs-ref v1.4.5 https://github.com/rectaris/temp_project.git /path/to/repo
 ```
 
 GitHub 上の**開発版の最新コミット**を導入する場合は、`HEAD` を明示します。
@@ -142,7 +144,7 @@ Copier の競合は、対象ファイル内の `<<<<<<<`、`=======`、`>>>>>>>`
 タグ付きバージョンへ明示的に更新する場合:
 
 ```sh
-copier update --trust --vcs-ref v1.4.4
+copier update --trust --vcs-ref v1.4.5
 ```
 
 リリース時は、テンプレート変更をコミットしたあとにタグを作成して push します。

@@ -18,9 +18,54 @@ tmp=$(CDPATH= cd -- "$tmp" && pwd -P)
 source_head_before=$(git -C "$root" rev-parse HEAD)
 source_status_before=$(git -C "$root" status --porcelain=v1 --untracked-files=all)
 
+# Transition state of the v1.4.5 validation-witness migration lane. The
+# release path, the attempt-state path, and both process identifiers are
+# written before the handler is registered so every early exit can release the
+# held update child and stop the detached guardian under `set -u`.
+v145_release="$tmp/v145-guardian-release"
+v145_attempt=
+update_pid=
+guardian_pid=0
+
 cleanup() {
   result=$?
   trap - EXIT HUP INT TERM
+  touch "$v145_release" 2>/dev/null || true
+  # Plan 183 settled the same bounded update-process wait for the cleanup
+  # path, so the released child is waited for and retired here before the
+  # guardian identifier is read and the temporary root is removed.
+  if [ -n "$update_pid" ]; then
+    cleanup_waited=0
+    while [ "$cleanup_waited" -lt 30 ]; do
+      if ! kill -0 "$update_pid" 2>/dev/null; then
+        break
+      fi
+      cleanup_waited=$((cleanup_waited + 1))
+      sleep 1
+    done
+    if kill -0 "$update_pid" 2>/dev/null; then
+      kill -TERM "$update_pid" 2>/dev/null || true
+      sleep 5
+      kill -KILL "$update_pid" 2>/dev/null || true
+    fi
+    wait "$update_pid" 2>/dev/null || true
+    update_pid=
+  fi
+  # An exit between the guardian start and the pending assertion leaves this
+  # handler without the identifier, so recover it from the published attempt
+  # state of the quiescent child before the temporary root is removed.
+  case "$guardian_pid" in
+    ''|*[!0-9]*) guardian_pid=0 ;;
+  esac
+  if [ "$guardian_pid" -eq 0 ] && [ -n "$v145_attempt" ] && [ -f "$v145_attempt" ]; then
+    guardian_pid=$(sed -n 's/^ *"guardian_pid": *\([0-9][0-9]*\),\{0,1\} *$/\1/p' "$v145_attempt" 2>/dev/null || true)
+    case "$guardian_pid" in
+      ''|*[!0-9]*) guardian_pid=0 ;;
+    esac
+  fi
+  if [ "$guardian_pid" -gt 0 ]; then
+    kill -TERM "$guardian_pid" 2>/dev/null || true
+  fi
   source_head_after=$(git -C "$root" rev-parse HEAD 2>/dev/null || true)
   source_status_after=$(git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null || true)
   if [ "$source_head_after" != "$source_head_before" ] || [ "$source_status_after" != "$source_status_before" ]; then
@@ -72,15 +117,17 @@ fi
 
 mkdir -p "$tmp"
 if ! command -v copier >/dev/null 2>&1; then
-  mkdir -p "$tmp/bin"
+  mkdir -p "$tmp/bin" "$tmp/copier-project"
+  cp "$root/pyproject.toml" "$root/uv.lock" "$tmp/copier-project/"
   cat >"$tmp/bin/copier" <<'EOF_COPIER_SHIM'
 #!/bin/sh
-exec env UV_CACHE_DIR="$COPIER_TEST_CACHE" uv run --project "$COPIER_TEST_ROOT" copier "$@"
+shim_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+exec env \
+  UV_CACHE_DIR="$shim_root/uv-cache" \
+  UV_PROJECT_ENVIRONMENT="$shim_root/uv-venv" \
+  uv run --locked --project "$shim_root/copier-project" copier "$@"
 EOF_COPIER_SHIM
   chmod +x "$tmp/bin/copier"
-  COPIER_TEST_CACHE="$tmp/uv-cache"
-  COPIER_TEST_ROOT="$root"
-  export COPIER_TEST_CACHE COPIER_TEST_ROOT
   PATH="$tmp/bin:$PATH"
   export PATH
 fi
@@ -93,77 +140,55 @@ fixture_clone "$root" "$update_source"
 fixture_git "$update_source" fetch -q "$root" "$target_commit"
 fixture_git "$update_source" switch -q -c migration-target FETCH_HEAD
 fixture_git "$update_source" merge-base --is-ancestor v1.2.1 HEAD
-for candidate_path in \
-  copier.yml \
-  scripts/migrate-sequential-plan-worker.py \
-  scripts/validate-copier-update.py \
-  template/README.md.jinja \
-  template/.github/workflows/codex-ci-autofix.yml.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
-  template/.project-agent-workflow/scripts/run-copier-update.sh \
-  template/.project-agent-workflow/scripts/update-from-copier.sh \
-  template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
-  template/.project-agent-workflow/scripts/validate-copier-update.py \
-  template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
-  template/.project-agent-workflow/scripts/check-external-service-policy.py \
-  template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
-  template/.project-agent-workflow/scripts/validate-changes.py \
-  template/.agents/skills/browser-ops/SKILL.md \
-  template/.project-agent-workflow/AGENTS.md.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
-  template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
-  template/.project-agent-workflow/scripts/planlib.py \
-  template/.project-agent-workflow/ownership.yaml \
-  template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
-  template/.project-agent-workflow/skills/browser-ops/SKILL.md \
-  template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-  template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-  template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-  template/.project-agent-workflow/skills/graph-memory/SKILL.md \
-  template/.project-agent-workflow/skills/linear-ops/SKILL.md \
-  template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
-  template/docs/agent/external-services.yaml.jinja
-do
+copier_update_inventory="$root/tests/fixtures/orchestration/copier-update-source-inventory.txt"
+# The inventory is the only source of the copied and staged paths, so every
+# entry is checked against the repository it names before it is copied. A
+# blank, duplicate, absolute, traversing, dot-segment, backslash, symlinked,
+# missing, non-regular, or out-of-root entry stops the fixture instead of
+# reaching the update source.
+inventory_root=$(CDPATH= cd -- "$root" && pwd -P)
+inventory_seen="$tmp/copier-update-inventory-seen"
+: >"$inventory_seen"
+while IFS= read -r candidate_path || [ -n "$candidate_path" ]; do
+  case "$candidate_path" in
+    ""|/*|.|..|./*|../*|*/./*|*/../*|*/.|*/..|*//*|*\\*)
+      echo "invalid Copier update inventory path: $candidate_path" >&2
+      exit 1
+      ;;
+  esac
+  if grep -F -q -x -e "$candidate_path" "$inventory_seen"; then
+    echo "duplicate Copier update inventory path: $candidate_path" >&2
+    exit 1
+  fi
+  printf '%s\n' "$candidate_path" >>"$inventory_seen"
+  if [ -L "$root/$candidate_path" ]; then
+    echo "symlinked Copier update inventory path: $candidate_path" >&2
+    exit 1
+  fi
+  if [ ! -f "$root/$candidate_path" ]; then
+    echo "missing Copier update inventory file: $candidate_path" >&2
+    exit 1
+  fi
+  case "$candidate_path" in
+    */*) candidate_expected="$inventory_root/${candidate_path%/*}" ;;
+    *) candidate_expected="$inventory_root" ;;
+  esac
+  candidate_parent=$(CDPATH= cd -- "$(dirname -- "$root/$candidate_path")" && pwd -P)
+  if [ "$candidate_parent" != "$candidate_expected" ]; then
+    echo "out-of-root Copier update inventory path: $candidate_path" >&2
+    exit 1
+  fi
   mkdir -p "$(dirname "$update_source/$candidate_path")"
   cp "$root/$candidate_path" "$update_source/$candidate_path"
-done
-fixture_git "$update_source" add \
-  copier.yml \
-  scripts/migrate-sequential-plan-worker.py \
-  scripts/validate-copier-update.py \
-  template/README.md.jinja \
-  template/.github/workflows/codex-ci-autofix.yml.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
-  template/.project-agent-workflow/scripts/run-copier-update.sh \
-  template/.project-agent-workflow/scripts/update-from-copier.sh \
-  template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
-  template/.project-agent-workflow/scripts/validate-copier-update.py \
-  template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
-  template/.project-agent-workflow/scripts/check-external-service-policy.py \
-  template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
-  template/.project-agent-workflow/scripts/validate-changes.py \
-  template/.agents/skills/browser-ops/SKILL.md \
-  template/.project-agent-workflow/AGENTS.md.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
-  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
-  template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
-  template/.project-agent-workflow/scripts/planlib.py \
-  template/.project-agent-workflow/ownership.yaml \
-  template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
-  template/.project-agent-workflow/skills/browser-ops/SKILL.md \
-  template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-  template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-  template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-  template/.project-agent-workflow/skills/graph-memory/SKILL.md \
-  template/.project-agent-workflow/skills/linear-ops/SKILL.md \
-  template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
-  template/docs/agent/external-services.yaml.jinja
+  fixture_git "$update_source" add -- "$candidate_path"
+done < "$copier_update_inventory"
 fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
   commit --allow-empty -qm "Make Copier updates fail closed"
 fixture_git "$update_source" tag v1.2.2
-target_ref=v1.2.2
+fixture_git "$update_source" -c user.name=CI -c user.email=ci@example.invalid \
+  commit --allow-empty -qm "Create v1.3.1 template identity"
 fixture_git "$update_source" tag v1.3.1
+target_ref=v1.3.1
 fixture_git "$update_source" -c user.email=ci@example.invalid -c user.name=CI \
   commit --allow-empty -qm "Create v1.4.2 migration boundary"
 fixture_git "$update_source" tag -f v1.4.2
@@ -202,11 +227,42 @@ fi
 fixture_git "$direct_push_update_out" diff --check
 
 broad_out="$tmp/task-scoped-default-policy"
-run_copier copy -q -f --trust --defaults --vcs-ref "$target_ref" \
+run_copier copy -q -f --trust --defaults --vcs-ref v1.3.0 \
   --data-file "$root/tests/fixtures/broad.answers.yml" "$update_source" "$broad_out" >/dev/null
 grep -q '^version: 2$' "$broad_out/docs/agent/external-services.yaml"
 grep -q '^access_profile: task_scoped_default_allow$' "$broad_out/docs/agent/external-services.yaml"
+fixture_git "$broad_out" init -b main >/dev/null
+fixture_git "$broad_out" config user.email "ci@example.invalid"
+fixture_git "$broad_out" config user.name "CI"
+printf '\n# project-owned version 2 policy marker\n' >>"$broad_out/docs/agent/external-services.yaml"
+printf 'project-owned version 2 marker\n' >"$broad_out/project-owned-v2.txt"
+fixture_git "$broad_out" add -A
+fixture_git "$broad_out" commit -m "Initial version 2 generated workflow" >/dev/null
+broad_policy_before="$tmp/task-scoped-default-policy-before.yaml"
+cp "$broad_out/docs/agent/external-services.yaml" "$broad_policy_before"
+run_copier update -q --trust --defaults --vcs-ref v1.3.1 "$broad_out" >/dev/null
+if ! cmp -s "$broad_policy_before" "$broad_out/docs/agent/external-services.yaml"; then
+  echo "Copier update changed project-owned version 2 external-service policy bytes" >&2
+  exit 1
+fi
 (cd "$broad_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
+test -f "$broad_out/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
+grep -q 'Bind provider authentication to each exact call' "$broad_out/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml"
+grep -q 'project-owned version 2 marker' "$broad_out/project-owned-v2.txt"
+if find "$broad_out" -name '*.rej' -print -quit | grep -q .; then
+  echo "version 2 Copier update produced rejection files" >&2
+  exit 1
+fi
+if grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' "$broad_out" --exclude-dir=.git >/dev/null; then
+  echo "version 2 Copier update produced inline conflict markers" >&2
+  exit 1
+fi
+broad_deletions=$(fixture_git "$broad_out" diff --diff-filter=D --name-only)
+if [ -n "$broad_deletions" ]; then
+  echo "version 2 Copier update produced unrelated tracked deletions: $broad_deletions" >&2
+  exit 1
+fi
+fixture_git "$broad_out" diff --check
 
 browser_legacy_out="$tmp/browser-run-legacy-policy"
 run_copier copy -q -f --trust --defaults --vcs-ref v1.2.1 \
@@ -220,6 +276,40 @@ if grep -q '^  browser_run:$' "$browser_legacy_out/docs/agent/external-services.
   echo "older Browser Run fixture unexpectedly contains browser_run" >&2
   exit 1
 fi
+if grep -q '^_src_path: ../update-source$' "$browser_legacy_out/.copier-answers.yml"; then
+  echo "ordinary update fixture unexpectedly uses the helper-only source relationship" >&2
+  exit 1
+fi
+direct_verification_target="$tmp/direct-v1-target"
+fixture_clone "$browser_legacy_out" "$direct_verification_target"
+fixture_git "$direct_verification_target" config user.email "ci@example.invalid"
+fixture_git "$direct_verification_target" config user.name "CI"
+sed -i 's|^_src_path:.*$|_src_path: ../update-source|' \
+  "$direct_verification_target/.copier-answers.yml"
+grep -q '^_src_path: ../update-source$' \
+  "$direct_verification_target/.copier-answers.yml"
+fixture_git "$direct_verification_target" add .copier-answers.yml
+fixture_git "$direct_verification_target" commit -m "Use isolated verification source" >/dev/null
+direct_verification_out="$tmp/direct-v1-verification"
+if ! python3 "$root/.codex/skills/verify-copier-update/scripts/verify-copier-update.py" \
+    --target "$direct_verification_target" \
+    --source "$update_source" \
+    --source-ref "$target_ref" \
+    --output-dir "$direct_verification_out" \
+    --trust-template-tasks \
+    --validation-command-json \
+    '["python3","-c","from pathlib import Path; assert Path(\"README.md\").is_file(); assert Path(\".agents/skills/verify-copier-update/SKILL.md\").is_file()"]' \
+    >/dev/null; then
+  cat "$direct_verification_out/verification-manifest.json" >&2
+  for diagnostic_log in "$direct_verification_out"/logs/*.stderr; do
+    [ -s "$diagnostic_log" ] || continue
+    printf '%s\n' "--- $(basename -- "$diagnostic_log")" >&2
+    cat "$diagnostic_log" >&2
+  done
+  exit 1
+fi
+grep -q '"result": "verified"' "$direct_verification_out/verification-manifest.json"
+grep -q '"update_path": "direct_supported_v1"' "$direct_verification_out/verification-manifest.json"
 browser_legacy_policy_before="$tmp/browser-run-legacy-policy-before.yaml"
 cp "$browser_legacy_out/docs/agent/external-services.yaml" "$browser_legacy_policy_before"
 run_copier update -q --trust --defaults --vcs-ref "$target_ref" "$browser_legacy_out" >/dev/null
@@ -234,6 +324,10 @@ fi
 (cd "$browser_legacy_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
 test -f "$browser_legacy_out/.agents/skills/browser-ops/SKILL.md"
 test -f "$browser_legacy_out/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
+test -f "$browser_legacy_out/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
+test -f "$browser_legacy_out/.agents/skills/verify-copier-update/SKILL.md"
+test -f "$browser_legacy_out/.project-agent-workflow/skills/verify-copier-update/SKILL.md"
+test -x "$browser_legacy_out/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py"
 fixture_git "$browser_legacy_out" diff --check
 
 validator="$root/scripts/validate-copier-update.py"
@@ -519,6 +613,17 @@ run_copier copy -q -f --trust --defaults --vcs-ref v1.4.1 \
 fixture_git "$wrapper_self_update_out" init -b main >/dev/null
 fixture_git "$wrapper_self_update_out" config user.email "ci@example.invalid"
 fixture_git "$wrapper_self_update_out" config user.name "CI"
+printf '%s\n' \
+  'version: 1' \
+  'enabled: true' \
+  'merge_target_refs:' \
+  '  - refs/heads/integration' \
+  'protected_local_branch_refs:' \
+  '  - refs/heads/main' \
+  '  - refs/heads/integration' \
+  >"$wrapper_self_update_out/docs/agent/git-retirement.yaml"
+retirement_config_before="$tmp/v141-git-retirement-before.yaml"
+cp "$wrapper_self_update_out/docs/agent/git-retirement.yaml" "$retirement_config_before"
 fixture_git "$wrapper_self_update_out" add -A
 fixture_git "$wrapper_self_update_out" commit -m "Create v1.4.1 wrapper self-update fixture" >/dev/null
 if ! (cd "$wrapper_self_update_cwd" && \
@@ -527,6 +632,12 @@ if ! (cd "$wrapper_self_update_cwd" && \
   echo "v1.4.1 wrapper did not survive replacing itself during update" >&2
   exit 1
 fi
+if ! cmp -s "$retirement_config_before" "$wrapper_self_update_out/docs/agent/git-retirement.yaml"; then
+  echo "Copier update changed project-owned Git-retirement configuration bytes" >&2
+  exit 1
+fi
+test -f "$wrapper_self_update_out/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md"
+test -x "$wrapper_self_update_out/.project-agent-workflow/scripts/retire-merged-worktrees.py"
 grep -q -- '--destination . --before-update' \
   "$wrapper_self_update_out/.project-agent-workflow/scripts/run-copier-update.sh"
 if (cd "$wrapper_self_update_out" && \
@@ -594,7 +705,10 @@ run_adoption() {
   ref=$2
   shift 2
   if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
-    (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" uv run python \
+    (cd "$root" && env \
+      UV_CACHE_DIR="$tmp/adoption-uv-cache" \
+      UV_PROJECT_ENVIRONMENT="$tmp/adoption-uv-venv" \
+      uv run --locked --project "$root" python \
       "$root/scripts/adopt-to-namespaced-layout.py" \
       --destination "$destination" --vcs-ref "$ref" "$@")
   else
@@ -648,8 +762,13 @@ EOF
   fixture_git "$out" add docs/agent/SPEC_PRODUCT.md docs/agent/PROJECT_ENVIRONMENT.md docs/agent/PROJECT_UI_DESIGN.md
   fixture_git "$out" commit -m "Add local project notes" >/dev/null
   if [ "$lane" = "earliest-supported" ]; then
+    # Only this lane dispatches a Copier update, and it always updates the
+    # `earliest-supported` project. The destination is therefore written as
+    # that one anchored path so the dispatch names a readable project instead
+    # of an unresolved lane parameter.
+    [ "$out" = "$tmp/earliest-supported" ]
     status_before=$(fixture_git "$out" status --porcelain=v1)
-    if run_copier update -q -f --trust --vcs-ref "$target_ref" "$out" >/dev/null 2>&1; then
+    if run_copier update -q -f --trust --vcs-ref "$target_ref" "$tmp/earliest-supported" >/dev/null 2>&1; then
       echo "direct pre-v1 copier update unexpectedly succeeded" >&2
       exit 1
     fi
@@ -662,22 +781,203 @@ EOF
   printf '%s\n' "$out"
 }
 
+# The update fills only the agent model fields a project has not declared, so a
+# lane that already holds a value asserts that exact value instead of the seed.
+# Each entry is "profile:model:effort" and "-" keeps the seeded default.
+agent_profile_expectations=""
+
+seeded_agent_profile_model() {
+  case "$1" in
+    change_reviewer) echo gpt-5.6-sol ;;
+    docs_researcher|evidence_synthesizer|repo_explorer) echo gpt-5.6-luna ;;
+    scoped_worker) echo gpt-5.6-terra ;;
+    fast_scoped_worker|sequential_plan_worker) echo gpt-5.3-codex-spark ;;
+  esac
+}
+
+seeded_agent_profile_effort() {
+  case "$1" in
+    change_reviewer) echo high ;;
+    evidence_synthesizer) echo xhigh ;;
+    repo_explorer) echo low ;;
+    docs_researcher|scoped_worker|fast_scoped_worker|sequential_plan_worker) echo medium ;;
+  esac
+}
+
+expected_agent_profile_field() {
+  expectation_profile=$1
+  expectation_field=$2
+  for expectation in $agent_profile_expectations; do
+    case "$expectation" in
+      "$expectation_profile":*) ;;
+      *) continue ;;
+    esac
+    expectation_rest=${expectation#*:}
+    case "$expectation_field" in
+      model) expectation_value=${expectation_rest%%:*} ;;
+      *) expectation_value=${expectation_rest#*:} ;;
+    esac
+    if [ "$expectation_value" != "-" ]; then
+      printf '%s\n' "$expectation_value"
+      return 0
+    fi
+    break
+  done
+  case "$expectation_field" in
+    model) seeded_agent_profile_model "$expectation_profile" ;;
+    *) seeded_agent_profile_effort "$expectation_profile" ;;
+  esac
+}
+
 assert_agent_profiles() {
   out=$1
-  grep -qE '^[[:space:]]*model = "gpt-5.6-sol"$' "$out/.codex/agents/change_reviewer.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "high"$' "$out/.codex/agents/change_reviewer.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/docs_researcher.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/docs_researcher.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/evidence_synthesizer.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "xhigh"$' "$out/.codex/agents/evidence_synthesizer.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/repo_explorer.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "low"$' "$out/.codex/agents/repo_explorer.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.6-terra"$' "$out/.codex/agents/scoped_worker.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/scoped_worker.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/fast_scoped_worker.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/fast_scoped_worker.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/sequential_plan_worker.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/sequential_plan_worker.toml"
+  for profile in change_reviewer docs_researcher evidence_synthesizer repo_explorer \
+    scoped_worker fast_scoped_worker sequential_plan_worker
+  do
+    profile_file="$out/.codex/agents/$profile.toml"
+    grep -qE "^[[:space:]]*model = \"$(expected_agent_profile_field "$profile" model)\"$" "$profile_file"
+    grep -qE "^[[:space:]]*model_reasoning_effort = \"$(expected_agent_profile_field "$profile" effort)\"$" "$profile_file"
+  done
+}
+
+assert_managed_orchestration_reports() {
+  test -f "$managed_agents"
+  test -f "$managed_orchestration"
+  grep -Eqi 'without waiting for per-task user instruction|without requiring a per-task user instruction' "$managed_agents" "$managed_orchestration"
+  grep -qi 'final ownership' "$managed_agents"
+  grep -q 'final high-risk' "$managed_agents" "$managed_orchestration"
+  grep -q 'authorization decisions' "$managed_agents" "$managed_orchestration"
+  grep -q 'external writes' "$managed_agents" "$managed_orchestration"
+  grep -q 'main session' "$managed_agents" "$managed_orchestration"
+  grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
+  grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
+  grep -qi 'context files read-only' "$managed_orchestration" "$managed_agents"
+  test -f "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  test -f "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  test -f "$out/.project-agent-workflow/scripts/planlib.py"
+  grep -q 'run-sandboxed-plan-worker.py' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -q 'sequential_plan_worker' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -q 'The main agent owns task interpretation, integration, validation acceptance, planning updates, commits, and the final report.' "$managed_orchestration"
+  grep -q '^DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q '^DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q '^TERRA_CODEX_MODEL = "gpt-5.6-terra"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def select_plan_writable_profile' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def open_availability_state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q -- '--availability-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'skipped_known_unavailable_starts' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def correct_worker' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'correction_lineage' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def validate_candidate' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def open_lifecycle_state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q -- '--lifecycle-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'VALIDATION_AUTHORITY_SCOPE' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'network_enabled=False' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'WORKER_CONTRACT_SCHEMA_VERSION' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def derive_worker_contract' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def verify_worker_contract' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'WORKER_COMPLETION_RECEIPT_SCHEMA_VERSION' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def validate_worker_completion_receipt' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def write_attempt_completion_receipt' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def write_attempt_process_result' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def derive_repository_identity' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'def begin_plan_execution_attempt' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q -- '--predecessor-plan-execution-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'REVIEW_REASON_CODES' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+  grep -q 'def record_writable_attempt_start' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+  grep -q 'def record_attempt_close' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+  grep -q 'diagnosis_required' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+  grep -q 'def load_authoritative_failure' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+  grep -q 'def load_diagnosis_evidence' "$out/.project-agent-workflow/scripts/plan-execution-state.py"
+  grep -q 'def validation_failure_identity' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'worker_attempt_label' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'NEW_FILE_ROOT' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
+  grep -q 'implementation_risk' "$out/.project-agent-workflow/scripts/planlib.py"
+  grep -q 'implementation_ambiguity' "$out/.project-agent-workflow/scripts/planlib.py"
+  grep -q 'focused_validation' "$out/.project-agent-workflow/scripts/planlib.py"
+  grep -q 'validation_authority_scope' "$out/.project-agent-workflow/scripts/planlib.py"
+  grep -qi 'repository breadth alone is insufficient' "$managed_agents" "$managed_orchestration"
+  grep -qi 'admissible implementation slice' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -qi 'state path outside the repository' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -q 'run-sandboxed-plan-worker.py correct' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -q 'run-sandboxed-plan-worker.py validate' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -qi 'worker completion receipt' "$managed_agents" "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -q 'primary_invariant' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -q 'exact file paths' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
+  grep -q 'predecessor_acceptance' "$managed_orchestration"
+  grep -q 'writable_attempt_started' "$managed_orchestration"
+  grep -q 'attempt_closed' "$managed_orchestration"
+  grep -q 'successor_claimed' "$managed_orchestration"
+  grep -q 'review_evidence_digest' "$managed_orchestration"
+  grep -q 'global task lock' "$managed_orchestration"
+  grep -q 'def has_pre_v1_adoption_provenance()' "$out/.project-agent-workflow/scripts/planlib.py"
+}
+
+# The managed entrypoint routes to the guardian rule instead of repeating it,
+# so every update must publish the short route, keep the whole rule in its
+# normative destination, and leave the project's own entrypoint untouched.
+assert_managed_policy_routing() {
+  entrypoint=$1
+  destination=$2
+  index=$3
+  # Fragment checks accept a route that drops its own obligation, so the
+  # rendered route and the rendered guardian statement are compared against the
+  # exact reviewed bytes that the root checker pins by digest.
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$entrypoint" "$destination" "$index" "$root" <<'EOF_MANAGED_ROUTING'
+import hashlib
+import importlib.util
+import sys
+from pathlib import Path
+
+entrypoint, destination, index, root = (Path(value) for value in sys.argv[1:5])
+spec = importlib.util.spec_from_file_location(
+    "managed_routing_policy", root / "scripts/check-root-agent-policy.py"
+)
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
+
+marker = policy.VALIDATION_WITNESS_MIGRATION_MARKER
+route_marker = policy.VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER
+generated_destination = policy.VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS[
+    "template/.project-agent-workflow/AGENTS.md.jinja"
+]
+
+entrypoint_text = entrypoint.read_text(encoding="utf-8")
+if marker in entrypoint_text:
+    raise SystemExit(f"managed entrypoint restates the relocated guardian rule: {entrypoint}")
+
+routes = [line.rstrip() for line in entrypoint_text.splitlines() if route_marker in line.lower()]
+if len(routes) != 1:
+    raise SystemExit(f"managed entrypoint needs exactly one guardian route: {entrypoint}")
+route = routes[0]
+if len(route.encode("utf-8")) > policy.VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES:
+    raise SystemExit(f"managed entrypoint guardian route is too long: {entrypoint}")
+if generated_destination not in route:
+    raise SystemExit(f"managed entrypoint guardian route does not name its destination: {entrypoint}")
+normalized = route.replace(generated_destination, "<destination>")
+if hashlib.sha256(normalized.encode("utf-8")).hexdigest() != (
+    policy.VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256
+):
+    raise SystemExit(f"managed entrypoint guardian route is not the reviewed route: {entrypoint}")
+
+statements = [
+    line.rstrip()
+    for line in destination.read_text(encoding="utf-8").splitlines()
+    if marker in line
+]
+if len(statements) != 1:
+    raise SystemExit(f"managed destination needs exactly one guardian rule: {destination}")
+lowered = statements[0].lower()
+for required in policy.VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS:
+    if required not in lowered:
+        raise SystemExit(f"managed destination is missing {required}: {destination}")
+if hashlib.sha256(statements[0].encode("utf-8")).hexdigest() != (
+    policy.VALIDATION_WITNESS_MIGRATION_POLICY_SHA256
+):
+    raise SystemExit(f"managed destination guardian rule is not the reviewed rule: {destination}")
+
+if generated_destination not in index.read_text(encoding="utf-8"):
+    raise SystemExit(f"generated index does not route to the guardian rule: {index}")
+EOF_MANAGED_ROUTING
 }
 
 validate_common_lane() {
@@ -687,51 +987,17 @@ validate_common_lane() {
   managed_agents="$out/.project-agent-workflow/AGENTS.md"
   managed_orchestration="$out/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 
-  assert_managed_orchestration_reports() {
-    test -f "$managed_agents"
-    test -f "$managed_orchestration"
-    grep -Eqi 'without waiting for per-task user instruction|without requiring a per-task user instruction' "$managed_agents" "$managed_orchestration"
-    grep -qi 'final ownership' "$managed_agents"
-    grep -q 'final high-risk' "$managed_agents" "$managed_orchestration"
-    grep -q 'authorization decisions' "$managed_agents" "$managed_orchestration"
-    grep -q 'external writes' "$managed_agents" "$managed_orchestration"
-    grep -q 'main session' "$managed_agents" "$managed_orchestration"
-    grep -Eqi 'final report transparency is mandatory|final report must state whether helpers were used' "$managed_agents" "$managed_orchestration"
-    grep -qi 'helpers were used' "$managed_agents" "$managed_orchestration"
-    grep -qi 'context files read-only' "$managed_orchestration" "$managed_agents"
-    test -f "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
-    test -f "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    test -f "$out/.project-agent-workflow/scripts/planlib.py"
-    grep -q 'run-sandboxed-plan-worker.py' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
-    grep -q 'sequential_plan_worker' "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
-    grep -q 'The main agent owns task interpretation, integration, validation acceptance, planning updates, commits, and the final report.' "$managed_orchestration"
-    grep -q '^DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q '^DEFAULT_FALLBACK_CODEX_MODEL = "gpt-5.6-luna"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q '^TERRA_CODEX_MODEL = "gpt-5.6-terra"$' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'def select_plan_writable_profile' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'def open_availability_state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q -- '--availability-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'skipped_known_unavailable_starts' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'def correct_worker' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'correction_lineage' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'def validate_candidate' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'def open_lifecycle_state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q -- '--lifecycle-state' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'VALIDATION_AUTHORITY_SCOPE' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'network_enabled=False' "$out/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
-    grep -q 'implementation_risk' "$out/.project-agent-workflow/scripts/planlib.py"
-    grep -q 'implementation_ambiguity' "$out/.project-agent-workflow/scripts/planlib.py"
-    grep -q 'focused_validation' "$out/.project-agent-workflow/scripts/planlib.py"
-    grep -q 'validation_authority_scope' "$out/.project-agent-workflow/scripts/planlib.py"
-    grep -qi 'repository breadth alone is insufficient' "$managed_agents" "$managed_orchestration"
-    grep -qi 'admissible implementation slice' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
-    grep -qi 'state path outside the repository' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
-    grep -q 'run-sandboxed-plan-worker.py correct' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
-    grep -q 'run-sandboxed-plan-worker.py validate' "$managed_orchestration" "$out/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md"
-    grep -q 'def has_pre_v1_adoption_provenance()' "$out/.project-agent-workflow/scripts/planlib.py"
-  }
-
   assert_managed_orchestration_reports
+  assert_managed_policy_routing "$managed_agents" "$managed_orchestration" \
+    "$out/.project-agent-workflow/docs/agent/spec-index.yaml"
+
+  test -f "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
+  grep -q '"suite": "worker-execution-contract-integration"' "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
+  test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
+  grep -q '"suite": "worker-completion-receipt"' "$root/tests/fixtures/orchestration/worker-completion-receipt-scenarios.json"
+  test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-holdout.json"
+  test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-holdout-v2.json"
+  test -f "$root/tests/fixtures/orchestration/worker-completion-receipt-evidence.json"
 
   test -f "$out/.copier-answers.yml"
   test -f "$out/.project-agent-workflow/AGENTS.md"
@@ -773,6 +1039,8 @@ validate_common_lane() {
   grep -q "ci_autofix_mode: $expected_ci_autofix" "$out/.copier-answers.yml"
   grep -q 'human_report_mode: agent_select_local' "$out/.copier-answers.yml"
   grep -q '"mode": "agent_select_local"' "$out/.project-agent-workflow/human-report.json"
+  grep -q 'human_report_shared_mode: disabled' "$out/.copier-answers.yml"
+  test ! -e "$out/docs/human-report"
   grep -Fq "CI autofix mode: \`$expected_ci_autofix\`" "$out/.project-agent-workflow/AGENTS.md"
   if [ "$expected_ci_autofix" = "disabled" ]; then
     test ! -f "$out/.github/workflows/codex-ci-autofix.yml"
@@ -828,12 +1096,24 @@ validate_common_lane() {
     [ -n "$path" ] || continue
     test -f "$out/$path"
   done
+  if [ ! -x "$out/.githooks/pre-commit" ]; then
+    echo "updated project is missing an executable pre-commit hook: $out" >&2
+    exit 1
+  fi
+  cmp "$root/template/.githooks/pre-commit" "$out/.githooks/pre-commit"
+  cmp "$root/template/.github/hooks/plan-lifecycle.json" "$out/.github/hooks/plan-lifecycle.json"
+  if [ -e "$out/.git" ] && [ -n "$(fixture_git "$out" config --local --get core.hooksPath || true)" ]; then
+    echo "the update selected core.hooksPath in the project: $out" >&2
+    exit 1
+  fi
   assert_agent_profiles "$out"
 }
 
 earliest_out=$(prepare_lane earliest-supported "$earliest_ref" "$legacy_answers")
 (cd "$earliest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="repo_explorer:-:medium"
 validate_common_lane "$earliest_out"
+agent_profile_expectations=""
 grep -q 'Codex hooks mode: `install_templates`' "$earliest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `disabled`' "$earliest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -843,7 +1123,9 @@ test ! -f "$earliest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
 
 oldest_out=$(prepare_lane oldest-supported "$oldest_ref" "$legacy_answers")
 (cd "$oldest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="repo_explorer:-:medium"
 validate_common_lane "$oldest_out"
+agent_profile_expectations=""
 grep -q 'Codex hooks mode: `install_templates`' "$oldest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `document_optional`' "$oldest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`documented`' "$oldest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -865,7 +1147,9 @@ fi
 
 latest_out=$(prepare_lane latest-stable "$latest_ref" "$root/tests/fixtures/python.answers.yml")
 (cd "$latest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="change_reviewer:-:max docs_researcher:gpt-5.4-mini:- scoped_worker:gpt-5.5:high"
 validate_common_lane "$latest_out"
+agent_profile_expectations=""
 test -f "$latest_out/docs/agent/SPEC_COPIER_ADOPTION.md"
 test -f "$latest_out/.codex/skills/decision-audit/SKILL.md"
 grep -q 'Codex hooks mode: `install_templates`' "$latest_out/.project-agent-workflow/AGENTS.md"
@@ -925,6 +1209,13 @@ checked_summary_ja: プロジェクト所有の再計画履歴を保持した。
     "991\tdocs/plan/active/991-project-owned-history.md\treplan_required\n",
     encoding="utf-8",
 )
+# The v0.4.6 template this fixture copies from predates docs/plan/replanned.md,
+# so seed the empty index the current restructuring authority requires.
+replanned_index = repository / "docs/plan/replanned.md"
+if not replanned_index.exists():
+    replanned_index.write_text(
+        "# Replanned Plan Index\n\nid\tpath\tcontract\n", encoding="utf-8"
+    )
 PY_REPLAN_SOURCE
 fixture_git "$replanned_history_out" add docs/plan
 fixture_git "$replanned_history_out" commit -m "Add stopped project-owned plan" >/dev/null
@@ -966,6 +1257,8 @@ human_design_required: yes
 human_approval_status: approved
 write_scope:
   - docs/plan/
+preservation_scope:
+  - none
 context_files:
   - none
 required_specs:
@@ -977,10 +1270,15 @@ required_specs:
   - docs/agent/SPEC_HUMAN_REPORTING.md
   - docs/agent/SPEC_DEVELOPMENT_FLOW.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
+focused_validation:
+  - git diff --check
 validation:
   - git diff --check
 acceptance:
   - {acceptance}
+validation_witness_schema: 1
+validation_witness_map:
+  - {{"acceptance_sha256":"{acceptance_digest}","stage":"focused","witness":"git diff --check"}}
 checked_summary_ja: プロジェクト所有の後続計画。
 
 ## Tasks
@@ -1197,12 +1495,16 @@ fixture_git "$pre_v1_plan_out" diff --check
 
 v100_out=$(prepare_lane v100-repair v1.0.0 "$root/tests/fixtures/python.answers.yml")
 (cd "$v100_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="change_reviewer:-:max scoped_worker:-:high"
 validate_common_lane "$v100_out" 0 patch_only
-grep -q '^_commit: v1.2.2$' "$v100_out/.copier-answers.yml"
+agent_profile_expectations=""
+grep -q '^_commit: v1.3.1$' "$v100_out/.copier-answers.yml"
 
 legacy_disabled_out=$(prepare_lane oldest-disabled "$oldest_ref" "$legacy_disabled_answers")
 (cd "$legacy_disabled_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="repo_explorer:-:medium"
 validate_common_lane "$legacy_disabled_out"
+agent_profile_expectations=""
 grep -q 'Codex hooks mode: `disabled`' "$legacy_disabled_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `disabled`' "$legacy_disabled_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`disabled`' "$legacy_disabled_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -1218,7 +1520,9 @@ legacy_override_out=$(prepare_lane oldest-explicit-disabled "$oldest_ref" "$lega
   --data graph_memory_mode=disabled \
   --data ci_autofix_mode=disabled)
 (cd "$legacy_override_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="repo_explorer:-:medium"
 validate_common_lane "$legacy_override_out"
+agent_profile_expectations=""
 grep -q 'External service policy states: MCP=`disabled`, Linear=`disabled`, graph memory=`disabled`' "$legacy_override_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'Linear=`disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -1320,6 +1624,16 @@ developer_instructions = """
 Keep this project instruction.
 """
 EOF_MATURE_DOCS_RESEARCHER
+cat >"$mature_out/.codex/agents/scoped_worker.toml" <<'EOF_MATURE_SCOPED_WORKER'
+  name = "scoped_worker"
+  description = "Customized scoped_worker profile."
+  model = "seed-equal-value"
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Keep this project instruction.
+"""
+EOF_MATURE_SCOPED_WORKER
 cat >"$mature_out/.codex/agents/repo_explorer.toml" <<'EOF_MATURE_REPO_EXPLORER'
   name = "project_repository_reader"
   description = "Customized repo_explorer profile."
@@ -1345,15 +1659,22 @@ fixture_git "$mature_out" commit -m "Customize mature project workflow" >/dev/nu
 
 run_adoption "$mature_out" "$target_ref" >/dev/null
 (cd "$mature_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="change_reviewer:-:max docs_researcher:legacy-model:legacy-effort scoped_worker:seed-equal-value:-"
 validate_common_lane "$mature_out"
+agent_profile_expectations=""
 grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/docs_researcher.toml"
 grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/repo_explorer.toml"
-grep -q '^  model = "gpt-5.6-luna"$' "$mature_out/.codex/agents/docs_researcher.toml"
-grep -q '^  model_reasoning_effort = "medium"$' "$mature_out/.codex/agents/docs_researcher.toml"
-if grep -q 'legacy-model' "$mature_out/.codex/agents/docs_researcher.toml" || grep -q 'legacy-effort' "$mature_out/.codex/agents/docs_researcher.toml"; then
-  echo "normalized agent profile left legacy model values" >&2
+# The project already declared both fields, so the update must keep its values.
+grep -q '^  model = "legacy-model"$' "$mature_out/.codex/agents/docs_researcher.toml"
+grep -q '^  model_reasoning_effort = "legacy-effort"$' "$mature_out/.codex/agents/docs_researcher.toml"
+if grep -q 'gpt-5.6-luna' "$mature_out/.codex/agents/docs_researcher.toml"; then
+  echo "update replaced a project-owned agent model value" >&2
   exit 1
 fi
+# The project declared model but not the effort, so only the effort is filled.
+grep -q '^  model = "seed-equal-value"$' "$mature_out/.codex/agents/scoped_worker.toml"
+grep -q '^  model_reasoning_effort = "medium"$' "$mature_out/.codex/agents/scoped_worker.toml"
+# The project declared neither field, so both defaults are inserted.
 grep -q '^  model = "gpt-5.6-luna"$' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q '^  model_reasoning_effort = "low"$' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q '^  name = "project_repository_reader"$' "$mature_out/.codex/agents/repo_explorer.toml"
@@ -1449,7 +1770,7 @@ fixture_git "$future_out" config user.name "CI"
 fixture_git "$future_out" add -A
 fixture_git "$future_out" commit -m "Initial namespaced workflow" >/dev/null
 
-printf '\nProject AGENTS marker.\n' >>"$future_out/AGENTS.md"
+printf '# Project Agents\n\nProject AGENTS marker.\nDo not use `.agents/skills/natural-japanese/SKILL.md`.\nThe bridge is already installed at `.agents/skills/natural-japanese/SKILL.md`.\n' >"$future_out/AGENTS.md"
 printf '\nProject README marker.\n' >>"$future_out/README.md"
 printf '\n# project ignore marker\n' >>"$future_out/.gitignore"
 printf '\n# project config marker\n' >>"$future_out/.codex/config.toml"
@@ -1479,6 +1800,7 @@ jobs: {}
 EOF_FUTURE_CI
 fixture_git "$future_out" add -A
 fixture_git "$future_out" commit -m "Add project-owned extensions" >/dev/null
+future_agents_before=$(fixture_git "$future_out" hash-object AGENTS.md)
 
 printf 'dirty update preflight\n' >"$future_out/untracked-before-update.txt"
 if "$future_out/.project-agent-workflow/scripts/update-from-copier.sh" \
@@ -1502,13 +1824,68 @@ if [ -n "$(fixture_git "$future_out" status --porcelain=v1)" ]; then
   fixture_git "$future_out" status --short >&2
   exit 1
 fi
-if ! (cd "$outside_cwd" && "$future_out/.project-agent-workflow/scripts/update-from-copier.sh" --defaults --vcs-ref v1.2.3 >/dev/null); then
+future_warning="$tmp/future-update-warning.txt"
+if ! (cd "$outside_cwd" && "$future_out/.project-agent-workflow/scripts/update-from-copier.sh" --defaults --vcs-ref v1.2.3 >/dev/null 2>"$future_warning"); then
   echo "clean recurring Copier wrapper update failed" >&2
   exit 1
 fi
 
 grep -q 'generated update wrapper' "$future_out/.project-agent-workflow/README.md"
+test "$future_agents_before" = "$(fixture_git "$future_out" hash-object AGENTS.md)"
 grep -q 'Project AGENTS marker.' "$future_out/AGENTS.md"
+test -f "$future_out/.agents/skills/natural-japanese/SKILL.md"
+test -f "$future_out/.project-agent-workflow/skills/natural-japanese/SKILL.md"
+grep -Fq 'Copier update preserved project-owned AGENTS.md without Japanese-writing routing.' "$future_warning"
+grep -Fq 'read `.agents/skills/natural-japanese/SKILL.md` after the governing project policy.' "$future_warning"
+PYTHONDONTWRITEBYTECODE=1 python3 - "$future_out" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+repository = Path(sys.argv[1])
+script = repository / ".project-agent-workflow/scripts/validate-copier-update.py"
+spec = importlib.util.spec_from_file_location("validate_copier_update", script)
+assert spec and spec.loader
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+agents = repository / "AGENTS.md"
+original = agents.read_text(encoding="utf-8")
+seed = next(
+    line for line in module.JAPANESE_ROUTING_LINES if ", read `" in line
+)
+managed = next(
+    line for line in module.JAPANESE_ROUTING_LINES if ", use `" in line
+)
+invalid = (
+    f"```markdown\n{seed}\n```\n",
+    f"````markdown\n```not-a-closer\n{seed}\n````\n",
+    f"    {seed}\n",
+    f"   \t{seed}\n",
+    f"<!--\n{seed}\n-->\n",
+    f"```text\nexample\n\t```\n{seed}\n```\n",
+    f"{seed} Example only; do not follow this line.\n",
+    "The bridge is documented at `.agents/skills/natural-japanese/SKILL.md`.\n",
+    f"- Do not use this routing instruction: {managed}\n",
+)
+try:
+    for content in invalid:
+        agents.write_text(content, encoding="utf-8")
+        if not module.needs_japanese_routing_guidance(repository):
+            raise SystemExit("non-operative Japanese routing text suppressed guidance")
+    for content in (
+        seed + "\n",
+        managed + "\n",
+        f"```bad`info\n{seed}\n",
+    ):
+        agents.write_text(content, encoding="utf-8")
+        if module.needs_japanese_routing_guidance(repository):
+            raise SystemExit("canonical Japanese routing line was not recognized")
+    agents.write_text(module.JAPANESE_ROUTING_SUGGESTION + "\n", encoding="utf-8")
+    if module.needs_japanese_routing_guidance(repository):
+        raise SystemExit("emitted Japanese routing suggestion was not canonical")
+finally:
+    agents.write_text(original, encoding="utf-8")
+PY
 grep -q 'Project README marker.' "$future_out/README.md"
 grep -q 'project ignore marker' "$future_out/.gitignore"
 grep -q 'project config marker' "$future_out/.codex/config.toml"
@@ -1556,5 +1933,251 @@ if ! fixture_git "$wrapper_conflict_out" ls-files -u | grep -q .; then
   echo "v1.2.2-to-v1.2.3 fixture did not create a real index conflict" >&2
   exit 1
 fi
+
+# The synthetic v1.4.4 boundary is this template without the installed
+# validation-witness policy marker, so the before migration reads the
+# committed downstream project as pre-schema.
+v145_marker='validation-witness-migration-provenance-schema: 1'
+v145_policy="$update_source/template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -qF "$v145_marker" "$v145_policy"
+sed -i "s/$v145_marker/validation-witness-migration-provenance-boundary: absent/" "$v145_policy"
+if grep -qF "$v145_marker" "$v145_policy"; then
+  echo "the synthetic v1.4.4 policy still installs the validation-witness boundary" >&2
+  exit 1
+fi
+fixture_git "$update_source" add -- template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
+fixture_git "$update_source" -c user.email=ci@example.invalid -c user.name=CI \
+  commit -qm "Create the pre-schema v1.4.4 boundary"
+# The clone carries the released tags of this template, so both synthetic
+# boundaries replace whatever the clone already names.
+fixture_git "$update_source" tag -f v1.4.4
+
+# The synchronization command runs as its own migration of the synthetic
+# v1.4.5 boundary, ordered directly after the before migration that publishes
+# the pending attempt. It emits the ready event once that migration has
+# returned and holds the update child until this fixture writes the release
+# path, which is how the fixture observes the pending state, the guardian
+# identifier, and the release paths without naming the migration command.
+v145_ready="$tmp/v145-guardian-ready"
+v145_hold="$tmp/v145-hold-before-stage.sh"
+cat >"$v145_hold" <<EOF_V145_HOLD
+#!/bin/sh
+set -eu
+: >"$v145_ready"
+held=0
+while [ "\$held" -lt 600 ]; do
+  if [ -e "$v145_release" ]; then
+    exit 0
+  fi
+  if [ ! -d "$tmp" ]; then
+    echo "the fixture temporary root disappeared while the update was held" >&2
+    exit 1
+  fi
+  held=\$((held + 1))
+  sleep 1
+done
+echo "the fixture release event was not observed" >&2
+exit 1
+EOF_V145_HOLD
+chmod +x "$v145_hold"
+
+sed -i "s/validation-witness-migration-provenance-boundary: absent/$v145_marker/" "$v145_policy"
+grep -qF "$v145_marker" "$v145_policy"
+python3 - "$update_source/copier.yml" "$v145_hold" <<'PY_V145_MIGRATION'
+import re
+import sys
+from pathlib import Path
+
+configuration = Path(sys.argv[1])
+hold = sys.argv[2]
+text = configuration.read_text(encoding="utf-8")
+if "'" in hold or "\n" in hold:
+    raise SystemExit("the fixture synchronization command path is not quotable")
+starts = [match.start() for match in re.finditer(r"^  - version: ", text, re.MULTILINE)]
+if not starts:
+    raise SystemExit("the fixture source declares no versioned Copier migration")
+selected = [
+    (start, stop)
+    for start, stop in zip(starts, starts[1:] + [len(text)])
+    if text[start:stop].startswith("  - version: v1.4.5\n")
+    and "_stage == 'before'" in text[start:stop]
+]
+if len(selected) != 1:
+    raise SystemExit("the v1.4.5 before-stage migration is not written exactly once")
+stop = selected[0][1]
+if stop not in starts:
+    raise SystemExit("the v1.4.5 before-stage migration is written last")
+entry = (
+    "  - version: v1.4.5\n"
+    "    command:\n"
+    f"      - '{hold}'\n"
+    "    when: \"[[ _stage == 'before' ]]\"\n"
+)
+configuration.write_text(text[:stop] + entry + text[stop:], encoding="utf-8")
+PY_V145_MIGRATION
+fixture_git "$update_source" add -- copier.yml \
+  template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
+fixture_git "$update_source" -c user.email=ci@example.invalid -c user.name=CI \
+  commit -qm "Create the v1.4.5 validation-witness boundary"
+fixture_git "$update_source" tag -f v1.4.5
+
+v145_project="$tmp/v145-project"
+v145_plan="docs/plan/active/902-pre-schema-integration.md"
+v145_contract="docs/plan/replanned/contracts/901-source.json"
+v145_archive="docs/plan/replanned/2026/08/16-31/901-source.md"
+v145_record="$v145_project/.project-agent-workflow-migration/validation-witness-provenance-v1.json"
+v145_log="$tmp/v145-update.log"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.4.4 \
+  --data-file "$root/tests/fixtures/python.answers.yml" "$update_source" "$v145_project" >/dev/null
+grep -q '^_commit: v1.4.4$' "$v145_project/.copier-answers.yml"
+if grep -qF "$v145_marker" "$v145_project/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"; then
+  echo "the generated v1.4.4 project already installs the validation-witness boundary" >&2
+  exit 1
+fi
+
+mkdir -p "$v145_project/docs/plan/active" \
+  "$v145_project/docs/plan/replanned/contracts" \
+  "$v145_project/docs/plan/replanned/2026/08/16-31"
+cat >"$v145_project/$v145_plan" <<'EOF_V145_PLAN'
+# Pre-schema integration
+
+status: in_progress
+primary_invariant: preserve the committed integration identity
+replan_contract: docs/plan/replanned/contracts/901-source.json
+acceptance:
+  - Preserve the pre-schema acceptance.
+validation:
+  - python3 scripts/validate-changes.py --all
+checked_summary_ja: 移行前の統合計画を保持する。
+
+## Tasks
+
+- [ ] Preserve the integration boundary.
+EOF_V145_PLAN
+cat >"$v145_project/$v145_archive" <<'EOF_V145_ARCHIVE'
+# Replanned source
+
+status: replanned
+EOF_V145_ARCHIVE
+python3 - "$v145_project" "$v145_plan" "$v145_contract" "$v145_archive" <<'PY_V145_CONTRACT'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+project = Path(sys.argv[1])
+plan_path = sys.argv[2]
+contract_path = sys.argv[3]
+archive_path = sys.argv[4]
+
+
+def digest(raw: bytes) -> str:
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+plan_raw = (project / plan_path).read_bytes()
+acceptance = ["Preserve the pre-schema acceptance."]
+contract = {
+    "archive_path": archive_path,
+    "contract_path": contract_path,
+    "schema_version": 1,
+    "successors": [
+        {
+            "acceptance_digests": [digest(item.encode("utf-8")) for item in acceptance],
+            "content": plan_raw.decode("utf-8"),
+            "content_digest": digest(plan_raw),
+            "integration": True,
+            "path": plan_path,
+        }
+    ],
+}
+(project / contract_path).write_text(
+    json.dumps(contract, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY_V145_CONTRACT
+fixture_git "$v145_project" init -b main >/dev/null
+fixture_git "$v145_project" config user.email "ci@example.invalid"
+fixture_git "$v145_project" config user.name "CI"
+fixture_git "$v145_project" add -A
+fixture_git "$v145_project" commit -qm "Create the pre-schema v1.4.4 project"
+v145_git_dir=$(fixture_git "$v145_project" rev-parse --path-format=absolute --absolute-git-dir)
+v145_attempt="$v145_git_dir/project-agent-workflow/validation-witness-provenance-v1.attempt.json"
+
+# Plan 183 settled a bounded wait on the update process itself, so this
+# fixture reads the identifier it started. The identifier stays its own
+# unreaped child until this wait retires it, and the forced signals run only
+# while that child is still live.
+"$v145_project/.project-agent-workflow/scripts/update-from-copier.sh" \
+  --defaults --vcs-ref v1.4.5 >"$v145_log" 2>&1 &
+update_pid=$!
+
+v145_ready_waited=0
+while [ "$v145_ready_waited" -lt 300 ]; do
+  if [ -e "$v145_ready" ]; then
+    break
+  fi
+  v145_ready_waited=$((v145_ready_waited + 1))
+  sleep 1
+done
+if [ ! -e "$v145_ready" ]; then
+  touch "$v145_release"
+  echo "the guardian ready event was not observed" >&2
+  cat "$v145_log" >&2
+  exit 1
+fi
+
+grep -q '"state": "pending"' "$v145_attempt"
+guardian_pid=$(sed -n 's/^ *"guardian_pid": *\([0-9][0-9]*\),\{0,1\} *$/\1/p' "$v145_attempt")
+case "$guardian_pid" in
+  ''|*[!0-9]*)
+    echo "the guardian PID was not read from the pending attempt state" >&2
+    exit 1
+    ;;
+esac
+[ "$guardian_pid" -gt 0 ]
+
+touch "$v145_release"
+
+v145_exit_waited=0
+while [ "$v145_exit_waited" -lt 30 ]; do
+  if ! kill -0 "$update_pid" 2>/dev/null; then
+    break
+  fi
+  v145_exit_waited=$((v145_exit_waited + 1))
+  sleep 1
+done
+v145_update_status=0
+v145_reaped=0
+if ! kill -0 "$update_pid" 2>/dev/null; then
+  wait "$update_pid" || v145_update_status=$?
+  v145_reaped=1
+fi
+if [ "$v145_reaped" -eq 0 ]; then
+  kill -TERM "$update_pid" 2>/dev/null || true
+  sleep 5
+  kill -KILL "$update_pid" 2>/dev/null || true
+fi
+wait "$update_pid" 2>/dev/null || true
+update_pid=
+if [ "$v145_reaped" -ne 1 ] || [ "$v145_update_status" -ne 0 ]; then
+  echo "the v1.4.4-to-v1.4.5 transition update did not complete" >&2
+  cat "$v145_log" >&2
+  exit 1
+fi
+
+grep -q '"state": "consumed"' "$v145_attempt"
+grep -q '^_commit: v1.4.5$' "$v145_project/.copier-answers.yml"
+grep -qF "$v145_marker" "$v145_project/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q '"migration_version": "v1.4.5"' "$v145_record"
+grep -q '"previous_template_ref": "v1.4.4"' "$v145_record"
+grep -q "\"path\": \"$v145_plan\"" "$v145_record"
+test -f "$v145_project/$v145_contract"
+test -f "$v145_project/$v145_archive"
+if find "$v145_project" -name '*.rej' -print -quit | grep -q .; then
+  echo "the v1.4.5 transition produced rejection files" >&2
+  exit 1
+fi
+fixture_git "$v145_project" diff --check
 
 echo "copier update test passed"

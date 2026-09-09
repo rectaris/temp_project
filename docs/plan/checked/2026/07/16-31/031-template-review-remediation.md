@@ -1,6 +1,6 @@
 # Remediate template review findings
 
-status: ready_to_archive
+status: checked
 task_type: template_workflow
 review_class: B
 human_design_required: no

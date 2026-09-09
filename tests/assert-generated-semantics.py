@@ -28,6 +28,7 @@ def main() -> int:
     profile_answers = (
         ("primary_language", "Primary language"),
         ("human_report_mode", "Human report mode"),
+        ("human_report_shared_mode", "Shared human report mode"),
         ("codex_hooks_mode", "Codex hooks mode"),
         ("skillspector_mode", "SkillSpector mode"),
         ("external_access_profile", "External access profile"),
@@ -43,6 +44,10 @@ def main() -> int:
     require(
         f'"mode": "{answers["human_report_mode"]}"' in human_report_config,
         "managed human report config does not reflect human_report_mode",
+    )
+    require(
+        f'"shared_mode": "{answers["human_report_shared_mode"]}"' in human_report_config,
+        "managed human report config does not reflect human_report_shared_mode",
     )
 
     conditional_files = (
@@ -145,6 +150,45 @@ def main() -> int:
     require(
         "distinct project-owned external-service record" in browser_policy,
         "generated browser policy permits Browser Run authority to leak to another Chromium provider",
+    )
+
+    natural_bridge = root / ".agents/skills/natural-japanese/SKILL.md"
+    natural_skill = root / ".project-agent-workflow/skills/natural-japanese/SKILL.md"
+    natural_workflow = (
+        root / ".project-agent-workflow/skills/natural-japanese/references/workflow.md"
+    )
+    natural_helper = (
+        root / ".project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py"
+    )
+    require(natural_bridge.is_file(), "generated natural-japanese bridge missing")
+    require(natural_skill.is_file(), "generated natural-japanese skill missing")
+    require(natural_helper.is_file(), "generated natural-japanese lint missing")
+    require(
+        natural_helper.stat().st_mode & 0o111 != 0,
+        "generated natural-japanese lint is not executable",
+    )
+    require(
+        ".project-agent-workflow/skills/natural-japanese/SKILL.md"
+        in natural_bridge.read_text(encoding="utf-8"),
+        "generated natural-japanese bridge target is incorrect",
+    )
+    workflow_text = natural_workflow.read_text(encoding="utf-8")
+    for marker in (
+        "## Short Reply",
+        "Do not run a subprocess.",
+        "## Japanese File Work",
+        "at most once per draft",
+        "## Important Long-Form Prose",
+        "## Protected Content",
+        "## Non-Use Boundary",
+    ):
+        require(marker in workflow_text, f"generated natural-japanese workflow lacks {marker}")
+    require(
+        "natural-japanese" in agents
+        and "facts, quotations, uncertainty" in agents
+        and "requested form" in agents
+        and "document purpose" in agents,
+        "managed AGENTS.md lacks natural-japanese routing priority",
     )
 
     if answers["external_access_profile"] == "restricted":
