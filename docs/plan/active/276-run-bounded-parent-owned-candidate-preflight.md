@@ -1,6 +1,6 @@
 # Run one bounded parent-owned preflight per candidate
 
-status: backlog
+status: in_progress
 primary_invariant: A parent may obtain bounded diagnostic feedback from an admitted candidate in a fresh credential-free network-isolated clone without granting worker validation authority or consuming, replacing, or resetting acceptance and correction gates.
 task_types:
   - template_workflow
@@ -8,7 +8,7 @@ task_types:
   - security
 review_class: C
 human_design_required: yes
-human_approval_status: pending
+human_approval_status: approved
 implementation_tier: 2
 implementation_risk: high
 implementation_ambiguity: ordinary
@@ -130,3 +130,9 @@ checked_summary_ja: 候補生成後に親だけが隔離環境で短いテスト
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
 
 - 2026-09-08 planning alignment: Reuse this one diagnostic preflight instead of adding another feedback or retry subsystem. Plan 299 supplies operational routing only, and Plan 300 prepares existing state only; neither may execute this preflight, count it as acceptance, or change its approval and correction limits. The existing detailed-design approval remains pending.
+
+- 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation.
+- 2026-09-09 class C design approval: The gate "Obtain explicit owner approval of this class C design before promotion or implementation" is satisfied. Asked the owner directly about the two pending class C designs, 275 and 276, and the owner answered `approve_both`. `human_approval_status` moves from `pending` to `approved` on that instruction alone; no agent judgement substitutes for it.
+- 2026-09-09 predecessor gates: Plan 268 is checked at `docs/plan/checked/2026/09/01-15/268-restore-large-test-baseline-and-ci.md`. Plan 275 stopped at `replan_required` and was reconstructed as plan 302, which carries every acceptance item of 275 unchanged and is checked at `docs/plan/checked/2026/09/01-15/302-complete-routed-agent-policy.md`, so the policy relocation this plan waits for is in place.
+- 2026-09-09 implementation mode: `implementation_risk: high` and the gate "do not dispatch it to Spark, Terra, or the writable sequential-plan worker" together require bounded parent implementation with independent review. No writable worker is started for this plan.
+- 2026-09-09 activation baseline: `a2ef370` in `temp_project`.
