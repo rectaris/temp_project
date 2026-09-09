@@ -1,6 +1,6 @@
 # Complete routed agent policy with aligned validation authority
 
-status: in_progress
+status: checked
 replan_sources:
   - docs/plan/active/275-route-detailed-agent-policy-on-demand.md
 replan_contract: docs/plan/replanned/contracts/275-route-detailed-agent-policy-on-demand.json
@@ -123,14 +123,14 @@ checked_summary_ja: 起動時の AGENTS.md から重複する詳細手順を規�
 
 ## Tasks
 
-- [ ] Freeze the moved-requirement inventory, canonical destinations, activation-baseline byte counts, fixed median/edge scenarios, and critical requirements; have an independent evaluator seal the separate held-out input before changing wording.
-- [ ] Move detailed rules to the existing normative destinations and add mandatory task routes; preserve semantic root/template alignment.
-- [ ] Replace the duplicated entrypoint text with direct routing instructions while retaining the always-needed safety core.
-- [ ] Update marker and alignment tests to inspect the actual normative destinations and route reachability, with negative tests for every lost obligation class and missing destination.
-- [ ] Add baseline byte and static read-set checks to check-root-agent-policy.py and its existing test entrypoint; do not read raw logs or call models in these deterministic checks.
-- [ ] Run one fresh independent scenario evaluation and, if an allowed revision is necessary, one fresh reevaluation; retain ambiguity and assumption reports locally and check the held-out case without further tuning.
-- [ ] Replace the three stale assertions in tests/smoke.sh that require the generated entrypoint to restate the relocated guardian rule, so they require the mandatory route and the populated normative destination instead.
-- [ ] Run focused validation, complete independent acceptance review within the existing budget, and run authoritative validation once.
+- [x] Freeze the moved-requirement inventory, canonical destinations, activation-baseline byte counts, fixed median/edge scenarios, and critical requirements; have an independent evaluator seal the separate held-out input before changing wording.
+- [x] Move detailed rules to the existing normative destinations and add mandatory task routes; preserve semantic root/template alignment.
+- [x] Replace the duplicated entrypoint text with direct routing instructions while retaining the always-needed safety core.
+- [x] Update marker and alignment tests to inspect the actual normative destinations and route reachability, with negative tests for every lost obligation class and missing destination.
+- [x] Add baseline byte and static read-set checks to check-root-agent-policy.py and its existing test entrypoint; do not read raw logs or call models in these deterministic checks.
+- [x] Run one fresh independent scenario evaluation and, if an allowed revision is necessary, one fresh reevaluation; retain ambiguity and assumption reports locally and check the held-out case without further tuning.
+- [x] Replace the three stale assertions in tests/smoke.sh that require the generated entrypoint to restate the relocated guardian rule, so they require the mandatory route and the populated normative destination instead.
+- [x] Run focused validation, complete independent acceptance review within the existing budget, and run authoritative validation once.
 
 ## Validation Notes
 
@@ -157,3 +157,8 @@ checked_summary_ja: 起動時の AGENTS.md から重複する詳細手順を規�
 - 2026-09-09 reconstruction: Plan 275 stopped at `replan_required` with `post_authoritative_design_change` after `REQUIRE_COPIER=1 tests/smoke.sh` exited 1 at `tests/smoke.sh:1617`. This successor changes only the boundary: `tests/smoke.sh` joins `write_scope` so the relocation and the assertions that describe it change together. Every acceptance item, safety condition, and requirement is inherited unchanged.
 - 2026-09-09 owner continuation authorization: The owner chose `authorize_reconstruction`, described as adding `tests/smoke.sh` to `write_scope` and finishing plan 275's work, in response to the recorded stop.
 - 2026-09-09 preserved candidate: `620e4ba`..`f4da226` from `plan/275-route-detailed-agent-policy-on-demand` is retained as patches and carries four independent reviews ending with no High and no Medium findings. Reuse it as the starting point; it is not accepted evidence for this plan until this plan's own validation passes.
+
+- 2026-09-09 candidate replay: The preserved four commits from plan 275 were cherry-picked onto `plan/302-complete-routed-agent-policy` as `68c3f7e`, `cf4c31e`, `6ea63f6`, and `79b97e4`, unchanged. This plan then updated the three stale generated-entrypoint assertions in `tests/smoke.sh` so they require the mandatory route and the populated normative destination instead of a restated rule.
+- 2026-09-09 focused validation: `python3 tests/test-validation-tools.py` (245 tests), `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `tests/copier-update.sh --require-copier`, and `git diff --check` all passed.
+- 2026-09-09 review, epoch 0: Round one reported one Medium: the retargeted assertion at `tests/smoke.sh:1628` searched the generated `SPEC_ORCHESTRATION.md` for the entrypoint's phrasing, which that destination never uses, so it would fail. Commit `5d86f17` replaced it with two assertions written in the destination's own words, covering both the durable `pending` to `consumed` transition and the terminality of `consumed`. The final review of this epoch reported no High and no Medium findings.
+- 2026-09-09 authoritative validation: `scripts/lint-project-workflow.sh` passed and `REQUIRE_COPIER=1 tests/smoke.sh` passed, each run once on the accepted candidate.
