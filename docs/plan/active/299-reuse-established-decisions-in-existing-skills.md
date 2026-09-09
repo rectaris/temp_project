@@ -1,6 +1,6 @@
 # Reuse established decisions through existing planning skills
 
-status: backlog
+status: in_progress
 primary_invariant: Existing planning and execution skills apply one shared decision sequence to the same authorized task without reopening settled choices, inventing successor plans or relaxing normative approval, diagnosis and review boundaries.
 task_types:
   - template_workflow
@@ -50,7 +50,8 @@ context_files:
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
-  - docs/plan/backlog/275-route-detailed-agent-policy-on-demand.md
+  - docs/plan/replanned/2026/09/01-15/275-route-detailed-agent-policy-on-demand.md
+  - docs/plan/checked/2026/09/01-15/302-complete-routed-agent-policy.md
   - docs/plan/checked/2026/09/01-15/282-render-plans-from-checked-authoring-input.md
   - docs/plan/checked/2026/08/16-31/119-integrate-verify-copier-update-skill.md
 required_specs:
@@ -109,3 +110,7 @@ checked_summary_ja: 既決事項と失敗の再現確認を既存スキルへま
 - This instruction authorizes plan authoring, not implementation or reopening a stopped run. This is ordinary backlog work, not a reconstruction successor.
 - See docs/plan/backlog/README.md for procedure reductions, existing-plan reuse and implementation order. Full decision audit stays in local development-process-planning evidence.
 - The shared authoring checker derives correspondence and digests; the parent reviews witness semantics. No measured productivity saving is claimed.
+
+- 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. `review_class: B` with `human_approval_status: not_required`, so no separate design approval is needed.
+- 2026-09-09 predecessor gate: The gate "Start after existing Plan 275 is checked" is satisfied by its successor. Plan 275 stopped at `replan_required` and was reconstructed as plan 302, which carries every acceptance item of 275 unchanged and is now checked at `docs/plan/checked/2026/09/01-15/302-complete-routed-agent-policy.md`. The relocation this plan waits for is therefore in place; `context_files` is rebound to the archived 275 record and its checked successor.
+- 2026-09-09 activation baseline: `dfba0d9` in `temp_project`.
