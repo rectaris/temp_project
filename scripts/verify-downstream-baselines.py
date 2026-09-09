@@ -161,10 +161,11 @@ def require_baseline(entry: object, root: Path, seen: set[str]) -> Baseline:
             raise BaselineError(f"baseline {identifier} must declare a non-empty {field}")
         required[field] = value.strip()
     commands = entry.get("validation_commands")
-    if commands is None:
-        commands = []
     if not isinstance(commands, list):
-        raise BaselineError(f"baseline {identifier} must declare its validation commands as a list")
+        raise BaselineError(
+            f"baseline {identifier} must declare validation_commands as a list, empty only when"
+            " the project has no command the isolated clone can run"
+        )
     parsed: list[tuple[str, ...]] = []
     for command in commands:
         if not isinstance(command, list) or not command:
@@ -361,6 +362,8 @@ def verify(
     ]
     for validation in baseline.validation_commands:
         command.extend(["--validation-command-json", json.dumps(list(validation))])
+    if not baseline.validation_commands:
+        command.append("--declare-no-project-validation")
     subprocess.run(command, cwd=ROOT, check=False)
     manifest = output / "verification-manifest.json"
     if not manifest.is_file():
@@ -397,7 +400,7 @@ def render(reports: list[dict[str, object]]) -> str:
             f"{report['baseline']}: {report['result']} ({report['reason_code']}) "
             f"owner={report['owner']}"
         )
-        if report["result"] != "verified":
+        if report["result"] != "verified" or report.get("residual_obligation"):
             lines.append(f"  next_action: {report['next_action']}")
     return "\n".join(lines)
 

@@ -40,6 +40,16 @@ codes:
     next_action: Proceed with the update on the recorded target commit.
     retry: never
 
+  all_checks_passed_without_project_validation:
+    owner: project
+    residual_obligation: true
+    next_action: >-
+      Every template-side check passed, but no project validation command was run,
+      so this result says nothing about whether the updated project still works.
+      Apply the update on the recorded target commit, then run the project's own
+      suite in a checkout that carries its installed dependencies.
+    retry: never
+
   verification_incomplete:
     owner: environment
     next_action: >-
@@ -185,7 +195,17 @@ codes:
     owner: project
     next_action: >-
       Pass at least one project validation command. An update cannot be verified
-      without a check that the updated project still works.
+      without a check that the updated project still works. When the project's own
+      gate cannot run in a fresh clone, say so with the declaration flag instead,
+      which records the gap in the result rather than hiding it.
+    retry: after_fix
+
+  validation_declaration_conflict:
+    owner: invocation
+    next_action: >-
+      Pass either the project validation commands or the declaration that the
+      project has none, not both. The caller stated two different things about the
+      same project.
     retry: after_fix
 
   # Observed incompatibilities between the baseline and the template ref.

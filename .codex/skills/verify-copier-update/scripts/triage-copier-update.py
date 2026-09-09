@@ -118,7 +118,7 @@ def parse_triage_without_yaml(path: Path) -> dict[str, Any]:
             stack.append((indent, child))
             continue
         require_plain_scalar(value, number)
-        container[key] = int(value) if value.isdigit() else value
+        container[key] = plain_scalar(value)
 
     if pending is not None:
         container, key = pending
@@ -130,6 +130,16 @@ def parse_triage_without_yaml(path: Path) -> dict[str, Any]:
 # with one of these, or that carries an inline comment, is refused so a machine
 # without the YAML library never reads a different instruction than one with it.
 UNSUPPORTED_SCALAR_OPENERS = ("\"", "'", "&", "*", "!", "|", ">", "{", "[", "?", "%", "@", "`")
+
+
+def plain_scalar(value: str) -> Any:
+    """Read one plain scalar the way the YAML library reads it."""
+
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    return int(value) if value.isdigit() else value
 
 
 def require_plain_scalar(value: str, number: int) -> None:
@@ -196,6 +206,11 @@ def require_entry(section: str, name: str, entry: Any, subjects: dict[str, Any])
     action = entry.get("next_action")
     if not isinstance(action, str) or not action.strip():
         raise TriageError(f"{section} entry {name} must declare a non-empty next_action")
+    residual = entry.get("residual_obligation", False)
+    if not isinstance(residual, bool):
+        raise TriageError(f"{section} entry {name} must declare residual_obligation as a boolean")
+    if residual and owner == "none":
+        raise TriageError(f"{section} entry {name} leaves an obligation, so it may not be ownerless")
 
 
 def resolve_code(table: dict[str, Any], code: str) -> dict[str, Any]:
@@ -247,10 +262,16 @@ def build_report(table: dict[str, Any], manifest: dict[str, Any]) -> dict[str, A
     result = str(manifest["result"])
     code = str(manifest["reason_code"])
     entry = resolve_code(table, code)
-    if result == "verified" and entry["owner"] != "none":
+    residual = bool(entry.get("residual_obligation", False))
+    if result == "verified" and entry["owner"] != "none" and not residual:
         raise TriageError(
             f"verification manifest reports {result} with reason code {code}, which the "
             "triage table assigns an owner; the manifest and the table disagree"
+        )
+    if result != "verified" and residual:
+        raise TriageError(
+            f"verification manifest reports {result} with reason code {code}, which the "
+            "triage table records as leaving an obligation behind a passing result"
         )
     if result != "verified" and entry["owner"] == "none":
         raise TriageError(
@@ -266,6 +287,7 @@ def build_report(table: dict[str, Any], manifest: dict[str, Any]) -> dict[str, A
         "match": entry["match"],
         "matched": entry["matched"],
         "subject": entry.get("subject"),
+        "residual_obligation": residual,
         "result_action": str(table["results"][result]["next_action"]).strip(),
         "next_action": str(entry["next_action"]).strip(),
         "detail": manifest.get("detail"),
@@ -282,6 +304,8 @@ def render_text(report: dict[str, Any]) -> str:
     ]
     if report.get("subject"):
         lines.append(f"subject: {report['subject']}")
+    if report.get("residual_obligation"):
+        lines.append("residual_obligation: this result leaves work its owner must still do")
     lines.append(f"result_action: {report['result_action']}")
     lines.append(f"next_action: {report['next_action']}")
     if report.get("detail"):

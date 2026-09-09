@@ -220,6 +220,7 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         *,
         validation: str | None = None,
         trust: bool = True,
+        declare_absent: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], Path]:
         output = self.root / output_name
         command = [
@@ -236,6 +237,10 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         ]
         if trust:
             command.append("--trust-template-tasks")
+        if declare_absent:
+            command.append("--declare-no-project-validation")
+        if validation is None and declare_absent:
+            return self.launch(command, output)
         if validation is None:
             validation = json.dumps(
                 [
@@ -245,6 +250,11 @@ class VerifyCopierUpdateTests(unittest.TestCase):
                 ]
             )
         command.extend(["--validation-command-json", validation])
+        return self.launch(command, output)
+
+    def launch(
+        self, command: list[str], output: Path
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
         environment = os.environ.copy()
         environment["PATH"] = f"{self.bin}{os.pathsep}{environment.get('PATH', '')}"
         process = subprocess.run(
@@ -390,6 +400,43 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         process, output = self.invoke("dirty-source")
         self.assertEqual(2, process.returncode)
         self.assertEqual("source_dirty", self.manifest(output)["reason_code"])
+
+    def test_a_project_without_a_runnable_gate_is_verified_with_the_gap_recorded(self) -> None:
+        process, output = self.invoke("declared-absent", declare_absent=True)
+        self.assertEqual(0, process.returncode)
+        manifest = self.manifest(output)
+        self.assertEqual("verified", manifest["result"])
+        self.assertEqual("all_checks_passed_without_project_validation", manifest["reason_code"])
+        self.assertEqual("declared_absent", manifest["project_validation"])
+        self.assert_originals_unchanged()
+
+    def test_declaring_no_gate_while_passing_one_is_blocked(self) -> None:
+        process, output = self.invoke(
+            "declaration-conflict",
+            declare_absent=True,
+            validation=json.dumps(["python3", "-c", "pass"]),
+        )
+        self.assertEqual(2, process.returncode)
+        self.assertEqual("validation_declaration_conflict", self.manifest(output)["reason_code"])
+
+    def test_saying_nothing_about_the_gate_is_still_blocked(self) -> None:
+        output = self.root / "no-validation-statement"
+        command = [
+            "python3",
+            str(HELPER),
+            "--target",
+            str(self.target),
+            "--source",
+            str(self.source),
+            "--source-ref",
+            "v1.1.0",
+            "--output-dir",
+            str(output),
+            "--trust-template-tasks",
+        ]
+        process, _ = self.launch(command, output)
+        self.assertEqual(2, process.returncode)
+        self.assertEqual("validation_missing", self.manifest(output)["reason_code"])
 
     def test_missing_trust_is_blocked(self) -> None:
         process, output = self.invoke("missing-trust", trust=False)
@@ -936,6 +983,28 @@ class TriageResolverTest(unittest.TestCase):
         self.assertEqual("template", report["owner"])
         self.assertEqual("never", report["retry"])
 
+    def test_a_verified_result_that_leaves_work_names_its_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(
+                Path(raw), "verified", "all_checks_passed_without_project_validation"
+            )
+            process = run(
+                ["python3", str(TRIAGE), str(manifest), "--format", "json"], ROOT, check=False
+            )
+        self.assertEqual(0, process.returncode, process.stderr)
+        report = json.loads(process.stdout)
+        self.assertTrue(report["residual_obligation"])
+        self.assertEqual("project", report["owner"])
+
+    def test_an_ownerless_entry_may_not_leave_work(self) -> None:
+        triage = load_triage_module()
+        table = triage.require_table(TABLE)
+        entry = dict(table["codes"]["all_checks_passed"])
+        entry["residual_obligation"] = True
+        with self.assertRaises(triage.TriageError) as caught:
+            triage.require_entry("codes", "all_checks_passed", entry, table["subjects"])
+        self.assertIn("may not be ownerless", str(caught.exception))
+
     def test_an_unclassified_code_exits_two(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             manifest = write_manifest(Path(raw), "rejected", "brand_new_code")
@@ -1072,9 +1141,19 @@ class DownstreamBaselineTest(unittest.TestCase):
                     self.assertNotIn(command[0], NEEDS_INSTALLED_DEPENDENCIES)
 
     def test_a_project_without_a_runnable_gate_is_recorded_without_one(self) -> None:
-        text = ENTRY.replace('    validation_commands:\n      - ["true"]\n', "")
+        text = ENTRY.replace('    validation_commands:\n      - ["true"]\n', "    validation_commands: []\n")
         baselines = self.load_record(text)
         self.assertEqual((), baselines[0].validation_commands)
+
+    def test_an_omitted_command_list_is_not_read_as_a_declaration(self) -> None:
+        for text in (
+            ENTRY.replace('    validation_commands:\n      - ["true"]\n', ""),
+            ENTRY.replace('    validation_commands:\n      - ["true"]\n', "    validation_commands:\n"),
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(self.runner.BaselineError) as caught:
+                    self.load_record(text)
+                self.assertIn("validation_commands as a list", str(caught.exception))
 
     def test_a_relative_path_resolves_against_the_given_root(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -1114,7 +1193,7 @@ class DownstreamBaselineTest(unittest.TestCase):
             (ENTRY.replace('      - ["true"]\n', "      - []\n"), "unusable validation command"),
             (
                 ENTRY.replace('    validation_commands:\n      - ["true"]\n', "    validation_commands: true\n"),
-                "validation commands as a list",
+                "validation_commands as a list",
             ),
             (ENTRY + ENTRY.split("baselines:\n", 1)[1], "recorded more than once"),
             (ENTRY.replace("    path: one\n", '    path: ""\n'), "non-empty path"),

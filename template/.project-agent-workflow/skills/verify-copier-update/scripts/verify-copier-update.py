@@ -892,6 +892,7 @@ def run_verification(args: argparse.Namespace) -> tuple[int, Path]:
         "target": {"repository": target.name},
         "source": {"repository": source.name, "selector": args.source_ref},
         "update_path": None,
+        "project_validation": "declared_absent" if args.declare_no_project_validation else "required",
         "changed_paths": [],
         "commands": [],
         "unresolved": [],
@@ -907,7 +908,13 @@ def run_verification(args: argparse.Namespace) -> tuple[int, Path]:
             parse_json_argv(raw, f"validation command {index}")
             for index, raw in enumerate(args.validation_command_json, start=1)
         ]
-        if not validations:
+        if validations and args.declare_no_project_validation:
+            stop(
+                "blocked",
+                "validation_declaration_conflict",
+                "a project validation command was passed together with the declaration that none exists",
+            )
+        if not validations and not args.declare_no_project_validation:
             stop("blocked", "validation_missing", "at least one target-specific validation command is required")
         if not args.trust_template_tasks:
             stop("blocked", "template_trust_missing", "template-task trust must be explicit")
@@ -1212,14 +1219,27 @@ def run_verification(args: argparse.Namespace) -> tuple[int, Path]:
         if second_status:
             stop("rejected", "not_idempotent", "same-ref update left a second worktree change")
 
-        manifest.update(
-            {
-                "result": "verified",
-                "reason_code": "all_checks_passed",
-                "detail": "all required checks passed for the recorded commit OIDs",
-                "unresolved": [],
-            }
-        )
+        if args.declare_no_project_validation:
+            manifest.update(
+                {
+                    "result": "verified",
+                    "reason_code": "all_checks_passed_without_project_validation",
+                    "detail": (
+                        "every template-side check passed for the recorded commit OIDs,"
+                        " and no project validation command was run"
+                    ),
+                    "unresolved": [],
+                }
+            )
+        else:
+            manifest.update(
+                {
+                    "result": "verified",
+                    "reason_code": "all_checks_passed",
+                    "detail": "all required checks passed for the recorded commit OIDs",
+                    "unresolved": [],
+                }
+            )
         exit_code = 0
     except VerificationStop as exc:
         manifest.update(
@@ -1313,6 +1333,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="repeatable target-specific validation command as a JSON argv array",
+    )
+    parser.add_argument(
+        "--declare-no-project-validation",
+        action="store_true",
+        help=(
+            "verify without any project validation command, for a project whose own"
+            " gate cannot run in a fresh clone; the result records the gap"
+        ),
     )
     return parser
 
