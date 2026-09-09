@@ -1010,6 +1010,9 @@ class RemoteSourceDetectionTest(unittest.TestCase):
 
 
 TEMPLATE_REMOTE = "git@github.com:rectaris/temp_project.git"
+# A verification runs inside a fresh clone, so a gate driven by one of these launchers
+# cannot run there and must never be recorded.
+NEEDS_INSTALLED_DEPENDENCIES = frozenset({"npm", "npx", "pnpm", "yarn", "node", "vitest", "tsc"})
 ENTRY = (
     "schema_version: 1\n"
     f"template_remote: {TEMPLATE_REMOTE}\n"
@@ -1060,11 +1063,18 @@ class DownstreamBaselineTest(unittest.TestCase):
         )
         for baseline in baselines:
             with self.subTest(baseline=baseline.identifier):
-                self.assertTrue(baseline.validation_commands)
                 self.assertTrue(baseline.path.is_absolute())
                 self.assertTrue(baseline.remote)
                 self.assertTrue(baseline.baseline_ref)
                 self.assertTrue(baseline.template_commit)
+                for command in baseline.validation_commands:
+                    self.assertTrue(all(command))
+                    self.assertNotIn(command[0], NEEDS_INSTALLED_DEPENDENCIES)
+
+    def test_a_project_without_a_runnable_gate_is_recorded_without_one(self) -> None:
+        text = ENTRY.replace('    validation_commands:\n      - ["true"]\n', "")
+        baselines = self.load_record(text)
+        self.assertEqual((), baselines[0].validation_commands)
 
     def test_a_relative_path_resolves_against_the_given_root(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -1101,7 +1111,11 @@ class DownstreamBaselineTest(unittest.TestCase):
                 "non-empty baselines",
             ),
             (ENTRY.replace(f"template_remote: {TEMPLATE_REMOTE}\n", ""), "non-empty template_remote"),
-            (ENTRY.replace('      - ["true"]\n', ""), "at least one validation command"),
+            (ENTRY.replace('      - ["true"]\n', "      - []\n"), "unusable validation command"),
+            (
+                ENTRY.replace('    validation_commands:\n      - ["true"]\n', "    validation_commands: true\n"),
+                "validation commands as a list",
+            ),
             (ENTRY + ENTRY.split("baselines:\n", 1)[1], "recorded more than once"),
             (ENTRY.replace("    path: one\n", '    path: ""\n'), "non-empty path"),
             (ENTRY.replace("    remote: git@github.com:owner/one.git\n", ""), "non-empty remote"),

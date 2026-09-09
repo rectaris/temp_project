@@ -161,8 +161,10 @@ def require_baseline(entry: object, root: Path, seen: set[str]) -> Baseline:
             raise BaselineError(f"baseline {identifier} must declare a non-empty {field}")
         required[field] = value.strip()
     commands = entry.get("validation_commands")
-    if not isinstance(commands, list) or not commands:
-        raise BaselineError(f"baseline {identifier} must declare at least one validation command")
+    if commands is None:
+        commands = []
+    if not isinstance(commands, list):
+        raise BaselineError(f"baseline {identifier} must declare its validation commands as a list")
     parsed: list[tuple[str, ...]] = []
     for command in commands:
         if not isinstance(command, list) or not command:

@@ -17,7 +17,14 @@
 #   template_commit   the template version the project records at that ref, so a
 #                     stale entry is refused instead of silently accepted, and the
 #                     project's recorded _src_path must name template_remote
-#   validation_commands  the project's own commands that must still pass afterwards
+#   validation_commands  optional; the project's own commands that must still pass
+#                     afterwards, limited to commands the isolated clone can run
+#
+# A verification runs inside a fresh clone, which carries no installed dependencies,
+# so a project whose own gate builds or generates types cannot declare that gate here.
+# Such a project records no command rather than an invented one: the template's own
+# obligation is still checked, because the generated change-aware validation runs
+# inside the updated clone and reports the template as the owner when it rejects.
 schema_version: 1
 
 # The template every recorded project must actually be generated from. It is checked
@@ -31,16 +38,18 @@ baselines:
     remote: git@github.com:rectaris/curiretas-gakumas-portal.git
     baseline_ref: dev
     template_commit: v1.4.1
-    validation_commands:
-      - ["npm", "run", "typecheck"]
+    # npm run verify runs check:types, test and build, all of which need installed
+    # dependencies that the isolated clone does not carry.
+    validation_commands: []
 
   - id: gakumasu-timeline
     path: gakumasu-timeline
     remote: git@github.com:rectaris/gakumasu-timeline.git
     baseline_ref: dev
     template_commit: v1.4.1-19-gf6d071e
-    validation_commands:
-      - ["npm", "run", "typecheck"]
+    # npm run verify runs validate:data, verify:tests and build, and its type checks
+    # call wrangler, so none of it runs in the isolated clone.
+    validation_commands: []
 
   # The checkout directory and the repository it tracks carry different names.
   - id: supportcard-status
@@ -48,5 +57,6 @@ baselines:
     remote: git@github.com:rectaris/calc-sapo.git
     baseline_ref: dev
     template_commit: v1.4.1
-    validation_commands:
-      - ["python3", "-m", "compileall", "-q", "."]
+    # npm run verify runs build, vitest, a structure check and a security scan, all of
+    # which need installed dependencies.
+    validation_commands: []

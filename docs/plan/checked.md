@@ -239,3 +239,4 @@ id	path
 305	docs/plan/checked/2026/09/01-15/305-make-test-fixtures-independent-of-host-state.md
 306	docs/plan/checked/2026/09/01-15/306-classify-update-verification-outcomes.md
 307	docs/plan/checked/2026/09/01-15/307-verify-real-downstream-baselines.md
+308	docs/plan/checked/2026/09/01-15/308-record-the-real-downstream-gate.md
