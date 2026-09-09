@@ -252,7 +252,9 @@ DECISION_REUSE_REQUIRED_POLICY_REFERENCES = (
     "docs/agent/SPEC_DECISION_AUDIT.md",
 )
 # The routed instruction itself, not just the path. Each entry must appear as a
-# whole line so a negated or reversed instruction cannot satisfy it.
+# whole line, including its exact leading indentation, so neither a negated
+# instruction nor a re-indented one that Markdown reads as a code block or as
+# foreign list content can satisfy it.
 DECISION_REUSE_SKILL_INSTRUCTIONS = {
     ".codex/skills/decision-audit/SKILL.md": (
         "Read `references/implementation-preflight.md` when the audit is about to become"
@@ -266,7 +268,7 @@ DECISION_REUSE_SKILL_INSTRUCTIONS = {
         " `{reference}` before proposing a repair.",
     ),
     ".codex/skills/sequential-plan-orchestrator/SKILL.md": (
-        "Read `{reference}` before classifying a repair, before reopening a settled"
+        "   Read `{reference}` before classifying a repair, before reopening a settled"
         " decision, and before asking for approval that the unchanged authorization"
         " already covers.",
     ),
@@ -960,7 +962,9 @@ def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str
 
 
 def require_decision_reuse_instructions(relative: str, reference: str) -> None:
-    lines = {line.strip() for line in read(relative).splitlines()}
+    # Only trailing whitespace is normalized. Leading indentation is part of the
+    # instruction because Markdown gives it meaning.
+    lines = {line.rstrip() for line in read(relative).splitlines()}
     for instruction in decision_reuse_instruction_lines(relative, reference):
         if instruction not in lines:
             fail(f"{relative} does not carry the routed preflight instruction: {instruction}")
@@ -1012,7 +1016,11 @@ def check_decision_reuse_scenarios() -> None:
     }
     for key, expected_set in declared_sets.items():
         value = block.get(key)
-        if not isinstance(value, list) or set(value) != expected_set:
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) for item in value
+        ):
+            fail(f"{relative} decision_reuse {key} must be a list of strings")
+        if set(value) != expected_set:
             fail(
                 f"{relative} decision_reuse {key} must be exactly "
                 f"{sorted(expected_set)}"

@@ -738,7 +738,7 @@ def require_decision_reuse_alignment() -> None:
         generated_skill = "template/" + root_skill.replace(
             ".codex/skills/", ".project-agent-workflow/skills/", 1
         )
-        lines = {line.strip() for line in read(generated_skill).splitlines()}
+        lines = {line.rstrip() for line in read(generated_skill).splitlines()}
         for instruction in policy.DECISION_REUSE_SKILL_INSTRUCTIONS[root_skill]:
             expected = instruction.format(
                 reference=policy.DECISION_REUSE_GENERATED_REFERENCE
