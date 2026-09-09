@@ -52,6 +52,10 @@ The post-render profile task may insert only an absent `model` or `model_reasoni
 
 It must preserve every declared model field, instructions, and every unrelated project-owned field.
 
+## Validation-Witness Migration Boundary
+
+Before any Copier v1.4.5 before-update or after-update migration step, read the whole validation-witness migration guardian rule in `references/orchestration.md` and follow it there. That document is the single normative home of the rule; this page does not restate it, and no summary of it authorizes an update.
+
 ## Release Flow
 
 1. Change `copier.yml`, `template/`, references, or tests.

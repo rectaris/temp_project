@@ -32,6 +32,8 @@ task_types:
         when: raw local logs or large artifacts are kept as evidence for template work.
       - path: docs/agent/SPEC_CONTEXT_COMPRESSION.md
         when: large generated logs, CI logs, or local evidence need compressed views.
+      - path: references/orchestration.md
+        when: a Copier v1.4.5 before-update or after-update validation-witness migration step is in scope.
 
   security:
     summary: Secrets, credentials, permissions, hooks, logs, external access, dependency execution, or CI write behavior.

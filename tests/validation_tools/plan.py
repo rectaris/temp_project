@@ -2578,6 +2578,195 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     module.ROOT = root
                     module.check_active_plans()
 
+    ROUTING_FIXTURE = ROOT / "tests/fixtures/agent-policy-routing/scenarios.json"
+    ROUTING_PROTOCOL = ROOT / "tests/fixtures/agent-policy-routing/evaluation-protocol.md"
+    ROUTED_POLICY_FILES = (
+        "AGENTS.md",
+        "template/.project-agent-workflow/AGENTS.md.jinja",
+        "references/orchestration.md",
+        "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+        "docs/agent/spec-index.yaml",
+        "template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja",
+    )
+
+    def build_routing_fixture(self, directory: Path) -> None:
+        """Copy the real routed policy files so a mutation is the only change."""
+
+        for relative in self.ROUTED_POLICY_FILES:
+            target = directory / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
+
+    def load_routing_policy(self, directory: Path, name: str):
+        module = load_module(self.ROOT_POLICY, name)
+        module.ROOT = directory
+        return module
+
+    def test_routing_fixture_holds_only_the_fixed_cases(self) -> None:
+        fixture = json.loads(self.ROUTING_FIXTURE.read_text(encoding="utf-8"))
+        kinds = [scenario["kind"] for scenario in fixture["scenarios"]]
+        self.assertIn("median", kinds)
+        self.assertIn("edge", kinds)
+        for scenario in fixture["scenarios"]:
+            self.assertTrue(scenario["required_before_action"])
+            self.assertTrue(scenario["critical_failures"])
+        protocol = self.ROUTING_PROTOCOL.read_text(encoding="utf-8")
+        self.assertIn("never contains the held-out evaluation input", protocol)
+        self.assertIn("embeds the case", protocol)
+        # The held-out case lives outside the repository, so no fixture byte may
+        # carry it and no protocol byte may reproduce it.
+        serialized = self.ROUTING_FIXTURE.read_text(encoding="utf-8")
+        self.assertNotIn("held-out case", serialized)
+
+    def test_routed_destinations_are_reachable_from_every_entrypoint(self) -> None:
+        module = load_module(self.ROOT_POLICY, "root_policy_routing_reachable")
+        fixture = json.loads(self.ROUTING_FIXTURE.read_text(encoding="utf-8"))
+        for route in fixture["routes"]:
+            for entrypoint, destination in route["destinations"].items():
+                with self.subTest(entrypoint=entrypoint):
+                    text = (ROOT / entrypoint).read_text(encoding="utf-8")
+                    self.assertIn(destination, text)
+                    self.assertNotIn(
+                        module.VALIDATION_WITNESS_MIGRATION_MARKER, text
+                    )
+            for index_route in route["index_routes"]:
+                with self.subTest(index=index_route["index"]):
+                    index = (ROOT / index_route["index"]).read_text(encoding="utf-8")
+                    self.assertIn(index_route["task_type"], index)
+                    self.assertIn(index_route["path"], index)
+        module.check_validation_witness_migration_policy()
+        module.check_agents_entrypoint_size()
+
+    def test_root_policy_rejects_a_lost_routed_obligation(self) -> None:
+        module = load_module(self.ROOT_POLICY, "root_policy_routing_markers")
+        destinations = module.VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS
+        cases = {}
+        for entrypoint in destinations:
+            for marker in module.VALIDATION_WITNESS_MIGRATION_ROUTE_MARKERS:
+                cases[f"{entrypoint} drops {marker}"] = (entrypoint, marker, "")
+            cases[f"{entrypoint} drops its destination"] = (
+                entrypoint,
+                destinations[entrypoint],
+                "somewhere-else.md",
+            )
+        for relative in (
+            "references/orchestration.md",
+            "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+        ):
+            for marker in module.VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS[:4]:
+                cases[f"{relative} drops {marker}"] = (relative, marker, "")
+        for index, (case, (relative, marker, replacement)) in enumerate(cases.items()):
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_routing_fixture(directory)
+                    target = directory / relative
+                    lines = target.read_text(encoding="utf-8").splitlines(keepends=True)
+                    # A destination path also appears in unrelated rules, so the
+                    # mutation is applied to the statement that owns the marker.
+                    owning = [
+                        index
+                        for index, line in enumerate(lines)
+                        if marker.lower() in line.lower()
+                        and (
+                            module.VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER in line.lower()
+                            or module.VALIDATION_WITNESS_MIGRATION_MARKER in line
+                        )
+                    ]
+                    self.assertEqual(len(owning), 1, f"{relative} must state {marker} once")
+                    line = lines[owning[0]]
+                    lines[owning[0]], count = re.subn(
+                        re.escape(marker), replacement, line, count=1, flags=re.IGNORECASE
+                    )
+                    self.assertEqual(count, 1, f"{relative} must state {marker}")
+                    target.write_text("".join(lines), encoding="utf-8")
+                    policy = self.load_routing_policy(
+                        directory, f"root_policy_routing_drop_{index}"
+                    )
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(SystemExit):
+                            policy.check_validation_witness_migration_policy()
+
+    def test_root_policy_rejects_a_restated_rule_in_an_entrypoint(self) -> None:
+        module = load_module(self.ROOT_POLICY, "root_policy_routing_restate")
+        for index, entrypoint in enumerate(
+            module.VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS
+        ):
+            with self.subTest(entrypoint=entrypoint):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_routing_fixture(directory)
+                    target = directory / entrypoint
+                    target.write_text(
+                        target.read_text(encoding="utf-8")
+                        + f"\n- {module.VALIDATION_WITNESS_MIGRATION_MARKER} restated here.\n",
+                        encoding="utf-8",
+                    )
+                    policy = self.load_routing_policy(
+                        directory, f"root_policy_routing_restate_{index}"
+                    )
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(SystemExit):
+                            policy.check_validation_witness_migration_policy()
+
+    def test_root_policy_rejects_an_oversized_or_regrown_entrypoint(self) -> None:
+        module = load_module(self.ROOT_POLICY, "root_policy_routing_size")
+        for index, entrypoint in enumerate(
+            module.VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS
+        ):
+            with self.subTest(oversized_route=entrypoint):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_routing_fixture(directory)
+                    target = directory / entrypoint
+                    text = target.read_text(encoding="utf-8")
+                    padded = text.replace(
+                        "no summary of it authorizes an update.",
+                        "no summary of it authorizes an update. " + "x" * 300,
+                        1,
+                    )
+                    self.assertNotEqual(padded, text)
+                    target.write_text(padded, encoding="utf-8")
+                    policy = self.load_routing_policy(
+                        directory, f"root_policy_routing_size_{index}"
+                    )
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(SystemExit):
+                            policy.check_validation_witness_migration_policy()
+        for index, entrypoint in enumerate(module.AGENTS_BASELINE_BYTES):
+            with self.subTest(regrown=entrypoint):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_routing_fixture(directory)
+                    target = directory / entrypoint
+                    baseline = module.AGENTS_BASELINE_BYTES[entrypoint]
+                    target.write_text(
+                        target.read_text(encoding="utf-8") + "y" * baseline,
+                        encoding="utf-8",
+                    )
+                    policy = self.load_routing_policy(
+                        directory, f"root_policy_routing_regrow_{index}"
+                    )
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(SystemExit):
+                            policy.check_agents_entrypoint_size()
+
+    def test_root_policy_rejects_a_weaker_generated_route(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            self.build_routing_fixture(directory)
+            target = directory / "template/.project-agent-workflow/AGENTS.md.jinja"
+            target.write_text(
+                target.read_text(encoding="utf-8").replace(
+                    "read the whole", "consider reading", 1
+                ),
+                encoding="utf-8",
+            )
+            policy = self.load_routing_policy(directory, "root_policy_routing_weaker")
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    policy.check_validation_witness_migration_policy()
+
     def test_title_does_not_hide_manifest_validation_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plan = Path(tmp) / "plan.md"

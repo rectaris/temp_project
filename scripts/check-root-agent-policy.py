@@ -244,6 +244,37 @@ VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS = (
     "unrestricted same-user actor",
 )
 
+# The always-loaded entrypoints route to the guardian rule instead of repeating
+# it. The route is what an agent reads first, so it must name its destination,
+# require the read before the migration step, and refuse a summary substitute.
+VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER = (
+    "validation-witness migration guardian rule"
+)
+VALIDATION_WITNESS_MIGRATION_ROUTE_MARKERS = (
+    "before any copier v1.4.5 before-update or after-update migration step",
+    "read the whole",
+    "follow it there",
+    "no summary of it authorizes an update",
+)
+VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS = {
+    "AGENTS.md": "references/orchestration.md",
+    "template/.project-agent-workflow/AGENTS.md.jinja": (
+        ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+    ),
+}
+# A route long enough to restate the rule would reintroduce the duplicate the
+# relocation removed, so the entrypoint route is capped.
+VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES = 300
+
+# The activation baseline of plan 275. The entrypoints are always loaded, so
+# each one is held at or below its reduced size rather than allowed to drift
+# back toward the duplicated form.
+AGENTS_BASELINE_BYTES = {
+    "AGENTS.md": 23719,
+    "template/.project-agent-workflow/AGENTS.md.jinja": 21072,
+}
+AGENTS_MINIMUM_BYTE_REDUCTION = 1000
+
 VALIDATION_WITNESS_MAP_MARKER = "validation_witness_map"
 
 # Markers every witness-map policy statement must carry, whatever depth the
@@ -437,13 +468,64 @@ def validation_witness_migration_policy_statement(relative: str) -> str:
     return statement
 
 
+def validation_witness_migration_route(relative: str) -> str:
+    text = read(relative)
+    if VALIDATION_WITNESS_MIGRATION_MARKER in text:
+        fail(
+            f"{relative} must route to the validation-witness migration policy "
+            "instead of restating it"
+        )
+    matches = [
+        line.strip()
+        for line in text.splitlines()
+        if VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER in line.lower()
+    ]
+    if len(matches) != 1:
+        fail(
+            f"{relative} must contain exactly one validation-witness migration "
+            "route"
+        )
+    route = matches[0]
+    size = len(route.encode("utf-8"))
+    if size > VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES:
+        fail(
+            f"{relative} validation-witness migration route is {size} bytes, "
+            f"over {VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES}"
+        )
+    destination = VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS[relative]
+    if destination not in route:
+        fail(
+            f"{relative} validation-witness migration route does not name "
+            f"{destination}"
+        )
+    lowered = route.lower()
+    for marker in VALIDATION_WITNESS_MIGRATION_ROUTE_MARKERS:
+        if marker not in lowered:
+            fail(
+                f"{relative} missing validation-witness migration route marker: "
+                f"{marker}"
+            )
+    return lowered.replace(destination.lower(), "<destination>")
+
+
+def check_agents_entrypoint_size() -> None:
+    for relative, baseline in AGENTS_BASELINE_BYTES.items():
+        size = len(read(relative).encode("utf-8"))
+        allowed = baseline - AGENTS_MINIMUM_BYTE_REDUCTION
+        if size > allowed:
+            fail(
+                f"{relative} is {size} bytes; the routed entrypoint must stay at "
+                f"or below {allowed}"
+            )
+
+
 def check_validation_witness_migration_policy() -> None:
-    root_agents = validation_witness_migration_policy_statement("AGENTS.md")
-    template_agents = validation_witness_migration_policy_statement(
+    root_agents = validation_witness_migration_route("AGENTS.md")
+    template_agents = validation_witness_migration_route(
         "template/.project-agent-workflow/AGENTS.md.jinja"
     )
     if root_agents != template_agents:
-        fail("root/generated AGENTS validation-witness migration policy differs")
+        fail("root/generated AGENTS validation-witness migration route differs")
 
     root_orchestration = validation_witness_migration_policy_statement(
         "references/orchestration.md"
@@ -3627,6 +3709,7 @@ def main() -> int:
     check_required_files()
     check_gitignore()
     check_agents_rules()
+    check_agents_entrypoint_size()
     check_validation_witness_migration_policy()
     check_validation_witness_map_policy()
     check_tier_zero_pair_policy()

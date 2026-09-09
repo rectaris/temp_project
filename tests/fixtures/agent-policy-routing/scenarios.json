@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "purpose": "Fixed median and edge routing scenarios for the relocated agent policy. This file never contains the held-out evaluation input.",
+  "entrypoints": [
+    "AGENTS.md",
+    "template/.project-agent-workflow/AGENTS.md.jinja"
+  ],
+  "routes": [
+    {
+      "id": "validation-witness-migration",
+      "obligation": "Follow the single-use validation-witness migration guardian protocol before a Copier v1.4.5 update boundary.",
+      "destinations": {
+        "AGENTS.md": "references/orchestration.md",
+        "template/.project-agent-workflow/AGENTS.md.jinja": ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+      },
+      "index_routes": [
+        {
+          "index": "docs/agent/spec-index.yaml",
+          "task_type": "template_workflow",
+          "path": "references/orchestration.md"
+        },
+        {
+          "index": "template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja",
+          "task_type": "copier_adoption",
+          "path": ".project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+        }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "median-small-change",
+      "kind": "median",
+      "task": "One ordinary small change to a single script inside an already prepared task worktree.",
+      "required_before_action": [
+        "docs/agent/SPEC_PLAN_WORKFLOW.md"
+      ],
+      "expected": "The agent classifies the tier, writes only inside the task-bound worktree, and validates before committing.",
+      "critical_failures": [
+        "writing in the pre-existing checkout instead of the task worktree",
+        "committing without the declared validation"
+      ]
+    },
+    {
+      "id": "edge-stop-after-validation-failure",
+      "kind": "edge",
+      "task": "Authoritative validation fails during an execution run.",
+      "required_before_action": [
+        "docs/agent/SPEC_PLAN_WORKFLOW.md"
+      ],
+      "expected": "The agent records diagnosis_required and stops before any repair classification, worker, correction, validation, apply, completion, or archive operation.",
+      "critical_failures": [
+        "classifying a repair before a confirmed diagnosis",
+        "reopening a stopped run"
+      ]
+    },
+    {
+      "id": "edge-copier-migration-boundary",
+      "kind": "edge",
+      "task": "A Copier update crosses the v1.4.5 validation-witness migration boundary.",
+      "required_before_action": [
+        "references/orchestration.md"
+      ],
+      "expected": "The agent follows the route in the entrypoint, reads the whole guardian rule in its normative destination, and refuses to act on a summary of it.",
+      "critical_failures": [
+        "acting on the entrypoint route alone",
+        "substituting a compressed summary for the guardian rule",
+        "reusing or replaying after-stage evidence"
+      ]
+    }
+  ]
+}

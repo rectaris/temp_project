@@ -97,6 +97,10 @@ Changes made directly inside the managed core are unsupported extension points a
 
 Move such changes into a project-owned extension before the next update.
 
+## Validation-Witness Migration Boundary
+
+Before any Copier v1.4.5 before-update or after-update migration step, read the whole validation-witness migration guardian rule in `.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md` and follow it there. That document is the single normative home of the rule; this page does not restate it, and no summary of it authorizes an update.
+
 ## Migrating the Pre-Namespace Layout
 
 Repositories generated before this ownership model may contain generic policy under `docs/agent/`, workflow helpers under `scripts/`, and generic skills under `.codex/skills/`.

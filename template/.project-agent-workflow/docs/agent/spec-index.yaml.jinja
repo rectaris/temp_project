@@ -192,6 +192,8 @@ task_types:
         when: external service options, Linear, MCP, or graph memory policy are part of the adoption.
       - path: .project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md
         when: plan lifecycle files, checked archives, or active plans are copied or merged.
+      - path: .project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
+        when: a Copier v1.4.5 before-update or after-update validation-witness migration step is in scope.
 
   agent_logging:
     summary: Local raw agent logs, run manifests, redaction reports, compressed views, or large agent artifacts.

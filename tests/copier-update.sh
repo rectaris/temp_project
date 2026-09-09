@@ -912,6 +912,24 @@ assert_managed_orchestration_reports() {
   grep -q 'def has_pre_v1_adoption_provenance()' "$out/.project-agent-workflow/scripts/planlib.py"
 }
 
+# The managed entrypoint routes to the guardian rule instead of repeating it,
+# so every update must publish the short route, keep the whole rule in its
+# normative destination, and leave the project's own entrypoint untouched.
+assert_managed_policy_routing() {
+  entrypoint=$1
+  destination=$2
+  index=$3
+  if grep -Fq 'validation-witness-migration-provenance-schema: 1' "$entrypoint"; then
+    echo "managed entrypoint restates the relocated guardian rule: $entrypoint" >&2
+    exit 1
+  fi
+  grep -Fq 'validation-witness migration guardian rule' "$entrypoint"
+  grep -Fq '.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md' "$entrypoint"
+  grep -Fq 'no summary of it authorizes an update.' "$entrypoint"
+  grep -Fq 'validation-witness-migration-provenance-schema: 1' "$destination"
+  grep -Fq 'SPEC_ORCHESTRATION.md' "$index"
+}
+
 validate_common_lane() {
   out=$1
   expect_legacy_root=${2:-1}
@@ -920,6 +938,8 @@ validate_common_lane() {
   managed_orchestration="$out/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 
   assert_managed_orchestration_reports
+  assert_managed_policy_routing "$managed_agents" "$managed_orchestration" \
+    "$out/.project-agent-workflow/docs/agent/spec-index.yaml"
 
   test -f "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
   grep -q '"suite": "worker-execution-contract-integration"' "$root/tests/fixtures/orchestration/worker-contract-evidence.json"
