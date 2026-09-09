@@ -7218,14 +7218,14 @@ class ParentDirectPreparationTest(unittest.TestCase):
     def test_a_failed_first_publication_leaves_no_unusable_record(self) -> None:
         """A retry must not be blocked by a placeholder from a failed attempt."""
 
-        real = STATE_MODULE.atomic_write
+        real = os.link
 
-        def failing(path: Path, value: dict[str, Any], **keywords: Any) -> None:
-            if path == self.state:
+        def failing(source: str, target: str, **keywords: Any) -> None:
+            if target == self.state.name:
                 raise OSError("injected publication failure")
-            real(path, value, **keywords)
+            real(source, target, **keywords)
 
-        with mock.patch.object(STATE_MODULE, "atomic_write", failing):
+        with mock.patch("os.link", failing):
             with mock.patch("builtins.print"):
                 with self.assertRaises(STATE_MODULE.StateError):
                     self.prepare_in_process()
