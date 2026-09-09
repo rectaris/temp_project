@@ -961,114 +961,61 @@ def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str
     )
 
 
-MARKDOWN_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
-MARKDOWN_FENCE_INDENT = 3
-MARKDOWN_TAB_STOP = 4
+# A routed instruction only counts when Markdown renders it as an instruction,
+# and the constructs that can swallow a line depend on container context that
+# spans several lines. Approximating that context failed repeatedly: a fence
+# indented past the margin, a tab-indented fence inside a list item, and a raw
+# HTML block opened as list content each hid a byte-identical route. Rather than
+# keep enumerating hiding places, a file that carries a routed instruction is
+# required to be plain prose, so the tokens that could open such a context are
+# refused wherever they appear.
+MARKDOWN_FENCE_TOKEN_RE = re.compile(r"`{3,}|~{3,}")
+MARKDOWN_CONTAINER_PREFIX_RE = re.compile(r"^ *(?:> ?|(?:[-*+]|\d{1,9}[.)])(?: +|$))")
 
 
-def expand_markdown_indent(line: str) -> str:
-    """Expand leading tabs the way CommonMark measures block indentation."""
+def markdown_block_content(line: str) -> str:
+    """Return the line with its blockquote and list markers removed."""
 
-    prefix: list[str] = []
-    column = 0
-    for index, char in enumerate(line):
-        if char == "\t":
-            width = MARKDOWN_TAB_STOP - (column % MARKDOWN_TAB_STOP)
-            prefix.append(" " * width)
-            column += width
-            continue
-        if char != " ":
-            prefix.append(line[index:])
-            break
-        prefix.append(char)
-        column += 1
-    return "".join(prefix)
-
-
-def markdown_fence_opener(line: str) -> str | None:
-    expanded = expand_markdown_indent(line)
-    stripped = expanded.lstrip(" ")
-    if len(expanded) - len(stripped) > MARKDOWN_FENCE_INDENT:
-        return None
-    match = MARKDOWN_FENCE_RE.match(stripped)
-    return None if match is None else match.group(1)
-
-
-def markdown_fence_closes(line: str, fence: str) -> bool:
-    """Report whether the line closes an open fence.
-
-    CommonMark closes a fence only with a line indented at most three columns
-    that repeats the opening character at least as many times and carries
-    nothing but whitespace afterwards. A closer with an info string or deeper
-    indentation leaves the block open, so accepting it would let a routed
-    instruction stay inside code while the check passes.
-    """
-
-    closer = markdown_fence_opener(line)
-    if closer is None or closer[0] != fence[0] or len(closer) < len(fence):
-        return False
-    return expand_markdown_indent(line).lstrip(" ")[len(closer):].strip(" \t") == ""
+    current = line
+    while True:
+        match = MARKDOWN_CONTAINER_PREFIX_RE.match(current)
+        if match is None:
+            return current.lstrip(" ")
+        current = current[match.end():]
 
 
 def markdown_prose_defects(text: str) -> list[str]:
-    """Report the constructs that stop this file from being plain prose.
+    """Report the constructs that stop this text from being plain prose.
 
-    Enumerating every way a line can hide inside Markdown is open ended, and
-    each missed construct silently turns a hidden route into an accepted one.
-    A file that must carry routed instructions is therefore required to be
-    plain prose: raw HTML, HTML comments, and unterminated fences are refused
-    outright rather than approximated, so an unproven construct fails instead
-    of passing.
+    Without any code fence token there is no fenced block in any container,
+    without a tab there is no ambiguous indentation, and without a comment
+    marker or a block that opens with a raw HTML tag there is no HTML block.
+    What remains renders every line as text, so a line that matches an expected
+    instruction is that instruction.
     """
 
     defects: list[str] = []
-    fence: str | None = None
-    fence_line = 0
     for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.rstrip()
-        if fence is not None:
-            if markdown_fence_closes(line, fence):
-                fence = None
-            continue
-        opener = markdown_fence_opener(line)
-        if opener is not None:
-            fence = opener
-            fence_line = number
-            continue
-        stripped = expand_markdown_indent(line).lstrip(" ")
-        if stripped.startswith("<"):
-            defects.append(f"line {number} opens a raw HTML block: {line.strip()}")
-        elif "<!--" in line:
-            defects.append(f"line {number} opens an HTML comment: {line.strip()}")
-    if fence is not None:
-        defects.append(f"line {fence_line} opens a fenced block that is never closed")
+        if "\t" in raw:
+            defects.append(f"line {number} contains a tab, which shifts block indentation")
+        if MARKDOWN_FENCE_TOKEN_RE.search(line):
+            defects.append(f"line {number} contains a code fence token")
+        if "<!--" in line:
+            defects.append(f"line {number} contains an HTML comment marker")
+        elif markdown_block_content(line).startswith("<"):
+            defects.append(f"line {number} opens a raw HTML block")
     return defects
 
 
-def markdown_operative_lines(text: str) -> set[str]:
-    """Return the lines Markdown renders as instructions.
+def markdown_prose_lines(text: str) -> set[str]:
+    """Return the lines of a text already proven to be plain prose.
 
-    A byte-identical line inside a fenced code block is not an instruction, so
-    those regions are excluded. Only trailing whitespace is normalized; leading
-    indentation stays part of the line because Markdown gives it meaning.
-    Callers pair this with markdown_prose_defects, which refuses the raw HTML
-    and comment constructs this scanner does not model.
+    Only trailing whitespace is normalized. Leading indentation stays part of
+    the line because Markdown gives it meaning.
     """
 
-    operative: set[str] = set()
-    fence: str | None = None
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        if fence is not None:
-            if markdown_fence_closes(line, fence):
-                fence = None
-            continue
-        opener = markdown_fence_opener(line)
-        if opener is not None:
-            fence = opener
-            continue
-        operative.add(line)
-    return operative
+    return {line.rstrip() for line in text.splitlines()}
 
 
 def require_markdown_prose(relative: str, text: str) -> None:
@@ -1079,7 +1026,7 @@ def require_markdown_prose(relative: str, text: str) -> None:
 def require_decision_reuse_instructions(relative: str, reference: str) -> None:
     text = read(relative)
     require_markdown_prose(relative, text)
-    lines = markdown_operative_lines(text)
+    lines = markdown_prose_lines(text)
     for instruction in decision_reuse_instruction_lines(relative, reference):
         if instruction not in lines:
             fail(f"{relative} does not carry the routed preflight instruction: {instruction}")
@@ -1192,7 +1139,7 @@ def check_decision_reuse_scenarios() -> None:
             fail(f"missing implementation preflight reference: {target}")
     preflight = read(DECISION_REUSE_REFERENCE)
     require_markdown_prose(DECISION_REUSE_REFERENCE, preflight)
-    preflight_lines = markdown_operative_lines(preflight)
+    preflight_lines = markdown_prose_lines(preflight)
     for section in DECISION_REUSE_SECTIONS:
         if section not in preflight_lines:
             fail(f"{DECISION_REUSE_REFERENCE} missing section: {section}")

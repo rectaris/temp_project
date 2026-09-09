@@ -744,7 +744,7 @@ def require_decision_reuse_alignment() -> None:
                 f"{generated_skill} must stay plain Markdown prose to carry a routed "
                 f"instruction: {defect}"
             )
-        lines = policy.markdown_operative_lines(generated_text)
+        lines = policy.markdown_prose_lines(generated_text)
         for instruction in policy.DECISION_REUSE_SKILL_INSTRUCTIONS[root_skill]:
             expected = instruction.format(
                 reference=policy.DECISION_REUSE_GENERATED_REFERENCE
