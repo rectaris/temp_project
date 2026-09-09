@@ -120,4 +120,3 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [300](300-compose-parent-direct-execution-preparation.md) | backlog | Compose existing parent-direct execution preparation | docs/plan/backlog/300-compose-parent-direct-execution-preparation.md |

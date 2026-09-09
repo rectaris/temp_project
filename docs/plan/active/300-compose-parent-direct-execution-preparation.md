@@ -1,6 +1,6 @@
 # Compose existing parent-direct execution preparation
 
-status: backlog
+status: in_progress
 primary_invariant: One parent-direct preparation operation composes existing registry and ledger initialization, reports readiness only after exact bindings verify, and grants no implementation, review, continuation or publication authority.
 task_types:
   - template_workflow
@@ -103,3 +103,10 @@ checked_summary_ja: 親による実装の開始準備を一つにまとめ、台
 - This instruction authorizes plan authoring, not implementation or reopening a stopped run. This is ordinary backlog work, not a reconstruction successor.
 - See docs/plan/backlog/README.md for procedure reductions, existing-plan reuse and implementation order. Full decision audit stays in local development-process-planning evidence.
 - The shared authoring checker derives correspondence and digests; the parent reviews witness semantics. No measured productivity saving is claimed.
+
+- 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation.
+- 2026-09-09 approval gate: `review_class: B` with `human_approval_status: not_required`, so no separate owner design approval is required.
+- 2026-09-09 ordering gate: The gate "If the skill-consolidation plan is also selected, implement it first" is satisfied. Plan 299 is checked at `docs/plan/checked/2026/09/01-15/299-route-shared-implementation-preflight.md`, so the sequential skill edits it owns are already published.
+- 2026-09-09 predecessor references: Plans 103, 286 and 296 are checked under `docs/plan/checked/2026/09/01-15/`.
+- 2026-09-09 implementation mode: `implementation_risk: high` requires bounded parent implementation with independent read-only review; no writable worker is started for this plan.
+- 2026-09-09 activation baseline: `0f78a68` in `temp_project`.
