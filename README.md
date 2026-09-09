@@ -21,7 +21,7 @@ Copier が更新する汎用ファイルは、生成先の `.project-agent-workf
 ルートの `AGENTS.md`、`README.md`、`docs/agent/`、`docs/plan/` など、開発中に変更するファイルは初回だけ生成し、以後の `copier update` では上書きしません。
 `.agents/skills/` には管理対象の汎用 Skill 用ブリッジを置き、予約名と衝突しないプロジェクト固有 Skill も追加できます。
 `.codex/` と `.github/` には、ホストが検出するための小さな橋渡しファイルまたは専用の統合ファイルだけを置きます。
-`.codex/agents/*.toml` はプロジェクト所有ですが、`model` と `model_reasoning_effort` だけはテンプレートが固定し、copy/update 後の task で正規化します。
+`.codex/agents/*.toml` はプロジェクト所有です。`model` と `model_reasoning_effort` は、copy/update 後の task が欠けている場合だけ既定値で補い、すでに書かれている値はそのまま残します。
 agent の説明、指示、sandbox 設定など、ほかのフィールドは変更しません。
 
 このテンプレートは、対応する Copier の copy/update 経路で、生成先が所有する製品コード、規則、設定、計画履歴、検証処理を削除または上書きしないことを開発要件とします。

@@ -781,22 +781,33 @@ EOF
   printf '%s\n' "$out"
 }
 
+# Profiles whose model fields the fixture declares itself. The update fills only
+# absent defaults, so a lane that customizes a profile asserts its own values.
+agent_profile_skip=""
+
+assert_seeded_agent_profile() {
+  grep -qE "^[[:space:]]*model = \"$2\"$" "$1/.codex/agents/$4.toml"
+  grep -qE "^[[:space:]]*model_reasoning_effort = \"$3\"$" "$1/.codex/agents/$4.toml"
+}
+
 assert_agent_profiles() {
   out=$1
-  grep -qE '^[[:space:]]*model = "gpt-5.6-sol"$' "$out/.codex/agents/change_reviewer.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "high"$' "$out/.codex/agents/change_reviewer.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/docs_researcher.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/docs_researcher.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/evidence_synthesizer.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "xhigh"$' "$out/.codex/agents/evidence_synthesizer.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.6-luna"$' "$out/.codex/agents/repo_explorer.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "low"$' "$out/.codex/agents/repo_explorer.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.6-terra"$' "$out/.codex/agents/scoped_worker.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/scoped_worker.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/fast_scoped_worker.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/fast_scoped_worker.toml"
-  grep -qE '^[[:space:]]*model = "gpt-5.3-codex-spark"$' "$out/.codex/agents/sequential_plan_worker.toml"
-  grep -qE '^[[:space:]]*model_reasoning_effort = "medium"$' "$out/.codex/agents/sequential_plan_worker.toml"
+  for profile in change_reviewer docs_researcher evidence_synthesizer repo_explorer \
+    scoped_worker fast_scoped_worker sequential_plan_worker
+  do
+    case " $agent_profile_skip " in
+      *" $profile "*) continue ;;
+    esac
+    case "$profile" in
+      change_reviewer) assert_seeded_agent_profile "$out" gpt-5.6-sol high "$profile" ;;
+      docs_researcher) assert_seeded_agent_profile "$out" gpt-5.6-luna medium "$profile" ;;
+      evidence_synthesizer) assert_seeded_agent_profile "$out" gpt-5.6-luna xhigh "$profile" ;;
+      repo_explorer) assert_seeded_agent_profile "$out" gpt-5.6-luna low "$profile" ;;
+      scoped_worker) assert_seeded_agent_profile "$out" gpt-5.6-terra medium "$profile" ;;
+      fast_scoped_worker) assert_seeded_agent_profile "$out" gpt-5.3-codex-spark medium "$profile" ;;
+      sequential_plan_worker) assert_seeded_agent_profile "$out" gpt-5.3-codex-spark medium "$profile" ;;
+    esac
+  done
 }
 
 assert_managed_orchestration_reports() {
@@ -1501,6 +1512,16 @@ developer_instructions = """
 Keep this project instruction.
 """
 EOF_MATURE_DOCS_RESEARCHER
+cat >"$mature_out/.codex/agents/scoped_worker.toml" <<'EOF_MATURE_SCOPED_WORKER'
+  name = "scoped_worker"
+  description = "Customized scoped_worker profile."
+  model = "seed-equal-value"
+sandbox_mode = "workspace-write"
+
+developer_instructions = """
+Keep this project instruction.
+"""
+EOF_MATURE_SCOPED_WORKER
 cat >"$mature_out/.codex/agents/repo_explorer.toml" <<'EOF_MATURE_REPO_EXPLORER'
   name = "project_repository_reader"
   description = "Customized repo_explorer profile."
@@ -1526,15 +1547,22 @@ fixture_git "$mature_out" commit -m "Customize mature project workflow" >/dev/nu
 
 run_adoption "$mature_out" "$target_ref" >/dev/null
 (cd "$mature_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_skip="docs_researcher scoped_worker"
 validate_common_lane "$mature_out"
+agent_profile_skip=""
 grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/docs_researcher.toml"
 grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/repo_explorer.toml"
-grep -q '^  model = "gpt-5.6-luna"$' "$mature_out/.codex/agents/docs_researcher.toml"
-grep -q '^  model_reasoning_effort = "medium"$' "$mature_out/.codex/agents/docs_researcher.toml"
-if grep -q 'legacy-model' "$mature_out/.codex/agents/docs_researcher.toml" || grep -q 'legacy-effort' "$mature_out/.codex/agents/docs_researcher.toml"; then
-  echo "normalized agent profile left legacy model values" >&2
+# The project already declared both fields, so the update must keep its values.
+grep -q '^  model = "legacy-model"$' "$mature_out/.codex/agents/docs_researcher.toml"
+grep -q '^  model_reasoning_effort = "legacy-effort"$' "$mature_out/.codex/agents/docs_researcher.toml"
+if grep -q 'gpt-5.6-luna' "$mature_out/.codex/agents/docs_researcher.toml"; then
+  echo "update replaced a project-owned agent model value" >&2
   exit 1
 fi
+# The project declared model but not the effort, so only the effort is filled.
+grep -q '^  model = "seed-equal-value"$' "$mature_out/.codex/agents/scoped_worker.toml"
+grep -q '^  model_reasoning_effort = "medium"$' "$mature_out/.codex/agents/scoped_worker.toml"
+# The project declared neither field, so both defaults are inserted.
 grep -q '^  model = "gpt-5.6-luna"$' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q '^  model_reasoning_effort = "low"$' "$mature_out/.codex/agents/repo_explorer.toml"
 grep -q '^  name = "project_repository_reader"$' "$mature_out/.codex/agents/repo_explorer.toml"

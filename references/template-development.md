@@ -42,15 +42,15 @@ External-service modules use `docs/agent/external-services.yaml`; the restricted
 Repository-owned:
 
 - root `AGENTS.md`, `README.md`, `.gitignore`, `.codex/config.toml`, and `.codex/hooks.json`
-- seeded `.codex/agents/*.toml` helper-agent definitions, except for the template-fixed `model` and `model_reasoning_effort` fields
+- seeded `.codex/agents/*.toml` helper-agent definitions, including any `model` and `model_reasoning_effort` value the project has already declared; the template supplies those two fields only when they are absent
 - `.agents/skills/` entries whose names do not collide with generated generic skills
 - `docs/agent/` project policy and external-service settings
 - `docs/plan/` active state and history
 - product specs, UI wording, domain data contracts, and local validation adapters
 
-The post-render profile task may replace only `model` and `model_reasoning_effort` in seeded helper-agent definitions.
+The post-render profile task may insert only an absent `model` or `model_reasoning_effort` in seeded helper-agent definitions.
 
-It must preserve instructions and every unrelated project-owned field.
+It must preserve every declared model field, instructions, and every unrelated project-owned field.
 
 ## Release Flow
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for fixed generated-agent model profile normalization."""
+"""Tests for fill-only generated-agent model profile defaults."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ Preserve this project instruction.
         self.assertIn('model_reasoning_effort = "low"', rendered)
         self.assertIn("Preserve this project instruction.", rendered)
 
-    def test_replaces_existing_fields_idempotently(self) -> None:
+    def test_preserves_existing_fields_byte_for_byte(self) -> None:
         original = '''name = "worker"
 description = "Customized worker."
 model = "old-model"
@@ -42,11 +42,20 @@ model_reasoning_effort = "max"
 sandbox_mode = "workspace-write"
 '''
         rendered = MODULE.render_profile(original, "gpt-5.6-terra", "medium")
+        self.assertEqual(rendered, original)
         self.assertEqual(rendered, MODULE.render_profile(rendered, "gpt-5.6-terra", "medium"))
-        self.assertIn('description = "Customized worker."', rendered)
-        self.assertIn('sandbox_mode = "workspace-write"', rendered)
 
-    def test_replaces_existing_indented_fields_without_changing_indent(self) -> None:
+    def test_preserves_an_existing_value_that_equals_an_older_seed(self) -> None:
+        original = '''name = "worker"
+description = "Customized worker."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "low"
+'''
+        self.assertEqual(
+            MODULE.render_profile(original, "gpt-5.6-terra", "medium"), original
+        )
+
+    def test_preserves_existing_indented_fields_without_changing_indent(self) -> None:
         original = '''  name = "worker"
   description = "Customized worker."
   model = "old-model"
@@ -54,9 +63,36 @@ sandbox_mode = "workspace-write"
   sandbox_mode = "workspace-write"
 '''
         rendered = MODULE.render_profile(original, "gpt-5.6-luna", "low")
-        self.assertIn('  model = "gpt-5.6-luna"', rendered)
-        self.assertIn('  model_reasoning_effort = "low"', rendered)
-        self.assertIn('  description = "Customized worker."', rendered)
+        self.assertEqual(rendered, original)
+
+    def test_fills_only_the_absent_field(self) -> None:
+        with_model = '''name = "worker"
+description = "Customized worker."
+model = "old-model"
+sandbox_mode = "workspace-write"
+'''
+        rendered = MODULE.render_profile(with_model, "gpt-5.6-luna", "low")
+        self.assertIn('model = "old-model"', rendered)
+        self.assertEqual(rendered.count('model = "gpt-5.6-luna"'), 0)
+        self.assertIn('model_reasoning_effort = "low"', rendered)
+
+        with_effort = '''name = "worker"
+description = "Customized worker."
+model_reasoning_effort = "max"
+sandbox_mode = "workspace-write"
+'''
+        rendered = MODULE.render_profile(with_effort, "gpt-5.6-luna", "low")
+        self.assertIn('model_reasoning_effort = "max"', rendered)
+        self.assertEqual(rendered.count('model_reasoning_effort = "low"'), 0)
+        self.assertIn('model = "gpt-5.6-luna"', rendered)
+
+    def test_refuses_a_non_string_model_field(self) -> None:
+        original = '''name = "worker"
+description = "Customized worker."
+model = 3
+'''
+        with self.assertRaises(MODULE.ProfileError):
+            MODULE.render_profile(original, "gpt-5.6-luna", "low")
 
     def test_inserts_missing_fields_after_indented_anchors(self) -> None:
         original = '''  name = "worker"
@@ -116,10 +152,8 @@ model = "project-owned"
 model_reasoning_effort = "project-owned"
 '''
         rendered = MODULE.render_profile(original, "gpt-5.6-luna", "low")
+        self.assertEqual(rendered, original)
         self.assertIn('[metadata]\nmodel = "project-owned"', rendered)
-        self.assertIn('model_reasoning_effort = "project-owned"', rendered)
-        self.assertEqual(rendered.count('model = "gpt-5.6-luna"'), 1)
-        self.assertEqual(rendered.count('model_reasoning_effort = "low"'), 1)
 
     def test_refuses_invalid_toml(self) -> None:
         original = '''name = "worker"

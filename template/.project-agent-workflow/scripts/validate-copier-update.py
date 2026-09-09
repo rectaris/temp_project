@@ -22,7 +22,7 @@ NON_REPOSITORY_DIAGNOSIS = (
     "fatal: not a git repository (or any of the parent directories): .git"
 )
 OWNERSHIP_PATH = ".project-agent-workflow/ownership.yaml"
-CURRENT_OWNERSHIP_SHA256 = "895975aad2a8141b5884444961dd6876176b8c524f316e8c76d1585342184aa1"
+CURRENT_OWNERSHIP_SHA256 = "106567d1dadb9d44c5c0333fe5d9ac4024507e2aa116e0517e3134e8cba94c93"
 OWNERSHIP_MAX_BYTES = 64 * 1024
 JAPANESE_ROUTING_PATH = ".agents/skills/natural-japanese/SKILL.md"
 JAPANESE_ROUTING_LINES = frozenset(
@@ -61,7 +61,7 @@ def markdown_indentation(line: str) -> tuple[int, str]:
     return columns, line[index:]
 LEGACY_SEQUENTIAL_WORKER_SHA256 = "744ed4f634e13ec1de27076dfa9f12411a8b01ff56ba27cfbc5151086fbe1ccb"
 READ_ONLY_SEQUENTIAL_WORKER_SHA256 = "6011c848311f59e18a37f511af8620cc025e8cad72a54fc767a83dd8da7837d1"
-FIXED_AGENT_PROFILES = {
+SEEDED_AGENT_PROFILES = {
     "change_reviewer": ("gpt-5.6-sol", "high"),
     "docs_researcher": ("gpt-5.6-luna", "medium"),
     "evidence_synthesizer": ("gpt-5.6-luna", "xhigh"),
@@ -350,13 +350,31 @@ def validate_agent_profile_transition(path: str, before: bytes, after: bytes) ->
     try:
         before_text = before.decode("utf-8")
         after_text = after.decode("utf-8")
+        previous = tomllib.loads(before_text)
         parsed = tomllib.loads(after_text)
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise UpdateValidationError(f"changed agent profile is not valid UTF-8 TOML: {path}") from exc
     profile_name = Path(path).stem
-    expected = FIXED_AGENT_PROFILES.get(profile_name)
-    if expected is None or (parsed.get("model"), parsed.get("model_reasoning_effort")) != expected:
-        raise UpdateValidationError(f"changed agent profile has unexpected fixed model fields: {path}")
+    seeded = SEEDED_AGENT_PROFILES.get(profile_name)
+    for index, field in enumerate(("model", "model_reasoning_effort")):
+        # Ownership is per field: a field the project already declared may only
+        # survive unchanged, and a field it never declared may only appear as
+        # this profile's seeded default.
+        if field in previous:
+            if parsed.get(field) != previous[field]:
+                raise UpdateValidationError(
+                    "Copier update replaced a project-owned agent profile field: "
+                    f"{path} ({field})"
+                )
+            continue
+        if seeded is None:
+            raise UpdateValidationError(
+                f"changed agent profile is not a seeded profile: {path}"
+            )
+        if parsed.get(field) != seeded[index]:
+            raise UpdateValidationError(
+                f"changed agent profile has an unexpected default {field}: {path}"
+            )
     if without_fixed_agent_lines(before_text) != without_fixed_agent_lines(after_text):
         raise UpdateValidationError(
             f"Copier update changed project-owned agent profile content outside fixed model fields: {path}"

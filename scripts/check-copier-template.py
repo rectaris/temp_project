@@ -2338,20 +2338,22 @@ def require_copier_documentation_contract() -> None:
         ),
         "references/template-development.md": (
             "Require `--trust` for every documented copy and update command",
-            "template-fixed `model` and `model_reasoning_effort` fields",
-            "preserve instructions and every unrelated project-owned field",
+            "the template supplies those two fields only when they are absent",
+            "preserve every declared model field, instructions, and every unrelated project-owned field",
         ),
         "template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md": (
             "## Non-Destructive Update Contract",
             "copier copy --trust",
             ".project-agent-workflow/scripts/update-from-copier.sh",
             "The `model` and `model_reasoning_effort` fields are the only exceptions.",
+            "A value the project already declares stays exactly as declared",
+            "Replacing a model field the project already declared is rejected.",
             "`--trust` authorizes the bundled task; it does not prove that the resulting diff is safe to commit.",
         ),
         "template/.project-agent-workflow/ownership.yaml": (
             "field_overrides:",
             "  - path: .codex/agents/*.toml",
-            "    template_fixed:\n      - model\n      - model_reasoning_effort",
+            "    template_default_when_absent:\n      - model\n      - model_reasoning_effort",
             "    project_owned_remainder: true",
         ),
     }

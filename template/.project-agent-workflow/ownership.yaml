@@ -36,7 +36,7 @@ seeded_project_owned:
 
 field_overrides:
   - path: .codex/agents/*.toml
-    template_fixed:
+    template_default_when_absent:
       - model
       - model_reasoning_effort
     project_owned_remainder: true

@@ -1155,8 +1155,8 @@ checked_summary_ja: 件数境界を検証する。
 
 
 class CopierOwnedContentValidationTest(unittest.TestCase):
-    def test_validator_fixed_profiles_match_the_normalizer(self) -> None:
-        self.assertEqual(VALIDATOR.FIXED_AGENT_PROFILES, PROFILE_UPDATER.PROFILES)
+    def test_validator_seeded_profiles_match_the_normalizer(self) -> None:
+        self.assertEqual(VALIDATOR.SEEDED_AGENT_PROFILES, PROFILE_UPDATER.PROFILES)
 
     def make_repository(self) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         temporary = tempfile.TemporaryDirectory()
@@ -1217,20 +1217,52 @@ developer_instructions = """Preserve this instruction."""
         with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "ownership inventory"):
             VALIDATOR.validate(repository)
 
-    def test_allows_managed_changes_and_exact_model_field_normalization(self) -> None:
+    def test_rejects_replacement_of_a_declared_project_owned_model_field(self) -> None:
         temporary, repository = self.make_repository()
         self.addCleanup(temporary.cleanup)
         (repository / ".project-agent-workflow/managed.txt").write_text("managed\n", encoding="utf-8")
         agent = repository / ".codex/agents/repo_explorer.toml"
-        agent.write_text(
-            agent.read_text(encoding="utf-8")
-            .replace('model = "old-model"', 'model = "gpt-5.6-luna"')
-            .replace('model_reasoning_effort = "medium"', 'model_reasoning_effort = "low"'),
-            encoding="utf-8",
-        )
+        original = agent.read_text(encoding="utf-8")
+        for before, after in (
+            ('model = "old-model"', 'model = "gpt-5.6-luna"'),
+            ('model_reasoning_effort = "medium"', 'model_reasoning_effort = "low"'),
+        ):
+            with self.subTest(field=before):
+                agent.write_text(original.replace(before, after, 1), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    VALIDATOR.UpdateValidationError, "project-owned agent profile field"
+                ):
+                    VALIDATOR.validate(repository)
+        agent.write_text(original, encoding="utf-8")
         VALIDATOR.validate(repository)
 
-    def test_allows_model_normalization_when_project_owns_a_custom_profile_name(self) -> None:
+    def test_allows_inserting_only_an_absent_default(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        agent = repository / ".codex/agents/repo_explorer.toml"
+        without_effort = agent.read_text(encoding="utf-8").replace(
+            'model_reasoning_effort = "medium"\n', ""
+        )
+        agent.write_text(without_effort, encoding="utf-8")
+        subprocess.run(["git", "add", str(agent.relative_to(repository))], cwd=repository, check=True)
+        subprocess.run(["git", "commit", "-qm", "drop the effort field"], cwd=repository, check=True)
+
+        filled = PROFILE_UPDATER.render_profile(
+            without_effort, *PROFILE_UPDATER.PROFILES["repo_explorer"]
+        )
+        self.assertIn('model = "old-model"', filled)
+        self.assertIn('model_reasoning_effort = "low"', filled)
+        agent.write_text(filled, encoding="utf-8")
+        VALIDATOR.validate(repository)
+
+        agent.write_text(
+            filled.replace('model_reasoning_effort = "low"', 'model_reasoning_effort = "high"', 1),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "unexpected default"):
+            VALIDATOR.validate(repository)
+
+    def test_preserves_model_fields_when_project_owns_a_custom_profile_name(self) -> None:
         temporary, repository = self.make_repository()
         self.addCleanup(temporary.cleanup)
         agent = repository / ".codex/agents/repo_explorer.toml"
@@ -1241,10 +1273,11 @@ developer_instructions = """Preserve this instruction."""
         subprocess.run(["git", "add", str(agent.relative_to(repository))], cwd=repository, check=True)
         subprocess.run(["git", "commit", "-qm", "customize profile name"], cwd=repository, check=True)
 
-        normalized = PROFILE_UPDATER.render_profile(
+        rendered = PROFILE_UPDATER.render_profile(
             customized, *PROFILE_UPDATER.PROFILES["repo_explorer"]
         )
-        agent.write_text(normalized, encoding="utf-8")
+        self.assertEqual(rendered, customized)
+        agent.write_text(rendered, encoding="utf-8")
 
         VALIDATOR.validate(repository)
 
@@ -1276,15 +1309,8 @@ developer_instructions = """Preserve this instruction."""
         agent.write_text(original, encoding="utf-8")
         subprocess.run(["git", "add", str(agent.relative_to(repository))], cwd=repository, check=True)
         subprocess.run(["git", "commit", "-qm", "add model-like instruction"], cwd=repository, check=True)
-        normalized = (
-            original.replace('model = "old-model"', 'model = "gpt-5.6-luna"', 1)
-            .replace('model_reasoning_effort = "medium"', 'model_reasoning_effort = "low"', 1)
-        )
-        agent.write_text(normalized, encoding="utf-8")
-        VALIDATOR.validate(repository)
-
         agent.write_text(
-            normalized.replace('model = \\"instruction text\\"', 'model = \\"changed text\\"'),
+            original.replace('model = \\"instruction text\\"', 'model = \\"changed text\\"'),
             encoding="utf-8",
         )
         with self.assertRaisesRegex(VALIDATOR.UpdateValidationError, "agent profile"):

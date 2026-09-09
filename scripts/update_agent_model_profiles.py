@@ -114,42 +114,47 @@ def render_profile(text: str, model: str, effort: str) -> str:
 
     lines = text.splitlines()
     assignments = root_assignments(lines)
-    expected = {"model": model, "model_reasoning_effort": effort}
+    defaults = {"model": model, "model_reasoning_effort": effort}
     missing: list[tuple[str, str]] = []
-    insertion_indent = ""
-    for field, value in expected.items():
+    for field, value in defaults.items():
         matches = assignments[field]
         if len(matches) > 1:
             raise ProfileError(f"agent TOML defines {field} more than once")
         if matches:
-            index, indent = matches[0]
-            lines[index] = f'{indent}{field} = "{value}"'
-            if not insertion_indent:
-                insertion_indent = indent
+            # The project owns a field it already declares. Filling only what is
+            # absent keeps an update non-destructive; an existing value that
+            # happens to equal an older seed is still the project's value.
+            if not isinstance(parsed.get(field), str):
+                raise ProfileError(f"agent TOML must declare {field} as a string")
         else:
             missing.append((field, value))
 
-    if missing:
-        description_anchor = next((index for index, _ in assignments["description"]), None)
-        name_anchor = next((index for index, _ in assignments["name"]), None)
-        insert_after = description_anchor if description_anchor is not None else name_anchor
-        if insert_after is None:
-            raise ProfileError("agent TOML is missing name or description anchor")
+    if not missing:
+        return text
 
-        anchor = "description" if description_anchor is not None else "name"
-        insertion_indent = assignments[anchor][0][1]
+    description_anchor = next((index for index, _ in assignments["description"]), None)
+    name_anchor = next((index for index, _ in assignments["name"]), None)
+    insert_after = description_anchor if description_anchor is not None else name_anchor
+    if insert_after is None:
+        raise ProfileError("agent TOML is missing name or description anchor")
 
-        for field, value in reversed(missing):
-            lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"')
+    anchor = "description" if description_anchor is not None else "name"
+    insertion_indent = assignments[anchor][0][1]
+
+    for field, value in reversed(missing):
+        lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"')
 
     rendered = "\n".join(lines).rstrip() + "\n"
     try:
         normalized = tomllib.loads(rendered)
     except tomllib.TOMLDecodeError as exc:
         raise ProfileError(f"agent TOML did not remain valid TOML after normalization: {exc}") from exc
-    for field, value in expected.items():
-        if normalized.get(field) != value:
-            raise ProfileError(f"agent TOML did not normalize {field}")
+    inserted = dict(missing)
+    for field in defaults:
+        previous = parsed.get(field)
+        wanted = inserted[field] if field in inserted else previous
+        if normalized.get(field) != wanted:
+            raise ProfileError(f"agent TOML did not preserve {field}")
     return rendered
 
 

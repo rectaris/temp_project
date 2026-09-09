@@ -65,4 +65,4 @@ MCP、Linear、graph memory、Browser Run は任意機能です。
 clean な状態から更新し、製品コード、プロジェクト固有規則、設定、計画履歴が保持されていることを差分で確認してください。
 `update-from-copier.sh` は force flag を拒否し、Copier の終了後に `*.rej`、未解決競合、分類できない Git 管理対象ファイルの削除を検査します。
 `update-from-copier.sh` が失敗した場合はコミットせず、作業ツリーと index に残った結果を確認して原因を解消してください。
-`.codex/agents/*.toml` では `model` と `model_reasoning_effort` だけがテンプレートの固定値へ戻り、ほかのフィールドはプロジェクト所有のまま保持されます。
+`.codex/agents/*.toml` では `model` と `model_reasoning_effort` が欠けている場合だけテンプレートの既定値で補われ、すでに書かれている値とほかのフィールドはプロジェクト所有のまま保持されます。
