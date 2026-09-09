@@ -233,3 +233,4 @@ id	path
 300	docs/plan/checked/2026/09/01-15/300-compose-parent-direct-execution-preparation.md
 291	docs/plan/checked/2026/09/01-15/291-state-the-no-push-rule-in-security-policy.md
 293	docs/plan/checked/2026/09/01-15/293-state-what-to-do-when-a-decision-record-is-insufficient.md
+294	docs/plan/checked/2026/09/01-15/294-bound-stop-gate-block-repetition.md

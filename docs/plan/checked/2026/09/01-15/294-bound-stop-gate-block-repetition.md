@@ -1,6 +1,6 @@
 # Bound stop-gate block repetition so a reported unresolvable retained state can end a turn
 
-status: in_progress
+status: checked
 primary_invariant: The stop gate never withholds a turn indefinitely: after a bounded number of consecutive blocks that report the identical retained task state, it accepts the reported blocker as terminal, and it keeps blocking while that reported state still changes.
 task_types:
   - hook_behavior
@@ -67,13 +67,20 @@ checked_summary_ja: 解決不能な保持状態を報告したターンを終了
 
 ## Tasks
 
-- [ ] Add a bounded consecutive-block counter to the root stop gate, stored per repository identity and keyed by the digest of the block reason.
-- [ ] Release the block and print an empty decision once the bound is reached, and clear the stored count when the reason changes or no task is outstanding.
-- [ ] Mirror the change into the template copy of the stop gate so the two stay identical.
-- [ ] Extend tests/hooks/gates.py to prove the withheld attempts, the bounded release, and both reset paths.
-- [ ] Run the focused witnesses, then the authoritative suite once.
+- [x] Add a bounded consecutive-block counter to the root stop gate, stored per repository identity and keyed by the digest of the block reason.
+- [x] Release the block and print an empty decision once the bound is reached, and clear the stored count when the reason changes or no task is outstanding.
+- [x] Mirror the change into the template copy of the stop gate so the two stay identical.
+- [x] Extend tests/hooks/gates.py to prove the withheld attempts, the bounded release, and both reset paths.
+- [x] Run the focused witnesses, then the authoritative suite once.
 
 ## Validation Notes
 
 - Owner implementation authorization on 2026-09-09: 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 This explicitly selects the existing Class C plan and its bounded-release decision; no new external effects or requirement changes are added.
 - Replace the nonexistent root SPEC_VALIDATION.md reference with references/validation.md and read the root security policy. The existing acceptance and validation commands remain unchanged.
+- First three identical retained-task reports block; the fourth and later return an empty decision and a stderr reminder that publication and retirement remain incomplete. A changed reason, no outstanding task, or an intervening completion-gate failure resets the count.
+- The counter lives in the canonical common Git directory, stores only a SHA-256 reason digest and bounded count, and is shared by linked worktrees but not separate repositories. It uses a nonblocking exclusive lock and refuses malformed, oversized, non-owner-only, symlinked, hardlinked or nonregular state without claiming success.
+- Seven new end-to-end tests cover shared-worktree counting without ownership/ref mutation, an already-absent worktree, changed/cleared reports on both copies, repository isolation, completion-failure reset and continued blocking, invalid/unsafe state, and lock contention.
+- Independent read-only Sol review reported no significant findings. The parent inspected and accepted the exact three-file diff.
+- Focused validation passed: python3 tests/test-hooks.py (121 tests) and python3 scripts/check-copier-template.py. The root policy checker and git diff --check also passed.
+- Authoritative validation passed once: scripts/lint-project-workflow.sh and tests/smoke.sh. Optional actionlint was unavailable and skipped by the existing smoke command.
+- Product commit: e37321e. No remote push was performed.
