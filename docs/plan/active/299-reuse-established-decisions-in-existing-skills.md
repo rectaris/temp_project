@@ -1,8 +1,6 @@
 # Reuse established decisions through existing planning skills
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
+status: in_progress
 primary_invariant: Existing planning and execution skills apply one shared decision sequence to the same authorized task without reopening settled choices, inventing successor plans or relaxing normative approval, diagnosis and review boundaries.
 task_types:
   - template_workflow
@@ -129,3 +127,4 @@ checked_summary_ja: 既決事項と失敗の再現確認を既存スキルへま
 - 2026-09-09 evaluation against a reference parser: `markdown_it` in CommonMark mode was used as an oracle, not as a shipped dependency. Across 240 systematic and 4000 randomized constructs that wrap the exact route in fences, comments, raw HTML, and list or blockquote containers at varying indentation, no construct hid the route from the parser while the rule accepted it. The eight route-carrying and reference files, unmodified, report no defect. Fifteen end-to-end mutations of both checkers, including the two open findings, were all rejected, as were the seven that also apply to `scripts/check-copier-template.py`.
 - 2026-09-09 focused validation on `bd872b9`: `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `python3 tests/test-validation-tools.py` (245), `python3 scripts/validate-changes.py --all`, and `git diff --check` each passed.
 - 2026-09-09 stop: The authorized epoch's review budget is spent, so the candidate cannot be reviewed again inside this plan. Recorded `status: replan_required` with `parent_remediation_budget_exhausted`. The remediation is committed and unpublished; no acceptance item is withdrawn.
+- 2026-09-09 owner continuation authorization, second: Presented the stop, the changed shape of the check, its cost, and the reference-parser evidence, and asked the owner to choose between continuation, acceptance without further review, reconstruction, deferral, and stopping. The owner answered `authorize_continuation`, quoted as 「継続を承認する（もう 1 エポック開き、最終レビューと正式検証まで進める）」. This authorizes one further execution epoch on the unchanged plan, source baseline, invariant, acceptance items, validation authority, and write scope. The owner did not waive review.
