@@ -961,15 +961,22 @@ def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str
     )
 
 
-# A routed instruction only counts when Markdown renders it as an instruction,
-# and the constructs that can swallow a line depend on container context that
-# spans several lines. Approximating that context failed repeatedly: a fence
-# indented past the margin, a tab-indented fence inside a list item, and a raw
-# HTML block opened as list content each hid a byte-identical route. Rather than
-# keep enumerating hiding places, a file that carries a routed instruction is
-# required to be plain prose, so the tokens that could open such a context are
-# refused wherever they appear.
+# A routed instruction only counts when Markdown renders it as an instruction.
+# Deciding that from the surrounding document failed repeatedly, because both
+# block context and inline context can carry across lines: a fence indented
+# inside a list item, raw HTML opened as list content, and a two-backtick code
+# span spanning several lines each hid a byte-identical route. Enumerating
+# hiding places is therefore the wrong shape. A file that carries a routed
+# instruction is instead required to be plain prose, which means it may not
+# contain the constructs that can extend past the line they start on. Each rule
+# below names one such carrier, and together they leave no way for a later line
+# to be anything but text.
 MARKDOWN_FENCE_TOKEN_RE = re.compile(r"`{3,}|~{3,}")
+MARKDOWN_BACKTICK_RUN_RE = re.compile(r"`+")
+MARKDOWN_LINK_DESTINATION_RE = re.compile(r"\]\(")
+# A list container shifts the margin, so a definition can sit at any depth and
+# behind any number of list or quote markers.
+MARKDOWN_LINK_DEFINITION_RE = re.compile(r"^ *\[[^\]]*\]:")
 MARKDOWN_CONTAINER_PREFIX_RE = re.compile(r"^ *(?:> ?|(?:[-*+]|\d{1,9}[.)])(?: +|$))")
 
 
@@ -980,18 +987,55 @@ def markdown_block_content(line: str) -> str:
     while True:
         match = MARKDOWN_CONTAINER_PREFIX_RE.match(current)
         if match is None:
-            return current.lstrip(" ")
+            return current
         current = current[match.end():]
+
+
+def markdown_code_spans(line: str) -> tuple[list[tuple[int, int]], bool]:
+    """Return the line's closed code spans and whether one is left open.
+
+    CommonMark closes a code span with the next backtick run of the same
+    length. A run with no partner would continue onto the following lines, so
+    the caller refuses the file rather than guess where the span ends.
+    """
+
+    runs = [(match.start(), match.end()) for match in MARKDOWN_BACKTICK_RUN_RE.finditer(line)]
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(runs):
+        length = runs[index][1] - runs[index][0]
+        partner = index + 1
+        while partner < len(runs) and runs[partner][1] - runs[partner][0] != length:
+            partner += 1
+        if partner == len(runs):
+            return spans, True
+        spans.append((runs[index][0], runs[partner][1]))
+        index = partner + 1
+    return spans, False
+
+
+def markdown_outside_code(line: str, spans: list[tuple[int, int]]) -> str:
+    """Return the line with its closed code spans removed."""
+
+    parts: list[str] = []
+    previous = 0
+    for start, end in spans:
+        parts.append(line[previous:start])
+        previous = end
+    parts.append(line[previous:])
+    return "".join(parts)
 
 
 def markdown_prose_defects(text: str) -> list[str]:
     """Report the constructs that stop this text from being plain prose.
 
-    Without any code fence token there is no fenced block in any container,
-    without a tab there is no ambiguous indentation, and without a comment
-    marker or a block that opens with a raw HTML tag there is no HTML block.
-    What remains renders every line as text, so a line that matches an expected
-    instruction is that instruction.
+    Without a fence token no fenced block exists in any container. Without a
+    tab no indentation is ambiguous. Without an unclosed backtick run no code
+    span reaches the next line. Without an angle bracket outside code no raw
+    HTML block, inline tag, comment, or autolink starts. Without an unclosed
+    link destination and without a link reference definition no destination or
+    title runs on. What remains renders every line as text, so a line that
+    matches an expected instruction is that instruction.
     """
 
     defects: list[str] = []
@@ -1001,10 +1045,19 @@ def markdown_prose_defects(text: str) -> list[str]:
             defects.append(f"line {number} contains a tab, which shifts block indentation")
         if MARKDOWN_FENCE_TOKEN_RE.search(line):
             defects.append(f"line {number} contains a code fence token")
-        if "<!--" in line:
-            defects.append(f"line {number} contains an HTML comment marker")
-        elif markdown_block_content(line).startswith("<"):
-            defects.append(f"line {number} opens a raw HTML block")
+        spans, unclosed = markdown_code_spans(line)
+        if unclosed:
+            defects.append(f"line {number} leaves a code span open")
+            continue
+        outside = markdown_outside_code(line, spans)
+        if "<" in outside:
+            defects.append(f"line {number} contains an angle bracket outside code")
+        for match in MARKDOWN_LINK_DESTINATION_RE.finditer(outside):
+            if ")" not in outside[match.end():]:
+                defects.append(f"line {number} leaves a link destination open")
+                break
+        if MARKDOWN_LINK_DEFINITION_RE.match(markdown_block_content(line)):
+            defects.append(f"line {number} is a link reference definition")
     return defects
 
 
