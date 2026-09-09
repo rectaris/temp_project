@@ -1,6 +1,6 @@
 # State the no-push rule in the root and generated security policy
 
-status: in_progress
+status: checked
 primary_invariant: A reader who follows the security policy alone learns that pushing requires an explicit user request.
 task_types:
   - documentation_policy_alignment
@@ -52,10 +52,15 @@ checked_summary_ja: ルートと生成物のセキュリティ方針に push 禁
 
 ## Tasks
 
-- [ ] Add the no-push rule to docs/agent/SPEC_SECURITY.md in the section that governs remote and repository effects.
-- [ ] Mirror the same rule into template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md.
-- [ ] Run the focused checks and then the authoritative suite once.
+- [x] Add the no-push rule to docs/agent/SPEC_SECURITY.md in the section that governs remote and repository effects.
+- [x] Mirror the same rule into template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md.
+- [x] Run the focused checks and then the authoritative suite once.
 
 ## Validation Notes
 
 - The owner's 2026-09-09 instruction to implement every backlog plan authorizes this activation. Replace the nonexistent root SPEC_VALIDATION.md reference with the existing root validation policy, references/validation.md; validation commands and acceptance remain unchanged.
+- Both policies now state "Do not push unless the user explicitly requests it." The existing AGENTS.md rule remains intact, with no profile exception.
+- Independent read-only Sol review reported no High or Medium findings. The parent inspected and accepted the exact mirrored diff.
+- Focused validation passed: python3 scripts/check-root-agent-policy.py and python3 scripts/check-copier-template.py.
+- Authoritative validation passed once: scripts/lint-project-workflow.sh and tests/smoke.sh. Optional actionlint was unavailable and skipped by the existing smoke command.
+- Product commit: af1628d. No remote push was performed.

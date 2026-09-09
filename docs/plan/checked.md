@@ -231,3 +231,4 @@ id	path
 299	docs/plan/checked/2026/09/01-15/299-reuse-established-decisions-in-existing-skills.md
 276	docs/plan/checked/2026/09/01-15/276-run-bounded-parent-owned-candidate-preflight.md
 300	docs/plan/checked/2026/09/01-15/300-compose-parent-direct-execution-preparation.md
+291	docs/plan/checked/2026/09/01-15/291-state-the-no-push-rule-in-security-policy.md
