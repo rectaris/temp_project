@@ -1,6 +1,6 @@
 # Preserve project-owned agent model settings during Copier updates
 
-status: in_progress
+status: ready
 primary_invariant: Copier preserves every existing project-owned agent model and reasoning value, fills only absent defaults, and rejects unrelated profile changes without altering the qualified writable-runner model policy.
 task_types:
   - template_workflow
@@ -96,12 +96,12 @@ checked_summary_ja: Copier 更新で利用側のモデルと推論設定を保�
 
 ## Tasks
 
-- [ ] Replace normalization expectations with preservation fixtures, including custom values, one missing field, both missing fields, nested and multiline model-like text, idempotence, duplicates, and symlinks.
-- [ ] Change render_profile to preserve existing assignments and insert only absent root fields, without moving the packaging helper or changing seeded profiles.
-- [ ] Change the update validator to compare before/after ownership at field granularity and allow only exact missing-default insertion plus the existing exact historical migration.
-- [ ] Update generated ownership and current root/generated docs; adjust current-policy marker checks while keeping safety and seed assertions.
-- [ ] Extend the disposable Copier fixtures with preservation and malicious-overwrite failures; retain every supported historical migration fixture.
-- [ ] Run the focused update suite, obtain independent review, and run authoritative validation once; the lint suite also executes the updater and migration unit tests.
+- [x] Replace normalization expectations with preservation fixtures, including custom values, one missing field, both missing fields, nested and multiline model-like text, idempotence, duplicates, and symlinks.
+- [x] Change render_profile to preserve existing assignments and insert only absent root fields, without moving the packaging helper or changing seeded profiles.
+- [x] Change the update validator to compare before/after ownership at field granularity and allow only exact missing-default insertion plus the existing exact historical migration.
+- [x] Update generated ownership and current root/generated docs; adjust current-policy marker checks while keeping safety and seed assertions.
+- [x] Extend the disposable Copier fixtures with preservation and malicious-overwrite failures; retain every supported historical migration fixture.
+- [x] Run the focused update suite, obtain independent review, and run authoritative validation once; the lint suite also executes the updater and migration unit tests.
 
 ## Validation Notes
 
@@ -115,3 +115,7 @@ checked_summary_ja: Copier 更新で利用側のモデルと推論設定を保�
 
 - 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Activation baseline: `5125827` in `temp_project`. Plan 273 is checked, and the declared source mechanisms are still present.
 - 2026-09-09 write-scope admission: The integration gate 「The focused Copier command must include the mutable source files in its disposable fixture」 cannot hold while `scripts/update_agent_model_profiles.py` is absent from `tests/fixtures/orchestration/copier-update-source-inventory.txt`, which is the fixture's only source of copied paths. The parent admitted that one inventory file into `write_scope`. This adds no requirement and changes no acceptance item.
+- 2026-09-09 focused validation: `tests/copier-update.sh --require-copier` exit 0; `python3 scripts/check-copier-template.py` passed; `python3 tests/test-agent-model-profiles.py` 19 OK; `python3 tests/test-copier-migration.py` 33 OK; `git diff --check` clean.
+- 2026-09-09 independent review round 1: four Medium findings (byte loss when filling one field, an unseeded profile change passing the update validator, the focused Copier fixture not carrying the updater, and a symlinked agent directory escaping the destination). All four were remediated parent-direct, each with a regression test proven non-vacuous by reverting the fix and observing the test fail.
+- 2026-09-09 independent review round 2: no High findings and no Medium finding against this change. One Medium was reported for a multiline `name` or `description` anchor. Running the baseline `112876b` updater and the current updater on the same inputs produced the same `ProfileError` in both, so the defect predates this plan, is outside its acceptance items, and fails closed rather than corrupting a profile. It is recorded here for a separate bounded plan instead of being repaired under this scope.
+- 2026-09-09 authoritative validation: `scripts/lint-project-workflow.sh` passed and `REQUIRE_COPIER=1 tests/smoke.sh` passed, each run once.
