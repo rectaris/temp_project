@@ -10,6 +10,7 @@ This repository keeps security controls explicit and fail-closed at write bounda
 
 ## Generated Automation
 
+- Do not push unless the user explicitly requests it.
 - Default generated automation to read-only or artifact-only behavior.
 - Require explicit project configuration before automation writes to branches, issues, services, or durable external memory.
 - An explicitly selected task-scoped external-access profile may authorize ordinary writes required by the current user request, but it does not override credential denials or exact-confirmation requirements for consequential effects.
