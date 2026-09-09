@@ -113,3 +113,18 @@
 - `scripts/lint-project-workflow.sh`：成功。
 - `REQUIRE_COPIER=1 tests/smoke.sh`：生成プロジェクトを含めて成功。Actionlint未導入の検査はスクリプトの規定どおり省略された。
 - 一覧の九つのローカルリンクと、新規四件のcontext_filesの存在を確認した。
+
+## 現在の backlog 一覧
+
+`python3 scripts/render-plan-overview.py --relative-to docs/plan/backlog/README.md` で生成した一覧。
+
+| id | status | title | path |
+| --- | --- | --- | --- |
+| [273](273-stop-indivisible-tier-one-work-without-descope.md) | backlog | Stop indivisible Tier 1 work without an impossible descope | docs/plan/backlog/273-stop-indivisible-tier-one-work-without-descope.md |
+| [274](274-preserve-project-owned-agent-model-settings.md) | backlog | Preserve project-owned agent model settings during Copier updates | docs/plan/backlog/274-preserve-project-owned-agent-model-settings.md |
+| [275](275-route-detailed-agent-policy-on-demand.md) | backlog | Route detailed agent policy without losing mandatory requirements | docs/plan/backlog/275-route-detailed-agent-policy-on-demand.md |
+| [276](276-run-bounded-parent-owned-candidate-preflight.md) | backlog | Run one bounded parent-owned preflight per candidate | docs/plan/backlog/276-run-bounded-parent-owned-candidate-preflight.md |
+| [277](277-summarize-observed-run-resources-locally.md) | backlog | Summarize observed run resources locally without changing acceptance evidence | docs/plan/backlog/277-summarize-observed-run-resources-locally.md |
+| [298](298-derive-plan-overviews-from-lifecycle-files.md) | backlog | Derive plan overview rows from existing lifecycle files | docs/plan/backlog/298-derive-plan-overviews-from-lifecycle-files.md |
+| [299](299-reuse-established-decisions-in-existing-skills.md) | backlog | Reuse established decisions through existing planning skills | docs/plan/backlog/299-reuse-established-decisions-in-existing-skills.md |
+| [300](300-compose-parent-direct-execution-preparation.md) | backlog | Compose existing parent-direct execution preparation | docs/plan/backlog/300-compose-parent-direct-execution-preparation.md |

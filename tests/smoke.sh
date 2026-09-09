@@ -87,7 +87,9 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/create-plan.sh \
     template/.project-agent-workflow/scripts/plan_authoring.py \
     template/.project-agent-workflow/scripts/planlib.py \
+    template/.project-agent-workflow/scripts/plan_overview.py \
     template/.project-agent-workflow/scripts/promote-plan.sh \
+    template/.project-agent-workflow/scripts/render-plan-overview.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
     template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
@@ -162,7 +164,9 @@ if [ -z "$source_ref" ]; then
     template/.project-agent-workflow/scripts/create-plan.sh \
     template/.project-agent-workflow/scripts/plan_authoring.py \
     template/.project-agent-workflow/scripts/planlib.py \
+    template/.project-agent-workflow/scripts/plan_overview.py \
     template/.project-agent-workflow/scripts/promote-plan.sh \
+    template/.project-agent-workflow/scripts/render-plan-overview.py \
     template/.project-agent-workflow/scripts/restructure-plan.py \
     template/.project-agent-workflow/scripts/plan-execution-state.py \
     template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
