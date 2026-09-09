@@ -462,8 +462,11 @@ def check_agents_rules() -> None:
 
 
 def validation_witness_migration_policy_statement(relative: str) -> str:
+    # Only the line ending is removed. Leading indentation stays inside the
+    # digest so that nesting a top-level mandatory bullet under other content
+    # cannot keep the pin green.
     matches = [
-        line.strip()
+        line.rstrip()
         for line in read(relative).splitlines()
         if VALIDATION_WITNESS_MIGRATION_MARKER in line
     ]
@@ -496,7 +499,7 @@ def validation_witness_migration_route(relative: str) -> str:
             "instead of restating it"
         )
     matches = [
-        line.strip()
+        line.rstrip()
         for line in text.splitlines()
         if VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER in line.lower()
     ]

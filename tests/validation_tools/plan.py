@@ -2808,6 +2808,44 @@ class PlanValidationCommandsTest(unittest.TestCase):
                         with self.assertRaises(SystemExit):
                             policy.check_validation_witness_migration_policy()
 
+    def test_root_policy_rejects_an_indented_routed_obligation(self) -> None:
+        """Nesting the mandatory bullets under other content must be rejected."""
+
+        module = load_module(self.ROOT_POLICY, "root_policy_routing_indent")
+        cases = {
+            "indented routes": (
+                tuple(module.VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS),
+                module.VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER,
+            ),
+            "indented guardian rule": (
+                (
+                    "references/orchestration.md",
+                    "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+                ),
+                module.VALIDATION_WITNESS_MIGRATION_MARKER,
+            ),
+        }
+        for index, (case, (relatives, marker)) in enumerate(cases.items()):
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_routing_fixture(directory)
+                    for relative in relatives:
+                        target = directory / relative
+                        lines = target.read_text(encoding="utf-8").splitlines()
+                        indented = [
+                            f"    {line}" if marker in line.lower() else line
+                            for line in lines
+                        ]
+                        self.assertNotEqual(lines, indented, f"{relative} must state {marker}")
+                        target.write_text("\n".join(indented) + "\n", encoding="utf-8")
+                    policy = self.load_routing_policy(
+                        directory, f"root_policy_routing_indent_{index}"
+                    )
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(SystemExit):
+                            policy.check_validation_witness_migration_policy()
+
     def test_root_policy_rejects_a_weaker_generated_route(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)

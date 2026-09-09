@@ -945,7 +945,7 @@ entrypoint_text = entrypoint.read_text(encoding="utf-8")
 if marker in entrypoint_text:
     raise SystemExit(f"managed entrypoint restates the relocated guardian rule: {entrypoint}")
 
-routes = [line.strip() for line in entrypoint_text.splitlines() if route_marker in line.lower()]
+routes = [line.rstrip() for line in entrypoint_text.splitlines() if route_marker in line.lower()]
 if len(routes) != 1:
     raise SystemExit(f"managed entrypoint needs exactly one guardian route: {entrypoint}")
 route = routes[0]
@@ -960,7 +960,7 @@ if hashlib.sha256(normalized.encode("utf-8")).hexdigest() != (
     raise SystemExit(f"managed entrypoint guardian route is not the reviewed route: {entrypoint}")
 
 statements = [
-    line.strip()
+    line.rstrip()
     for line in destination.read_text(encoding="utf-8").splitlines()
     if marker in line
 ]
