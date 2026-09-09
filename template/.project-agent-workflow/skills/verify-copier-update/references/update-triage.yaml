@@ -55,8 +55,9 @@ codes:
   absolute_source_path:
     owner: project
     next_action: >-
-      Record `_src_path` in the tracked Copier answers as a path relative to the
-      project root rather than an absolute path, then verify again.
+      Record `_src_path` in the tracked Copier answers as a remote URL or as a
+      path relative to the project root, not as an absolute path, then verify
+      again.
     retry: after_fix
   source_path_escape:
     owner: project
@@ -67,8 +68,9 @@ codes:
   source_path_overlap:
     owner: project
     next_action: >-
-      Record a `_src_path` in the tracked Copier answers that resolves beside the
-      project rather than inside or above it, then verify again.
+      Record a `_src_path` in the tracked Copier answers that is a remote URL or a
+      relative path resolving beside the project rather than inside or above it,
+      then verify again.
     retry: after_fix
   source_path_scratch_overlap:
     owner: project
@@ -380,6 +382,37 @@ codes:
       restore it from its recorded commit before verifying again.
     retry: after_fix
 
+  # Pointing the disposable baseline at the local template checkout.
+  isolated_answers_unavailable:
+    owner: environment
+    next_action: >-
+      Report the unreadable Copier answers file in the disposable clone upstream
+      with the command logs.
+    retry: after_fix
+  isolated_answers_unwritable:
+    owner: environment
+    next_action: >-
+      Report the unwritable Copier answers file in the disposable clone upstream
+      with the command logs.
+    retry: after_fix
+  isolated_answers_rewrite_failed:
+    owner: project
+    next_action: >-
+      Record exactly one `_src_path` line in the tracked Copier answers file, then
+      verify again.
+    retry: after_fix
+  isolated_answers_commit_failed:
+    owner: environment
+    next_action: >-
+      Report the failed commit of the rewritten answers file upstream with the
+      command logs.
+    retry: after_fix
+  isolated_baseline_missing:
+    owner: environment
+    next_action: >-
+      Report the unresolvable disposable baseline commit upstream with the logs.
+    retry: after_fix
+
   # Git inspections that could not complete.
   staged_tree_failed:
     owner: environment
@@ -421,37 +454,46 @@ codes:
 # Codes the verifier builds from a subject name and a fixed suffix. The resolver
 # strips the longest matching subject, then resolves the remaining suffix here.
 subjects:
+  # Every subject names the repository a fault belongs to, so a suffix shared by
+  # both sides still reports the owner who can act on it. A fault in the source
+  # is the template's to fix even when a downstream project observed it.
+  #
   # The two repositories under comparison, and their state after the update.
-  - source
-  - target
-  - final_source
-  - final_target
+  source: template
+  target: project
+  final_source: template
+  final_target: project
   # A single Git state file inside one of those repositories.
-  - source_head_state
-  - source_index_state
-  - source_split_index
-  - source_tracked_file
-  - target_head_state
-  - target_index_state
-  - target_split_index
-  - target_tracked_file
-  - final_source_head_state
-  - final_source_index_state
-  - final_source_split_index
-  - final_source_tracked_file
-  - final_target_head_state
-  - final_target_index_state
-  - final_target_split_index
-  - final_target_tracked_file
-  # The disposable clone a single phase was required to leave unchanged.
-  - idempotence_source
-  - update_source
-  - validation_source
+  source_head_state: template
+  source_index_state: template
+  source_split_index: template
+  source_tracked_file: template
+  target_head_state: project
+  target_index_state: project
+  target_split_index: project
+  target_tracked_file: project
+  final_source_head_state: template
+  final_source_index_state: template
+  final_source_split_index: template
+  final_source_tracked_file: template
+  final_target_head_state: project
+  final_target_index_state: project
+  final_target_split_index: project
+  final_target_tracked_file: project
+  # The disposable clone a single phase was required to leave unchanged. Each one
+  # is a clone of the source, so the template owns what it reveals.
+  idempotence_source: template
+  update_source: template
+  validation_source: template
 
 suffixes:
   # The named repository is unusable as a verification input.
   unavailable:
-    owner: invocation
+    owner: from_subject
+    # The base subjects name a path the caller supplied on the command line.
+    subject_owners:
+      source: invocation
+      target: invocation
     next_action: Pass a path that exists and can be read, then verify again.
     retry: after_fix
   symlink:
@@ -463,7 +505,7 @@ suffixes:
     next_action: Pass a directory path, then verify again.
     retry: after_fix
   not_regular:
-    owner: invocation
+    owner: from_subject
     next_action: Pass a path whose contents are regular files, then verify again.
     retry: after_fix
   not_git_root:
@@ -471,7 +513,7 @@ suffixes:
     next_action: Pass the Git repository root rather than a subdirectory.
     retry: after_fix
   too_large:
-    owner: invocation
+    owner: from_subject
     next_action: >-
       Report the oversized tracked file upstream. The verifier bounds what it
       reads, so it cannot decide this baseline.
@@ -479,82 +521,82 @@ suffixes:
 
   # The named repository must be a clean, stable baseline.
   dirty:
-    owner: project
+    owner: from_subject
     next_action: >-
       Commit or stash the named repository's changes so the baseline is clean,
       then verify again.
     retry: after_fix
   changed:
-    owner: project
+    owner: from_subject
     next_action: >-
       Stop writing to the named repository during verification, then verify again.
     retry: after_fix
   short_read:
-    owner: project
+    owner: from_subject
     next_action: >-
       Stop writing to the named repository during verification, then verify again.
     retry: after_fix
   snapshot_changed_worktree:
-    owner: project
+    owner: from_subject
     next_action: >-
       Stop writing to the named repository during verification, then verify again.
     retry: after_fix
   head_missing:
-    owner: project
+    owner: from_subject
     next_action: >-
       Give the named repository at least one commit, then verify again.
     retry: after_fix
   invalid_oid:
-    owner: project
+    owner: from_subject
     next_action: >-
       Resolve the named repository's HEAD to a commit, then verify again.
     retry: after_fix
   unmerged_index:
-    owner: project
+    owner: from_subject
     next_action: >-
       Resolve the named repository's unmerged index entries, then verify again.
     retry: after_fix
 
   # Repository shapes the verifier deliberately refuses to decide.
   submodule_unsupported:
-    owner: project
+    owner: from_subject
     next_action: >-
       Report the submodule upstream. The verifier does not decide a baseline that
       carries submodules.
     retry: never
   external_filter_unsupported:
-    owner: project
+    owner: from_subject
     next_action: >-
       Disable the external clean filter for the verification run, then verify
       again. A filter that rewrites content makes the comparison undecidable.
     retry: after_fix
   index_flags_unsupported:
-    owner: project
+    owner: from_subject
     next_action: >-
       Report the unsupported index flags upstream with the command logs.
     retry: never
   tracked_mode_unsupported:
-    owner: project
+    owner: from_subject
     next_action: >-
       Report the unsupported tracked file mode upstream with the command logs.
     retry: never
   tracked_type_mismatch:
-    owner: project
+    owner: from_subject
     next_action: >-
       Restore the named repository so its tracked entries match their recorded
       types, then verify again.
     retry: after_fix
   tracked_symlink_unavailable:
-    owner: project
+    owner: from_subject
     next_action: Restore the missing tracked symlink, then verify again.
     retry: after_fix
   ignored_file_unavailable:
-    owner: project
+    owner: from_subject
     next_action: >-
       Stop writing to the named repository during verification, then verify again.
     retry: after_fix
   ignored_symlink_unavailable:
-    owner: project
+    owner: from_subject
     next_action: >-
       Stop writing to the named repository during verification, then verify again.
     retry: after_fix

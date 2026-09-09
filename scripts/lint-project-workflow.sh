@@ -77,6 +77,7 @@ python3 "$root/tests/test-copier-migration.py"
 python3 "$root/tests/test-copier-adoption.py"
 python3 "$root/tests/test-referent-contract.py"
 python3 "$root/tests/test-validation-tools.py"
+python3 "$root/tests/test-verify-copier-update.py"
 "$root/tests/root-plan-lifecycle.sh"
 
 check_hook_activation "$root"

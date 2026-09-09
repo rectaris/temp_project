@@ -24,6 +24,8 @@ TRIAGE_NAME = "update-triage.yaml"
 SCHEMA_VERSION = 1
 RESULTS = ("verified", "rejected", "blocked")
 OWNERS = ("none", "invocation", "environment", "project", "template", "undetermined")
+SUBJECT_OWNERS = ("invocation", "environment", "project", "template", "undetermined")
+FROM_SUBJECT = "from_subject"
 RETRIES = ("after_fix", "never")
 
 
@@ -157,23 +159,38 @@ def require_table(path: Path) -> dict[str, Any]:
     for section in ("results", "codes", "suffixes"):
         if not isinstance(table.get(section), dict) or not table[section]:
             raise TriageError(f"triage table must declare a non-empty {section} mapping")
-    if not isinstance(table.get("subjects"), list) or not table["subjects"]:
-        raise TriageError("triage table must declare a non-empty subjects list")
+    if not isinstance(table.get("subjects"), dict) or not table["subjects"]:
+        raise TriageError("triage table must declare a non-empty subjects mapping")
+    for subject, owner in table["subjects"].items():
+        if owner not in SUBJECT_OWNERS:
+            raise TriageError(f"subject {subject} declares an unknown owner: {owner!r}")
     for result in RESULTS:
         if result not in table["results"]:
             raise TriageError(f"triage table must describe the {result} result")
     for section in ("codes", "suffixes"):
         for name, entry in table[section].items():
-            require_entry(section, name, entry)
+            require_entry(section, name, entry, table["subjects"])
     return table
 
 
-def require_entry(section: str, name: str, entry: Any) -> None:
+def require_entry(section: str, name: str, entry: Any, subjects: dict[str, Any]) -> None:
     if not isinstance(entry, dict):
         raise TriageError(f"{section} entry {name} must be a mapping")
     owner = entry.get("owner")
-    if owner not in OWNERS:
+    if owner == FROM_SUBJECT and section != "suffixes":
+        raise TriageError(f"{section} entry {name} may not take its owner from a subject")
+    if owner not in OWNERS and owner != FROM_SUBJECT:
         raise TriageError(f"{section} entry {name} declares an unknown owner: {owner!r}")
+    overrides = entry.get("subject_owners", {})
+    if not isinstance(overrides, dict):
+        raise TriageError(f"{section} entry {name} must declare subject_owners as a mapping")
+    if overrides and section != "suffixes":
+        raise TriageError(f"{section} entry {name} may not override an owner per subject")
+    for subject, override in overrides.items():
+        if subject not in subjects:
+            raise TriageError(f"{section} entry {name} overrides an undeclared subject: {subject}")
+        if override not in SUBJECT_OWNERS:
+            raise TriageError(f"{section} entry {name} overrides {subject} with an unknown owner: {override!r}")
     if entry.get("retry") not in RETRIES:
         raise TriageError(f"{section} entry {name} declares an unknown retry: {entry.get('retry')!r}")
     action = entry.get("next_action")
@@ -190,11 +207,17 @@ def resolve_code(table: dict[str, Any], code: str) -> dict[str, Any]:
         if code.startswith(prefix):
             suffix = code[len(prefix) :]
             if suffix in table["suffixes"]:
+                entry = dict(table["suffixes"][suffix])
+                overrides = entry.pop("subject_owners", {})
+                if subject in overrides:
+                    entry["owner"] = overrides[subject]
+                elif entry["owner"] == FROM_SUBJECT:
+                    entry["owner"] = table["subjects"][subject]
                 return {
                     "match": "subject_suffix",
                     "matched": suffix,
                     "subject": subject,
-                    **table["suffixes"][suffix],
+                    **entry,
                 }
     raise TriageError(
         f"reason code is not classified: {code}. Report it upstream so the triage "

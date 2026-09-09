@@ -22,7 +22,9 @@ The helper requires both original worktrees to be clean Git roots and rejects sy
 
 It clones without hard links, checks out the exact downstream and source commits, and recreates the downstream answer file's relative `_src_path` relationship inside one same-filesystem workspace.
 
-Absolute, missing, ambiguous, or workspace-escaping `_src_path` values stop as `blocked` rather than being rewritten.
+A remote `_src_path`, whether a URL or an scp-style address, names no local directory, so the helper puts the isolated source at a fixed path beside the clone and commits that path into the clone's answer file. The recorded remote value and the substituted path both appear in the manifest, and the commit that carries the substitution becomes the clone's baseline, so the update is still required to leave the clone at a known commit.
+
+Absolute, missing, ambiguous, or workspace-escaping local `_src_path` values stop as `blocked` rather than being rewritten.
 
 The helper uses `.project-agent-workflow/scripts/update-from-copier.sh` when the baseline provides it.
 

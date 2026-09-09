@@ -1,0 +1,52 @@
+# The downstream projects a release must be verified against before it is tagged.
+#
+# scripts/verify-downstream-baselines.py drives the verify-copier-update skill over
+# every entry here, so a release stops on a project the candidate ref cannot update
+# instead of on a downstream agent discovering it after the tag exists.
+#
+# Every field is checked against the checkout before a verification runs, because a
+# record that quietly drifts from the projects it names would report a candidate as
+# checked against baselines it never touched.
+#
+#   path              where the checkout is, resolved against the directory holding
+#                     this repository's checkout unless the value is absolute
+#   remote            the checkout's origin, compared after normalising the scp and
+#                     https spellings of the same repository
+#   baseline_ref      the downstream ref to verify, checked out inside the isolated
+#                     workspace rather than read from the working tree
+#   template_commit   the template version the project records at that ref, so a
+#                     stale entry is refused instead of silently accepted, and the
+#                     project's recorded _src_path must name template_remote
+#   validation_commands  the project's own commands that must still pass afterwards
+schema_version: 1
+
+# The template every recorded project must actually be generated from. It is checked
+# against this checkout's origin and against each project's recorded _src_path, so a
+# verification cannot substitute this repository for a template a project never used.
+template_remote: git@github.com:rectaris/temp_project.git
+
+baselines:
+  - id: curiretas-gakumas-portal
+    path: curiretas-gakumas-portal
+    remote: git@github.com:rectaris/curiretas-gakumas-portal.git
+    baseline_ref: dev
+    template_commit: v1.4.1
+    validation_commands:
+      - ["npm", "run", "typecheck"]
+
+  - id: gakumasu-timeline
+    path: gakumasu-timeline
+    remote: git@github.com:rectaris/gakumasu-timeline.git
+    baseline_ref: dev
+    template_commit: v1.4.1-19-gf6d071e
+    validation_commands:
+      - ["npm", "run", "typecheck"]
+
+  # The checkout directory and the repository it tracks carry different names.
+  - id: supportcard-status
+    path: supportcard-status
+    remote: git@github.com:rectaris/calc-sapo.git
+    baseline_ref: dev
+    template_commit: v1.4.1
+    validation_commands:
+      - ["python3", "-m", "compileall", "-q", "."]

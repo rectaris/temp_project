@@ -20,6 +20,26 @@ from typing import NoReturn, Sequence
 SCHEMA_VERSION = 1
 MANIFEST_NAME = "verification-manifest.json"
 ANSWERS_PATH = ".copier-answers.yml"
+ISOLATED_SOURCE_PATH = "../source"
+# Copier decides whether a recorded template source names a repository to clone or a
+# directory on this machine, and it uses these exact rules to do it. They are
+# reproduced rather than approximated: a value this helper called remote while Copier
+# would read it as a local path would be verified against a source the real update
+# never uses, and the run would report a success the project could not reproduce.
+GIT_ALIAS_REPLACEMENTS = (
+    (re.compile(r"^gh:/?(.*\.git)$"), r"https://github.com/\1"),
+    (re.compile(r"^gh:/?(.*)$"), r"https://github.com/\1.git"),
+    (re.compile(r"^gl:/?(.*\.git)$"), r"https://gitlab.com/\1"),
+    (re.compile(r"^gl:/?(.*)$"), r"https://gitlab.com/\1.git"),
+)
+GIT_PREFIXES = ("git@", "git://", "git+", "https://github.com/", "https://gitlab.com/")
+GIT_POSTFIX = ".git"
+# Being a repository is not the same as being out of reach. A local directory may be a
+# repository Copier would clone, and substituting the isolated checkout for it would
+# skip the absolute, escaping and overlapping refusals that a path on this machine
+# must still face, so only an address carried over the network is substituted.
+NETWORK_SCHEME_RE = re.compile(r"^(?:git|ssh|https?)://")
+SCP_ADDRESS_RE = re.compile(r"^[^/\s:]+@[^/\s:]+:")
 WORKFLOW_DIR = ".project-agent-workflow"
 UPDATE_WRAPPER = f"{WORKFLOW_DIR}/scripts/update-from-copier.sh"
 UPDATE_VALIDATOR = f"{WORKFLOW_DIR}/scripts/validate-copier-update.py"
@@ -625,6 +645,65 @@ def git_blob(repository: Path, oid: str, path: str, environment: dict[str, str])
     return read_git(repository, ["show", f"{oid}:{path}"], environment, "answers_missing")
 
 
+def copier_repository_url(recorded_source: str) -> str | None:
+    """Return the address Copier would clone, or None when it would read a path.
+
+    Copier resolves its aliases first, then accepts the value as a repository when it
+    carries a known Git prefix or suffix. A value that satisfies neither is a path on
+    this machine, however much it may resemble a URL.
+    """
+
+    url = recorded_source
+    for pattern, replacement in GIT_ALIAS_REPLACEMENTS:
+        url = pattern.sub(replacement, url)
+    if url.endswith(GIT_POSTFIX) or url.startswith(GIT_PREFIXES):
+        return url
+    return None
+
+
+def is_remote_source(recorded_source: str) -> bool:
+    """Report whether the recorded source names a repository this run cannot reach.
+
+    A value must be both a repository Copier would clone and an address carried over
+    the network. A repository that lives on this machine, however it is spelled, stays
+    a path so that it still faces every refusal a path faces.
+    """
+
+    url = copier_repository_url(recorded_source)
+    if url is None:
+        return False
+    if url.startswith("git+"):
+        url = url[len("git+") :]
+    return bool(NETWORK_SCHEME_RE.match(url) or SCP_ADDRESS_RE.match(url))
+
+
+def rewrite_recorded_source(clone: Path, recorded_source: str, isolated_source: str) -> None:
+    """Point the disposable baseline's recorded template path at the local checkout.
+
+    Copier refuses to update a dirty repository, so the rewrite is committed in the
+    clone and the caller compares later HEADs against that commit instead of the
+    original baseline.
+    """
+
+    answers = clone / ANSWERS_PATH
+    try:
+        text = answers.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        stop("blocked", "isolated_answers_unavailable", "the cloned Copier answers file could not be read")
+    expression = re.compile(r"^_src_path:[ \t]*.*$", re.MULTILINE)
+    replaced, count = expression.subn(f"_src_path: {isolated_source}", text, count=1)
+    if count != 1 or replaced == text:
+        stop(
+            "blocked",
+            "isolated_answers_rewrite_failed",
+            f"the cloned Copier answers file does not record exactly one rewritable {recorded_source}",
+        )
+    try:
+        answers.write_text(replaced, encoding="utf-8")
+    except OSError:
+        stop("blocked", "isolated_answers_unwritable", "the cloned Copier answers file could not be rewritten")
+
+
 def parse_answer_scalar(raw: bytes, key: str) -> str:
     try:
         text = raw.decode("utf-8")
@@ -859,7 +938,13 @@ def run_verification(args: argparse.Namespace) -> tuple[int, Path]:
         recorded_source = parse_answer_scalar(answers, "_src_path")
         recorded_commit = parse_answer_scalar(answers, "_commit")
         manifest["target"]["recorded_template_commit"] = recorded_commit
-        source_path = Path(recorded_source)
+        manifest["source"]["recorded_src_path"] = recorded_source
+        # A remote _src_path names no path this run may reach. The isolated clone
+        # replaces it with a fixed sibling checkout so the recorded template ref is
+        # still what gets verified, without the run reaching the network.
+        remote_source = is_remote_source(recorded_source)
+        source_path = Path(ISOLATED_SOURCE_PATH) if remote_source else Path(recorded_source)
+        manifest["source"]["isolated_src_path"] = str(source_path)
         if source_path.is_absolute():
             stop("blocked", "absolute_source_path", "isolated verification requires a relative _src_path")
 
@@ -888,6 +973,35 @@ def run_verification(args: argparse.Namespace) -> tuple[int, Path]:
 
         clone_at(target, target_clone, target_oid, recorder, environment, "target")
         clone_at(source, isolated_source, source_oid, recorder, environment, "source")
+        clone_baseline_oid = target_oid
+        if remote_source:
+            rewrite_recorded_source(target_clone, recorded_source, str(source_path))
+            recorder.run(
+                "record the isolated template path",
+                [
+                    "git",
+                    *SAFE_GIT_CONFIG,
+                    "-c",
+                    "user.name=Copier Verification",
+                    "-c",
+                    "user.email=copier-verification@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "--no-verify",
+                    "-m",
+                    "Point the isolated baseline at the local template checkout",
+                    "--",
+                    ANSWERS_PATH,
+                ],
+                target_clone,
+                environment,
+                failure_result="blocked",
+                failure_code="isolated_answers_commit_failed",
+            )
+            clone_baseline_oid = resolve_commit(
+                target_clone, "HEAD", environment, "isolated_baseline_missing"
+            )
+            manifest["target"]["isolated_baseline_oid"] = clone_baseline_oid
         source_argument = selected_source_ref(isolated_source, args.source_ref, source_oid, environment)
 
         wrapper = target_clone / UPDATE_WRAPPER
@@ -936,7 +1050,7 @@ def run_verification(args: argparse.Namespace) -> tuple[int, Path]:
         expected_head = resolve_commit(
             target_clone, "HEAD", environment, "updated_head_missing"
         )
-        if expected_head != target_oid:
+        if expected_head != clone_baseline_oid:
             stop("rejected", "update_changed_head", "Copier update changed the disposable baseline HEAD")
         expected_status = read_git(
             target_clone,
@@ -968,7 +1082,7 @@ def run_verification(args: argparse.Namespace) -> tuple[int, Path]:
         validated_head = resolve_commit(
             target_clone, "HEAD", environment, "validated_head_missing"
         )
-        if validated_head != target_oid:
+        if validated_head != clone_baseline_oid:
             stop(
                 "rejected",
                 "validation_changed_head",
