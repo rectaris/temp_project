@@ -120,4 +120,3 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [294](294-bound-stop-gate-block-repetition.md) | backlog | Bound stop-gate block repetition so a reported unresolvable retained state can end a turn | docs/plan/backlog/294-bound-stop-gate-block-repetition.md |

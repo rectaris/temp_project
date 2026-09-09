@@ -1,16 +1,17 @@
 # Bound stop-gate block repetition so a reported unresolvable retained state can end a turn
 
-status: backlog
+status: in_progress
 primary_invariant: The stop gate never withholds a turn indefinitely: after a bounded number of consecutive blocks that report the identical retained task state, it accepts the reported blocker as terminal, and it keeps blocking while that reported state still changes.
 task_types:
   - hook_behavior
   - test_coverage
 review_class: C
 human_design_required: no
-human_approval_status: pending
+human_approval_status: approved
 implementation_tier: 2
 implementation_risk: ordinary
 implementation_ambiguity: ordinary
+implementation_mode: parent_direct
 plan_purpose: implementation
 feasibility_evidence:
   - {"evidence":"stop_review_gate.py has exactly one early return that can end the loop, the runtime-supplied stop_hook_active field, and no internal bound. On 2026-09-09 the same retained-task block was reissued eleven consecutive times while the ownership record, task worktree and temporary branch were all absent.","kind":"reproduced_defect"}
@@ -34,7 +35,8 @@ context_files:
   - scripts/project_workflow/worktree_guard.py
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
-  - docs/agent/SPEC_VALIDATION.md
+  - references/validation.md
+  - docs/agent/SPEC_SECURITY.md
 focused_validation:
   - python3 tests/test-hooks.py
   - python3 scripts/check-copier-template.py
@@ -54,6 +56,9 @@ checked_summary_ja: 解決不能な保持状態を報告したターンを終了
 
 ## Decisions
 
+- Use bounded parent implementation with independent read-only review because the write scope includes a lifecycle hook and its test authority.
+- Store one bounded digest/count record in the canonical common Git directory so linked worktrees share the repository's consecutive count and independent clones do not. Serialize access, refuse unsafe or malformed state explicitly, and never store raw reasons or modify ownership records.
+- Preserve the first three identical retained-state blocks and release the fourth and later identical attempts. Reset the sequence on a changed reason, no outstanding task, or an intervening plan-completion failure; never release a plan-completion failure through this counter.
 - Bound the repetition inside the gate rather than relying only on the runtime-supplied stop_hook_active field, because that single external signal is the current sole loop breaker and its absence deadlocks the turn.
 - Leave the block itself unchanged until the bound is reached, so a task worktree that can still be published or retired is still withheld from success.
 - Key the count by repository identity and the digest of the exact block reason, and clear it whenever the reason changes or nothing is outstanding, so only a genuinely unchanging report consumes the bound.
@@ -69,3 +74,6 @@ checked_summary_ja: 解決不能な保持状態を報告したターンを終了
 - [ ] Run the focused witnesses, then the authoritative suite once.
 
 ## Validation Notes
+
+- Owner implementation authorization on 2026-09-09: 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 This explicitly selects the existing Class C plan and its bounded-release decision; no new external effects or requirement changes are added.
+- Replace the nonexistent root SPEC_VALIDATION.md reference with references/validation.md and read the root security policy. The existing acceptance and validation commands remain unchanged.
