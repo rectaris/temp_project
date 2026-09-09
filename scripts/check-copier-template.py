@@ -1631,6 +1631,9 @@ def require_validation_witness_copier_transition(copier_yml: str) -> None:
     for required in (
         "copier.yml",
         migration_script,
+        # The update task the fixture must exercise from the working tree,
+        # so a broken candidate updater cannot pass the focused Copier suite.
+        "scripts/update_agent_model_profiles.py",
         *VALIDATION_WITNESS_UPDATE_SOURCES,
     ):
         if inventory.count(required) != 1:

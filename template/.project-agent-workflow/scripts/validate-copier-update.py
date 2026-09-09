@@ -356,6 +356,10 @@ def validate_agent_profile_transition(path: str, before: bytes, after: bytes) ->
         raise UpdateValidationError(f"changed agent profile is not valid UTF-8 TOML: {path}") from exc
     profile_name = Path(path).stem
     seeded = SEEDED_AGENT_PROFILES.get(profile_name)
+    if seeded is None:
+        raise UpdateValidationError(
+            f"changed agent profile is not a seeded profile: {path}"
+        )
     for index, field in enumerate(("model", "model_reasoning_effort")):
         # Ownership is per field: a field the project already declared may only
         # survive unchanged, and a field it never declared may only appear as
@@ -367,10 +371,6 @@ def validate_agent_profile_transition(path: str, before: bytes, after: bytes) ->
                     f"{path} ({field})"
                 )
             continue
-        if seeded is None:
-            raise UpdateValidationError(
-                f"changed agent profile is not a seeded profile: {path}"
-            )
         if parsed.get(field) != seeded[index]:
             raise UpdateValidationError(
                 f"changed agent profile has an unexpected default {field}: {path}"

@@ -1,6 +1,7 @@
 copier.yml
 scripts/migrate-sequential-plan-worker.py
 scripts/snapshot-validation-witness-provenance.py
+scripts/update_agent_model_profiles.py
 scripts/validate-copier-update.py
 template/AGENTS.md.jinja
 template/README.md.jinja

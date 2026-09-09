@@ -1281,6 +1281,34 @@ developer_instructions = """Preserve this instruction."""
 
         VALIDATOR.validate(repository)
 
+    def test_rejects_any_change_to_an_unseeded_agent_profile(self) -> None:
+        temporary, repository = self.make_repository()
+        self.addCleanup(temporary.cleanup)
+        agent = repository / ".codex/agents/project_custom.toml"
+        agent.write_text(
+            'name = "project_custom"\n'
+            'description = "Project profile."\n'
+            'model = "project-model"\n'
+            'model_reasoning_effort = "high"\n',
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", str(agent.relative_to(repository))], cwd=repository, check=True)
+        subprocess.run(["git", "commit", "-qm", "add project profile"], cwd=repository, check=True)
+
+        # Both declared fields keep their parsed values, so only an
+        # unconditional unseeded-profile rejection can stop this diff.
+        agent.write_text(
+            'name = "project_custom"\n'
+            'description = "Project profile."\n'
+            'model  =  "project-model"\n'
+            'model_reasoning_effort = "high"\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            VALIDATOR.UpdateValidationError, "not a seeded profile"
+        ):
+            VALIDATOR.validate(repository)
+
     def test_rejects_agent_instruction_changes_but_allows_exact_worker_transition(self) -> None:
         temporary, repository = self.make_repository()
         self.addCleanup(temporary.cleanup)

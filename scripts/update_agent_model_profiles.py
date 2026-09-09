@@ -113,6 +113,7 @@ def render_profile(text: str, model: str, effort: str) -> str:
         raise ProfileError("agent TOML is missing a string name")
 
     lines = text.splitlines()
+    raw_lines = text.splitlines(keepends=True)
     assignments = root_assignments(lines)
     defaults = {"model": model, "model_reasoning_effort": effort}
     missing: list[tuple[str, str]] = []
@@ -141,10 +142,17 @@ def render_profile(text: str, model: str, effort: str) -> str:
     anchor = "description" if description_anchor is not None else "name"
     insertion_indent = assignments[anchor][0][1]
 
+    # Insertion works on the line list that still carries its own terminators,
+    # so every byte outside the added assignments survives the render: the
+    # file's newline style, its trailing whitespace, and its final blank lines.
+    terminator = raw_lines[insert_after][len(lines[insert_after]):]
+    if not terminator:
+        terminator = "\r\n" if "\r\n" in text else "\n"
+        raw_lines[insert_after] += terminator
     for field, value in reversed(missing):
-        lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"')
+        raw_lines.insert(insert_after + 1, f'{insertion_indent}{field} = "{value}"{terminator}')
 
-    rendered = "\n".join(lines).rstrip() + "\n"
+    rendered = "".join(raw_lines)
     try:
         normalized = tomllib.loads(rendered)
     except tomllib.TOMLDecodeError as exc:
@@ -163,7 +171,7 @@ def write_atomic(path: Path, text: str) -> None:
     temporary = Path(temporary_name)
     try:
         os.fchmod(descriptor, stat.S_IMODE(path.stat().st_mode))
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
         temporary.replace(path)
     finally:
@@ -175,11 +183,19 @@ def normalize_destination(destination: Path, *, check: bool = False) -> list[Pat
     for name, (model, effort) in PROFILES.items():
         relative = Path(".codex/agents") / f"{name}.toml"
         path = destination / relative
-        if path.is_symlink():
-            raise ProfileError(f"refusing to replace symlinked agent profile: {relative}")
+        # A symlinked profile is not the only way out of the destination: a
+        # symlinked parent redirects every profile at once, so each component
+        # between the destination and the file is checked before any read.
+        for component in (*reversed(relative.parents[:-1]), relative):
+            candidate = destination / component
+            if candidate.is_symlink():
+                raise ProfileError(f"refusing to follow symlinked agent path: {component}")
         if not path.is_file():
             raise ProfileError(f"missing built-in agent profile: {relative}")
-        original = path.read_text(encoding="utf-8")
+        if path.resolve() != (destination.resolve() / relative):
+            raise ProfileError(f"agent profile resolves outside the destination: {relative}")
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            original = handle.read()
         try:
             rendered = render_profile(original, model, effort)
         except ProfileError as exc:

@@ -39,6 +39,7 @@ write_scope:
   - tests/test-agent-model-profiles.py
   - tests/test-copier-migration.py
   - tests/copier-update.sh
+  - tests/fixtures/orchestration/copier-update-source-inventory.txt
   - scripts/check-copier-template.py
 preservation_scope:
   - none
@@ -113,3 +114,4 @@ checked_summary_ja: Copier 更新で利用側のモデルと推論設定を保�
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
 
 - 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Activation baseline: `5125827` in `temp_project`. Plan 273 is checked, and the declared source mechanisms are still present.
+- 2026-09-09 write-scope admission: The integration gate 「The focused Copier command must include the mutable source files in its disposable fixture」 cannot hold while `scripts/update_agent_model_profiles.py` is absent from `tests/fixtures/orchestration/copier-update-source-inventory.txt`, which is the fixture's only source of copied paths. The parent admitted that one inventory file into `write_scope`. This adds no requirement and changes no acceptance item.

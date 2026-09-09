@@ -200,6 +200,73 @@ sandbox_mode = "read-only"
             with self.assertRaises(MODULE.ProfileError):
                 MODULE.normalize_destination(destination)
 
+    def test_refuses_a_symlinked_agent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "project"
+            outside = Path(temporary) / "outside"
+            outside.mkdir(parents=True)
+            for name in MODULE.PROFILES:
+                (outside / f"{name}.toml").write_text('name = "worker"\n', encoding="utf-8")
+            (destination / ".codex").mkdir(parents=True)
+            (destination / ".codex/agents").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(MODULE.ProfileError):
+                MODULE.normalize_destination(destination)
+            for name in MODULE.PROFILES:
+                self.assertEqual(
+                    (outside / f"{name}.toml").read_text(encoding="utf-8"),
+                    'name = "worker"\n',
+                )
+
+    def test_preserves_carriage_returns_and_trailing_bytes_when_filling(self) -> None:
+        original = (
+            'name = "worker"\r\n'
+            'description = "Customized worker."\r\n'
+            'model = "old-model"\r\n'
+            "\r\n"
+            "\r\n"
+        )
+        rendered = MODULE.render_profile(original, "gpt-5.6-luna", "low")
+        self.assertEqual(
+            rendered,
+            'name = "worker"\r\n'
+            'description = "Customized worker."\r\n'
+            'model_reasoning_effort = "low"\r\n'
+            'model = "old-model"\r\n'
+            "\r\n"
+            "\r\n",
+        )
+
+    def test_preserves_a_final_line_without_a_newline(self) -> None:
+        original = 'name = "worker"\ndescription = "Customized worker."'
+        rendered = MODULE.render_profile(original, "gpt-5.6-luna", "low")
+        self.assertEqual(
+            rendered,
+            'name = "worker"\n'
+            'description = "Customized worker."\n'
+            'model = "gpt-5.6-luna"\n'
+            'model_reasoning_effort = "low"\n',
+        )
+
+    def test_writes_filled_profiles_without_rewriting_other_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary)
+            agents = destination / ".codex/agents"
+            agents.mkdir(parents=True)
+            for name in MODULE.PROFILES:
+                path = agents / f"{name}.toml"
+                with path.open("w", encoding="utf-8", newline="") as handle:
+                    handle.write(
+                        f'name = "{name}"\r\ndescription = "Customized."\r\n'
+                        'model = "project-model"\r\n\r\n'
+                    )
+            MODULE.normalize_destination(destination)
+            for name in MODULE.PROFILES:
+                with (agents / f"{name}.toml").open("r", encoding="utf-8", newline="") as handle:
+                    stored = handle.read()
+                self.assertIn('model = "project-model"\r\n', stored)
+                self.assertTrue(stored.endswith("\r\n\r\n"), stored)
+                self.assertNotIn("\n\n", stored.replace("\r\n", "\r"))
+
 
 if __name__ == "__main__":
     unittest.main()
