@@ -1143,6 +1143,10 @@ def run_bounded_subprocess(
     so a flooding command cannot exhaust memory before the limit applies.
     Reaching either bound kills the process group; neither bound is a retry
     signal, and the caller records the reason with the bounded output.
+
+    A reader that cannot drain its pipe to completion fails closed. It kills
+    the process group and reports the failure, so a partially read capture is
+    never returned as if the command had simply produced little output.
     """
 
     process = subprocess.Popen(  # noqa: S603 - argv is parent-owned and fully resolved
@@ -1157,6 +1161,7 @@ def run_bounded_subprocess(
     lock = threading.Lock()
     buffers: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
     budget = {"remaining": max(0, int(output_limit_bytes)), "truncated": False}
+    read_failures: list[str] = []
 
     def drain(stream: Any, key: str) -> None:
         try:
@@ -1175,7 +1180,10 @@ def run_bounded_subprocess(
                 if overflowed:
                     kill_process_group(process)
                     return
-        except OSError:
+        except (OSError, MemoryError) as exc:
+            with lock:
+                read_failures.append(f"{key} reader stopped early: {exc.__class__.__name__}")
+            kill_process_group(process)
             return
         finally:
             try:
@@ -1195,13 +1203,29 @@ def run_bounded_subprocess(
     except subprocess.TimeoutExpired:
         timed_out = True
         kill_process_group(process)
-        process.wait()
+        try:
+            process.wait(timeout=PREFLIGHT_DRAIN_JOIN_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
     for thread in threads:
         thread.join(timeout=PREFLIGHT_DRAIN_JOIN_SECONDS)
+    stalled = [thread for thread in threads if thread.is_alive()]
+    if stalled:
+        kill_process_group(process)
+        for thread in stalled:
+            thread.join(timeout=PREFLIGHT_DRAIN_JOIN_SECONDS)
+        with lock:
+            read_failures.append("a reader did not finish after the process group was killed")
     with lock:
+        failures = sorted(set(read_failures))
         truncated = budget["truncated"]
         stdout = bytes(buffers["stdout"])
         stderr = bytes(buffers["stderr"])
+    if failures:
+        raise RunnerError(
+            "bounded command output could not be read to completion: " + "; ".join(failures)
+        )
     return {
         "returncode": int(process.returncode if process.returncode is not None else -1),
         "stdout": stdout,

@@ -18,6 +18,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 
@@ -6268,6 +6269,49 @@ class CandidatePreflightBoundsTests(unittest.TestCase):
         self.assertTrue(result["output_truncated"])
         self.assertLessEqual(len(result["stdout"]) + len(result["stderr"]), 4096)
         self.assertFalse(result["timed_out"])
+
+    def test_a_reader_that_cannot_drain_its_pipe_fails_closed(self) -> None:
+        real_popen = RUNNER.subprocess.Popen
+        seen: dict[str, int] = {}
+
+        class FailingReader:
+            def __init__(self, inner: Any) -> None:
+                self.inner = inner
+                self.calls = 0
+
+            def read(self, size: int) -> bytes:
+                self.calls += 1
+                seen["reads"] = self.calls
+                if self.calls > 1:
+                    raise OSError("simulated pipe read failure")
+                return self.inner.read(size)
+
+            def close(self) -> None:
+                self.inner.close()
+
+        def popen(*args: Any, **kwargs: Any) -> Any:
+            process = real_popen(*args, **kwargs)
+            process.stdout = FailingReader(process.stdout)
+            return process
+
+        program = (
+            "import sys, time\n"
+            "chunk = 'x' * 4096\n"
+            "for _ in range(100000):\n"
+            "    sys.stdout.write(chunk)\n"
+            "    sys.stdout.flush()\n"
+            "time.sleep(120)\n"
+        )
+        started = time.monotonic()
+        with mock.patch.object(RUNNER.subprocess, "Popen", popen):
+            with self.assertRaises(RUNNER.RunnerError) as caught:
+                RUNNER.run_bounded_subprocess(
+                    [sys.executable, "-c", program],
+                    timeout_seconds=60.0,
+                    output_limit_bytes=RUNNER.PREFLIGHT_OUTPUT_LIMIT_BYTES,
+                )
+        self.assertIn("could not be read to completion", str(caught.exception))
+        self.assertLess(time.monotonic() - started, 30.0)
 
     def test_timeout_kills_descendant_processes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
