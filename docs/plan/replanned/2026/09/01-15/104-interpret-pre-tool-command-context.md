@@ -1,7 +1,6 @@
 # Interpret actual command context before requiring a task worktree
 
-status: in_progress
-primary_invariant: The pre-tool worktree decision uses a bounded recognized invocation and its effective repository directory; a lifecycle filename used only as data never becomes write classification or authority.
+status: replanned
 task_types:
   - template_workflow
   - planning_docs
@@ -68,11 +67,19 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:0243c89c86f86a67df4bce2dd6fe927b926389fcc5745dd7723d70278d898a78","stage":"focused","witness":"python3 tests/test-hooks.py"}
   - {"acceptance_sha256":"sha256:9c55c43f300180055a6557ae9676c2eb39f679fe53870a8400dbaa873a39ab6b","stage":"focused","witness":"python3 tests/test-hooks.py"}
   - {"acceptance_sha256":"sha256:35f9b5e36aa1020b3abec7caf87b3689b4e6b1c88f3c190ad199a48c9f34d759","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/104-interpret-pre-tool-command-context.md
+replan_contract: docs/plan/replanned/contracts/104-complete-pre-tool-command-context.json
 integration_gates:
-  - Start only after this backlog plan is selected for implementation and published as active; use its exact bound task worktree.
-  - Use bounded parent implementation and independent read-only review. Keep existing correction and review limits, mandatory validation, Copier preservation and external-effect authority.
-  - No shell evaluation, command execution, interpreter-wide allowlist, new runtime protocol or disabled guard.
-  - External forwarding beyond an explicit supported workdir field is outside scope. A missing field remains an integration limitation, not a numbered investigation plan.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/301-complete-pre-tool-command-context.md
+inherited_acceptance_digests:
+  - sha256:639974b33514ee85859a502260dc968e530bef5fce9cbc0b3f050c1f4388cb4c
+  - sha256:0243c89c86f86a67df4bce2dd6fe927b926389fcc5745dd7723d70278d898a78
+  - sha256:9c55c43f300180055a6557ae9676c2eb39f679fe53870a8400dbaa873a39ab6b
+  - sha256:35f9b5e36aa1020b3abec7caf87b3689b4e6b1c88f3c190ad199a48c9f34d759
 checked_summary_ja: 実行対象と実行場所を区別し、参照だけの操作を誤って止めない。
 
 ## Decisions

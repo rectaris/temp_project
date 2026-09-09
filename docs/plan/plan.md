@@ -1,4 +1,4 @@
 # Active Plan
 
 id	path	status
-104	docs/plan/active/104-interpret-pre-tool-command-context.md	in_progress
+301	docs/plan/active/301-complete-pre-tool-command-context.md	in_progress

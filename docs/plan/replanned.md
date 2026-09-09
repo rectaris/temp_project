@@ -56,3 +56,4 @@ id	path	contract
 283	docs/plan/replanned/2026/09/01-15/283-complete-resumable-parent-worktrees.md	docs/plan/replanned/contracts/283-bootstrap-same-plan-continuation.json
 106	docs/plan/replanned/2026/09/01-15/106-adapt-natural-japanese-for-copilot.md	docs/plan/replanned/contracts/106-complete-natural-japanese-copilot.json
 254	docs/plan/replanned/2026/09/01-15/254-preserve-identical-human-report-supersede.md	docs/plan/replanned/contracts/254-complete-safe-human-report-supersede.json
+104	docs/plan/replanned/2026/09/01-15/104-interpret-pre-tool-command-context.md	docs/plan/replanned/contracts/104-complete-pre-tool-command-context.json
