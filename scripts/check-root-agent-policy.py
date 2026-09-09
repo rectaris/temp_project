@@ -962,6 +962,31 @@ def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str
 
 
 MARKDOWN_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
+MARKDOWN_FENCE_INDENT = 3
+
+
+def markdown_fence_opener(line: str) -> str | None:
+    stripped = line.lstrip(" ")
+    if len(line) - len(stripped) > MARKDOWN_FENCE_INDENT:
+        return None
+    match = MARKDOWN_FENCE_RE.match(stripped)
+    return None if match is None else match.group(1)
+
+
+def markdown_fence_closes(line: str, fence: str) -> bool:
+    """Report whether the line closes an open fence.
+
+    CommonMark closes a fence only with a line indented at most three spaces
+    that repeats the opening character at least as many times and carries
+    nothing but whitespace afterwards. A closer with an info string or deeper
+    indentation leaves the block open, so accepting it would let a routed
+    instruction stay inside code while the check passes.
+    """
+
+    closer = markdown_fence_opener(line)
+    if closer is None or closer[0] != fence[0] or len(closer) < len(fence):
+        return False
+    return line.lstrip(" ")[len(closer):].strip(" \t") == ""
 
 
 def markdown_operative_lines(text: str) -> set[str]:
@@ -984,12 +1009,12 @@ def markdown_operative_lines(text: str) -> set[str]:
                 in_comment = False
             continue
         if fence is not None:
-            if stripped.startswith(fence):
+            if markdown_fence_closes(line, fence):
                 fence = None
             continue
-        opener = MARKDOWN_FENCE_RE.match(stripped)
-        if opener is not None and len(line) - len(stripped) <= 3:
-            fence = opener.group(1)
+        opener = markdown_fence_opener(line)
+        if opener is not None:
+            fence = opener
             continue
         if "<!--" in line:
             if line.count("<!--") > line.count("-->"):
