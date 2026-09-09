@@ -1,6 +1,6 @@
 # Stop indivisible Tier 1 work without an impossible descope
 
-status: in_progress
+status: checked
 primary_invariant: A Tier 1 plan keeps its single acceptance requirement intact when it must stop; it cannot fabricate a retained/deferred partition or obtain another execution budget through descope.
 task_types:
   - template_workflow
@@ -93,11 +93,11 @@ checked_summary_ja: 完了条件が一つの Tier 1 に分割不能な縮小手�
 
 ## Tasks
 
-- [ ] Add new-admission fixtures for zero, one, and two Tier 1 acceptance items plus a historical plan that remains readable.
-- [ ] Update root admission checking and the generated planlib admission path without changing historical manifest parsing.
-- [ ] Update root/template tier and descope wording and the corresponding AGENTS instruction; preserve every existing owner-decision and stopped-run guarantee.
-- [ ] Verify the existing nonempty partition behavior and generated create/promote behavior using the declared witnesses.
-- [ ] Obtain independent review and run authoritative validation once; do not reuse an implementation check as the final authoritative witness.
+- [x] Add new-admission fixtures for zero, one, and two Tier 1 acceptance items plus a historical plan that remains readable.
+- [x] Update root admission checking and the generated planlib admission path without changing historical manifest parsing.
+- [x] Update root/template tier and descope wording and the corresponding AGENTS instruction; preserve every existing owner-decision and stopped-run guarantee.
+- [x] Verify the existing nonempty partition behavior and generated create/promote behavior using the declared witnesses.
+- [x] Obtain independent review and run authoritative validation once; do not reuse an implementation check as the final authoritative witness.
 
 ## Validation Notes
 
@@ -110,3 +110,9 @@ checked_summary_ja: 完了条件が一つの Tier 1 に分割不能な縮小手�
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
 
 - 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Activation baseline: `b5cac7c` in `temp_project`. The declared source mechanisms are still present.
+
+- 2026-09-09 implementation: New Tier 1 admission now requires exactly one acceptance item in `scripts/check-root-agent-policy.py` (`check_plan_admission`, gated by the existing 264 boundary) and in `template/.project-agent-workflow/scripts/planlib.py` (`validate_admission_record`, gated by `has_admission_record`). The tier and descope policy in `docs/agent/SPEC_PLAN_WORKFLOW.md`, its generated mirror, `AGENTS.md`, and `template/.project-agent-workflow/AGENTS.md.jinja` now state that a single acceptance item cannot be partitioned, so indivisible Tier 1 work stops for the owner with its requirement, stopped state, and evidence intact. `TIER_ZERO_SECTION_DIGEST` was re-pinned because that guard deliberately forces a tier-policy re-review.
+- 2026-09-09 focused validation: `python3 tests/test-validation-tools.py` (237 tests OK), `python3 scripts/check-root-agent-policy.py` (passed), `python3 tests/test-plan-execution-state.py` (137 tests OK), `python3 scripts/check-copier-template.py` (passed), `git diff --check` (clean).
+- 2026-09-09 independent review: one bounded read-only review reported no finding and accepted the change. It reproduced admission enforcement on both the root and generated paths, confirmed that all six existing Tier 1 plans still pass and that a synthetic pre-264 plan is skipped, confirmed `scripts/plan-execution-state.py` and its template copy are untouched with their nonempty partition checks intact, and mutation-tested the new tests in throwaway copies outside the worktree.
+- 2026-09-09 authoritative validation: `scripts/lint-project-workflow.sh` and `REQUIRE_COPIER=1 tests/smoke.sh` on commit `187ddad`.
+- 2026-09-09 scope note: no continuation, successor, reset, or reopening route was added, and no ledger schema, review budget, or correction limit was changed.
