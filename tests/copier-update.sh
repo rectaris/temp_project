@@ -781,13 +781,52 @@ EOF
   printf '%s\n' "$out"
 }
 
-# Profiles whose model fields the fixture declares itself. The update fills only
-# absent defaults, so a lane that customizes a profile asserts its own values.
-agent_profile_skip=""
+# The update fills only the agent model fields a project has not declared, so a
+# lane that already holds a value asserts that exact value instead of the seed.
+# Each entry is "profile:model:effort" and "-" keeps the seeded default.
+agent_profile_expectations=""
 
-assert_seeded_agent_profile() {
-  grep -qE "^[[:space:]]*model = \"$2\"$" "$1/.codex/agents/$4.toml"
-  grep -qE "^[[:space:]]*model_reasoning_effort = \"$3\"$" "$1/.codex/agents/$4.toml"
+seeded_agent_profile_model() {
+  case "$1" in
+    change_reviewer) echo gpt-5.6-sol ;;
+    docs_researcher|evidence_synthesizer|repo_explorer) echo gpt-5.6-luna ;;
+    scoped_worker) echo gpt-5.6-terra ;;
+    fast_scoped_worker|sequential_plan_worker) echo gpt-5.3-codex-spark ;;
+  esac
+}
+
+seeded_agent_profile_effort() {
+  case "$1" in
+    change_reviewer) echo high ;;
+    evidence_synthesizer) echo xhigh ;;
+    repo_explorer) echo low ;;
+    docs_researcher|scoped_worker|fast_scoped_worker|sequential_plan_worker) echo medium ;;
+  esac
+}
+
+expected_agent_profile_field() {
+  expectation_profile=$1
+  expectation_field=$2
+  for expectation in $agent_profile_expectations; do
+    case "$expectation" in
+      "$expectation_profile":*) ;;
+      *) continue ;;
+    esac
+    expectation_rest=${expectation#*:}
+    case "$expectation_field" in
+      model) expectation_value=${expectation_rest%%:*} ;;
+      *) expectation_value=${expectation_rest#*:} ;;
+    esac
+    if [ "$expectation_value" != "-" ]; then
+      printf '%s\n' "$expectation_value"
+      return 0
+    fi
+    break
+  done
+  case "$expectation_field" in
+    model) seeded_agent_profile_model "$expectation_profile" ;;
+    *) seeded_agent_profile_effort "$expectation_profile" ;;
+  esac
 }
 
 assert_agent_profiles() {
@@ -795,18 +834,9 @@ assert_agent_profiles() {
   for profile in change_reviewer docs_researcher evidence_synthesizer repo_explorer \
     scoped_worker fast_scoped_worker sequential_plan_worker
   do
-    case " $agent_profile_skip " in
-      *" $profile "*) continue ;;
-    esac
-    case "$profile" in
-      change_reviewer) assert_seeded_agent_profile "$out" gpt-5.6-sol high "$profile" ;;
-      docs_researcher) assert_seeded_agent_profile "$out" gpt-5.6-luna medium "$profile" ;;
-      evidence_synthesizer) assert_seeded_agent_profile "$out" gpt-5.6-luna xhigh "$profile" ;;
-      repo_explorer) assert_seeded_agent_profile "$out" gpt-5.6-luna low "$profile" ;;
-      scoped_worker) assert_seeded_agent_profile "$out" gpt-5.6-terra medium "$profile" ;;
-      fast_scoped_worker) assert_seeded_agent_profile "$out" gpt-5.3-codex-spark medium "$profile" ;;
-      sequential_plan_worker) assert_seeded_agent_profile "$out" gpt-5.3-codex-spark medium "$profile" ;;
-    esac
+    profile_file="$out/.codex/agents/$profile.toml"
+    grep -qE "^[[:space:]]*model = \"$(expected_agent_profile_field "$profile" model)\"$" "$profile_file"
+    grep -qE "^[[:space:]]*model_reasoning_effort = \"$(expected_agent_profile_field "$profile" effort)\"$" "$profile_file"
   done
 }
 
@@ -1011,7 +1041,9 @@ validate_common_lane() {
 
 earliest_out=$(prepare_lane earliest-supported "$earliest_ref" "$legacy_answers")
 (cd "$earliest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="repo_explorer:-:medium"
 validate_common_lane "$earliest_out"
+agent_profile_expectations=""
 grep -q 'Codex hooks mode: `install_templates`' "$earliest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `disabled`' "$earliest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`documented`' "$earliest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -1021,7 +1053,9 @@ test ! -f "$earliest_out/.project-agent-workflow/scripts/skillspector-scan.sh"
 
 oldest_out=$(prepare_lane oldest-supported "$oldest_ref" "$legacy_answers")
 (cd "$oldest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="repo_explorer:-:medium"
 validate_common_lane "$oldest_out"
+agent_profile_expectations=""
 grep -q 'Codex hooks mode: `install_templates`' "$oldest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `document_optional`' "$oldest_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`documented`' "$oldest_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -1043,7 +1077,9 @@ fi
 
 latest_out=$(prepare_lane latest-stable "$latest_ref" "$root/tests/fixtures/python.answers.yml")
 (cd "$latest_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="change_reviewer:-:max docs_researcher:gpt-5.4-mini:- scoped_worker:gpt-5.5:high"
 validate_common_lane "$latest_out"
+agent_profile_expectations=""
 test -f "$latest_out/docs/agent/SPEC_COPIER_ADOPTION.md"
 test -f "$latest_out/.codex/skills/decision-audit/SKILL.md"
 grep -q 'Codex hooks mode: `install_templates`' "$latest_out/.project-agent-workflow/AGENTS.md"
@@ -1389,12 +1425,16 @@ fixture_git "$pre_v1_plan_out" diff --check
 
 v100_out=$(prepare_lane v100-repair v1.0.0 "$root/tests/fixtures/python.answers.yml")
 (cd "$v100_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="change_reviewer:-:max scoped_worker:-:high"
 validate_common_lane "$v100_out" 0 patch_only
+agent_profile_expectations=""
 grep -q '^_commit: v1.3.1$' "$v100_out/.copier-answers.yml"
 
 legacy_disabled_out=$(prepare_lane oldest-disabled "$oldest_ref" "$legacy_disabled_answers")
 (cd "$legacy_disabled_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="repo_explorer:-:medium"
 validate_common_lane "$legacy_disabled_out"
+agent_profile_expectations=""
 grep -q 'Codex hooks mode: `disabled`' "$legacy_disabled_out/.project-agent-workflow/AGENTS.md"
 grep -q 'SkillSpector mode: `disabled`' "$legacy_disabled_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`disabled`' "$legacy_disabled_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -1410,7 +1450,9 @@ legacy_override_out=$(prepare_lane oldest-explicit-disabled "$oldest_ref" "$lega
   --data graph_memory_mode=disabled \
   --data ci_autofix_mode=disabled)
 (cd "$legacy_override_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
+agent_profile_expectations="repo_explorer:-:medium"
 validate_common_lane "$legacy_override_out"
+agent_profile_expectations=""
 grep -q 'External service policy states: MCP=`disabled`, Linear=`disabled`, graph memory=`disabled`' "$legacy_override_out/.project-agent-workflow/AGENTS.md"
 grep -q 'MCP=`disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
 grep -q 'Linear=`disabled`' "$legacy_override_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
@@ -1547,9 +1589,9 @@ fixture_git "$mature_out" commit -m "Customize mature project workflow" >/dev/nu
 
 run_adoption "$mature_out" "$target_ref" >/dev/null
 (cd "$mature_out" && python3 .project-agent-workflow/scripts/migrate-legacy-template-files.py >/dev/null)
-agent_profile_skip="docs_researcher scoped_worker"
+agent_profile_expectations="change_reviewer:-:max docs_researcher:legacy-model:legacy-effort scoped_worker:seed-equal-value:-"
 validate_common_lane "$mature_out"
-agent_profile_skip=""
+agent_profile_expectations=""
 grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/docs_researcher.toml"
 grep -q 'Keep this project instruction.' "$mature_out/.codex/agents/repo_explorer.toml"
 # The project already declared both fields, so the update must keep its values.
