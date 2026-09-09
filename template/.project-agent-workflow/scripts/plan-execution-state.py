@@ -2640,6 +2640,35 @@ def require_predecessor_ancestry(accepted_source_head: str, successor_source_hea
         raise StateError("successor source HEAD is not based on the accepted predecessor source")
 
 
+def reserve_new_execution_state(path: Path) -> None:
+    """Claim a never-used execution state path exclusively before publication.
+
+    `atomic_write` publishes with a replacing rename, which is correct for
+    every later update but would silently overwrite a foreign file created
+    after the absence check. Reserving the final name with an exclusive
+    create makes a concurrent creator fail closed instead.
+    """
+
+    reject_symlink_ancestors(path, include_target=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    directory_descriptor = os.open(
+        path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    )
+    try:
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_descriptor,
+            )
+        except FileExistsError as exc:
+            raise StateError("execution state already exists") from exc
+        os.close(descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
 def atomic_write(path: Path, value: dict[str, Any]) -> None:
     reject_symlink_ancestors(path, include_target=False)
     data = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
@@ -3421,6 +3450,7 @@ def init_state(args: argparse.Namespace) -> None:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         if path.exists() or path.is_symlink():
             raise StateError("execution state already exists")
+        reserve_new_execution_state(path)
         atomic_write(path, state)
 
 
@@ -3432,6 +3462,18 @@ PARENT_DIRECT_PREPARATION_DESTINATIONS = (
     ("state", "execution state"),
     ("lifecycle_state", "candidate lifecycle state"),
 )
+
+
+def require_plain_path_components(path: Path, label: str) -> None:
+    """Refuse `.` and `..` so one lexical form identifies one destination.
+
+    `Path.absolute()` keeps traversal components, so repository containment,
+    duplicate detection, nesting detection and the recorded path digests would
+    otherwise compare unequal strings that name the same file.
+    """
+
+    if any(part in {".", ".."} for part in path.parts):
+        raise StateError(f"{label} must not use a relative traversal component")
 
 
 def preparation_destinations(args: argparse.Namespace) -> list[tuple[str, str, Path]]:
@@ -3453,6 +3495,7 @@ def require_free_preparation_destinations(
 
     claimed: list[tuple[str, Path]] = []
     for name, label, path in destinations:
+        require_plain_path_components(path, label)
         require_outside_repository(path, label)
         reject_symlink_ancestors(path, include_target=True)
         absolute = path.absolute()
@@ -3478,6 +3521,7 @@ def require_committed_active_plan(plan_arg: str, source_head: str) -> dict[str, 
     """
 
     root = repository_root()
+    require_plain_path_components(Path(plan_arg), "execution plan")
     absolute = Path(plan_arg).absolute()
     try:
         relative = absolute.relative_to(root).as_posix()
@@ -3514,10 +3558,8 @@ def require_committed_active_plan(plan_arg: str, source_head: str) -> dict[str, 
     statuses = re.findall(r"^status: (.+)$", plan_text, flags=re.MULTILINE)
     if statuses[:1] != ["in_progress"]:
         raise StateError("parent-direct preparation requires an in_progress active plan")
-    modes = re.findall(
-        r"^implementation_mode: (candidate|parent_direct)$", plan_text, flags=re.MULTILINE
-    )
-    if len(modes) > 1 or (modes and modes[0] != "parent_direct"):
+    modes = re.findall(r"^implementation_mode:(.*)$", plan_text, flags=re.MULTILINE)
+    if len(modes) > 1 or (modes and modes[0].strip() != "parent_direct"):
         raise StateError("plan implementation_mode does not match the execution mode")
     invariants = re.findall(r"^primary_invariant: (.+)$", plan_text, flags=re.MULTILINE)
     if len(invariants) != 1 or not invariants[0].strip():
@@ -3534,6 +3576,9 @@ def verify_parent_direct_preparation(
 ) -> dict[str, Any]:
     """Report readiness only after the existing readers accept every record."""
 
+    lifecycle = Path(args.lifecycle_state)
+    if lifecycle.exists() or lifecycle.is_symlink():
+        raise StateError("candidate lifecycle state destination became occupied")
     state = read_state(Path(args.state))
     reviewer = read_reviewer_registry(Path(args.reviewer_registry))
     continuation = read_continuation_registry(Path(args.continuation_registry))
@@ -3601,11 +3646,32 @@ def verify_parent_direct_preparation(
             str(Path(args.state).absolute()),
         ],
         "grants_authority": False,
+        "establishes_global_run_uniqueness": False,
     }
 
 
 def emit_preparation_report(report: dict[str, Any]) -> None:
     print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def retained_preparation_records(args: argparse.Namespace) -> list[str]:
+    """Name every record that is present now, in creation order.
+
+    A constructor can publish its file and then fail while flushing metadata,
+    so a list built from returned calls can understate what survived. Probing
+    the destinations reports what a parent actually has to deal with.
+    """
+
+    retained: list[str] = []
+    for name in ("reviewer_registry", "continuation_registry", "state"):
+        path = Path(getattr(args, name))
+        try:
+            present = path.exists() or path.is_symlink()
+        except OSError:
+            present = True
+        if present:
+            retained.append(str(path.absolute()))
+    return retained
 
 
 def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
@@ -3615,6 +3681,12 @@ def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
     omitted record; it grants no implementation, review, continuation or
     publication authority, and it satisfies no later review or completion
     evidence.
+
+    Freshness is checked per destination, exactly as the three calls it
+    composes check it. Like those calls, it establishes no global uniqueness
+    for a plan or run identity, so choosing unused destinations for a plan
+    that already has a ledger remains as possible, and as prohibited, as it
+    was before. The report states this rather than implying otherwise.
     """
 
     if not ID_RE.fullmatch(args.run_id):
@@ -3655,6 +3727,7 @@ def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
         created.append(str(Path(args.state).absolute()))
         report = verify_parent_direct_preparation(args, plan)
     except (OSError, UnicodeError, StateError) as exc:
+        retained = retained_preparation_records(args)
         emit_preparation_report(
             {
                 "schema_version": PARENT_DIRECT_PREPARATION_SCHEMA_VERSION,
@@ -3662,13 +3735,13 @@ def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
                 "ready": False,
                 "run_id": args.run_id,
                 "created_records": created,
-                "retained_records": created,
+                "retained_records": retained,
                 "failure": str(exc),
             }
         )
         raise StateError(
             "parent-direct preparation stopped and retained "
-            f"{len(created)} created record(s): {exc}"
+            f"{len(retained)} created record(s): {exc}"
         ) from exc
     emit_preparation_report(report)
 

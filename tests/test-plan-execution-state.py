@@ -7162,6 +7162,140 @@ class ParentDirectPreparationTest(unittest.TestCase):
         self.assertIn("run id is invalid", result.stderr)
         self.assert_nothing_created()
 
+    def test_a_traversing_destination_is_refused(self) -> None:
+        escaping = self.external / ".." / "repo" / "inside.jsonl"
+        result = self.run_cli(
+            *self.arguments(**{"--reviewer-registry": str(escaping)})
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("relative traversal component", result.stderr)
+        self.assertFalse((self.repo / "inside.jsonl").exists())
+        self.assert_nothing_created()
+
+    def test_a_traversing_alias_of_another_destination_is_refused(self) -> None:
+        alias = self.external / "unused" / ".." / "execution.json"
+        result = self.run_cli(*self.arguments(**{"--lifecycle-state": str(alias)}))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("relative traversal component", result.stderr)
+        self.assert_nothing_created()
+
+    def test_a_traversing_plan_path_is_refused(self) -> None:
+        result = self.run_cli(
+            *self.arguments(**{"--plan": "docs/plan/active/../active/001-test.md"})
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("relative traversal component", result.stderr)
+        self.assert_nothing_created()
+
+    def test_an_unrecognised_implementation_mode_is_refused(self) -> None:
+        self.plan.write_text(
+            self.PLAN_BODY + "implementation_mode: worker\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "mode"], cwd=self.repo, check=True)
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        result = self.run_cli(*self.arguments(**{"--source-head": head}))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("implementation_mode", result.stderr)
+        self.assert_nothing_created()
+
+    def test_a_foreign_state_file_created_after_the_check_is_not_replaced(self) -> None:
+        real = STATE_MODULE.reserve_new_execution_state
+
+        def intercepted(path: Path) -> None:
+            if path == self.state and not self.state.exists():
+                self.state.write_text("foreign\n", encoding="utf-8")
+            real(path)
+
+        with mock.patch.object(
+            STATE_MODULE, "reserve_new_execution_state", intercepted
+        ):
+            with mock.patch("builtins.print"):
+                with self.assertRaises(STATE_MODULE.StateError):
+                    self.prepare_in_process()
+        self.assertEqual(self.state.read_text(encoding="utf-8"), "foreign\n")
+
+    def test_an_occupied_lifecycle_destination_blocks_readiness(self) -> None:
+        real = STATE_MODULE.init_state
+
+        def occupying(arguments: Any) -> None:
+            real(arguments)
+            self.lifecycle.write_text("foreign\n", encoding="utf-8")
+
+        with mock.patch.object(STATE_MODULE, "init_state", occupying):
+            with mock.patch("builtins.print") as printed:
+                with self.assertRaises(STATE_MODULE.StateError) as caught:
+                    self.prepare_in_process()
+        self.assertIn("lifecycle state destination became occupied", str(caught.exception))
+        self.assertFalse(json.loads(printed.call_args[0][0])["ready"])
+
+    def test_a_record_published_before_a_late_failure_is_still_reported(self) -> None:
+        real = STATE_MODULE.initialize_continuation_registry
+
+        def failing_after_publication(arguments: Any) -> None:
+            real(arguments)
+            raise OSError("injected metadata failure")
+
+        with mock.patch.object(
+            STATE_MODULE, "initialize_continuation_registry", failing_after_publication
+        ):
+            with mock.patch("builtins.print") as printed:
+                with self.assertRaises(STATE_MODULE.StateError):
+                    self.prepare_in_process()
+        report = json.loads(printed.call_args[0][0])
+        self.assertEqual(report["created_records"], [str(self.registry.absolute())])
+        self.assertEqual(
+            report["retained_records"],
+            [str(self.registry.absolute()), str(self.continuation.absolute())],
+        )
+        self.assertTrue(self.continuation.exists())
+
+    def test_the_composed_result_matches_the_three_call_sequence(self) -> None:
+        """The composed operation must grant no authority the three calls lack."""
+
+        self.assertEqual(self.run_cli(*self.arguments()).returncode, 0)
+        composed = json.loads(self.state.read_text(encoding="utf-8"))
+        separate_state = self.external / "separate-execution.json"
+        separate_registry = self.external / "separate-reviewers.jsonl"
+        separate_continuation = self.external / "separate-epochs.jsonl"
+
+        def cli(*arguments: str) -> None:
+            result = subprocess.run(
+                [sys.executable, str(STATE_SCRIPT), *arguments], cwd=self.repo,
+                check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        cli("registry-init", "--output", str(separate_registry))
+        cli("continuation-registry-init", "--output", str(separate_continuation))
+        cli(
+            "init", str(separate_state), "--run-id", "run-1",
+            "--plan", "docs/plan/active/001-test.md",
+            "--plan-digest", digest(self.PLAN_BODY),
+            "--source-head", self.head,
+            "--primary-invariant-digest", digest("one parent-direct invariant"),
+            "--lifecycle-state", str(self.lifecycle),
+            "--implementation-mode", "parent_direct",
+            "--require-adversarial-preflight",
+            "--continuation-registry", str(separate_continuation),
+        )
+        separate = json.loads(separate_state.read_text(encoding="utf-8"))
+
+        def normalize(state: dict[str, Any]) -> dict[str, Any]:
+            copy = json.loads(json.dumps(state))
+            for event in copy["events"]:
+                epoch = event.get("execution_epoch")
+                if epoch:
+                    epoch["continuation_registry_identity_digest"] = ""
+                event["event_digest"] = ""
+                event["monotonic_ns"] = 0
+            copy["event_chain_digest"] = ""
+            return copy
+
+        self.assertEqual(normalize(composed), normalize(separate))
+
     def test_repeated_preparation_is_refused(self) -> None:
         self.assertEqual(self.run_cli(*self.arguments()).returncode, 0)
         first = self.state.read_bytes()
