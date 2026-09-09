@@ -951,21 +951,24 @@ if len(routes) != 1:
 route = routes[0]
 if len(route.encode("utf-8")) > policy.VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES:
     raise SystemExit(f"managed entrypoint guardian route is too long: {entrypoint}")
-normalized = route.lower().replace(generated_destination.lower(), "<destination>")
+if generated_destination not in route:
+    raise SystemExit(f"managed entrypoint guardian route does not name its destination: {entrypoint}")
+normalized = route.replace(generated_destination, "<destination>")
 if hashlib.sha256(normalized.encode("utf-8")).hexdigest() != (
     policy.VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256
 ):
     raise SystemExit(f"managed entrypoint guardian route is not the reviewed route: {entrypoint}")
 
 statements = [
-    line.strip().lower()
+    line.strip()
     for line in destination.read_text(encoding="utf-8").splitlines()
     if marker in line
 ]
 if len(statements) != 1:
     raise SystemExit(f"managed destination needs exactly one guardian rule: {destination}")
+lowered = statements[0].lower()
 for required in policy.VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS:
-    if required not in statements[0]:
+    if required not in lowered:
         raise SystemExit(f"managed destination is missing {required}: {destination}")
 if hashlib.sha256(statements[0].encode("utf-8")).hexdigest() != (
     policy.VALIDATION_WITNESS_MIGRATION_POLICY_SHA256

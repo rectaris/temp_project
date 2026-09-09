@@ -271,10 +271,10 @@ VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES = 300
 # are pinned by digest. Changing either text is intended to fail here and be
 # re-reviewed before the digest is re-pinned.
 VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256 = (
-    "02da5e1988fc589cb293f617cdfa81be9f1e68df166bfa7cda86b9b27ac06039"
+    "f74585e0aeeecec3ef344bc6867f72f8d565fa808e055b59b53292351c5cdacd"
 )
 VALIDATION_WITNESS_MIGRATION_POLICY_SHA256 = (
-    "1a8914321c2de3428be2b3acfd47775ae40c31e402c3f388c15e90d9e7a6f279"
+    "9d4234176cb97bd911ceea0f5795524fac81f6c4128d68a5d9d1b1ab17cceb51"
 )
 
 # The activation baseline of plan 275. The entrypoints are always loaded, so
@@ -463,7 +463,7 @@ def check_agents_rules() -> None:
 
 def validation_witness_migration_policy_statement(relative: str) -> str:
     matches = [
-        line.strip().lower()
+        line.strip()
         for line in read(relative).splitlines()
         if VALIDATION_WITNESS_MIGRATION_MARKER in line
     ]
@@ -473,9 +473,12 @@ def validation_witness_migration_policy_statement(relative: str) -> str:
             "policy statement"
         )
     statement = matches[0]
+    lowered = statement.lower()
     for marker in VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS:
-        if marker not in statement:
+        if marker not in lowered:
             fail(f"{relative} missing validation-witness migration marker: {marker}")
+    # The digest covers the exact reviewed bytes; lowercasing before hashing
+    # would accept a synchronized change to a case-sensitive lifecycle token.
     digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
     if digest != VALIDATION_WITNESS_MIGRATION_POLICY_SHA256:
         fail(
@@ -522,7 +525,9 @@ def validation_witness_migration_route(relative: str) -> str:
                 f"{relative} missing validation-witness migration route marker: "
                 f"{marker}"
             )
-    normalized = lowered.replace(destination.lower(), "<destination>")
+    # Only the exact case-sensitive destination is substituted, so a route that
+    # names an unreachable variant of the path fails instead of normalizing away.
+    normalized = route.replace(destination, "<destination>")
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     if digest != VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256:
         fail(

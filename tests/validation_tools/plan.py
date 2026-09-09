@@ -2774,6 +2774,19 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 "never count either as product acceptance evidence",
                 "always count either as product acceptance evidence",
             ),
+            "recased lifecycle token": (
+                (
+                    "references/orchestration.md",
+                    "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+                ),
+                "`pending`",
+                "`PENDING`",
+            ),
+            "recased route destination": (
+                ("AGENTS.md",),
+                "rule in `references/orchestration.md` and follow",
+                "rule in `REFERENCES/ORCHESTRATION.MD` and follow",
+            ),
         }
         for index, (case, (relatives, marker, replacement)) in enumerate(cases.items()):
             with self.subTest(rejected=case):
