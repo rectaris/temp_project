@@ -3424,6 +3424,255 @@ def init_state(args: argparse.Namespace) -> None:
         atomic_write(path, state)
 
 
+PARENT_DIRECT_PREPARATION_SCHEMA_VERSION = 1
+
+PARENT_DIRECT_PREPARATION_DESTINATIONS = (
+    ("reviewer_registry", "reviewer session registry"),
+    ("continuation_registry", "continuation registry"),
+    ("state", "execution state"),
+    ("lifecycle_state", "candidate lifecycle state"),
+)
+
+
+def preparation_destinations(args: argparse.Namespace) -> list[tuple[str, str, Path]]:
+    return [
+        (name, label, Path(getattr(args, name)))
+        for name, label in PARENT_DIRECT_PREPARATION_DESTINATIONS
+    ]
+
+
+def require_free_preparation_destinations(
+    destinations: list[tuple[str, str, Path]]
+) -> None:
+    """Refuse every occupied, unsafe, shared or nested destination before any write.
+
+    This runs before the first constructor so a later occupied path cannot leave
+    an earlier record behind. The constructors keep their own checks, so a
+    concurrent creator is still refused rather than overwritten.
+    """
+
+    claimed: list[tuple[str, Path]] = []
+    for name, label, path in destinations:
+        require_outside_repository(path, label)
+        reject_symlink_ancestors(path, include_target=True)
+        absolute = path.absolute()
+        for other_name, other in claimed:
+            if absolute == other:
+                raise StateError(
+                    f"{label} must not reuse the {other_name} destination"
+                )
+            if absolute in other.parents or other in absolute.parents:
+                raise StateError(
+                    f"{label} must not contain or sit inside the {other_name} destination"
+                )
+        claimed.append((name, absolute))
+        if path.exists() or path.is_symlink():
+            raise StateError(f"{label} destination is already occupied")
+
+
+def require_committed_active_plan(plan_arg: str, source_head: str) -> dict[str, str]:
+    """Bind preparation to the exact committed bytes of one active plan.
+
+    Digests are derived from the committed plan rather than supplied, so a
+    fresh start cannot be bound to a plan revision that is not published.
+    """
+
+    root = repository_root()
+    absolute = Path(plan_arg).absolute()
+    try:
+        relative = absolute.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise StateError("execution plan must live inside the repository") from exc
+    if not PLAN_RE.fullmatch(relative):
+        raise StateError(
+            "parent-direct preparation requires a numbered active plan under docs/plan/active/"
+        )
+    reject_symlink_ancestors(absolute, include_target=True)
+    if not absolute.is_file():
+        raise StateError(f"missing active plan: {relative}")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], check=False, cwd=root,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=sanitized_git_environment(),
+    )
+    if head.returncode != 0 or head.stdout.strip() != source_head:
+        raise StateError("source HEAD mismatch")
+    committed = subprocess.run(
+        ["git", "cat-file", "blob", f"{source_head}:{relative}"], check=False, cwd=root,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=sanitized_git_environment(),
+    )
+    if committed.returncode != 0:
+        raise StateError(f"active plan is not committed at the baseline: {relative}")
+    plan_bytes = absolute.read_bytes()
+    if committed.stdout != plan_bytes:
+        raise StateError(f"active plan has uncommitted changes: {relative}")
+    try:
+        plan_text = plan_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise StateError("execution plan must be UTF-8") from exc
+    statuses = re.findall(r"^status: (.+)$", plan_text, flags=re.MULTILINE)
+    if statuses[:1] != ["in_progress"]:
+        raise StateError("parent-direct preparation requires an in_progress active plan")
+    modes = re.findall(
+        r"^implementation_mode: (candidate|parent_direct)$", plan_text, flags=re.MULTILINE
+    )
+    if len(modes) > 1 or (modes and modes[0] != "parent_direct"):
+        raise StateError("plan implementation_mode does not match the execution mode")
+    invariants = re.findall(r"^primary_invariant: (.+)$", plan_text, flags=re.MULTILINE)
+    if len(invariants) != 1 or not invariants[0].strip():
+        raise StateError("execution plan must declare exactly one nonblank primary_invariant")
+    return {
+        "path": relative,
+        "plan_digest": digest(plan_bytes),
+        "primary_invariant_digest": digest(invariants[0]),
+    }
+
+
+def verify_parent_direct_preparation(
+    args: argparse.Namespace, plan: dict[str, str]
+) -> dict[str, Any]:
+    """Report readiness only after the existing readers accept every record."""
+
+    state = read_state(Path(args.state))
+    reviewer = read_reviewer_registry(Path(args.reviewer_registry))
+    continuation = read_continuation_registry(Path(args.continuation_registry))
+    expected = {
+        "run_id": args.run_id,
+        "plan_path": plan["path"],
+        "plan_digest": plan["plan_digest"],
+        "source_head": args.source_head,
+        "primary_invariant_digest": plan["primary_invariant_digest"],
+        "implementation_mode": "parent_direct",
+        "state": "active",
+        "candidate_lifecycle_identity_digest": lifecycle_identity_digest(
+            args.run_id, Path(args.lifecycle_state)
+        ),
+    }
+    for key, value in expected.items():
+        if state[key] != value:
+            raise StateError(f"prepared execution state has an unexpected {key}")
+    if state["events"] and any(
+        event["event_type"] != "execution_epoch_started" for event in state["events"]
+    ):
+        raise StateError("prepared execution state must hold no execution event yet")
+    epochs = [
+        event["execution_epoch"]
+        for event in state["events"]
+        if event["event_type"] == "execution_epoch_started"
+    ]
+    if len(epochs) != 1 or epochs[0]["epoch"] != 0:
+        raise StateError("prepared execution state must hold exactly one epoch-zero record")
+    if epochs[0]["continuation_registry_identity_digest"] != continuation["identity_digest"]:
+        raise StateError(
+            "prepared epoch zero is not bound to the prepared continuation registry"
+        )
+    if reviewer["events"] or reviewer["header"]["path_digest"] != reviewer_registry_path_digest(
+        Path(args.reviewer_registry)
+    ):
+        raise StateError(
+            "prepared reviewer session registry is not a fresh registry at its own path"
+        )
+    if continuation["events"] or continuation["header"][
+        "path_digest"
+    ] != continuation_registry_path_digest(Path(args.continuation_registry)):
+        raise StateError(
+            "prepared continuation registry is not a fresh registry at its own path"
+        )
+    return {
+        "schema_version": PARENT_DIRECT_PREPARATION_SCHEMA_VERSION,
+        "record_type": "parent_direct_execution_preparation",
+        "ready": True,
+        "run_id": args.run_id,
+        "plan_path": plan["path"],
+        "plan_digest": plan["plan_digest"],
+        "source_head": args.source_head,
+        "primary_invariant_digest": plan["primary_invariant_digest"],
+        "implementation_mode": "parent_direct",
+        "execution_genesis_digest": state["genesis_digest"],
+        "execution_epoch": 0,
+        "cumulative_review_limit": epochs[0]["cumulative_review_limit"],
+        "reviewer_registry_id": reviewer["header"]["registry_id"],
+        "reviewer_registry_path_digest": reviewer["header"]["path_digest"],
+        "continuation_registry_identity_digest": continuation["identity_digest"],
+        "created_records": [
+            str(Path(args.reviewer_registry).absolute()),
+            str(Path(args.continuation_registry).absolute()),
+            str(Path(args.state).absolute()),
+        ],
+        "grants_authority": False,
+    }
+
+
+def emit_preparation_report(report: dict[str, Any]) -> None:
+    print(json.dumps(report, indent=2, sort_keys=True))
+
+
+def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
+    """Compose fresh epoch-zero parent-direct setup into one refusable operation.
+
+    This replaces three separate fresh-start calls. It reduces the chance of an
+    omitted record; it grants no implementation, review, continuation or
+    publication authority, and it satisfies no later review or completion
+    evidence.
+    """
+
+    if not ID_RE.fullmatch(args.run_id):
+        raise StateError("run id is invalid")
+    destinations = preparation_destinations(args)
+    require_free_preparation_destinations(destinations)
+    plan = require_committed_active_plan(args.plan, args.source_head)
+    created: list[str] = []
+    try:
+        initialize_reviewer_registry(
+            argparse.Namespace(output=args.reviewer_registry)
+        )
+        created.append(str(Path(args.reviewer_registry).absolute()))
+        initialize_continuation_registry(
+            argparse.Namespace(output=args.continuation_registry)
+        )
+        created.append(str(Path(args.continuation_registry).absolute()))
+        init_state(
+            argparse.Namespace(
+                state=args.state,
+                run_id=args.run_id,
+                plan=plan["path"],
+                group_permit=None,
+                group_state=None,
+                plan_digest=plan["plan_digest"],
+                source_head=args.source_head,
+                primary_invariant_digest=plan["primary_invariant_digest"],
+                lifecycle_state=args.lifecycle_state,
+                predecessor_state=None,
+                predecessor_checkpoint=None,
+                root_session_manifest=None,
+                reviewer_registry=None,
+                implementation_mode="parent_direct",
+                require_adversarial_preflight=True,
+                continuation_registry=args.continuation_registry,
+            )
+        )
+        created.append(str(Path(args.state).absolute()))
+        report = verify_parent_direct_preparation(args, plan)
+    except (OSError, UnicodeError, StateError) as exc:
+        emit_preparation_report(
+            {
+                "schema_version": PARENT_DIRECT_PREPARATION_SCHEMA_VERSION,
+                "record_type": "parent_direct_execution_preparation",
+                "ready": False,
+                "run_id": args.run_id,
+                "created_records": created,
+                "retained_records": created,
+                "failure": str(exc),
+            }
+        )
+        raise StateError(
+            "parent-direct preparation stopped and retained "
+            f"{len(created)} created record(s): {exc}"
+        ) from exc
+    emit_preparation_report(report)
+
+
 def read_private_json(path: Path, label: str) -> tuple[dict[str, Any], str]:
     require_outside_repository(path, label)
     reject_symlink_ancestors(path, include_target=True)
@@ -5496,6 +5745,15 @@ def parser() -> argparse.ArgumentParser:
     preflight.add_argument("--candidate-manifest")
     preflight.add_argument("--lifecycle-state", required=True)
     preflight.set_defaults(handler=record_adversarial_preflight)
+    prepare = sub.add_parser("prepare-parent-direct")
+    prepare.add_argument("state")
+    prepare.add_argument("--run-id", required=True)
+    prepare.add_argument("--plan", required=True)
+    prepare.add_argument("--source-head", required=True)
+    prepare.add_argument("--lifecycle-state", required=True)
+    prepare.add_argument("--reviewer-registry", required=True)
+    prepare.add_argument("--continuation-registry", required=True)
+    prepare.set_defaults(handler=prepare_parent_direct_execution)
     return root
 
 

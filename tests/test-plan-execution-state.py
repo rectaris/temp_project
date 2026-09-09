@@ -6839,5 +6839,337 @@ class ParallelPlanGroupTest(unittest.TestCase):
         self.assertTrue(os.access(generated, os.X_OK))
 
 
+
+class ParentDirectPreparationTest(unittest.TestCase):
+    """One composed fresh-start operation must refuse more than it creates."""
+
+    PLAN_BODY = (
+        "status: in_progress\n"
+        "task_types:\n  - template_workflow\n"
+        "review_class: B\n"
+        "human_design_required: no\n"
+        "human_approval_status: not_required\n"
+        "primary_invariant: one parent-direct invariant\n"
+        "write_scope:\n  - allowed.txt\n"
+        "context_files:\n  - AGENTS.md\n"
+        "required_specs:\n  - AGENTS.md\n"
+        "validation:\n  - true\n"
+        "acceptance:\n  - Test acceptance.\n"
+        "checked_summary_ja: fixture\n"
+    )
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.repo = self.base / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"], cwd=self.repo, check=True
+        )
+        self.plan = self.repo / "docs/plan/active/001-test.md"
+        self.plan.parent.mkdir(parents=True)
+        self.plan.write_text(self.PLAN_BODY, encoding="utf-8")
+        (self.repo / "AGENTS.md").write_text("test policy\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "plan"], cwd=self.repo, check=True)
+        self.head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        self.external = self.base / "external"
+        self.external.mkdir()
+        self.state = self.external / "execution.json"
+        self.lifecycle = self.external / "candidate-lifecycle.json"
+        self.registry = self.external / "reviewer-registry.jsonl"
+        self.continuation = self.external / "epoch-registry.jsonl"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def arguments(self, **overrides: str) -> list[str]:
+        values = {
+            "state": str(self.state),
+            "--run-id": "run-1",
+            "--plan": "docs/plan/active/001-test.md",
+            "--source-head": self.head,
+            "--lifecycle-state": str(self.lifecycle),
+            "--reviewer-registry": str(self.registry),
+            "--continuation-registry": str(self.continuation),
+        }
+        values.update(overrides)
+        command = ["prepare-parent-direct", values.pop("state")]
+        for flag, value in values.items():
+            command.extend([flag, value])
+        return command
+
+    def run_cli(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(STATE_SCRIPT), *arguments], cwd=self.repo, check=False,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def namespace(self, **overrides: str) -> SimpleNamespace:
+        values = {
+            "state": str(self.state),
+            "run_id": "run-1",
+            "plan": "docs/plan/active/001-test.md",
+            "source_head": self.head,
+            "lifecycle_state": str(self.lifecycle),
+            "reviewer_registry": str(self.registry),
+            "continuation_registry": str(self.continuation),
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def prepare_in_process(self, **overrides: str) -> None:
+        previous = Path.cwd()
+        os.chdir(self.repo)
+        try:
+            STATE_MODULE.prepare_parent_direct_execution(self.namespace(**overrides))
+        finally:
+            os.chdir(previous)
+
+    def assert_nothing_created(self) -> None:
+        for path in (self.registry, self.continuation, self.state):
+            self.assertFalse(path.exists(), f"{path} must not be created")
+
+    def test_fresh_preparation_creates_and_verifies_every_record(self) -> None:
+        result = self.run_cli(*self.arguments())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["ready"])
+        self.assertFalse(report["grants_authority"])
+        self.assertEqual(report["implementation_mode"], "parent_direct")
+        self.assertEqual(report["execution_epoch"], 0)
+        self.assertEqual(report["plan_path"], "docs/plan/active/001-test.md")
+        self.assertEqual(report["plan_digest"], digest(self.PLAN_BODY))
+        self.assertEqual(
+            report["primary_invariant_digest"], digest("one parent-direct invariant")
+        )
+        self.assertEqual(report["source_head"], self.head)
+        for path in (self.registry, self.continuation, self.state):
+            self.assertTrue(path.exists())
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        state = STATE_MODULE.read_state(self.state)
+        continuation = STATE_MODULE.read_continuation_registry(self.continuation)
+        epochs = [
+            event["execution_epoch"]
+            for event in state["events"]
+            if event["event_type"] == "execution_epoch_started"
+        ]
+        self.assertEqual(len(epochs), 1)
+        self.assertEqual(
+            epochs[0]["continuation_registry_identity_digest"],
+            continuation["identity_digest"],
+        )
+        self.assertEqual(
+            report["continuation_registry_identity_digest"], continuation["identity_digest"]
+        )
+        self.assertEqual(report["execution_genesis_digest"], state["genesis_digest"])
+
+    def test_preparation_grants_no_execution_authority(self) -> None:
+        self.assertEqual(self.run_cli(*self.arguments()).returncode, 0)
+        state = STATE_MODULE.read_state(self.state)
+        self.assertEqual(state["writable_attempt_starts"], 0)
+        self.assertEqual(state["writable_attempt_closures"], 0)
+        self.assertEqual(state["open_attempt_id"], "")
+        self.assertEqual(state["candidate_generations"], 0)
+        self.assertEqual(state["authoritative_validation_events"], 0)
+        self.assertEqual(
+            [
+                event["event_type"]
+                for event in state["events"]
+                if event["event_type"] != "execution_epoch_started"
+            ],
+            [],
+        )
+        registry = STATE_MODULE.read_reviewer_registry(self.registry)
+        self.assertEqual(registry["events"], [])
+        self.assertEqual(
+            STATE_MODULE.read_continuation_registry(self.continuation)["events"], []
+        )
+
+    def test_an_occupied_later_destination_fails_before_the_first_record(self) -> None:
+        self.state.write_text("foreign\n", encoding="utf-8")
+        result = self.run_cli(*self.arguments())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already occupied", result.stderr)
+        self.assertFalse(self.registry.exists())
+        self.assertFalse(self.continuation.exists())
+        self.assertEqual(self.state.read_text(encoding="utf-8"), "foreign\n")
+
+    def test_an_occupied_first_destination_is_refused(self) -> None:
+        self.registry.write_text("foreign\n", encoding="utf-8")
+        result = self.run_cli(*self.arguments())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already occupied", result.stderr)
+        self.assertFalse(self.continuation.exists())
+        self.assertFalse(self.state.exists())
+        self.assertEqual(self.registry.read_text(encoding="utf-8"), "foreign\n")
+
+    def test_shared_destination_paths_are_refused(self) -> None:
+        result = self.run_cli(
+            *self.arguments(**{"--continuation-registry": str(self.registry)})
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must not reuse", result.stderr)
+        self.assert_nothing_created()
+
+    def test_nested_destination_paths_are_refused(self) -> None:
+        result = self.run_cli(
+            *self.arguments(state=str(self.registry / "execution.json"))
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must not contain or sit inside", result.stderr)
+        self.assert_nothing_created()
+
+    def test_a_destination_inside_the_repository_is_refused(self) -> None:
+        result = self.run_cli(
+            *self.arguments(**{"--reviewer-registry": str(self.repo / "registry.jsonl")})
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be outside the repository", result.stderr)
+        self.assert_nothing_created()
+
+    def test_a_symlinked_destination_ancestor_is_refused(self) -> None:
+        link = self.base / "link"
+        link.symlink_to(self.external, target_is_directory=True)
+        result = self.run_cli(
+            *self.arguments(**{"--reviewer-registry": str(link / "registry.jsonl")})
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("symlink path component", result.stderr)
+        self.assert_nothing_created()
+
+    def test_an_uncommitted_plan_change_is_refused(self) -> None:
+        self.plan.write_text(self.PLAN_BODY + "extra: value\n", encoding="utf-8")
+        result = self.run_cli(*self.arguments())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("uncommitted changes", result.stderr)
+        self.assert_nothing_created()
+
+    def test_a_source_head_mismatch_is_refused(self) -> None:
+        result = self.run_cli(*self.arguments(**{"--source-head": "0" * 40}))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source HEAD mismatch", result.stderr)
+        self.assert_nothing_created()
+
+    def test_a_plan_outside_the_active_directory_is_refused(self) -> None:
+        result = self.run_cli(*self.arguments(**{"--plan": "AGENTS.md"}))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("numbered active plan", result.stderr)
+        self.assert_nothing_created()
+
+    def test_a_candidate_mode_plan_is_refused(self) -> None:
+        self.plan.write_text(
+            self.PLAN_BODY + "implementation_mode: candidate\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "mode"], cwd=self.repo, check=True)
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        result = self.run_cli(*self.arguments(**{"--source-head": head}))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("implementation_mode", result.stderr)
+        self.assert_nothing_created()
+
+    def test_partial_failure_retains_created_records_and_names_them(self) -> None:
+        with mock.patch.object(
+            STATE_MODULE, "init_state", side_effect=STATE_MODULE.StateError("injected")
+        ):
+            with mock.patch("builtins.print") as printed:
+                with self.assertRaises(STATE_MODULE.StateError) as caught:
+                    self.prepare_in_process()
+        self.assertIn("retained 2 created record(s)", str(caught.exception))
+        report = json.loads(printed.call_args[0][0])
+        self.assertFalse(report["ready"])
+        self.assertEqual(
+            report["retained_records"],
+            [str(self.registry.absolute()), str(self.continuation.absolute())],
+        )
+        self.assertIn("injected", report["failure"])
+        self.assertTrue(self.registry.exists())
+        self.assertTrue(self.continuation.exists())
+        self.assertFalse(self.state.exists())
+
+    def test_a_concurrent_creator_is_refused_without_overwriting(self) -> None:
+        original = STATE_MODULE.initialize_reviewer_registry
+        marker = "raced\n"
+
+        def racing(arguments: Any) -> None:
+            original(arguments)
+            self.continuation.write_text(marker, encoding="utf-8")
+
+        with mock.patch.object(STATE_MODULE, "initialize_reviewer_registry", racing):
+            with mock.patch("builtins.print"):
+                with self.assertRaises(STATE_MODULE.StateError) as caught:
+                    self.prepare_in_process()
+        self.assertIn("continuation registry already exists", str(caught.exception))
+        self.assertEqual(self.continuation.read_text(encoding="utf-8"), marker)
+        self.assertTrue(self.registry.exists())
+        self.assertFalse(self.state.exists())
+
+    def test_readiness_requires_every_named_reader(self) -> None:
+        """A reader that rejects a prepared record must block readiness.
+
+        `read_continuation_registry` also runs inside the existing ledger
+        constructor, so its refusal stops earlier and retains two records
+        instead of three. Both shapes must still refuse readiness.
+        """
+
+        for reader, retained in (
+            ("read_state", 3),
+            ("read_reviewer_registry", 3),
+            ("read_continuation_registry", 2),
+        ):
+            with self.subTest(reader=reader):
+                self.tearDown()
+                self.setUp()
+                with mock.patch.object(
+                    STATE_MODULE, reader, side_effect=STATE_MODULE.StateError("reader")
+                ):
+                    with mock.patch("builtins.print") as printed:
+                        with self.assertRaises(STATE_MODULE.StateError):
+                            self.prepare_in_process()
+                report = json.loads(printed.call_args[0][0])
+                self.assertFalse(report["ready"])
+                self.assertEqual(len(report["retained_records"]), retained)
+                self.assertEqual(self.state.exists(), retained == 3)
+                for path in report["retained_records"]:
+                    self.assertTrue(Path(path).exists())
+
+    def test_a_mismatched_prepared_record_refuses_readiness(self) -> None:
+        real = STATE_MODULE.read_state
+
+        def altered(path: Path) -> dict[str, Any]:
+            state = real(path)
+            state["source_head"] = "0" * 40
+            return state
+
+        with mock.patch.object(STATE_MODULE, "read_state", altered):
+            with mock.patch("builtins.print") as printed:
+                with self.assertRaises(STATE_MODULE.StateError) as caught:
+                    self.prepare_in_process()
+        self.assertIn("unexpected source_head", str(caught.exception))
+        report = json.loads(printed.call_args[0][0])
+        self.assertFalse(report["ready"])
+
+    def test_an_invalid_run_id_is_refused_before_any_check(self) -> None:
+        result = self.run_cli(*self.arguments(**{"--run-id": "bad id"}))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run id is invalid", result.stderr)
+        self.assert_nothing_created()
+
+    def test_repeated_preparation_is_refused(self) -> None:
+        self.assertEqual(self.run_cli(*self.arguments()).returncode, 0)
+        first = self.state.read_bytes()
+        result = self.run_cli(*self.arguments())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already occupied", result.stderr)
+        self.assertEqual(self.state.read_bytes(), first)
+
+
 if __name__ == "__main__":
     unittest.main()
