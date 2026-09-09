@@ -14,11 +14,13 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 from urllib.parse import urlsplit
 from pathlib import Path, PurePosixPath
@@ -63,6 +65,14 @@ TELEMETRY_SCHEMA_VERSION = 1
 TELEMETRY_MAX_DURATION_SECONDS = 31_536_000.0
 LIFECYCLE_STATE_SCHEMA_VERSION = 2
 LIFECYCLE_STATE_MAX_BYTES = 8192
+PREFLIGHT_REPORT_SCHEMA_VERSION = 1
+PREFLIGHT_CLAIM_SCHEMA_VERSION = 1
+PREFLIGHT_DEFAULT_TIMEOUT_SECONDS = 60
+PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS = 120
+PREFLIGHT_OUTPUT_LIMIT_BYTES = 65_536
+PREFLIGHT_DRAIN_CHUNK_BYTES = 4096
+PREFLIGHT_DRAIN_JOIN_SECONDS = 5.0
+PREFLIGHT_LEDGER_READ_MAX_BYTES = 4_194_304
 CORRECTION_BRIEF_MAX_BYTES = 8192
 INDEPENDENT_REVIEW_LIMIT = 2
 MAX_CORRECTION_ROUNDS = INDEPENDENT_REVIEW_LIMIT - 1
@@ -1101,6 +1111,104 @@ def run_subprocess(
         detail = stderr or stdout or f"exit {result.returncode}"
         raise RunnerError(f"command failed ({' '.join(argv)}): {detail}")
     return result
+
+
+def kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Kill the whole session started for one bounded command.
+
+    The command runs under Bubblewrap in its own session, so signalling the
+    group reaches the sandbox and every descendant it started.
+    """
+
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def run_bounded_subprocess(
+    argv: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout_seconds: float,
+    output_limit_bytes: int,
+) -> dict[str, Any]:
+    """Run one command under a hard time bound and a hard output bound.
+
+    Output is capped while it is read rather than after the command finishes,
+    so a flooding command cannot exhaust memory before the limit applies.
+    Reaching either bound kills the process group; neither bound is a retry
+    signal, and the caller records the reason with the bounded output.
+    """
+
+    process = subprocess.Popen(  # noqa: S603 - argv is parent-owned and fully resolved
+        list(argv),
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    lock = threading.Lock()
+    buffers: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
+    budget = {"remaining": max(0, int(output_limit_bytes)), "truncated": False}
+
+    def drain(stream: Any, key: str) -> None:
+        try:
+            while True:
+                chunk = stream.read(PREFLIGHT_DRAIN_CHUNK_BYTES)
+                if not chunk:
+                    return
+                with lock:
+                    room = budget["remaining"]
+                    if room:
+                        buffers[key] += chunk[:room]
+                        budget["remaining"] = room - min(room, len(chunk))
+                    overflowed = len(chunk) > room
+                    if overflowed:
+                        budget["truncated"] = True
+                if overflowed:
+                    kill_process_group(process)
+                    return
+        except OSError:
+            return
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    threads = [
+        threading.Thread(target=drain, args=(process.stdout, "stdout"), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, "stderr"), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    timed_out = False
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill_process_group(process)
+        process.wait()
+    for thread in threads:
+        thread.join(timeout=PREFLIGHT_DRAIN_JOIN_SECONDS)
+    with lock:
+        truncated = budget["truncated"]
+        stdout = bytes(buffers["stdout"])
+        stderr = bytes(buffers["stderr"])
+    return {
+        "returncode": int(process.returncode if process.returncode is not None else -1),
+        "stdout": stdout,
+        "stderr": stderr,
+        "timed_out": timed_out,
+        "output_truncated": truncated,
+    }
 
 
 def require_executable(name: str, configured: str) -> str:
@@ -4410,6 +4518,8 @@ def execute_validation_operation(
     private_node_runtime: dict[str, Any] | None,
     output_dir: Path,
     manifest_path: Path,
+    bounds: tuple[float, int] | None = None,
+    capture_sink: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Path, bytes]:
     """Prepare and run one planned validation operation without mutating the source checkout."""
     command_root = workspace / f"command-{index}"
@@ -4477,38 +4587,308 @@ def execute_validation_operation(
         else (require_validation_executable(command.argv[0], clone_dir), *command.argv[1:])
     )
     started = time.monotonic()
-    result = run_subprocess(
-        build_bwrap_command(
-            bwrap_bin=bwrap_bin,
-            clone_dir=clone_dir,
-            scratch_dir=scratch_dir,
-            command=command_argv,
-            env_vars=env_vars,
-            writable_clone=True,
-            writable_shadows=writable_shadows,
-            hidden_directories=normalize_hidden_directories(
-                validation_hidden,
-                visible_paths=(clone_dir, scratch_dir),
-            ),
-            read_only_shadows=read_only_shadows,
-            network_enabled=False,
+    sandbox_argv = build_bwrap_command(
+        bwrap_bin=bwrap_bin,
+        clone_dir=clone_dir,
+        scratch_dir=scratch_dir,
+        command=command_argv,
+        env_vars=env_vars,
+        writable_clone=True,
+        writable_shadows=writable_shadows,
+        hidden_directories=normalize_hidden_directories(
+            validation_hidden,
+            visible_paths=(clone_dir, scratch_dir),
         ),
-        cwd=repo_root,
-        env=sanitize_process_env(),
-        check=False,
+        read_only_shadows=read_only_shadows,
+        network_enabled=False,
     )
+    if bounds is None:
+        result = run_subprocess(
+            sandbox_argv,
+            cwd=repo_root,
+            env=sanitize_process_env(),
+            check=False,
+        )
+        returncode = result.returncode
+        stdout_bytes = result.stdout
+        stderr_bytes = result.stderr
+    else:
+        timeout_seconds, output_limit_bytes = bounds
+        bounded = run_bounded_subprocess(
+            sandbox_argv,
+            cwd=repo_root,
+            env=sanitize_process_env(),
+            timeout_seconds=timeout_seconds,
+            output_limit_bytes=output_limit_bytes,
+        )
+        returncode = bounded["returncode"]
+        stdout_bytes = bounded["stdout"]
+        stderr_bytes = bounded["stderr"]
+        if capture_sink is not None:
+            capture_sink.update(bounded)
     return (
         {
             "index": index,
             "argv": list(command.argv),
             "duration_seconds": bounded_duration(started, time.monotonic()),
-            "returncode": result.returncode,
-            "stdout_digest": hashlib.sha256(result.stdout).hexdigest(),
-            "stderr_digest": hashlib.sha256(result.stderr).hexdigest(),
+            "returncode": returncode,
+            "stdout_digest": hashlib.sha256(stdout_bytes).hexdigest(),
+            "stderr_digest": hashlib.sha256(stderr_bytes).hexdigest(),
         },
         clone_dir,
         initial_refs,
     )
+
+
+def preflight_execution_genesis(state_path: str) -> str:
+    """Read the execution genesis identity from the parent-owned ledger.
+
+    The read is bounded and does not interpret ledger history; the claim only
+    needs the identity that distinguishes this execution from another one.
+    """
+
+    path = Path(state_path).expanduser()
+    try:
+        content = read_bounded_regular_file(
+            path, PREFLIGHT_LEDGER_READ_MAX_BYTES, "plan execution state"
+        )
+    except RunnerError:
+        raise
+    except OSError as exc:
+        raise RunnerError(f"could not read the plan execution state: {exc}") from exc
+    payload = load_exact_json_object(content, label="plan execution state")
+    genesis = payload.get("genesis_digest")
+    if not isinstance(genesis, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", genesis):
+        raise RunnerError("plan execution state has no usable execution genesis identity")
+    return genesis
+
+
+def require_preflight_claim_directory(raw: str, repo_root: Path) -> Path:
+    """Return the parent-owned claim directory, refusing an unsafe location."""
+
+    directory = Path(raw).expanduser()
+    if not directory.is_absolute():
+        raise RunnerError("preflight claim directory must be an absolute path")
+    if directory.is_symlink():
+        raise RunnerError("preflight claim directory must not be a symlink")
+    if not directory.is_dir():
+        raise RunnerError(f"preflight claim directory does not exist: {directory}")
+    resolved = directory.resolve()
+    if path_is_within(repo_root, resolved) or resolved == repo_root:
+        raise RunnerError("preflight claim directory must live outside the repository")
+    metadata = resolved.stat()
+    if metadata.st_uid != os.getuid():
+        raise RunnerError("preflight claim directory must be owned by the parent")
+    if stat.S_IMODE(metadata.st_mode) & (stat.S_IRWXG | stat.S_IRWXO):
+        raise RunnerError("preflight claim directory must not be group or world accessible")
+    return resolved
+
+
+def claim_single_preflight(claim_dir: Path, payload: dict[str, Any]) -> Path:
+    """Claim the one preflight allowed for this candidate, or refuse.
+
+    The claim is created exclusively, so a duplicate, concurrent, or replayed
+    request cannot start a second process. An existing claim is never reused
+    or repaired: incomplete evidence from an earlier crash keeps the candidate
+    closed rather than granting another run.
+    """
+
+    claim_path = claim_dir / f"{payload['candidate_manifest_digest']}.json"
+    content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        descriptor = os.open(
+            claim_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+    except FileExistsError as exc:
+        raise RunnerError(
+            "this candidate has already claimed its one preflight; a further attempt is refused "
+            f"even after failure: {claim_path}"
+        ) from exc
+    except OSError as exc:
+        raise RunnerError(f"could not claim the preflight: {exc}") from exc
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return claim_path
+
+
+def preflight_candidate(args: argparse.Namespace) -> int:
+    """Run one bounded diagnostic command against an admitted candidate.
+
+    This is parent-owned diagnostic feedback, not validation. It never records
+    a validation event, never advances the lifecycle phase, never changes a
+    counter, and never satisfies an acceptance witness. Its only permitted use
+    is as evidence for the single correction the run already allows.
+    """
+
+    if not args.parent_diff_approved or not args.critical_invariants_approved:
+        raise RunnerError(
+            "candidate preflight requires explicit parent diff and critical-invariant approval"
+        )
+    preflight_started = time.monotonic()
+    timeout_seconds = int(args.timeout_seconds)
+    if not 1 <= timeout_seconds <= PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS:
+        raise RunnerError(
+            f"preflight timeout must be between 1 and {PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS} seconds"
+        )
+    git_bin = require_executable("git", args.git_bin)
+    bwrap_bin = require_executable("bwrap", args.bwrap_bin)
+    ensure_bwrap_usable(bwrap_bin)
+    repo_root = detect_repo_root(git_bin)
+    os.chdir(repo_root)
+    planlib = load_planlib()
+    validation_commands = load_plan_validation_commands()
+    ensure_clean_worktree(repo_root, git_bin)
+    claim_dir = require_preflight_claim_directory(args.preflight_claim_dir, repo_root)
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    verified = verify_candidate_manifest(
+        repo_root=repo_root,
+        git_bin=git_bin,
+        planlib=planlib,
+        manifest_path=manifest_path,
+    )
+    require_plan_worktree(repo_root, verified["plan_rel"], "running a candidate preflight")
+    enforce_plan_execution_gate(
+        args,
+        plan=verified["plan_rel"],
+        open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+    )
+    if args.orchestration_run_id != verified["manifest"]["orchestration_run_id"]:
+        raise RunnerError("preflight run identifier differs from the verified manifest")
+    if Path(args.lifecycle_state).expanduser().absolute() != Path(
+        verified["manifest"]["lifecycle_state_path"]
+    ):
+        raise RunnerError("preflight lifecycle state path differs from the verified manifest")
+    raw_commands = verified["values"].get("focused_validation", [])
+    if not isinstance(raw_commands, list):
+        raise RunnerError("plan focused_validation must be a list")
+    try:
+        commands = validation_commands.parse_validation_commands(raw_commands)
+    except ValueError as exc:
+        raise RunnerError(f"plan focused_validation contains an invalid command: {exc}") from exc
+    if not commands:
+        raise RunnerError("this plan has no focused validation stage to select a preflight from")
+    index = int(args.command_index)
+    if not 0 <= index < len(commands):
+        raise RunnerError(
+            f"preflight command index must select one declared focused command in 0..{len(commands) - 1}"
+        )
+    command = commands[index]
+    if command.argv[:2] == ("npm", "run"):
+        raise RunnerError(
+            "preflight provisions no npm dependency tree; select another declared focused command"
+        )
+    output_dir = materialize_output_dir(repo_root, args.output_dir)
+    report_path = output_dir / "preflight.json"
+    if report_path.exists() or report_path.is_symlink():
+        raise RunnerError(f"preflight report path is already present: {report_path}")
+    genesis = preflight_execution_genesis(args.plan_execution_state)
+    capture: dict[str, Any] = {}
+    lifecycle_context = open_lifecycle_state(
+        repo_root, args.lifecycle_state, args.orchestration_run_id
+    )
+    with lifecycle_context as lifecycle_state, tempfile.TemporaryDirectory(
+        prefix="sandboxed-plan-worker-preflight-"
+    ) as workspace_tmp:
+        workspace = Path(workspace_tmp)
+        lifecycle = lifecycle_state.require_existing()
+        if (
+            lifecycle["current_manifest_digest"] != verified["manifest_digest"]
+            or lifecycle["current_patch_digest"] != verified["patch_digest"]
+            or lifecycle["plan_execution_attempt_id"]
+            != verified["manifest"]["plan_execution_attempt_id"]
+        ):
+            raise RunnerError("preflight manifest is not the current lifecycle leaf")
+        if lifecycle["phase"] != "admitted":
+            raise RunnerError(
+                "preflight runs on an admitted candidate before validation, not after it"
+            )
+        enforce_plan_execution_gate(
+            args,
+            plan=verified["plan_rel"],
+            open_attempt_id=verified["manifest"]["plan_execution_attempt_id"],
+        )
+        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            raise RunnerError("source HEAD changed before the preflight claim")
+        claim_payload = {
+            "schema_version": PREFLIGHT_CLAIM_SCHEMA_VERSION,
+            "record_type": "candidate_preflight_claim",
+            "plan_path": verified["plan_rel"],
+            "plan_execution_attempt_id": verified["manifest"]["plan_execution_attempt_id"],
+            "orchestration_run_id": args.orchestration_run_id,
+            "execution_genesis_digest": genesis,
+            "candidate_manifest_digest": verified["manifest_digest"],
+            "candidate_patch_digest": verified["patch_digest"],
+            "command_digest": prefixed_sha256("\u0000".join(command.argv)),
+            "command_index": index,
+            "source_head": verified["head"],
+        }
+        claim_path = claim_single_preflight(claim_dir, claim_payload)
+        try:
+            record, _clone_dir, _initial_refs = execute_validation_operation(
+                repo_root=repo_root,
+                git_bin=git_bin,
+                bwrap_bin=bwrap_bin,
+                verified=verified,
+                workspace=workspace,
+                index=index,
+                command=command,
+                private_dependency_tree=None,
+                private_node_runtime=None,
+                output_dir=output_dir,
+                manifest_path=manifest_path,
+                bounds=(float(timeout_seconds), PREFLIGHT_OUTPUT_LIMIT_BYTES),
+                capture_sink=capture,
+            )
+        except (RunnerError, OSError) as exc:
+            raise RunnerError(f"preflight execution failed to start or complete: {exc}") from exc
+        ensure_clean_worktree(repo_root, git_bin)
+        if git_text(repo_root, git_bin, "rev-parse", "HEAD") != verified["head"]:
+            raise RunnerError("source HEAD changed during the candidate preflight")
+    timed_out = bool(capture.get("timed_out"))
+    truncated = bool(capture.get("output_truncated"))
+    status = (
+        "timed_out" if timed_out else "output_limit_exceeded" if truncated else "completed"
+    )
+    report = {
+        "schema_version": PREFLIGHT_REPORT_SCHEMA_VERSION,
+        "record_type": "candidate_preflight_diagnostic",
+        "evidence_class": "diagnostic",
+        "is_validation_evidence": False,
+        "plan_path": verified["plan_rel"],
+        "plan_digest": "sha256:" + verified["plan_digest"],
+        "plan_execution_attempt_id": verified["manifest"]["plan_execution_attempt_id"],
+        "execution_genesis_digest": genesis,
+        "candidate_manifest_digest": verified["manifest_digest"],
+        "candidate_patch_digest": verified["patch_digest"],
+        "source_head": verified["head"],
+        "claim_path_digest": prefixed_sha256(str(claim_path)),
+        "command_index": index,
+        "command_argv": list(command.argv),
+        "command_digest": claim_payload["command_digest"],
+        "timeout_seconds": timeout_seconds,
+        "output_limit_bytes": PREFLIGHT_OUTPUT_LIMIT_BYTES,
+        "status": status,
+        "timed_out": timed_out,
+        "output_truncated": truncated,
+        "exit_status": record["returncode"],
+        "passed": status == "completed" and record["returncode"] == 0,
+        "stdout_digest": record["stdout_digest"],
+        "stderr_digest": record["stderr_digest"],
+        "stdout": capture.get("stdout", b"").decode("utf-8", errors="replace"),
+        "stderr": capture.get("stderr", b"").decode("utf-8", errors="replace"),
+        "duration_seconds": bounded_duration(preflight_started, time.monotonic()),
+    }
+    report_descriptor = os.open(
+        report_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(report_descriptor, "wb") as handle:
+        handle.write((json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    print(str(report_path))
+    return 0
 
 
 def validate_candidate(args: argparse.Namespace) -> int:
@@ -5572,6 +5952,7 @@ def build_parser() -> argparse.ArgumentParser:
               run      execute a writable worker inside Bubblewrap and emit a candidate patch manifest
               correct  repair a verified candidate in a fresh isolated clone and emit an aggregate patch
               validate run a parent-authorized suite in a fresh review clone after candidate admission
+              preflight run one bounded diagnostic command against an admitted candidate; never validation
               apply    re-check and apply a previously emitted candidate patch manifest
               self-test run a deterministic local end-to-end check without contacting Codex
             """
@@ -5723,6 +6104,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="manifest from prepare-dependencies for lock-bound npm validation",
     )
     validation_parser.set_defaults(handler=validate_candidate)
+
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        help="run one bounded parent-owned diagnostic command against an admitted candidate",
+    )
+    preflight_parser.add_argument("manifest", help="verified candidate manifest")
+    preflight_parser.add_argument(
+        "--command-index",
+        type=int,
+        required=True,
+        help="zero-based index of the plan's declared focused_validation command to run",
+    )
+    preflight_parser.add_argument("--parent-diff-approved", action="store_true")
+    preflight_parser.add_argument("--critical-invariants-approved", action="store_true")
+    preflight_parser.add_argument("--output-dir", required=True)
+    preflight_parser.add_argument(
+        "--preflight-claim-dir",
+        required=True,
+        help="parent-owned claim directory outside the repository",
+    )
+    preflight_parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=PREFLIGHT_DEFAULT_TIMEOUT_SECONDS,
+        help=f"hard time bound, at most {PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS} seconds",
+    )
+    preflight_parser.add_argument("--orchestration-run-id", required=True)
+    preflight_parser.add_argument("--lifecycle-state", required=True)
+    preflight_parser.add_argument("--plan-execution-state", required=True)
+    preflight_parser.add_argument("--git-bin", default="git")
+    preflight_parser.add_argument("--bwrap-bin", default="bwrap")
+    preflight_parser.set_defaults(handler=preflight_candidate)
 
     apply_parser = subparsers.add_parser("apply", help="apply a previously emitted candidate patch manifest")
     apply_parser.add_argument("manifest", help="path to manifest.json emitted by the run command")

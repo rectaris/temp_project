@@ -10,10 +10,12 @@ import json
 import math
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -6212,6 +6214,457 @@ class RunnerTaskWorktreeBoundaryTests(unittest.TestCase):
         self.assertIn("must not run in the pre-existing checkout", str(raised.exception))
         worktree = self.prepare(self.PLAN)
         adapter.require_member_worktree(worktree, self.PLAN)
+
+
+class CandidatePreflightBoundsTests(unittest.TestCase):
+    """The diagnostic run must stop on its own bounds, not on the command's goodwill."""
+
+    def test_normal_command_output_is_captured_whole(self) -> None:
+        result = RUNNER.run_bounded_subprocess(
+            [sys.executable, "-c", "import sys; sys.stdout.write('ok'); sys.stderr.write('err')"],
+            timeout_seconds=30.0,
+            output_limit_bytes=RUNNER.PREFLIGHT_OUTPUT_LIMIT_BYTES,
+        )
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(result["stdout"], b"ok")
+        self.assertEqual(result["stderr"], b"err")
+        self.assertFalse(result["timed_out"])
+        self.assertFalse(result["output_truncated"])
+
+    def test_failing_command_reports_its_exit_status(self) -> None:
+        result = RUNNER.run_bounded_subprocess(
+            [sys.executable, "-c", "raise SystemExit(3)"],
+            timeout_seconds=30.0,
+            output_limit_bytes=RUNNER.PREFLIGHT_OUTPUT_LIMIT_BYTES,
+        )
+        self.assertEqual(result["returncode"], 3)
+        self.assertFalse(result["timed_out"])
+
+    def test_timeout_kills_the_command(self) -> None:
+        started = time.monotonic()
+        result = RUNNER.run_bounded_subprocess(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            timeout_seconds=1.0,
+            output_limit_bytes=RUNNER.PREFLIGHT_OUTPUT_LIMIT_BYTES,
+        )
+        self.assertTrue(result["timed_out"])
+        self.assertNotEqual(result["returncode"], 0)
+        self.assertLess(time.monotonic() - started, 30.0)
+
+    def test_output_flood_is_bounded_and_terminates_the_command(self) -> None:
+        program = (
+            "import sys, time\n"
+            "chunk = 'x' * 4096\n"
+            "for _ in range(100000):\n"
+            "    sys.stdout.write(chunk)\n"
+            "    sys.stdout.flush()\n"
+            "time.sleep(60)\n"
+        )
+        result = RUNNER.run_bounded_subprocess(
+            [sys.executable, "-c", program],
+            timeout_seconds=30.0,
+            output_limit_bytes=4096,
+        )
+        self.assertTrue(result["output_truncated"])
+        self.assertLessEqual(len(result["stdout"]) + len(result["stderr"]), 4096)
+        self.assertFalse(result["timed_out"])
+
+    def test_timeout_kills_descendant_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "child.pid"
+            program = (
+                "import os, subprocess, sys, time\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+                f"open({str(marker)!r}, 'w').write(str(child.pid))\n"
+                "time.sleep(120)\n"
+            )
+            result = RUNNER.run_bounded_subprocess(
+                [sys.executable, "-c", program],
+                timeout_seconds=2.0,
+                output_limit_bytes=RUNNER.PREFLIGHT_OUTPUT_LIMIT_BYTES,
+            )
+            self.assertTrue(result["timed_out"])
+            child_pid = int(marker.read_text(encoding="utf-8"))
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(child_pid, 0)
+                except OSError:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("descendant process survived the preflight time bound")
+
+
+class CandidatePreflightClaimTests(unittest.TestCase):
+    """One candidate may claim one preflight, and only from a parent-owned location."""
+
+    def claim_payload(self, digest: str = "a" * 64) -> dict:
+        return {
+            "schema_version": RUNNER.PREFLIGHT_CLAIM_SCHEMA_VERSION,
+            "record_type": "candidate_preflight_claim",
+            "candidate_manifest_digest": digest,
+            "candidate_patch_digest": "b" * 64,
+            "command_digest": "sha256:" + "c" * 64,
+        }
+
+    def test_claim_is_created_once_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "claims"
+            directory.mkdir(mode=0o700)
+            claim = RUNNER.claim_single_preflight(directory, self.claim_payload())
+            self.assertEqual(stat.S_IMODE(claim.stat().st_mode), 0o600)
+            self.assertEqual(
+                json.loads(claim.read_text(encoding="utf-8"))["candidate_manifest_digest"],
+                "a" * 64,
+            )
+
+    def test_second_claim_for_the_same_candidate_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "claims"
+            directory.mkdir(mode=0o700)
+            RUNNER.claim_single_preflight(directory, self.claim_payload())
+            with self.assertRaisesRegex(RUNNER.RunnerError, "already claimed its one preflight"):
+                RUNNER.claim_single_preflight(directory, self.claim_payload())
+
+    def test_a_crashed_claim_is_not_repaired_or_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "claims"
+            directory.mkdir(mode=0o700)
+            claim = directory / ("a" * 64 + ".json")
+            claim.write_text("{ truncated", encoding="utf-8")
+            with self.assertRaisesRegex(RUNNER.RunnerError, "already claimed its one preflight"):
+                RUNNER.claim_single_preflight(directory, self.claim_payload())
+
+    def test_a_correction_candidate_has_its_own_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "claims"
+            directory.mkdir(mode=0o700)
+            RUNNER.claim_single_preflight(directory, self.claim_payload("a" * 64))
+            second = RUNNER.claim_single_preflight(directory, self.claim_payload("d" * 64))
+            self.assertTrue(second.is_file())
+
+    def test_claim_directory_must_be_parent_owned_and_outside_the_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp) / "repo"
+            (repo_root / "inside").mkdir(parents=True)
+            os.chmod(repo_root / "inside", 0o700)
+            outside = Path(tmp) / "outside"
+            outside.mkdir(mode=0o700)
+            shared = Path(tmp) / "shared"
+            shared.mkdir(mode=0o770)
+            link = Path(tmp) / "link"
+            link.symlink_to(outside)
+
+            self.assertEqual(
+                RUNNER.require_preflight_claim_directory(str(outside), repo_root.resolve()),
+                outside.resolve(),
+            )
+            with self.assertRaisesRegex(RUNNER.RunnerError, "absolute path"):
+                RUNNER.require_preflight_claim_directory("claims", repo_root.resolve())
+            with self.assertRaisesRegex(RUNNER.RunnerError, "does not exist"):
+                RUNNER.require_preflight_claim_directory(str(Path(tmp) / "absent"), repo_root.resolve())
+            with self.assertRaisesRegex(RUNNER.RunnerError, "must not be a symlink"):
+                RUNNER.require_preflight_claim_directory(str(link), repo_root.resolve())
+            with self.assertRaisesRegex(RUNNER.RunnerError, "outside the repository"):
+                RUNNER.require_preflight_claim_directory(
+                    str(repo_root / "inside"), repo_root.resolve()
+                )
+            with self.assertRaisesRegex(RUNNER.RunnerError, "group or world accessible"):
+                RUNNER.require_preflight_claim_directory(str(shared), repo_root.resolve())
+
+
+class CandidatePreflightGenesisTests(unittest.TestCase):
+    def test_genesis_is_read_from_the_parent_owned_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "execution.json"
+            state.write_text(json.dumps({"genesis_digest": "sha256:" + "e" * 64}), encoding="utf-8")
+            self.assertEqual(
+                RUNNER.preflight_execution_genesis(str(state)), "sha256:" + "e" * 64
+            )
+
+    def test_a_ledger_without_a_usable_genesis_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "execution.json"
+            state.write_text(json.dumps({"genesis_digest": "not-a-digest"}), encoding="utf-8")
+            with self.assertRaisesRegex(RUNNER.RunnerError, "execution genesis identity"):
+                RUNNER.preflight_execution_genesis(str(state))
+            state.write_text(json.dumps({}), encoding="utf-8")
+            with self.assertRaisesRegex(RUNNER.RunnerError, "execution genesis identity"):
+                RUNNER.preflight_execution_genesis(str(state))
+
+
+class CandidatePreflightAuthorityTests(unittest.TestCase):
+    """The diagnostic operation must refuse before it starts a process."""
+
+    def base_args(self, **overrides) -> argparse.Namespace:
+        values = dict(
+            manifest="/tmp/manifest.json",
+            command_index=0,
+            parent_diff_approved=True,
+            critical_invariants_approved=True,
+            output_dir="/tmp/out",
+            preflight_claim_dir="/tmp/claims",
+            timeout_seconds=RUNNER.PREFLIGHT_DEFAULT_TIMEOUT_SECONDS,
+            orchestration_run_id="run-1",
+            lifecycle_state="/tmp/lifecycle.json",
+            plan_execution_state="/tmp/execution.json",
+            git_bin="git",
+            bwrap_bin="bwrap",
+        )
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_missing_parent_approval_refuses_before_any_work(self) -> None:
+        with mock.patch.object(RUNNER, "require_executable") as resolve:
+            for field in ("parent_diff_approved", "critical_invariants_approved"):
+                with self.assertRaisesRegex(RUNNER.RunnerError, "explicit parent diff"):
+                    RUNNER.preflight_candidate(self.base_args(**{field: False}))
+            resolve.assert_not_called()
+
+    def test_timeout_above_the_maximum_is_refused(self) -> None:
+        with mock.patch.object(RUNNER, "require_executable") as resolve:
+            with self.assertRaisesRegex(RUNNER.RunnerError, "between 1 and 120 seconds"):
+                RUNNER.preflight_candidate(
+                    self.base_args(timeout_seconds=RUNNER.PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS + 1)
+                )
+            with self.assertRaisesRegex(RUNNER.RunnerError, "between 1 and 120 seconds"):
+                RUNNER.preflight_candidate(self.base_args(timeout_seconds=0))
+            resolve.assert_not_called()
+
+    def test_bounds_match_the_approved_design(self) -> None:
+        self.assertEqual(RUNNER.PREFLIGHT_DEFAULT_TIMEOUT_SECONDS, 60)
+        self.assertEqual(RUNNER.PREFLIGHT_MAXIMUM_TIMEOUT_SECONDS, 120)
+        self.assertEqual(RUNNER.PREFLIGHT_OUTPUT_LIMIT_BYTES, 64 * 1024)
+
+    def test_preflight_is_registered_without_writable_worker_authority(self) -> None:
+        parser = RUNNER.build_parser()
+        args = parser.parse_args([
+            "preflight", "manifest.json", "--command-index", "0",
+            "--output-dir", "out", "--preflight-claim-dir", "/tmp/claims",
+            "--orchestration-run-id", "run-1", "--lifecycle-state", "life.json",
+            "--plan-execution-state", "state.json",
+        ])
+        self.assertIs(args.handler, RUNNER.preflight_candidate)
+        self.assertEqual(args.timeout_seconds, RUNNER.PREFLIGHT_DEFAULT_TIMEOUT_SECONDS)
+        self.assertFalse(hasattr(args, "model"))
+        self.assertFalse(hasattr(args, "group_permit"))
+
+    def test_preflight_holds_the_execution_lease_across_gate_and_handler(self) -> None:
+        observed: dict[str, object] = {}
+
+        def handler(args: argparse.Namespace) -> int:
+            observed["handler"] = True
+            observed["gate_before_handler"] = observed.get("gate", False)
+            return 0
+
+        parser = RUNNER.build_parser()
+        argv = [
+            "preflight", "manifest.json", "--command-index", "0",
+            "--output-dir", "out", "--preflight-claim-dir", "/tmp/claims",
+            "--orchestration-run-id", "run-1", "--lifecycle-state", "life.json",
+            "--plan-execution-state", "state.json",
+        ]
+
+        def record_gate(args: argparse.Namespace, **kwargs) -> None:
+            observed["gate"] = True
+            observed["lease_during_gate"] = observed.get("lease", False)
+
+        class Lease:
+            def __enter__(self_inner):
+                observed["lease"] = True
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                observed["lease_released_before_handler"] = not observed.get("handler", False)
+                return False
+
+        with mock.patch.object(RUNNER, "build_parser") as build, mock.patch.object(
+            RUNNER, "enforce_plan_execution_gate", side_effect=record_gate
+        ), mock.patch.object(RUNNER, "plan_execution_lease", return_value=Lease()):
+            parsed = parser.parse_args(argv)
+            parsed.handler = handler
+            build.return_value = mock.Mock(parse_args=mock.Mock(return_value=parsed))
+            self.assertEqual(RUNNER.main(argv), 0)
+        self.assertTrue(observed["lease_during_gate"])
+        self.assertTrue(observed["gate_before_handler"])
+        self.assertFalse(observed["lease_released_before_handler"])
+
+
+class CandidatePreflightEvidenceBoundaryTests(unittest.TestCase):
+    """Diagnostic output must never be reachable as validation evidence."""
+
+    def test_preflight_never_persists_a_lifecycle_transition(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("def preflight_candidate(")
+        end = source.index("def validate_candidate(", start)
+        body = source[start:end]
+        self.assertNotIn("lifecycle_state.persist", body)
+        self.assertNotIn("focused_validation_count", body)
+        self.assertNotIn("authoritative_validation_count", body)
+        self.assertNotIn("begin_plan_execution_attempt", body)
+        self.assertIn('"is_validation_evidence": False', body)
+        self.assertIn('"evidence_class": "diagnostic"', body)
+        self.assertNotIn("reserve_output_artifacts", body)
+
+    def test_preflight_rechecks_the_stop_gate_inside_the_protected_interval(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("def preflight_candidate(")
+        end = source.index("def validate_candidate(", start)
+        body = source[start:end]
+        self.assertEqual(body.count("enforce_plan_execution_gate("), 2)
+        gate = body.rindex("enforce_plan_execution_gate(")
+        claim = body.index("claim_single_preflight(")
+        spawn = body.index("execute_validation_operation(")
+        self.assertLess(gate, claim)
+        self.assertLess(claim, spawn)
+
+    def test_preflight_does_not_consume_or_reset_the_correction_budget(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("def preflight_candidate(")
+        end = source.index("def validate_candidate(", start)
+        body = source[start:end]
+        self.assertNotIn("correction_requested", body)
+        self.assertNotIn("correction_count", body)
+        self.assertNotIn("review", body)
+        self.assertNotIn("adversarial_preflight", body)
+
+
+class CandidatePreflightStopRaceTests(unittest.TestCase):
+    """A committed stop must prevent both the one-start claim and the spawn."""
+
+    def _namespace(self, root: Path) -> argparse.Namespace:
+        return argparse.Namespace(
+            parent_diff_approved=True,
+            critical_invariants_approved=True,
+            timeout_seconds=30,
+            git_bin="git",
+            bwrap_bin="bwrap",
+            preflight_claim_dir=str(root / "claims"),
+            manifest=str(root / "candidate.json"),
+            orchestration_run_id="run-1",
+            lifecycle_state=str(root / "lifecycle.json"),
+            plan_execution_state=str(root / "state.json"),
+            command_index=0,
+            output_dir=str(root / "out"),
+        )
+
+    def _verified(self, root: Path) -> dict:
+        return {
+            "plan_rel": "docs/plan/active/p.md",
+            "plan_digest": "0" * 64,
+            "manifest_digest": "sha256:" + "1" * 64,
+            "patch_digest": "sha256:" + "2" * 64,
+            "head": "3" * 40,
+            "manifest": {
+                "plan_execution_attempt_id": "attempt-1",
+                "orchestration_run_id": "run-1",
+                "lifecycle_state_path": str(root / "lifecycle.json"),
+            },
+            "values": {"focused_validation": ["python3 tests/test-thing.py"]},
+        }
+
+    def _run_with_gate(self, gate_failure_call: int) -> tuple[Exception | None, mock.Mock, mock.Mock]:
+        root = Path(tempfile.mkdtemp(prefix="preflight-race-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "claims").mkdir()
+        (root / "out").mkdir()
+        verified = self._verified(root)
+        calls = {"gate": 0}
+
+        def gate(*_args, **_kwargs):
+            calls["gate"] += 1
+            if calls["gate"] == gate_failure_call:
+                raise RUNNER.RunnerError("plan execution run is stopped")
+
+        lifecycle_state = mock.Mock()
+        lifecycle_state.require_existing.return_value = {
+            "current_manifest_digest": verified["manifest_digest"],
+            "current_patch_digest": verified["patch_digest"],
+            "plan_execution_attempt_id": "attempt-1",
+            "phase": "admitted",
+        }
+        lifecycle_context = mock.MagicMock()
+        lifecycle_context.__enter__.return_value = lifecycle_state
+        lifecycle_context.__exit__.return_value = False
+
+        claim = mock.Mock(return_value=root / "claims" / "claim.json")
+        spawn = mock.Mock(
+            return_value=(
+                {
+                    "returncode": 0,
+                    "stdout_digest": "sha256:" + "5" * 64,
+                    "stderr_digest": "sha256:" + "6" * 64,
+                },
+                root / "clone",
+                [],
+            )
+        )
+
+        command = mock.Mock()
+        command.argv = ("python3", "tests/test-thing.py")
+        commands = mock.Mock()
+        commands.parse_validation_commands.return_value = [command]
+
+        patches = {
+            "require_executable": mock.Mock(side_effect=lambda name, given=None: name),
+            "ensure_bwrap_usable": mock.Mock(),
+            "detect_repo_root": mock.Mock(return_value=root),
+            "load_planlib": mock.Mock(),
+            "load_plan_validation_commands": mock.Mock(return_value=commands),
+            "ensure_clean_worktree": mock.Mock(),
+            "require_preflight_claim_directory": mock.Mock(return_value=root / "claims"),
+            "verify_candidate_manifest": mock.Mock(return_value=verified),
+            "require_plan_worktree": mock.Mock(),
+            "enforce_plan_execution_gate": mock.Mock(side_effect=gate),
+            "materialize_output_dir": mock.Mock(return_value=root / "out"),
+            "preflight_execution_genesis": mock.Mock(return_value="sha256:" + "4" * 64),
+            "open_lifecycle_state": mock.Mock(return_value=lifecycle_context),
+            "git_text": mock.Mock(return_value=verified["head"]),
+            "claim_single_preflight": claim,
+            "execute_validation_operation": spawn,
+        }
+        stack = []
+        for name, replacement in patches.items():
+            patcher = mock.patch.object(RUNNER, name, replacement)
+            patcher.start()
+            stack.append(patcher)
+        self.addCleanup(lambda: [patcher.stop() for patcher in stack])
+        with mock.patch.object(RUNNER.os, "chdir"):
+            try:
+                RUNNER.preflight_candidate(self._namespace(root))
+            except Exception as exc:  # noqa: BLE001 - the failure itself is the assertion
+                return exc, claim, spawn
+        return None, claim, spawn
+
+    def test_a_committed_stop_prevents_claim_and_spawn(self) -> None:
+        error, claim, spawn = self._run_with_gate(1)
+        self.assertIsInstance(error, RUNNER.RunnerError)
+        claim.assert_not_called()
+        spawn.assert_not_called()
+
+    def test_a_stop_inside_the_protected_interval_prevents_claim_and_spawn(self) -> None:
+        error, claim, spawn = self._run_with_gate(2)
+        self.assertIsInstance(error, RUNNER.RunnerError)
+        claim.assert_not_called()
+        spawn.assert_not_called()
+
+    def test_the_unstopped_path_reaches_claim_before_spawn(self) -> None:
+        error, claim, spawn = self._run_with_gate(0)
+        self.assertIsNone(error)
+        claim.assert_called_once()
+        spawn.assert_called_once()
+
+
+class CandidatePreflightRunnerIdentityTests(unittest.TestCase):
+    """Root and generated runners must not diverge."""
+
+    def test_root_and_generated_runners_stay_identical(self) -> None:
+        self.assertEqual(
+            SCRIPT.read_bytes(),
+            TEMPLATE_SCRIPT.read_bytes(),
+        )
+
 
 
 def load_adapter_module():
