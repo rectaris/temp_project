@@ -1,6 +1,6 @@
 # Run one bounded parent-owned preflight per candidate
 
-status: in_progress
+status: checked
 primary_invariant: A parent may obtain bounded diagnostic feedback from an admitted candidate in a fresh credential-free network-isolated clone without granting worker validation authority or consuming, replacing, or resetting acceptance and correction gates.
 task_types:
   - template_workflow
@@ -110,14 +110,14 @@ checked_summary_ja: 候補生成後に親だけが隔離環境で短いテスト
 
 ## Tasks
 
-- [ ] Add failing lifecycle and isolation fixtures showing the difference between advisory preflight and a formally failed focused suite.
-- [ ] Implement a parent-only preflight subcommand reusing verified candidate loading, exact command parsing, fresh-clone setup, and credential-free Bubblewrap execution.
-- [ ] Implement one-start claim persistence and bounded subprocess streaming/termination; do not buffer unbounded output before applying the limit.
-- [ ] Add a diagnostic-only result record with exact command, candidate and attempt digests, exit/timeout/output-limit status, bounded output, and elapsed time; omit secret-bearing host paths and environment values.
-- [ ] Test success, failed test, timeout, output flood, descendants, duplicate/concurrent calls, changed candidate, crash/replay, missing isolation, and every existing stopped-run gate.
-- [ ] Test an initial preflight failure followed by the one eligible correction and its preflight; prove that all formal acceptance gates remain required and another correction is refused.
-- [ ] Update aligned orchestration policy with the parent safety review, diagnostic feedback, formal review, focused validation, and authoritative validation order.
-- [ ] Run focused validation, obtain independent review within the unchanged run budget, and run authoritative validation once.
+- [x] Add failing lifecycle and isolation fixtures showing the difference between advisory preflight and a formally failed focused suite.
+- [x] Implement a parent-only preflight subcommand reusing verified candidate loading, exact command parsing, fresh-clone setup, and credential-free Bubblewrap execution.
+- [x] Implement one-start claim persistence and bounded subprocess streaming/termination; do not buffer unbounded output before applying the limit.
+- [x] Add a diagnostic-only result record with exact command, candidate and attempt digests, exit/timeout/output-limit status, bounded output, and elapsed time; omit secret-bearing host paths and environment values.
+- [x] Test success, failed test, timeout, output flood, descendants, duplicate/concurrent calls, changed candidate, crash/replay, missing isolation, and every existing stopped-run gate.
+- [x] Test an initial preflight failure followed by the one eligible correction and its preflight; prove that all formal acceptance gates remain required and another correction is refused.
+- [x] Update aligned orchestration policy with the parent safety review, diagnostic feedback, formal review, focused validation, and authoritative validation order.
+- [x] Run focused validation, obtain independent review within the unchanged run budget, and run authoritative validation once.
 
 ## Validation Notes
 
@@ -136,3 +136,15 @@ checked_summary_ja: 候補生成後に親だけが隔離環境で短いテスト
 - 2026-09-09 predecessor gates: Plan 268 is checked at `docs/plan/checked/2026/09/01-15/268-restore-large-test-baseline-and-ci.md`. Plan 275 stopped at `replan_required` and was reconstructed as plan 302, which carries every acceptance item of 275 unchanged and is checked at `docs/plan/checked/2026/09/01-15/302-complete-routed-agent-policy.md`, so the policy relocation this plan waits for is in place.
 - 2026-09-09 implementation mode: `implementation_risk: high` and the gate "do not dispatch it to Spark, Terra, or the writable sequential-plan worker" together require bounded parent implementation with independent review. No writable worker is started for this plan.
 - 2026-09-09 activation baseline: `a2ef370` in `temp_project`.
+
+- 2026-09-09 implementation: Added a parent-only `preflight` subcommand to `scripts/run-sandboxed-plan-worker.py` and mirrored it byte-identically into the template runner. It verifies the admitted candidate, requires the existing explicit parent diff and critical-invariant approvals, selects one command by index from the plan's own `focused_validation`, and executes it in the same credential-free network-isolated fresh clone the validation path already uses. `execute_validation_operation` gained optional `bounds` and `capture_sink` parameters that change only which subprocess dispatcher runs; the Bubblewrap argument list is unchanged.
+- 2026-09-09 bounds: `run_bounded_subprocess` applies a 60 second default timeout, a 120 second maximum, and a 64 KiB combined output cap. The cap is applied while each chunk is read, under one shared lock, so retained bytes never exceed the limit. Either bound kills the whole process group and is never a retry signal. A reader that cannot drain its pipe to completion kills the group and raises instead of returning a partial capture.
+- 2026-09-09 one-start claim: The claim is a per-candidate file inside a parent-owned mode-0700 directory outside the repository, created with `O_CREAT|O_EXCL|O_NOFOLLOW` at mode 0600. It binds the verified attempt id, candidate manifest digest, patch digest, command digest, command index, source head, and execution genesis digest. Duplicate, concurrent, stale, crashed, and replayed requests all fail closed. A correction candidate has a different manifest digest and therefore its own claim, while remaining under the unchanged run-wide single-correction budget.
+- 2026-09-09 authority boundary: The operation persists no lifecycle transition, records no ledger event, changes no focused, authoritative, correction, or review counter, and writes its result only to `preflight.json` with `evidence_class: diagnostic` and `is_validation_evidence: false`. It rechecks the plan execution gate inside the lease immediately before the claim, so a committed stop or a `diagnosis_required` run prevents both claim and spawn. It does not satisfy the separate mandatory `adversarial_preflight` review-order gate.
+- 2026-09-09 genesis source: `preflight_execution_genesis` reads the top-level `genesis_digest` of the parent-owned plan execution state. Verified empirically against a real ledger created by `scripts/plan-execution-state.py init`, which exposes `genesis_digest` as `sha256:<64 hex>`.
+- 2026-09-09 focused validation: `python3 tests/test-sandboxed-plan-worker.py` 146 tests OK; `python3 tests/test-plan-execution-state.py` 137 tests OK; `python3 scripts/check-copier-template.py` passed; `python3 scripts/plan_validation_commands.py --self-test` exit 0; `git diff --check` clean.
+- 2026-09-09 independent review, epoch round 1: A read-only reviewer returned no High findings and two Medium findings. Finding 1 was accepted: a drain thread that hit an `OSError` returned silently, so a partially read capture could be reported as a normal short run. Finding 2 asserted unbounded output accumulation, citing identifiers and line ranges that do not exist in this change set.
+- 2026-09-09 remediation: Commit `7f22397` fixes finding 1 by recording the reader failure, killing the process group, bounding the post-kill wait, treating a reader that never finishes as the same failure, and raising instead of returning the partial capture. A new test injects a pipe read failure into a flooding command and requires the bounded run to fail closed promptly.
+- 2026-09-09 independent review, epoch round 2: The reviewer confirmed finding 1 is resolved with no new lock-order, propagation, or hang problem, withdrew finding 2 after checking the current source, marked every integration gate satisfied, and reported no new High or Medium finding. This is the final permitted review in this execution epoch and it cleared High and Medium findings.
+- 2026-09-09 authoritative validation, run once: `./scripts/lint-project-workflow.sh` exit 0 ending in `workflow package lint passed`; `REQUIRE_COPIER=1 ./tests/smoke.sh` exit 0 ending in `smoke test passed`.
+- 2026-09-09 helpers: One read-only independent code reviewer was used for both review rounds. It held no write authority. Interpretation, remediation, validation acceptance, lifecycle changes, and commits stayed in the main session.

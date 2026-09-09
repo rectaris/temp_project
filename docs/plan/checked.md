@@ -229,3 +229,4 @@ id	path
 274	docs/plan/checked/2026/09/01-15/274-preserve-project-owned-agent-model-settings.md
 302	docs/plan/checked/2026/09/01-15/302-complete-routed-agent-policy.md
 299	docs/plan/checked/2026/09/01-15/299-reuse-established-decisions-in-existing-skills.md
+276	docs/plan/checked/2026/09/01-15/276-run-bounded-parent-owned-candidate-preflight.md
