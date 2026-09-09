@@ -1,6 +1,6 @@
 # State the no-push rule in the root and generated security policy
 
-status: backlog
+status: in_progress
 primary_invariant: A reader who follows the security policy alone learns that pushing requires an explicit user request.
 task_types:
   - documentation_policy_alignment
@@ -10,6 +10,7 @@ human_approval_status: not_required
 implementation_tier: 1
 implementation_risk: low
 implementation_ambiguity: low
+implementation_mode: parent_direct
 plan_purpose: implementation
 feasibility_evidence:
   - {"evidence":"Neither docs/agent/SPEC_SECURITY.md nor template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md contains the substring push, so an agent that reads only the security policy finds no statement of the rule.","kind":"reproduced_defect"}
@@ -29,7 +30,7 @@ context_files:
   - AGENTS.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
-  - docs/agent/SPEC_VALIDATION.md
+  - references/validation.md
 focused_validation:
   - python3 scripts/check-root-agent-policy.py
   - python3 scripts/check-copier-template.py
@@ -45,6 +46,7 @@ checked_summary_ja: ルートと生成物のセキュリティ方針に push 禁
 
 ## Decisions
 
+- Use bounded parent implementation for the two security-policy files, with independent read-only review and unchanged validation and external-effect authority.
 - State the rule in the security policy and keep the existing AGENTS.md sentence; the two are not in conflict and removing either would lose a routing path.
 - Add no new checker. The existing root policy check and copier template check already cover both files.
 
@@ -55,3 +57,5 @@ checked_summary_ja: ルートと生成物のセキュリティ方針に push 禁
 - [ ] Run the focused checks and then the authoritative suite once.
 
 ## Validation Notes
+
+- The owner's 2026-09-09 instruction to implement every backlog plan authorizes this activation. Replace the nonexistent root SPEC_VALIDATION.md reference with the existing root validation policy, references/validation.md; validation commands and acceptance remain unchanged.
