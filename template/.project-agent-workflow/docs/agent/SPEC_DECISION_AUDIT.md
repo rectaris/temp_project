@@ -68,6 +68,27 @@ Use numbered decision items:
 
 Use `Recommended: Needs user decision` when available context is insufficient.
 
+## Implementation Preflight
+
+The `decision-audit` skill carries one direct reference,
+`references/implementation-preflight.md`, for the moment a task turns from
+deciding into doing. It covers accepted-decision reuse, the requirement, scope,
+condition, and witness preflight that runs before long plan prose, and exact
+failure reproduction after a formal validation failure.
+
+Read it when one of those three situations applies. Do not read it for an
+ordinary audit that changes nothing.
+
+This document and the routed specifications stay normative. The reference
+records how to apply them; it grants no new authority and never replaces
+`.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md` or `.project-agent-workflow/docs/agent/SPEC_SECURITY.md`.
+
+Reuse an accepted decision while the requirement, the accepted safety
+conditions, the class of external effects, and the approving authority are all
+unchanged. A new plan id, a routine checkpoint, or a resumed session does not by
+itself require the same approval again. A changed requirement, a changed safety
+condition, expanded external effects, or continuing a stopped run always does.
+
 ## Artifact Boundary
 
 Full decision-audit output belongs in one of:

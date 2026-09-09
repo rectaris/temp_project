@@ -46,7 +46,12 @@ def read(path: str) -> str:
 
 
 def normalized_template_core(path: str) -> str:
-    return read(path).replace(".project-agent-workflow/", "").replace(".agents/skills/", ".codex/skills/")
+    return (
+        read(path)
+        .replace(".project-agent-workflow/skills/", ".codex/skills/")
+        .replace(".project-agent-workflow/", "")
+        .replace(".agents/skills/", ".codex/skills/")
+    )
 
 
 def require_sequential_worker() -> None:
@@ -694,6 +699,80 @@ def require_referent_first_alignment() -> None:
             template_text = normalized_template_core(template_path)
         if read(root_path) != template_text:
             fail(f"referent-first root/template files differ: {root_path} != {template_path}")
+
+
+def require_decision_reuse_alignment() -> None:
+    pairs = (
+        (
+            ".codex/skills/decision-audit/SKILL.md",
+            "template/.project-agent-workflow/skills/decision-audit/SKILL.md",
+        ),
+        (
+            ".codex/skills/decision-audit/references/implementation-preflight.md",
+            "template/.project-agent-workflow/skills/decision-audit/references/implementation-preflight.md",
+        ),
+        (
+            ".codex/skills/implementation-guidelines/SKILL.md",
+            "template/.project-agent-workflow/skills/implementation-guidelines/SKILL.md",
+        ),
+    )
+    for root_path, template_path in pairs:
+        if read(root_path) != normalized_template_core(template_path):
+            fail(f"decision-reuse root/template files differ: {root_path} != {template_path}")
+
+    reference = ".codex/skills/decision-audit/references/implementation-preflight.md"
+    text = read(reference)
+    for marker in (
+        "Project policy is normative.",
+        "This reference adds no authority",
+        "no independent diagnosis",
+        "no independent repair",
+        "no numbered\ninvestigation plan",
+        "no parallel execution",
+        "no external write",
+    ):
+        if marker not in text:
+            fail(f"{reference} missing normative-policy marker: {marker!r}")
+
+    # A shared reference must not quietly become a new mechanism.
+    for relative in (
+        reference,
+        ".codex/skills/decision-audit/SKILL.md",
+        ".codex/skills/implementation-guidelines/SKILL.md",
+    ):
+        body = read(relative).lower()
+        for forbidden in (
+            "new skill",
+            "state file",
+            "ledger schema",
+            "evaluation service",
+            "investigation plan number",
+            "in parallel",
+        ):
+            if forbidden in body:
+                fail(f"{relative} introduces disallowed authority: {forbidden}")
+
+    root_skills = {
+        entry.name for entry in (ROOT / ".codex/skills").iterdir() if entry.is_dir()
+    }
+    template_skills = {
+        entry.name
+        for entry in (ROOT / "template/.project-agent-workflow/skills").iterdir()
+        if entry.is_dir()
+    }
+    if root_skills != template_skills:
+        fail(
+            "root and generated managed skill inventories differ: "
+            f"{sorted(root_skills ^ template_skills)}"
+        )
+
+    for relative, ceiling in (
+        (".codex/skills/decision-audit/SKILL.md", 2048),
+        (".codex/skills/implementation-guidelines/SKILL.md", 2560),
+    ):
+        size = len(read(relative).encode("utf-8"))
+        if size > ceiling:
+            fail(f"{relative} is no longer concise: {size} bytes exceeds {ceiling}")
 
 
 def require_user_communication_alignment() -> None:
@@ -3205,6 +3284,7 @@ def main() -> int:
     require_fast_scoped_worker()
     require_evidence_synthesizer()
     require_referent_first_alignment()
+    require_decision_reuse_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()
     require_parent_worktree_alignment()

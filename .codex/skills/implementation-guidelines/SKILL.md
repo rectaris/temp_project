@@ -18,6 +18,7 @@ Use this skill as auxiliary behavior guidance while implementing, reviewing, or 
 - State assumptions when the request has multiple plausible meanings.
 - Ask or challenge briefly when ambiguity affects data semantics, user-visible behavior, validation scope, security, or project invariants.
 - Define success criteria through tests, scripts, builds, screenshots, or other deterministic validation when practical.
+- Read `.codex/skills/decision-audit/references/implementation-preflight.md` before reopening an already accepted decision and before writing long plan prose.
 
 ## During Implementation
 
@@ -31,6 +32,7 @@ Use this skill as auxiliary behavior guidance while implementing, reviewing, or 
 ## Verification
 
 - Prefer reproduce-first fixes when a bug can be captured by a test.
+- After a formal validation failure, reproduce the exact failure as described in `.codex/skills/decision-audit/references/implementation-preflight.md` before proposing a repair.
 - Run validation required by project specs and the active plan.
 - If validation cannot run, record the concrete blocker and residual risk.
 - Every changed line should trace to the user request, active plan, or required validation.
