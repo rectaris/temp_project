@@ -8,7 +8,11 @@ a hook error, so every path here exits zero and prints exactly one object.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
+import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -37,11 +41,84 @@ GUARD_CANDIDATES = (
     "scripts/project_workflow/worktree_guard.py",
 )
 
+MAX_RETAINED_BLOCKS = 3
+REPETITION_STATE = "project-agent-workflow-stop-repetition.json"
+
 
 def block(reason: str) -> int:
     json.dump({"decision": "block", "reason": reason}, sys.stdout)
     sys.stdout.write("\n")
     return 0
+
+
+def retained_block_required(repo: Path, reason: str | None) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=repo,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        if reason is None:
+            return False
+        raise ValueError("cannot locate the common Git directory")
+    path = Path(result.stdout.strip()) / REPETITION_STATE
+    flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+    if reason is not None:
+        flags |= os.O_CREAT
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileNotFoundError:
+        if reason is None:
+            return False
+        raise
+    with os.fdopen(descriptor, "r+", encoding="utf-8") as handle:
+        info = os.fstat(handle.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+        ):
+            raise ValueError("repetition state must be an owner-only single-linked regular file")
+        # Keep one inode under the lock: unlinking a reset would split concurrent readers.
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        raw = handle.read(513)
+        if len(raw) > 512:
+            raise ValueError("repetition state exceeds its size bound")
+        state = json.loads(raw) if raw else {"reason_digest": None, "count": 0}
+        if not isinstance(state, dict) or set(state) != {"reason_digest", "count"}:
+            raise ValueError("invalid repetition state fields")
+        previous = state["reason_digest"]
+        count = state["count"]
+        if (
+            type(count) is not int
+            or not 0 <= count <= MAX_RETAINED_BLOCKS
+            or not (
+                previous is None and count == 0
+                or isinstance(previous, str)
+                and len(previous) == 64
+                and all(char in "0123456789abcdef" for char in previous)
+                and count > 0
+            )
+        ):
+            raise ValueError("invalid repetition state values")
+        current = hashlib.sha256(reason.encode("utf-8")).hexdigest() if reason else None
+        if current is not None and previous == current and count == MAX_RETAINED_BLOCKS:
+            return False
+        state = {
+            "reason_digest": current,
+            "count": (count + 1 if current == previous else 1) if current else 0,
+        }
+        handle.seek(0)
+        json.dump(state, handle, sort_keys=True)
+        handle.write("\n")
+        handle.truncate()
+        handle.flush()
+        os.fsync(handle.fileno())
+    return reason is not None
 
 
 def unretired_task(repo: Path) -> str | None:
@@ -146,22 +223,39 @@ def main() -> int:
         if resolved.is_file():
             completion_script = resolved
             break
+    pending = None
     if completion_script is None:
-        return block(MISSING_GATE_REASON)
-
-    completion = subprocess.run(
-        ["sh", str(completion_script), "--plans-only"],
-        cwd=repo,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if completion.returncode != 0:
-        return block(completion.stderr.strip() or FALLBACK_REASON)
-    pending = unretired_task(repo)
+        reason = MISSING_GATE_REASON
+    else:
+        completion = subprocess.run(
+            ["sh", str(completion_script), "--plans-only"],
+            cwd=repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if completion.returncode != 0:
+            reason = completion.stderr.strip() or FALLBACK_REASON
+        else:
+            pending = unretired_task(repo)
+            reason = pending
+    try:
+        keep_blocking = retained_block_required(repo, pending)
+    except (OSError, ValueError) as error:
+        return block(
+            (reason + " " if reason else "")
+            + f"The retained-task repetition counter is unavailable: {error}. "
+            "Report this blocker; do not claim the task was published or retired."
+        )
+    if reason is not None and (pending is None or keep_blocking):
+        return block(reason)
     if pending is not None:
-        return block(pending)
+        print(
+            "The identical retained-task blocker was already reported three times. "
+            "End this turn by reporting it; publication and retirement remain incomplete.",
+            file=sys.stderr,
+        )
     print("{}")
     return 0
 
