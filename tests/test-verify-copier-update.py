@@ -17,6 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / ".codex/skills/verify-copier-update/scripts/verify-copier-update.py"
+SKILL = HELPER.parent.parent
+TRIAGE = SKILL / "scripts/triage-copier-update.py"
+COVERAGE = SKILL / "scripts/check-triage-coverage.py"
+TABLE = SKILL / "references/update-triage.yaml"
+TEMPLATE_SKILL = ROOT / "template/.project-agent-workflow/skills/verify-copier-update"
 
 
 def load_helper_module():
@@ -678,6 +683,176 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         self.assertEqual(2, process.returncode)
         self.assertIn("output directory must be outside", process.stderr)
         self.assertFalse(output.exists())
+
+
+def load_triage_module():
+    spec = importlib.util.spec_from_file_location("triage_copier_update_helper", TRIAGE)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load triage resolver")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_manifest(directory: Path, result: str, reason_code: str) -> Path:
+    path = directory / "verification-manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "result": result,
+                "reason_code": reason_code,
+                "detail": "recorded detail",
+                "unresolved": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+class TriageTableTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.triage = load_triage_module()
+        self.table = self.triage.require_table(TABLE)
+
+    def test_bundled_reader_matches_the_yaml_library(self) -> None:
+        import yaml
+
+        expected = yaml.safe_load(TABLE.read_text(encoding="utf-8"))
+        self.assertEqual(expected, self.triage.parse_triage_without_yaml(TABLE))
+
+    def test_reader_is_used_when_the_yaml_library_is_absent(self) -> None:
+        real_import = __import__
+
+        def without_yaml(name, *arguments):
+            if name == "yaml":
+                raise ModuleNotFoundError("No module named 'yaml'")
+            return real_import(name, *arguments)
+
+        with mock.patch("builtins.__import__", without_yaml):
+            loaded = self.triage.load_yaml(TABLE)
+        self.assertEqual(self.table["schema_version"], loaded["schema_version"])
+
+    def test_every_emitted_reason_code_is_classified(self) -> None:
+        process = run(["python3", str(COVERAGE)], ROOT, check=False)
+        self.assertEqual(0, process.returncode, process.stderr)
+        self.assertIn("reason codes classified", process.stdout)
+
+    def test_coverage_check_reports_an_unclassified_code(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            table = Path(raw) / "update-triage.yaml"
+            text = TABLE.read_text(encoding="utf-8")
+            table.write_text(text.replace("  git_unavailable:\n", "  git_absent:\n", 1), encoding="utf-8")
+            process = run(
+                ["python3", str(COVERAGE), "--triage-table", str(table)], ROOT, check=False
+            )
+        self.assertEqual(1, process.returncode)
+        self.assertIn("git_unavailable", process.stderr)
+
+    def test_longest_subject_wins_over_a_shorter_one(self) -> None:
+        entry = self.triage.resolve_code(self.table, "final_target_index_state_short_read")
+        self.assertEqual("final_target_index_state", entry["subject"])
+        self.assertEqual("short_read", entry["matched"])
+
+    def test_an_exact_code_wins_over_a_subject_split(self) -> None:
+        entry = self.triage.resolve_code(self.table, "source_path_escape")
+        self.assertEqual("code", entry["match"])
+        self.assertIsNone(entry.get("subject"))
+
+    def test_an_unknown_code_is_refused_rather_than_guessed(self) -> None:
+        with self.assertRaises(self.triage.TriageError):
+            self.triage.resolve_code(self.table, "brand_new_code")
+
+    def test_a_stop_exception_built_without_raising_is_still_classified(self) -> None:
+        for code in (
+            "original_target_state_unavailable",
+            "original_target_changed",
+            "original_source_state_unavailable",
+            "original_source_changed",
+        ):
+            with self.subTest(code=code):
+                self.assertEqual("environment", self.triage.resolve_code(self.table, code)["owner"])
+
+    def test_recorded_answer_faults_belong_to_the_project(self) -> None:
+        for code in (
+            "absolute_source_path",
+            "source_path_escape",
+            "source_path_overlap",
+            "source_path_scratch_overlap",
+            "update_wrapper_invalid",
+        ):
+            with self.subTest(code=code):
+                self.assertEqual("project", self.triage.resolve_code(self.table, code)["owner"])
+
+    def test_the_bundled_reader_refuses_syntax_it_cannot_reproduce(self) -> None:
+        original = TABLE.read_text(encoding="utf-8")
+        for replacement in (
+            '    owner: "environment"\n',
+            "    owner: environment # inline\n",
+        ):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as raw:
+                table = Path(raw) / "update-triage.yaml"
+                table.write_text(
+                    original.replace("    owner: environment\n", replacement, 1), encoding="utf-8"
+                )
+                with self.assertRaises(self.triage.TriageError):
+                    self.triage.parse_triage_without_yaml(table)
+
+    def test_the_template_copy_is_identical(self) -> None:
+        for relative in (
+            "SKILL.md",
+            "references/update-triage.yaml",
+            "scripts/triage-copier-update.py",
+            "scripts/check-triage-coverage.py",
+        ):
+            with self.subTest(relative=relative):
+                self.assertEqual(
+                    (SKILL / relative).read_bytes(), (TEMPLATE_SKILL / relative).read_bytes()
+                )
+
+
+class TriageResolverTest(unittest.TestCase):
+    def test_a_passing_manifest_exits_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(Path(raw), "verified", "all_checks_passed")
+            process = run(["python3", str(TRIAGE), str(manifest)], ROOT, check=False)
+        self.assertEqual(0, process.returncode, process.stderr)
+        self.assertIn("owner: none", process.stdout)
+
+    def test_a_failing_manifest_exits_one_with_an_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(Path(raw), "rejected", "not_idempotent")
+            process = run(
+                ["python3", str(TRIAGE), str(manifest), "--format", "json"], ROOT, check=False
+            )
+        self.assertEqual(1, process.returncode)
+        report = json.loads(process.stdout)
+        self.assertEqual("template", report["owner"])
+        self.assertEqual("never", report["retry"])
+
+    def test_an_unclassified_code_exits_two(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(Path(raw), "rejected", "brand_new_code")
+            process = run(["python3", str(TRIAGE), str(manifest)], ROOT, check=False)
+        self.assertEqual(2, process.returncode)
+        self.assertIn("not classified", process.stderr)
+
+    def test_a_manifest_that_contradicts_the_table_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(Path(raw), "verified", "not_idempotent")
+            process = run(["python3", str(TRIAGE), str(manifest)], ROOT, check=False)
+        self.assertEqual(2, process.returncode)
+        self.assertIn("disagree", process.stderr)
+
+    def test_an_unusable_manifest_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = Path(raw) / "verification-manifest.json"
+            manifest.write_text("{ not json", encoding="utf-8")
+            process = run(["python3", str(TRIAGE), str(manifest)], ROOT, check=False)
+        self.assertEqual(2, process.returncode)
+        self.assertIn("not valid JSON", process.stderr)
 
 
 if __name__ == "__main__":

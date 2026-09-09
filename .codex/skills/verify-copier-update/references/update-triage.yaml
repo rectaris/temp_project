@@ -1,0 +1,628 @@
+# Reason-code triage for verify-copier-update.
+#
+# scripts/triage-copier-update.py resolves one verification manifest against this
+# table. Every reason code the verifier can emit must resolve to exactly one entry,
+# and scripts/check-triage-coverage.py fails when it does not.
+#
+# owner records who must change something for the result to change:
+#   invocation  - the caller passed unusable verification inputs
+#   environment - the executing machine lacks a usable prerequisite
+#   project     - the downstream project's own tracked state or policy
+#   template    - the template ref under verification
+#   undetermined- the code alone does not separate project from template, so the
+#                 entry names the exact evidence that separates them
+#
+# retry records whether repeating the same verification can produce a different
+# result once next_action is done:
+#   after_fix   - repeat after the named fix
+#   never       - repeating without new evidence repeats the same result
+schema_version: 1
+
+results:
+  verified:
+    meaning: every required isolated check passed for the recorded commit OIDs
+    next_action: >-
+      Apply the update on the recorded target commit with the project's own update
+      command, then run the project's validation suite before committing.
+  rejected:
+    meaning: a completed check observed an incompatibility or a safety failure
+    next_action: >-
+      Do not apply the update. Resolve the entry below, then verify again.
+  blocked:
+    meaning: a prerequisite was missing or unusable, so compatibility is unresolved
+    next_action: >-
+      Do not apply the update. Restore the prerequisite named below, then verify again.
+
+# Codes emitted with a fixed spelling.
+codes:
+  all_checks_passed:
+    owner: none
+    next_action: Proceed with the update on the recorded target commit.
+    retry: never
+
+  verification_incomplete:
+    owner: environment
+    next_action: >-
+      Report the run as inconclusive. The verifier stopped before it recorded a
+      result, so attach the command logs and verify again on an idle machine.
+    retry: after_fix
+  interrupted:
+    owner: environment
+    next_action: Verify again without interrupting the run.
+    retry: after_fix
+
+  # Caller-supplied verification inputs.
+  absolute_source_path:
+    owner: project
+    next_action: >-
+      Record `_src_path` in the tracked Copier answers as a path relative to the
+      project root rather than an absolute path, then verify again.
+    retry: after_fix
+  source_path_escape:
+    owner: project
+    next_action: >-
+      Record a `_src_path` in the tracked Copier answers that stays inside the
+      disposable workspace beside the project, then verify again.
+    retry: after_fix
+  source_path_overlap:
+    owner: project
+    next_action: >-
+      Record a `_src_path` in the tracked Copier answers that resolves beside the
+      project rather than inside or above it, then verify again.
+    retry: after_fix
+  source_path_scratch_overlap:
+    owner: project
+    next_action: >-
+      Record a `_src_path` in the tracked Copier answers that does not resolve
+      into the verification run's private scratch directories, then verify again.
+    retry: after_fix
+  repository_overlap:
+    owner: invocation
+    next_action: Pass separate target and source repositories.
+    retry: after_fix
+  output_exists:
+    owner: invocation
+    next_action: Pass an output directory path that does not exist yet.
+    retry: after_fix
+  output_parent_missing:
+    owner: invocation
+    next_action: Create the parent directory of the output path, then verify again.
+    retry: after_fix
+  output_inside_repository:
+    owner: invocation
+    next_action: Pass an output directory outside both repositories.
+    retry: after_fix
+  output_contains_repository:
+    owner: invocation
+    next_action: Pass an output directory that does not contain either repository.
+    retry: after_fix
+  invalid_command_json:
+    owner: invocation
+    next_action: Pass the Copier command as a JSON array of strings.
+    retry: after_fix
+  invalid_command_argv:
+    owner: invocation
+    next_action: Pass a Copier command whose entries are all non-empty strings.
+    retry: after_fix
+  unsafe_copier_launcher:
+    owner: invocation
+    next_action: >-
+      Pass a Copier launcher that the verifier accepts. Do not pass a shell, an
+      interpreter flag, or a launcher that reads its command from the environment.
+    retry: after_fix
+  template_trust_missing:
+    owner: invocation
+    next_action: >-
+      Re-run with the explicit template-task trust input, because this template
+      declares tasks that Copier will not run without it.
+    retry: after_fix
+
+  # Prerequisites the executing machine must supply.
+  git_unavailable:
+    owner: environment
+    next_action: Install Git, then verify again.
+    retry: after_fix
+  copier_unavailable:
+    owner: environment
+    next_action: Install Copier, then verify again.
+    retry: after_fix
+  copier_launcher_unavailable:
+    owner: environment
+    next_action: Install the named Copier launcher, then verify again.
+    retry: after_fix
+  command_unavailable:
+    owner: environment
+    next_action: Install the named validation command, then verify again.
+    retry: after_fix
+  unsupported_object_format:
+    owner: environment
+    next_action: >-
+      Report the repository's Git object format upstream. The verifier supports
+      only the formats it can compare, so it cannot decide this baseline.
+    retry: never
+  unsupported_index_mode:
+    owner: environment
+    next_action: >-
+      Report the unsupported Git index entry mode upstream with the command logs.
+    retry: never
+  staged_index_parse_failed:
+    owner: environment
+    next_action: >-
+      Report the unreadable Git index upstream with the command logs, then verify
+      again with a Git version the verifier supports.
+    retry: after_fix
+  status_parse_failed:
+    owner: environment
+    next_action: >-
+      Report the unreadable Git status output upstream with the command logs.
+    retry: after_fix
+
+  # The downstream project's own state.
+  adoption_required:
+    owner: project
+    next_action: >-
+      Adopt the workflow with a Copier copy before verifying an update. This
+      baseline records no adoption, so there is nothing to update.
+    retry: after_fix
+  answers_missing:
+    owner: project
+    next_action: >-
+      Restore the tracked Copier answers file, then verify again.
+    retry: after_fix
+  answers_not_utf8:
+    owner: project
+    next_action: Re-encode the Copier answers file as UTF-8, then verify again.
+    retry: after_fix
+  answers_field_invalid:
+    owner: project
+    next_action: >-
+      Repair the named field in the Copier answers file so it records one exact
+      source path and one exact commit, then verify again.
+    retry: after_fix
+  validation_missing:
+    owner: project
+    next_action: >-
+      Pass at least one project validation command. An update cannot be verified
+      without a check that the updated project still works.
+    retry: after_fix
+
+  # Observed incompatibilities between the baseline and the template ref.
+  staged_index_unmerged:
+    owner: undetermined
+    next_action: >-
+      Report the unmerged paths upstream together with the manifest's changed-path
+      classification. Paths the template owns are a template defect; paths this
+      project customized are a project decision to re-apply after the update.
+    retry: never
+  staged_untracked_paths:
+    owner: undetermined
+    next_action: >-
+      Report the untracked paths the update produced. Confirm upstream whether the
+      template intends to add them before adopting them into this project.
+    retry: never
+  staged_worktree_mismatch:
+    owner: template
+    next_action: >-
+      Report upstream that the update left the index and the worktree disagreeing,
+      with the manifest and the command logs.
+    retry: never
+  committed_tree_mismatch:
+    owner: template
+    next_action: >-
+      Report upstream that committing the update did not preserve the staged tree,
+      with the manifest and the command logs.
+    retry: never
+  commit_changed_worktree:
+    owner: template
+    next_action: >-
+      Report upstream that committing the update changed the worktree, with the
+      manifest and the command logs.
+    retry: never
+  update_changed_head:
+    owner: template
+    next_action: >-
+      Report upstream that the update moved HEAD, with the manifest and the logs.
+    retry: never
+  not_idempotent:
+    owner: template
+    next_action: >-
+      Report upstream that repeating the same template ref produced a second
+      change, with both command logs.
+    retry: never
+  validation_changed_head:
+    owner: undetermined
+    next_action: >-
+      Report that a validation command moved HEAD. A project-owned command that
+      commits is a project defect; a generated command that commits is a template
+      defect. Name which command it was.
+    retry: never
+  validation_changed_worktree:
+    owner: undetermined
+    next_action: >-
+      Report that a validation command changed tracked files. Name the command and
+      whether this project or the template owns it.
+    retry: never
+  post_validation_changed_worktree:
+    owner: undetermined
+    next_action: >-
+      Report that the worktree changed after validation finished. Name the command
+      and whether this project or the template owns it.
+    retry: never
+
+  # Generated files the update was required to leave usable.
+  update_wrapper_invalid:
+    owner: project
+    next_action: >-
+      Restore the tracked update wrapper this project already carries as an
+      executable regular file, then verify again. The candidate template ref has
+      not run at this point, so it did not produce this state.
+    retry: after_fix
+  updated_validator_missing:
+    owner: template
+    next_action: >-
+      Report upstream that the update did not leave a usable adoption validator,
+      with the manifest and the command logs.
+    retry: never
+  change_validator_missing:
+    owner: template
+    next_action: >-
+      Report upstream that the update did not leave a usable change-aware
+      validator, with the manifest and the command logs.
+    retry: never
+
+  # Commands that ran and exited non-zero.
+  update_failed:
+    owner: undetermined
+    next_action: >-
+      Read the recorded Copier log. A template defect fails the same way on an
+      unmodified copy of this baseline; a conflict with this project's answers or
+      customizations does not. State which one the log shows before reporting.
+    retry: never
+  updated_validator_failed:
+    owner: template
+    next_action: >-
+      Report upstream that the generated adoption validator rejected the project
+      the update produced, with the recorded validator log.
+    retry: never
+  change_validation_failed:
+    owner: template
+    next_action: >-
+      Report upstream that the generated change-aware validation rejected the
+      project the update produced, with the recorded validator log.
+    retry: never
+  diff_check_failed:
+    owner: template
+    next_action: >-
+      Report upstream that the update introduced whitespace errors, with the
+      recorded diff log.
+    retry: never
+  target_validation_failed:
+    owner: undetermined
+    next_action: >-
+      Read the recorded log for the named validation command. This project owns
+      the command, so decide whether the update broke it or the command was
+      already failing on this baseline, then report accordingly.
+    retry: never
+  post_validation_validator_failed:
+    owner: template
+    next_action: >-
+      Report upstream that the generated adoption validator rejected the project
+      after validation ran, with the recorded validator log.
+    retry: never
+  post_validation_diff_failed:
+    owner: template
+    next_action: >-
+      Report upstream that validation left whitespace errors, with the recorded
+      diff log.
+    retry: never
+  disposable_stage_failed:
+    owner: environment
+    next_action: >-
+      Report the failed staging of the disposable clone upstream with the logs.
+    retry: after_fix
+  disposable_commit_failed:
+    owner: environment
+    next_action: >-
+      Report the failed commit of the disposable clone upstream with the logs.
+    retry: after_fix
+  idempotence_update_failed:
+    owner: template
+    next_action: >-
+      Report upstream that repeating the same template ref failed, with the
+      recorded Copier log for the second run.
+    retry: never
+  idempotence_validator_failed:
+    owner: template
+    next_action: >-
+      Report upstream that the generated adoption validator rejected the project
+      after the repeated update, with the recorded validator log.
+    retry: never
+  idempotence_diff_failed:
+    owner: template
+    next_action: >-
+      Report upstream that the repeated update introduced whitespace errors, with
+      the recorded diff log.
+    retry: never
+
+  # Commits the verifier could not resolve after a phase.
+  updated_head_missing:
+    owner: environment
+    next_action: Report the unresolvable post-update HEAD upstream with the command logs.
+    retry: after_fix
+  validated_head_missing:
+    owner: environment
+    next_action: Report the unresolvable post-validation HEAD upstream with the command logs.
+    retry: after_fix
+
+  # The original repositories the verifier was required to leave untouched.
+  original_target_state_unavailable:
+    owner: environment
+    next_action: >-
+      Report that the original target repository could not be compared after the
+      run. Verify again on a machine where nothing else writes to it.
+    retry: after_fix
+  original_target_changed:
+    owner: environment
+    next_action: >-
+      Report that the original target repository changed during verification, and
+      restore it from its recorded commit before verifying again.
+    retry: after_fix
+  original_source_state_unavailable:
+    owner: environment
+    next_action: >-
+      Report that the original source repository could not be compared after the
+      run. Verify again on a machine where nothing else writes to it.
+    retry: after_fix
+  original_source_changed:
+    owner: environment
+    next_action: >-
+      Report that the original source repository changed during verification, and
+      restore it from its recorded commit before verifying again.
+    retry: after_fix
+
+  # Git inspections that could not complete.
+  staged_tree_failed:
+    owner: environment
+    next_action: Report the failed Git tree inspection upstream with the command logs.
+    retry: after_fix
+  staged_index_failed:
+    owner: environment
+    next_action: Report the failed Git index inspection upstream with the command logs.
+    retry: after_fix
+  staged_untracked_check_failed:
+    owner: environment
+    next_action: Report the failed Git untracked inspection upstream with the command logs.
+    retry: after_fix
+  committed_tree_missing:
+    owner: environment
+    next_action: Report the missing committed tree upstream with the command logs.
+    retry: after_fix
+  committed_status_failed:
+    owner: environment
+    next_action: Report the failed Git status inspection upstream with the command logs.
+    retry: after_fix
+  precommit_status_failed:
+    owner: environment
+    next_action: Report the failed Git status inspection upstream with the command logs.
+    retry: after_fix
+  updated_status_failed:
+    owner: environment
+    next_action: Report the failed Git status inspection upstream with the command logs.
+    retry: after_fix
+  validated_status_failed:
+    owner: environment
+    next_action: Report the failed Git status inspection upstream with the command logs.
+    retry: after_fix
+  idempotence_status_failed:
+    owner: environment
+    next_action: Report the failed Git status inspection upstream with the command logs.
+    retry: after_fix
+
+# Codes the verifier builds from a subject name and a fixed suffix. The resolver
+# strips the longest matching subject, then resolves the remaining suffix here.
+subjects:
+  # The two repositories under comparison, and their state after the update.
+  - source
+  - target
+  - final_source
+  - final_target
+  # A single Git state file inside one of those repositories.
+  - source_head_state
+  - source_index_state
+  - source_split_index
+  - source_tracked_file
+  - target_head_state
+  - target_index_state
+  - target_split_index
+  - target_tracked_file
+  - final_source_head_state
+  - final_source_index_state
+  - final_source_split_index
+  - final_source_tracked_file
+  - final_target_head_state
+  - final_target_index_state
+  - final_target_split_index
+  - final_target_tracked_file
+  # The disposable clone a single phase was required to leave unchanged.
+  - idempotence_source
+  - update_source
+  - validation_source
+
+suffixes:
+  # The named repository is unusable as a verification input.
+  unavailable:
+    owner: invocation
+    next_action: Pass a path that exists and can be read, then verify again.
+    retry: after_fix
+  symlink:
+    owner: invocation
+    next_action: Pass the real directory rather than a symbolic link to it.
+    retry: after_fix
+  not_directory:
+    owner: invocation
+    next_action: Pass a directory path, then verify again.
+    retry: after_fix
+  not_regular:
+    owner: invocation
+    next_action: Pass a path whose contents are regular files, then verify again.
+    retry: after_fix
+  not_git_root:
+    owner: invocation
+    next_action: Pass the Git repository root rather than a subdirectory.
+    retry: after_fix
+  too_large:
+    owner: invocation
+    next_action: >-
+      Report the oversized tracked file upstream. The verifier bounds what it
+      reads, so it cannot decide this baseline.
+    retry: never
+
+  # The named repository must be a clean, stable baseline.
+  dirty:
+    owner: project
+    next_action: >-
+      Commit or stash the named repository's changes so the baseline is clean,
+      then verify again.
+    retry: after_fix
+  changed:
+    owner: project
+    next_action: >-
+      Stop writing to the named repository during verification, then verify again.
+    retry: after_fix
+  short_read:
+    owner: project
+    next_action: >-
+      Stop writing to the named repository during verification, then verify again.
+    retry: after_fix
+  snapshot_changed_worktree:
+    owner: project
+    next_action: >-
+      Stop writing to the named repository during verification, then verify again.
+    retry: after_fix
+  head_missing:
+    owner: project
+    next_action: >-
+      Give the named repository at least one commit, then verify again.
+    retry: after_fix
+  invalid_oid:
+    owner: project
+    next_action: >-
+      Resolve the named repository's HEAD to a commit, then verify again.
+    retry: after_fix
+  unmerged_index:
+    owner: project
+    next_action: >-
+      Resolve the named repository's unmerged index entries, then verify again.
+    retry: after_fix
+
+  # Repository shapes the verifier deliberately refuses to decide.
+  submodule_unsupported:
+    owner: project
+    next_action: >-
+      Report the submodule upstream. The verifier does not decide a baseline that
+      carries submodules.
+    retry: never
+  external_filter_unsupported:
+    owner: project
+    next_action: >-
+      Disable the external clean filter for the verification run, then verify
+      again. A filter that rewrites content makes the comparison undecidable.
+    retry: after_fix
+  index_flags_unsupported:
+    owner: project
+    next_action: >-
+      Report the unsupported index flags upstream with the command logs.
+    retry: never
+  tracked_mode_unsupported:
+    owner: project
+    next_action: >-
+      Report the unsupported tracked file mode upstream with the command logs.
+    retry: never
+  tracked_type_mismatch:
+    owner: project
+    next_action: >-
+      Restore the named repository so its tracked entries match their recorded
+      types, then verify again.
+    retry: after_fix
+  tracked_symlink_unavailable:
+    owner: project
+    next_action: Restore the missing tracked symlink, then verify again.
+    retry: after_fix
+  ignored_file_unavailable:
+    owner: project
+    next_action: >-
+      Stop writing to the named repository during verification, then verify again.
+    retry: after_fix
+  ignored_symlink_unavailable:
+    owner: project
+    next_action: >-
+      Stop writing to the named repository during verification, then verify again.
+    retry: after_fix
+
+  ref_missing:
+    owner: invocation
+    next_action: >-
+      Pass a template ref that exists in the named repository and resolves to one
+      immutable commit, then verify again.
+    retry: after_fix
+  # Git inspections of the named repository that could not complete.
+  status_failed:
+    owner: environment
+    next_action: Report the failed Git status inspection upstream with the command logs.
+    retry: after_fix
+  refs_failed:
+    owner: environment
+    next_action: Report the failed Git ref inspection upstream with the command logs.
+    retry: after_fix
+  git_dir_failed:
+    owner: environment
+    next_action: Report the failed Git directory inspection upstream with the command logs.
+    retry: after_fix
+  common_dir_failed:
+    owner: environment
+    next_action: Report the failed Git directory inspection upstream with the command logs.
+    retry: after_fix
+  head_path_failed:
+    owner: environment
+    next_action: Report the failed Git HEAD inspection upstream with the command logs.
+    retry: after_fix
+  index_path_failed:
+    owner: environment
+    next_action: Report the failed Git index inspection upstream with the command logs.
+    retry: after_fix
+  index_flags_failed:
+    owner: environment
+    next_action: Report the failed Git index inspection upstream with the command logs.
+    retry: after_fix
+  index_flags_invalid:
+    owner: environment
+    next_action: Report the invalid Git index flags upstream with the command logs.
+    retry: after_fix
+  split_index_scan_failed:
+    owner: environment
+    next_action: Report the failed Git split-index inspection upstream with the command logs.
+    retry: after_fix
+  filter_config_failed:
+    owner: environment
+    next_action: Report the failed Git filter inspection upstream with the command logs.
+    retry: after_fix
+  tracked_files_failed:
+    owner: environment
+    next_action: Report the failed Git tracked-file inspection upstream with the command logs.
+    retry: after_fix
+  tracked_files_invalid:
+    owner: environment
+    next_action: Report the invalid Git tracked-file entry upstream with the command logs.
+    retry: after_fix
+  ignored_files_failed:
+    owner: environment
+    next_action: Report the failed Git ignored-file inspection upstream with the command logs.
+    retry: after_fix
+  clone_failed:
+    owner: environment
+    next_action: Report the failed clone upstream with the command logs.
+    retry: after_fix
+  checkout_failed:
+    owner: environment
+    next_action: Report the failed checkout upstream with the command logs.
+    retry: after_fix
