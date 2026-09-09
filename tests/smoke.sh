@@ -1614,14 +1614,19 @@ grep -q 'redaction_status' "$tmp/typescript/.project-agent-workflow/docs/agent/S
 grep -q 'agent_logging:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'Context compression helper: optional' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'external transcript logs as primary full-turn evidence' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
-grep -q 'validation-witness-migration-provenance-schema: 1' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+if grep -q 'validation-witness-migration-provenance-schema: 1' "$tmp/typescript/.project-agent-workflow/AGENTS.md"; then
+  echo 'generated entrypoint restates the relocated validation-witness migration guardian rule' >&2
+  exit 1
+fi
+grep -q 'read the whole validation-witness migration guardian rule in `.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md` and follow it there; no summary of it authorizes an update.' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'validation-witness-migration-provenance-schema: 1' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'earliest parent-owned static, focused, or authoritative witness' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'the map must never remove or weaken the authoritative `validation` suite' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
 grep -q 'binds every acceptance item, in source order' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'never removes, reorders, or weakens the authoritative suite' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'authoritative_only_reason' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
-grep -q 'must durably transition the attempt to `consumed` before acceptance' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
-grep -q 'Never treat the snapshot or attempt state as product acceptance evidence' "$tmp/typescript/.project-agent-workflow/AGENTS.md"
+grep -q 'must durably transition the attempt to `consumed` before acceptance' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'never count either as product acceptance evidence or as a validation witness by itself' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q '.project-agent-workflow/scripts/context-compress.sh' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_CONTEXT_COMPRESSION.md"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/check-agent-log-manifest.py"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/check-agent-log-manifest.py --self-test >/dev/null)
