@@ -1,6 +1,6 @@
 # Complete bounded pre-tool command context interpretation
 
-status: in_progress
+status: checked
 primary_invariant: The pre-tool worktree decision uses a bounded recognized invocation and its effective repository directory; a lifecycle filename used only as data never becomes write classification or authority, and an invocation this interpreter cannot read falls back to the previous conservative classification.
 replan_sources:
   - docs/plan/active/104-interpret-pre-tool-command-context.md
@@ -100,11 +100,11 @@ checked_summary_ja: 実行対象と実行場所を区別しつつ、読み取れ
 
 ## Tasks
 
-- [ ] Add a distinct unrecognized answer to the shared interpreter and route it to the previous conservative classification.
-- [ ] Refuse to read a segment whose program position is an option, an IO number or a program that runs another program named in its arguments.
-- [ ] Consume the bounded wrapper, interpreter and shell option grammar, including separate option values and the argument terminator.
-- [ ] Cover every reproduced form and every recorded read-only exemption in the existing hook fixtures.
-- [ ] Run focused checks, independent review and one authoritative suite for the accepted patch.
+- [x] Add a distinct unrecognized answer to the shared interpreter and route it to the previous conservative classification.
+- [x] Refuse to read a segment whose program position is an option, an IO number or a program that runs another program named in its arguments.
+- [x] Consume the bounded wrapper, interpreter and shell option grammar, including separate option values and the argument terminator.
+- [x] Cover every reproduced form and every recorded read-only exemption in the existing hook fixtures.
+- [x] Run focused checks, independent review and one authoritative suite for the accepted patch.
 
 ## Validation Notes
 
@@ -112,3 +112,9 @@ checked_summary_ja: 実行対象と実行場所を区別しつつ、読み取れ
 - Owner instruction: プラン104の実装をエポック1の後継で続行することを承認する
 - Plan 104 stopped at parent_remediation_budget_exhausted after one parent-direct remediation round left Medium findings. Its execution ledger could not open a same-plan continuation epoch because a formal review requires Codex reviewer-session runtime evidence that the reviewing session cannot emit.
 - The candidate from Plan 104 is promoted into this plan's write scope unchanged. Its focused and authoritative results do not carry over; this plan runs them again for the accepted patch.
+- Focused validation on the accepted patch: python3 tests/test-hooks.py reports 89 tests OK, and python3 scripts/check-copier-template.py passes. The root and generated gates are byte-identical after their import line.
+- Authoritative validation on the accepted patch, run once: scripts/lint-project-workflow.sh passes (234 tests OK) and REQUIRE_COPIER=1 tests/smoke.sh passes.
+- Differential evidence: an 11000-case sweep comparing the previous WRITE_COMMANDS patterns against the accepted interpreter reports no command that the previous classifier refused and this one allows, outside the recorded read-only exemptions.
+- Two independent read-only reviews were consumed. Round one raised three High and one Medium finding, round two raised three High and one Medium finding. Each finding was reproduced against the previous classifier and remediated. Round two led to inverting the read-only decision: only a positively validated form may certify a lifecycle file name as data, and a segment that mentions a lifecycle file without a validated form is answered as unread.
+- The execution ledger for this plan stopped at descope_pending with parent_remediation_budget_exhausted after the first review was recorded, and the second review receipt is retained outside the repository as a file. The epoch permits no third review, so the remediated state carries no independent review.
+- Owner acceptance: 提案の方針で承認する。 The owner authorized accepting the remediated candidate on parent validation and publishing it without a further independent review, with that gap stated.
