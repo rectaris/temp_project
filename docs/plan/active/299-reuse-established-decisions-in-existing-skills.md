@@ -1,6 +1,6 @@
 # Reuse established decisions through existing planning skills
 
-status: replan_required
+status: in_progress
 primary_invariant: Existing planning and execution skills apply one shared decision sequence to the same authorized task without reopening settled choices, inventing successor plans or relaxing normative approval, diagnosis and review boundaries.
 task_types:
   - template_workflow
@@ -134,3 +134,5 @@ checked_summary_ja: 既決事項と失敗の再現確認を既存スキルへま
 - 2026-09-09 harness correction: The harness previously compared a heading against its own source markers, which a renderer never emits, so it reported every marked line as hidden and produced 215 unexplained results. With headings and list markers normalized, 125,000 randomized adversarial constructs across six seeds hid a route 15,599 times and were accepted zero times, and the eight route-carrying files report no defect unmodified. 152 end-to-end mutations, covering all eight files and all eighteen carriers including the three round 2 findings, were each rejected from a clean clone.
 - 2026-09-09 focused validation on `f3138dc`: `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `python3 scripts/validate-changes.py --all`, and `git diff --check` each passed.
 - 2026-09-09 stop: The third authorized epoch's review budget is spent. Accepted closure requires the latest review to have cleared High and Medium findings, and the latest review returned three, so this candidate cannot be accepted without a further review even though the findings are addressed. Recorded `status: replan_required` with `parent_remediation_budget_exhausted`. The remediation is committed and unpublished; no acceptance item is withdrawn.
+- 2026-09-09 owner continuation authorization, third: Presented the stop, the addressed findings, the harness fault that had inflated earlier evidence, and the rule that blocks accepted closure without a clearing review, and asked the owner to choose between continuation, reconstruction, deferral, and stopping. The owner answered `authorize_continuation`, quoted as 「継続を承認する（4エポック目・確認レビュー1回で完了まで）」. This authorizes one further execution epoch on the unchanged plan, source baseline, invariant, acceptance items, validation authority, and write scope. No requirement or safety condition changes.
+- 2026-09-09 reopen, third: `status` returns to `in_progress`. The epoch is bounded to one confirming review of the committed remediation and, if it clears, the single authoritative validation run and completion. No new implementation work is authorized.
