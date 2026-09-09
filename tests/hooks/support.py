@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +24,7 @@ ROOT_MANIFEST_CHECKER = ROOT / "scripts/check-agent-log-manifest.py"
 ROOT_CONTEXT_COMPRESS = ROOT / "scripts/context-compress.sh"
 PRE_TOOL = ROOT / "template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py"
 ROOT_PRE_TOOL = ROOT / ".project-agent-workflow/hooks/pre_tool_hardening_gate.py"
+TOOL_COMMAND_CONTEXT = ROOT / "template/.project-agent-workflow/scripts/tool_command_context.py"
 ROOT_GUARD = ROOT / "scripts/project_workflow/worktree_guard.py"
 ROOT_WORKTREE_MANAGER = ROOT / "scripts/manage-plan-worktrees.py"
 PRE_COMMIT = ROOT / ".githooks/pre-commit"
@@ -147,6 +149,40 @@ def run_hook(
         check=True,
     )
     return json.loads(result.stdout or "{}")
+
+
+def exec_payload(
+    command: str,
+    workdir: str | None = None,
+    container: str = "tool_input",
+    workdir_key: str = "workdir",
+) -> dict:
+    """Build the payload an execution tool sends for one command.
+
+    ``workdir`` is placed in the same argument object the command came from,
+    which is where a real execution tool reports the directory it will run in.
+    """
+
+    arguments: dict[str, str] = {"cmd": command}
+    if workdir is not None:
+        arguments[workdir_key] = workdir
+    return {"tool_name": "exec_command", container: arguments}
+
+
+def load_command_context():
+    """Import the shared invocation interpreter both gates use."""
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "gate_tool_command_context", TOOL_COMMAND_CONTEXT
+    )
+    module = importlib.util.module_from_spec(spec)
+    # `dataclass` resolves annotations through the module registry, so the
+    # module must be registered before its body runs.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def write_sample_codex_transcript(path: Path) -> None:

@@ -869,6 +869,22 @@ def require_worktree_gate_alignment() -> None:
     for marker in ("WRITE_COMMANDS", "def worktree_refusal", "def guard_module"):
         if marker not in root_gate:
             fail(f"pre-tool gate missing task-worktree marker: {marker}")
+    # Both gates read commands through one shipped interpreter, so a lifecycle
+    # file name mentioned as data is classified the same way in this repository
+    # and in every generated project.
+    for marker in (
+        "import tool_command_context",
+        "tool_command_context.repository_writes",
+        "tool_command_context.payload_workdir",
+        "tool_command_context.effective_directory",
+    ):
+        if marker not in root_gate:
+            fail(f"pre-tool gate missing shared command-context marker: {marker}")
+    interpreter = "template/.project-agent-workflow/scripts/tool_command_context.py"
+    if interpreter not in SOURCE_REQUIRED:
+        fail("the shared command interpreter must ship in the Copier template")
+    if ".project-agent-workflow/scripts/tool_command_context.py" not in GENERATED_REQUIRED:
+        fail("the shared command interpreter must reach every generated project")
 
 
 SHARED_HUMAN_REPORT_ROOT = "docs/human-report/"

@@ -13,6 +13,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parents[2] / "template/.project-agent-workflow/scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 import security_rules
+import tool_command_context
 
 RULES = (
     (re.compile(r"^\s*git\s+reset\s+--hard\b"), "hard reset discards work"),
@@ -41,17 +42,26 @@ class GuardUnavailable(RuntimeError):
     """A shipped task-worktree guard could not be loaded."""
 
 
-def guard_module():
-    """Load the shared task-worktree guard, or return None when unavailable."""
+GUARDS: dict = {}
+
+
+def guard_module(cwd: Path):
+    """Load the task-worktree guard of the repository that owns `cwd`.
+
+    The guard is loaded for the directory the write actually runs in, so a
+    command aimed at a governed repository is judged by that repository's guard
+    rather than by whichever repository the hook process happens to sit in.
+    Returns None when that directory belongs to no repository, or to one that
+    ships no guard.
+    """
 
     import importlib.util
 
-    if "worktree_guard" in sys.modules:
-        return sys.modules["worktree_guard"]
     try:
         root = Path(
             subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
+                cwd=cwd,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -60,6 +70,8 @@ def guard_module():
         )
     except Exception:
         return None
+    if root in GUARDS:
+        return GUARDS[root]
     for candidate in (
         ".project-agent-workflow/scripts/worktree_guard.py",
         "scripts/project_workflow/worktree_guard.py",
@@ -74,27 +86,77 @@ def guard_module():
         if spec is None or spec.loader is None:
             raise GuardUnavailable(f"{candidate} could not be loaded")
         module = importlib.util.module_from_spec(spec)
-        sys.modules["worktree_guard"] = module
+        sys.modules[f"worktree_guard_{abs(hash(root))}"] = module
         spec.loader.exec_module(module)
+        GUARDS[root] = module
         return module
+    GUARDS[root] = None
     return None
 
 
-def worktree_refusal(command: str) -> str | None:
+def recognized_writes(command: str) -> list[tuple[str, ...]] | None:
+    """Return the `-C` directories of each recognized write in this command.
+
+    An empty list means the command was read and writes nothing, so a lifecycle
+    file name that is only read or counted no longer looks like a write. A
+    command the interpreter cannot read falls back to the previous patterns,
+    which classify text rather than invocations and therefore stay
+    conservative.
+    """
+
+    try:
+        return [write.directories for write in tool_command_context.repository_writes(command)]
+    except tool_command_context.Unparsed:
+        return [()] if any(pattern.search(command) for pattern in WRITE_COMMANDS) else []
+
+
+def worktree_refusal(
+    command: str,
+    workdir: str | None,
+    context_error: str | None,
+    context_candidates: tuple[str, ...] = (),
+) -> str | None:
     """Report why this write must move into a task worktree, if it must.
 
     A repository that ships no guard keeps its previous behavior. A shipped
     guard that refuses or fails blocks the write, so a broken boundary never
-    silently allows one.
+    silently allows one. Directory context that the payload contradicts or
+    malforms blocks a governed write too, because the alternative would be to
+    judge the write against a directory it does not run in. A rejected context
+    is therefore checked against every directory the payload named, not against
+    the hook's own process directory alone.
     """
 
-    if not any(pattern.search(command) for pattern in WRITE_COMMANDS):
+    directories = recognized_writes(command)
+    if not directories:
         return None
+    base = Path.cwd()
     try:
-        guard = guard_module()
-        if guard is None:
+        if context_error is not None:
+            for value in (base, *context_candidates):
+                candidate = Path(value)
+                if not candidate.is_dir():
+                    return context_error
+                guard = guard_module(candidate)
+                if guard is None:
+                    continue
+                try:
+                    refusal = guard.require_task_worktree(
+                        cwd=candidate, action="this repository write"
+                    )
+                except Exception:
+                    # A guard that refuses this directory settles the question:
+                    # the rejected context governs a write and must be reported.
+                    return context_error
+                if refusal is not None:
+                    return context_error
             return None
-        guard.require_task_worktree(action="this repository write")
+        for entry in directories:
+            cwd = tool_command_context.effective_directory(base, workdir, entry)
+            guard = guard_module(cwd)
+            if guard is None:
+                continue
+            guard.require_task_worktree(cwd=cwd, action="this repository write")
     except Exception as error:
         return f"{error}"
     return None
@@ -134,8 +196,15 @@ def main() -> int:
                 json.dump({"decision": "block", "reason": reason}, sys.stdout)
                 sys.stdout.write("\n")
                 return 0
+    try:
+        workdir = tool_command_context.payload_workdir(payload)
+        context_error = None
+        context_candidates: tuple[str, ...] = ()
+    except tool_command_context.ContextError as error:
+        workdir, context_error = None, f"{error}"
+        context_candidates = error.candidates
     for command in commands:
-        reason = worktree_refusal(command)
+        reason = worktree_refusal(command, workdir, context_error, context_candidates)
         if reason is not None:
             json.dump({"decision": "block", "reason": reason}, sys.stdout)
             sys.stdout.write("\n")
