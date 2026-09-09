@@ -1,6 +1,6 @@
 # Summarize observed run resources locally without changing acceptance evidence
 
-status: in_progress
+status: checked
 primary_invariant: A local read-only report exposes only evidence-backed resource and execution observations, preserves missingness and provenance, and cannot mutate or substitute for execution acceptance evidence.
 task_types:
   - template_workflow
@@ -104,12 +104,12 @@ checked_summary_ja: 既存の実行記録にある時間と資源使用量を、
 
 ## Tasks
 
-- [ ] Implement schema-specific read-only adapters for existing log resource observations, candidate telemetry, and execution-state stop records using their declared versions.
-- [ ] Implement bounded explicit-input handling, existing digest verification, identity deduplication, missingness, unit-safe totals, and separate observed/proxy fields.
-- [ ] Add JSON and short human-readable output that shows record coverage, source digests, directly observed time/counter values, and not_observed gaps without copying raw prompts or paths to credentials.
-- [ ] Add deterministic fixtures for missing evidence, changed digests, partial hooks, zero versus missing values, duplicate records, incompatible units, corrupted data, symlinks, input/output bounds, and absence of network or source writes.
-- [ ] Register the root wrapper and generated command, add a focused test domain under the existing test-hooks entrypoint, and document one local-only invocation.
-- [ ] Run focused validation, obtain independent review, and run authoritative validation once; record no resource-saving claim from these correctness tests.
+- [x] Implement schema-specific read-only adapters for existing log resource observations, candidate telemetry, and execution-state stop records using their declared versions.
+- [x] Implement bounded explicit-input handling, existing digest verification, identity deduplication, missingness, unit-safe totals, and separate observed/proxy fields.
+- [x] Add JSON and short human-readable output that shows record coverage, source digests, directly observed time/counter values, and not_observed gaps without copying raw prompts or paths to credentials.
+- [x] Add deterministic fixtures for missing evidence, changed digests, partial hooks, zero versus missing values, duplicate records, incompatible units, corrupted data, symlinks, input/output bounds, and absence of network or source writes.
+- [x] Register the root wrapper and generated command, add a focused test domain under the existing test-hooks entrypoint, and document one local-only invocation.
+- [x] Run focused validation, obtain independent review, and run authoritative validation once; record no resource-saving claim from these correctness tests.
 
 ## Validation Notes
 
@@ -124,3 +124,9 @@ checked_summary_ja: 既存の実行記録にある時間と資源使用量を、
 - 2026-09-08 planning alignment: Use this existing local summary for the development-process improvement observations described in the backlog overview. Do not add measurement schemas, phase reconstruction, human-intervention inference or paired benchmark collection; unavailable values remain not_observed.
 
 - 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Activation baseline: `fbaf252` in `temp_project`. Every declared dependency resolves to an existing record and the declared source mechanisms are still present.
+
+- 2026-09-09 implementation: Implemented as `template/.project-agent-workflow/scripts/summarize-agent-run.py` with the root wrapper `scripts/summarize-agent-run.py`, three Copier inventory entries, the `ResourceSummaryTest` domain (25 tests) under the existing `tests/test-hooks.py` entrypoint, and one local-only invocation documented in `docs/agent/SPEC_AGENT_LOGGING.md`, its generated mirror, `README.md`, and `template/README.md.jinja`.
+- 2026-09-09 focused validation: `python3 tests/test-hooks.py` (114 tests OK), `python3 scripts/check-copier-template.py` (passed), `git diff --check` (clean).
+- 2026-09-09 independent review: one bounded read-only review returned 2 Medium and 3 Low findings (blocking FIFO input, incomplete and untested text output, a dead not-observed filter, missing bound and multi-currency cases, a substring-only network check). All five were remediated; the single permitted rereview reported no High or Medium finding and accepted the change.
+- 2026-09-09 authoritative validation: `scripts/lint-project-workflow.sh` (234 tests OK) and `REQUIRE_COPIER=1 tests/smoke.sh` (smoke test passed) on commit `705e6ab`.
+- 2026-09-09 resource claim: none. These witnesses establish correctness of the summary command only; no measured saving in time, tokens, or cost is claimed.
