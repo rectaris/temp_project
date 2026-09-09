@@ -738,7 +738,13 @@ def require_decision_reuse_alignment() -> None:
         generated_skill = "template/" + root_skill.replace(
             ".codex/skills/", ".project-agent-workflow/skills/", 1
         )
-        lines = policy.markdown_operative_lines(read(generated_skill))
+        generated_text = read(generated_skill)
+        for defect in policy.markdown_prose_defects(generated_text):
+            fail(
+                f"{generated_skill} must stay plain Markdown prose to carry a routed "
+                f"instruction: {defect}"
+            )
+        lines = policy.markdown_operative_lines(generated_text)
         for instruction in policy.DECISION_REUSE_SKILL_INSTRUCTIONS[root_skill]:
             expected = instruction.format(
                 reference=policy.DECISION_REUSE_GENERATED_REFERENCE

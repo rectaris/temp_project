@@ -963,11 +963,32 @@ def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str
 
 MARKDOWN_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
 MARKDOWN_FENCE_INDENT = 3
+MARKDOWN_TAB_STOP = 4
+
+
+def expand_markdown_indent(line: str) -> str:
+    """Expand leading tabs the way CommonMark measures block indentation."""
+
+    prefix: list[str] = []
+    column = 0
+    for index, char in enumerate(line):
+        if char == "\t":
+            width = MARKDOWN_TAB_STOP - (column % MARKDOWN_TAB_STOP)
+            prefix.append(" " * width)
+            column += width
+            continue
+        if char != " ":
+            prefix.append(line[index:])
+            break
+        prefix.append(char)
+        column += 1
+    return "".join(prefix)
 
 
 def markdown_fence_opener(line: str) -> str | None:
-    stripped = line.lstrip(" ")
-    if len(line) - len(stripped) > MARKDOWN_FENCE_INDENT:
+    expanded = expand_markdown_indent(line)
+    stripped = expanded.lstrip(" ")
+    if len(expanded) - len(stripped) > MARKDOWN_FENCE_INDENT:
         return None
     match = MARKDOWN_FENCE_RE.match(stripped)
     return None if match is None else match.group(1)
@@ -976,7 +997,7 @@ def markdown_fence_opener(line: str) -> str | None:
 def markdown_fence_closes(line: str, fence: str) -> bool:
     """Report whether the line closes an open fence.
 
-    CommonMark closes a fence only with a line indented at most three spaces
+    CommonMark closes a fence only with a line indented at most three columns
     that repeats the opening character at least as many times and carries
     nothing but whitespace afterwards. A closer with an info string or deeper
     indentation leaves the block open, so accepting it would let a routed
@@ -986,28 +1007,58 @@ def markdown_fence_closes(line: str, fence: str) -> bool:
     closer = markdown_fence_opener(line)
     if closer is None or closer[0] != fence[0] or len(closer) < len(fence):
         return False
-    return line.lstrip(" ")[len(closer):].strip(" \t") == ""
+    return expand_markdown_indent(line).lstrip(" ")[len(closer):].strip(" \t") == ""
+
+
+def markdown_prose_defects(text: str) -> list[str]:
+    """Report the constructs that stop this file from being plain prose.
+
+    Enumerating every way a line can hide inside Markdown is open ended, and
+    each missed construct silently turns a hidden route into an accepted one.
+    A file that must carry routed instructions is therefore required to be
+    plain prose: raw HTML, HTML comments, and unterminated fences are refused
+    outright rather than approximated, so an unproven construct fails instead
+    of passing.
+    """
+
+    defects: list[str] = []
+    fence: str | None = None
+    fence_line = 0
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.rstrip()
+        if fence is not None:
+            if markdown_fence_closes(line, fence):
+                fence = None
+            continue
+        opener = markdown_fence_opener(line)
+        if opener is not None:
+            fence = opener
+            fence_line = number
+            continue
+        stripped = expand_markdown_indent(line).lstrip(" ")
+        if stripped.startswith("<"):
+            defects.append(f"line {number} opens a raw HTML block: {line.strip()}")
+        elif "<!--" in line:
+            defects.append(f"line {number} opens an HTML comment: {line.strip()}")
+    if fence is not None:
+        defects.append(f"line {fence_line} opens a fenced block that is never closed")
+    return defects
 
 
 def markdown_operative_lines(text: str) -> set[str]:
     """Return the lines Markdown renders as instructions.
 
-    A byte-identical line inside a fenced code block or an HTML comment is not
-    an instruction, so those regions are excluded. Only trailing whitespace is
-    normalized; leading indentation stays part of the line because Markdown
-    gives it meaning.
+    A byte-identical line inside a fenced code block is not an instruction, so
+    those regions are excluded. Only trailing whitespace is normalized; leading
+    indentation stays part of the line because Markdown gives it meaning.
+    Callers pair this with markdown_prose_defects, which refuses the raw HTML
+    and comment constructs this scanner does not model.
     """
 
     operative: set[str] = set()
     fence: str | None = None
-    in_comment = False
     for raw in text.splitlines():
         line = raw.rstrip()
-        stripped = line.lstrip()
-        if in_comment:
-            if "-->" in line:
-                in_comment = False
-            continue
         if fence is not None:
             if markdown_fence_closes(line, fence):
                 fence = None
@@ -1016,16 +1067,19 @@ def markdown_operative_lines(text: str) -> set[str]:
         if opener is not None:
             fence = opener
             continue
-        if "<!--" in line:
-            if line.count("<!--") > line.count("-->"):
-                in_comment = True
-            continue
         operative.add(line)
     return operative
 
 
+def require_markdown_prose(relative: str, text: str) -> None:
+    for defect in markdown_prose_defects(text):
+        fail(f"{relative} must stay plain Markdown prose to carry a routed instruction: {defect}")
+
+
 def require_decision_reuse_instructions(relative: str, reference: str) -> None:
-    lines = markdown_operative_lines(read(relative))
+    text = read(relative)
+    require_markdown_prose(relative, text)
+    lines = markdown_operative_lines(text)
     for instruction in decision_reuse_instruction_lines(relative, reference):
         if instruction not in lines:
             fail(f"{relative} does not carry the routed preflight instruction: {instruction}")
@@ -1137,8 +1191,10 @@ def check_decision_reuse_scenarios() -> None:
         if not (ROOT / target).is_file():
             fail(f"missing implementation preflight reference: {target}")
     preflight = read(DECISION_REUSE_REFERENCE)
+    require_markdown_prose(DECISION_REUSE_REFERENCE, preflight)
+    preflight_lines = markdown_operative_lines(preflight)
     for section in DECISION_REUSE_SECTIONS:
-        if section not in preflight:
+        if section not in preflight_lines:
             fail(f"{DECISION_REUSE_REFERENCE} missing section: {section}")
 
     for skill in sorted(DECISION_REUSE_SKILL_INSTRUCTIONS):
