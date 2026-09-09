@@ -1,15 +1,16 @@
 # Say how to proceed when an accepted-decision record cannot establish a reuse condition
 
-status: backlog
+status: in_progress
 primary_invariant: A reader who cannot establish one reuse condition from a decision record is told exactly what to do next, rather than being left to choose.
 task_types:
   - documentation_policy_alignment
 review_class: B
 human_design_required: no
 human_approval_status: not_required
-implementation_tier: 1
+implementation_tier: 2
 implementation_risk: low
 implementation_ambiguity: ordinary
+implementation_mode: parent_direct
 plan_purpose: implementation
 feasibility_evidence:
   - {"evidence":"The accepted-decision section of references/implementation-preflight.md requires four conditions to hold before a recorded decision may be reused, but states no action for the case where the record is silent or ambiguous about one of them, so a reader must invent a rule.","kind":"reproduced_defect"}
@@ -30,7 +31,9 @@ context_files:
   - docs/agent/SPEC_DECISION_AUDIT.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
-  - docs/agent/SPEC_VALIDATION.md
+  - references/validation.md
+  - docs/agent/SPEC_DECISION_AUDIT.md
+  - docs/agent/SPEC_SKILL_AUTHORING.md
 focused_validation:
   - python3 scripts/check-root-agent-policy.py
   - python3 scripts/check-copier-template.py
@@ -46,6 +49,7 @@ checked_summary_ja: 決定記録が再利用条件を満たせないときの進
 
 ## Decisions
 
+- Use bounded parent implementation and independent read-only review because the exact write scope includes validation authority. Classify the checker edit as Tier 2; preserve the acceptance and all declared validation commands.
 - Treat an insufficient record as a decision that has not been made, so the reader runs the decision audit instead of reusing the record. Do not add a partial-reuse path.
 - Pin the new statement with an expectation in the existing checker rather than adding a new check.
 
@@ -57,3 +61,5 @@ checked_summary_ja: 決定記録が再利用条件を満たせないときの進
 - [ ] Run the focused checks and then the authoritative suite once.
 
 ## Validation Notes
+
+- The owner's 2026-09-09 instruction to implement every backlog plan authorizes this activation. Replace the nonexistent root SPEC_VALIDATION.md reference with references/validation.md and add the applicable decision-audit and skill-authoring policies.

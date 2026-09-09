@@ -120,5 +120,4 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [293](293-state-what-to-do-when-a-decision-record-is-insufficient.md) | backlog | Say how to proceed when an accepted-decision record cannot establish a reuse condition | docs/plan/backlog/293-state-what-to-do-when-a-decision-record-is-insufficient.md |
 | [294](294-bound-stop-gate-block-repetition.md) | backlog | Bound stop-gate block repetition so a reported unresolvable retained state can end a turn | docs/plan/backlog/294-bound-stop-gate-block-repetition.md |
