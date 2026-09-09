@@ -285,6 +285,19 @@ Lifecycle states:
 - After a recorded pre-v1 Copier adoption, open plans may retain the preserved root routing contract and old generic CLI paths only while the migration manifest proves the pre-v1 source and every referenced CLI is an unmodified compatibility bridge to the managed helper.
 - A mixed root and managed routing contract, a modified legacy CLI, or an unverified legacy CLI requires manual plan integration.
 
+## Candidate Preflight Boundary
+
+`.project-agent-workflow/scripts/run-sandboxed-plan-worker.py preflight` gives the parent bounded diagnostic feedback on an admitted candidate. It is not validation and never becomes validation.
+
+- It runs after the parent has reviewed the candidate diff and the critical invariants, and before independent review.
+- It runs exactly one command already declared in the plan's `focused_validation`, selected by index. It accepts no free-form command, no new plan field, and no permission to edit a validation definition.
+- The clone is fresh, credential-free, and network-isolated, and the source checkout, admitted patch, worker receipt, validation authority, and every focused and authoritative counter stay unchanged.
+- One preflight per candidate is claimed atomically in a mode-0600 parent-owned record outside the repository, bound to the attempt id, candidate manifest and patch digests, command digest, and execution genesis. A duplicate, concurrent, stale, or replayed request cannot start a second process, and a crashed preflight leaves the candidate closed rather than granting a retry.
+- Execution is bounded to 60 seconds by default and 120 at most, with captured stdout plus stderr capped at 64 KiB. Reaching either bound kills the process group and is never an automatic retry.
+- A stopped run, an exhausted budget, and a `diagnosis_required` state each refuse the operation, and preflight lifts none of them.
+- Its result is recorded only in a separate bounded diagnostic artifact. It never appears in `completion_witness_map` or `validation_witness_map`, never counts as focused or authoritative success, and never satisfies the mandatory adversarial-preflight review-order event.
+- A failing preflight may inform only the one correction the run already allows. The next candidate still needs independent review, focused validation, and one authoritative run.
+
 ## Bounded Descope
 
 A bounded descope reduces the acceptance set of the current plan without restructuring it. Use it when review findings show that the plan is too wide, not that its design is wrong.
