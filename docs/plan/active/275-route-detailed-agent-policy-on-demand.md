@@ -1,6 +1,8 @@
 # Route detailed agent policy without losing mandatory requirements
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - post_authoritative_design_change
 primary_invariant: Every mandatory safety and lifecycle requirement remains directly reachable before its governed action, while always-loaded AGENTS files no longer duplicate task-specific migration and ledger procedures.
 task_types:
   - template_workflow
@@ -136,3 +138,9 @@ checked_summary_ja: 起動時の AGENTS.md から重複する詳細手順を規�
 - 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Asked separately whether the class C designs of plans 275 and 276 were approved, the owner answered `approve_both`, which supplies the explicit owner approval this plan's first integration gate requires; `human_approval_status` is now `approved`.
 - 2026-09-09 activation baseline: `95af91b` in `temp_project`. Plans 272, 273, and 274 each resolve to one checked record, so their policy is the baseline for this relocation.
 
+- 2026-09-09 candidate: `620e4ba`..`f4da226` on `plan/275-route-detailed-agent-policy-on-demand` relocates the guardian rule, pins the reviewed route and rule by exact bytes, and adds negative tests for paired weakening, case changes, and indentation. Focused validation passed: `python3 tests/test-validation-tools.py` (245), `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `tests/copier-update.sh --require-copier`, `git diff --check`. Root AGENTS fell 23719 to 21871 bytes and generated managed AGENTS fell 21072 to 19253 bytes.
+- 2026-09-09 evaluation: One sealed held-out case, digest `c0587eb0610cee4f7134de346196683c2c6cee4d4d8a58ae18aab678b823036f`, covered eight obligation classes and returned seven passes. The one failure, explicit external-write authorization, is pre-existing: `SPEC_SECURITY.md` is absent from this plan's diff and already omitted the no-push rule at `95af91b`, and `AGENTS.md` still carries it unchanged. The owner directed recording it and filing a separate backlog plan rather than tuning this candidate against the held-out outcome.
+- 2026-09-09 review: Four independent reviews across two epochs. The owner authorized the second epoch after the first ended with an open Medium. The final review reported no High and no Medium findings.
+- 2026-09-09 authoritative validation: `scripts/lint-project-workflow.sh` passed. `REQUIRE_COPIER=1 tests/smoke.sh` exited 1 at `tests/smoke.sh:1617`.
+- 2026-09-09 diagnosis, independently confirmed: `tests/smoke.sh` lines 1617, 1623, and 1624 require the generated entrypoint to keep restating the guardian rule that this plan relocates, so they become false by design. `tests/smoke.sh` is byte-identical to `95af91b`, is absent from `write_scope`, and appears only under `validation`, so it is this plan's authoritative validation authority. Repairing it would change that authority and this plan's scope, which an independent repair may not do.
+- 2026-09-09 stop: Recorded `status: replan_required` with `post_authoritative_design_change`. The owner then authorized one reconstruction that widens the boundary to include `tests/smoke.sh` and keeps every acceptance item, safety condition, and requirement unchanged.
