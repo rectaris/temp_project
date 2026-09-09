@@ -24,6 +24,8 @@ all of the following hold.
 - The class of external effects is unchanged.
 - The authority that approved it is unchanged.
 
+If the decision record cannot establish any one of these four conditions, do not reuse the decision; treat it as not yet made and run the decision audit.
+
 A new plan id, a routine checkpoint, a resumed session, or a skill invocation
 does not by itself make a settled choice open again.
 

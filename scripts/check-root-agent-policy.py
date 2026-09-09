@@ -218,6 +218,10 @@ DECISION_REUSE_SECTIONS = (
     "## Requirement, Scope, Condition, And Witness Preflight",
     "## Exact Failure Reproduction",
 )
+DECISION_REUSE_INSUFFICIENT_RECORD = (
+    "If the decision record cannot establish any one of these four conditions, "
+    "do not reuse the decision; treat it as not yet made and run the decision audit."
+)
 # Each required case binds one fixed authorization expectation and the policy
 # file that decides it. Neither may be renegotiated by editing the fixture.
 DECISION_REUSE_REQUIRED_CASES = {
@@ -1098,6 +1102,17 @@ def require_decision_reuse_instructions(relative: str, reference: str) -> None:
             fail(f"{relative} does not carry the routed preflight instruction: {instruction}")
 
 
+def has_insufficient_record_action(content: str) -> bool:
+    in_reuse = False
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        if line.startswith("## "):
+            in_reuse = line == "## Accepted Decision Reuse"
+        if in_reuse and line == DECISION_REUSE_INSUFFICIENT_RECORD:
+            return True
+    return False
+
+
 def check_decision_reuse_scenarios() -> None:
     """Check the fixed decision-reuse fixture against checker-owned expectations.
 
@@ -1203,6 +1218,10 @@ def check_decision_reuse_scenarios() -> None:
     for target in (DECISION_REUSE_REFERENCE, "template/" + DECISION_REUSE_GENERATED_REFERENCE):
         if not (ROOT / target).is_file():
             fail(f"missing implementation preflight reference: {target}")
+        content = read(target)
+        require_markdown_prose(target, content)
+        if not has_insufficient_record_action(content):
+            fail(f"{target} missing insufficient-record action in Accepted Decision Reuse")
     preflight = read(DECISION_REUSE_REFERENCE)
     require_markdown_prose(DECISION_REUSE_REFERENCE, preflight)
     preflight_lines = markdown_prose_lines(preflight)
@@ -3785,6 +3804,20 @@ def check_active_plans() -> None:
 
 
 def self_test() -> None:
+    reuse_heading = "## Accepted Decision Reuse\n\n"
+    action = DECISION_REUSE_INSUFFICIENT_RECORD
+    if not has_insufficient_record_action(reuse_heading + action + "\n"):
+        fail("self-test rejected the insufficient-record action")
+    for content in (
+        reuse_heading,
+        action + "\n" + reuse_heading,
+        reuse_heading + "## Another Section\n\n" + action,
+        reuse_heading + "Do not follow this: " + action,
+        reuse_heading + "    " + action,
+        reuse_heading + "> " + action,
+    ):
+        if has_insufficient_record_action(content):
+            fail("self-test accepted a missing or misplaced insufficient-record action")
     good = "review_class: B\n\n## Decisions\n\n1. Use final decisions only.\n"
     bad = """## Decision Audit
 
