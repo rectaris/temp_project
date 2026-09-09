@@ -266,6 +266,17 @@ VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS = {
 # relocation removed, so the entrypoint route is capped.
 VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES = 300
 
+# Markers and root/generated equality accept a weakening that is applied to
+# both sides at once, so the reviewed route and the reviewed guardian statement
+# are pinned by digest. Changing either text is intended to fail here and be
+# re-reviewed before the digest is re-pinned.
+VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256 = (
+    "02da5e1988fc589cb293f617cdfa81be9f1e68df166bfa7cda86b9b27ac06039"
+)
+VALIDATION_WITNESS_MIGRATION_POLICY_SHA256 = (
+    "1a8914321c2de3428be2b3acfd47775ae40c31e402c3f388c15e90d9e7a6f279"
+)
+
 # The activation baseline of plan 275. The entrypoints are always loaded, so
 # each one is held at or below its reduced size rather than allowed to drift
 # back toward the duplicated form.
@@ -465,6 +476,12 @@ def validation_witness_migration_policy_statement(relative: str) -> str:
     for marker in VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS:
         if marker not in statement:
             fail(f"{relative} missing validation-witness migration marker: {marker}")
+    digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
+    if digest != VALIDATION_WITNESS_MIGRATION_POLICY_SHA256:
+        fail(
+            f"{relative} validation-witness migration policy changed without "
+            f"re-reviewing the pinned statement: {digest}"
+        )
     return statement
 
 
@@ -505,7 +522,14 @@ def validation_witness_migration_route(relative: str) -> str:
                 f"{relative} missing validation-witness migration route marker: "
                 f"{marker}"
             )
-    return lowered.replace(destination.lower(), "<destination>")
+    normalized = lowered.replace(destination.lower(), "<destination>")
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    if digest != VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256:
+        fail(
+            f"{relative} validation-witness migration route changed without "
+            f"re-reviewing the pinned route: {digest}"
+        )
+    return normalized
 
 
 def check_agents_entrypoint_size() -> None:

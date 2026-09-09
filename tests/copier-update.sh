@@ -919,15 +919,62 @@ assert_managed_policy_routing() {
   entrypoint=$1
   destination=$2
   index=$3
-  if grep -Fq 'validation-witness-migration-provenance-schema: 1' "$entrypoint"; then
-    echo "managed entrypoint restates the relocated guardian rule: $entrypoint" >&2
-    exit 1
-  fi
-  grep -Fq 'validation-witness migration guardian rule' "$entrypoint"
-  grep -Fq '.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md' "$entrypoint"
-  grep -Fq 'no summary of it authorizes an update.' "$entrypoint"
-  grep -Fq 'validation-witness-migration-provenance-schema: 1' "$destination"
-  grep -Fq 'SPEC_ORCHESTRATION.md' "$index"
+  # Fragment checks accept a route that drops its own obligation, so the
+  # rendered route and the rendered guardian statement are compared against the
+  # exact reviewed bytes that the root checker pins by digest.
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$entrypoint" "$destination" "$index" "$root" <<'EOF_MANAGED_ROUTING'
+import hashlib
+import importlib.util
+import sys
+from pathlib import Path
+
+entrypoint, destination, index, root = (Path(value) for value in sys.argv[1:5])
+spec = importlib.util.spec_from_file_location(
+    "managed_routing_policy", root / "scripts/check-root-agent-policy.py"
+)
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
+
+marker = policy.VALIDATION_WITNESS_MIGRATION_MARKER
+route_marker = policy.VALIDATION_WITNESS_MIGRATION_ROUTE_MARKER
+generated_destination = policy.VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS[
+    "template/.project-agent-workflow/AGENTS.md.jinja"
+]
+
+entrypoint_text = entrypoint.read_text(encoding="utf-8")
+if marker in entrypoint_text:
+    raise SystemExit(f"managed entrypoint restates the relocated guardian rule: {entrypoint}")
+
+routes = [line.strip() for line in entrypoint_text.splitlines() if route_marker in line.lower()]
+if len(routes) != 1:
+    raise SystemExit(f"managed entrypoint needs exactly one guardian route: {entrypoint}")
+route = routes[0]
+if len(route.encode("utf-8")) > policy.VALIDATION_WITNESS_MIGRATION_ROUTE_MAX_BYTES:
+    raise SystemExit(f"managed entrypoint guardian route is too long: {entrypoint}")
+normalized = route.lower().replace(generated_destination.lower(), "<destination>")
+if hashlib.sha256(normalized.encode("utf-8")).hexdigest() != (
+    policy.VALIDATION_WITNESS_MIGRATION_ROUTE_SHA256
+):
+    raise SystemExit(f"managed entrypoint guardian route is not the reviewed route: {entrypoint}")
+
+statements = [
+    line.strip().lower()
+    for line in destination.read_text(encoding="utf-8").splitlines()
+    if marker in line
+]
+if len(statements) != 1:
+    raise SystemExit(f"managed destination needs exactly one guardian rule: {destination}")
+for required in policy.VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS:
+    if required not in statements[0]:
+        raise SystemExit(f"managed destination is missing {required}: {destination}")
+if hashlib.sha256(statements[0].encode("utf-8")).hexdigest() != (
+    policy.VALIDATION_WITNESS_MIGRATION_POLICY_SHA256
+):
+    raise SystemExit(f"managed destination guardian rule is not the reviewed rule: {destination}")
+
+if generated_destination not in index.read_text(encoding="utf-8"):
+    raise SystemExit(f"generated index does not route to the guardian rule: {index}")
+EOF_MANAGED_ROUTING
 }
 
 validate_common_lane() {

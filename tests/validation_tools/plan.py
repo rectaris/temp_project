@@ -2653,7 +2653,7 @@ class PlanValidationCommandsTest(unittest.TestCase):
             "references/orchestration.md",
             "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
         ):
-            for marker in module.VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS[:4]:
+            for marker in module.VALIDATION_WITNESS_MIGRATION_POLICY_MARKERS:
                 cases[f"{relative} drops {marker}"] = (relative, marker, "")
         for index, (case, (relative, marker, replacement)) in enumerate(cases.items()):
             with self.subTest(rejected=case):
@@ -2750,6 +2750,50 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     with contextlib.redirect_stderr(io.StringIO()):
                         with self.assertRaises(SystemExit):
                             policy.check_agents_entrypoint_size()
+
+    def test_root_policy_rejects_a_synchronized_semantic_weakening(self) -> None:
+        """A weakening applied to both sides at once must still be rejected."""
+
+        module = load_module(self.ROOT_POLICY, "root_policy_routing_paired")
+        cases = {
+            "inverted route reading": (
+                module.VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS,
+                "read the whole",
+                "do not read the whole",
+            ),
+            "inverted route obedience": (
+                module.VALIDATION_WITNESS_MIGRATION_ROUTE_DESTINATIONS,
+                "follow it there",
+                "do not follow it there",
+            ),
+            "inverted acceptance evidence": (
+                (
+                    "references/orchestration.md",
+                    "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md",
+                ),
+                "never count either as product acceptance evidence",
+                "always count either as product acceptance evidence",
+            ),
+        }
+        for index, (case, (relatives, marker, replacement)) in enumerate(cases.items()):
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = Path(raw)
+                    self.build_routing_fixture(directory)
+                    for relative in relatives:
+                        target = directory / relative
+                        text = target.read_text(encoding="utf-8")
+                        mutated, count = re.subn(
+                            re.escape(marker), replacement, text, count=1
+                        )
+                        self.assertEqual(count, 1, f"{relative} must state {marker}")
+                        target.write_text(mutated, encoding="utf-8")
+                    policy = self.load_routing_policy(
+                        directory, f"root_policy_routing_paired_{index}"
+                    )
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(SystemExit):
+                            policy.check_validation_witness_migration_policy()
 
     def test_root_policy_rejects_a_weaker_generated_route(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
