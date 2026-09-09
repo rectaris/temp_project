@@ -228,3 +228,4 @@ id	path
 273	docs/plan/checked/2026/09/01-15/273-stop-indivisible-tier-one-work-without-descope.md
 274	docs/plan/checked/2026/09/01-15/274-preserve-project-owned-agent-model-settings.md
 302	docs/plan/checked/2026/09/01-15/302-complete-routed-agent-policy.md
+299	docs/plan/checked/2026/09/01-15/299-reuse-established-decisions-in-existing-skills.md

@@ -1,6 +1,6 @@
 # Reuse established decisions through existing planning skills
 
-status: in_progress
+status: checked
 primary_invariant: Existing planning and execution skills apply one shared decision sequence to the same authorized task without reopening settled choices, inventing successor plans or relaxing normative approval, diagnosis and review boundaries.
 task_types:
   - template_workflow
@@ -96,12 +96,12 @@ checked_summary_ja: 既決事項と失敗の再現確認を既存スキルへま
 
 ## Tasks
 
-- [ ] Record cases for unchanged authorized work, expanded effects, root/generated failure confusion, plan-only requests, absent feasibility and review exhaustion.
-- [ ] Create the direct reference and replace duplicated operational explanations with conditional links in existing skills; keep names and trigger scope stable.
-- [ ] Align policy and installation inventory without copying the entire lifecycle contract into the skill.
-- [ ] Extend check-root-agent-policy.py to load tests/fixtures/agent-policy-routing/scenarios.json and reject missing cases, invalid expectation values and unresolved policy links. These checks establish fixture and routing structure, not agent behavior.
-- [ ] Obtain one independent reader review against fixed cases and report observed misinterpretations and unobserved timing separately.
-- [ ] Run focused checks and the mandatory suite once for the accepted change.
+- [x] Record cases for unchanged authorized work, expanded effects, root/generated failure confusion, plan-only requests, absent feasibility and review exhaustion.
+- [x] Create the direct reference and replace duplicated operational explanations with conditional links in existing skills; keep names and trigger scope stable.
+- [x] Align policy and installation inventory without copying the entire lifecycle contract into the skill.
+- [x] Extend check-root-agent-policy.py to load tests/fixtures/agent-policy-routing/scenarios.json and reject missing cases, invalid expectation values and unresolved policy links. These checks establish fixture and routing structure, not agent behavior.
+- [x] Obtain one independent reader review against fixed cases and report observed misinterpretations and unobserved timing separately.
+- [x] Run focused checks and the mandatory suite once for the accepted change.
 
 ## Validation Notes
 
@@ -136,3 +136,12 @@ checked_summary_ja: 既決事項と失敗の再現確認を既存スキルへま
 - 2026-09-09 stop: The third authorized epoch's review budget is spent. Accepted closure requires the latest review to have cleared High and Medium findings, and the latest review returned three, so this candidate cannot be accepted without a further review even though the findings are addressed. Recorded `status: replan_required` with `parent_remediation_budget_exhausted`. The remediation is committed and unpublished; no acceptance item is withdrawn.
 - 2026-09-09 owner continuation authorization, third: Presented the stop, the addressed findings, the harness fault that had inflated earlier evidence, and the rule that blocks accepted closure without a clearing review, and asked the owner to choose between continuation, reconstruction, deferral, and stopping. The owner answered `authorize_continuation`, quoted as 「継続を承認する（4エポック目・確認レビュー1回で完了まで）」. This authorizes one further execution epoch on the unchanged plan, source baseline, invariant, acceptance items, validation authority, and write scope. No requirement or safety condition changes.
 - 2026-09-09 reopen, third: `status` returns to `in_progress`. The epoch is bounded to one confirming review of the committed remediation and, if it clears, the single authoritative validation run and completion. No new implementation work is authorized.
+- 2026-09-09 epoch 3 review: Round 1 found two Medium findings. Any same-line closing parenthesis after an inline link opener was assumed to close the destination, which a plain parenthesis inside an open quoted title does not do; and backslash escapes were removed before code-span pairing, which CommonMark does not do inside a code span. Both rules required the checker to know what only the parser knows.
+- 2026-09-09 design change: `783661a` stops deciding how a line parses and refuses the material instead. A backslash anywhere on a line and the inline link form outside code are now defects, and all escape processing is deleted. None of the eight route-carrying or reference files contains either, so the routes, which are plain paths in inline code, are unaffected. Round 2, the final permitted review, returned no High or Medium finding.
+- 2026-09-09 evaluation against a reference parser: an earlier harness fault that compared heading lines against rendered text while keeping their number signs was corrected; it had reported every marked line as hidden. With markers normalized and the reviewer's constructs plus twelve further backslash, nested-parenthesis, and quoted-title carriers added, 100,000 randomized constructs across four seeds hid a route 12,068 times and were accepted zero times. 184 end-to-end mutations, covering all eight files and twenty-two carriers, were each rejected from a clean clone. All six findings raised across both epochs are individually refused.
+- 2026-09-09 focused validation on `783661a`: `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `python3 tests/test-validation-tools.py` (245), `python3 scripts/validate-changes.py --all`, and `git diff --check` each passed.
+- 2026-09-09 authoritative validation, run once on `783661a`: `./scripts/lint-project-workflow.sh` passed, and `REQUIRE_COPIER=1 ./tests/smoke.sh` passed with exit status 0. Before the run, every assertion in both suites that names a changed file was checked to still hold, since this plan only adds sections and links.
+- 2026-09-09 completion: All three completion conditions are met. The shared reference carries the accepted-decision reuse, preflight, and exact-failure reproduction sections and is reached by resolvable conditional links from the three existing skills; the policy checker loads the fixed scenario fixture and validates the required case ids, authorization expectations, and policy-reference coverage; and the skill bodies stay concise, treat project policy as normative, and add no new skill, state record, evaluation service, numbered investigation, or parallel planning authority. Candidate commits `c817f20`..`783661a`. Seven independent reviews across four execution epochs, with three owner continuation authorizations.
+- 2026-09-09 independent reader evaluation: One reader, separate from the code reviewer, read the reference, the three linking skills, and the fixture, and concluded an authorization value for each of the six required case ids using only those documents. All six matched the fixture expectation. The reader found the three conditional links findable and consistent, quoted the authority-denial sentence as unambiguous, and found no self-contradiction and no root/generated path confusion in the evaluated documents.
+- 2026-09-09 observed misinterpretation, not remediated here: The reader reported one genuine ambiguity. The accepted-decision section requires four unchanged conditions but does not say how to proceed when the available record is insufficient to establish one of them, which leaves an alternative reading of the first case where a prior run's stopped status is unstated. The reference is inside `write_scope`, but the reviewed candidate has already cleared its final permitted review, and an accepted candidate must contain only the reviewed patch. The finding is therefore recorded here and carried to backlog rather than patched into this candidate.
+- 2026-09-09 unobserved: The reader stated explicitly that timing, speed, productivity, token savings, and reduction in planning effort were not observed. No such claim is made for this plan.
