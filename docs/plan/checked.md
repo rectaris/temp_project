@@ -223,3 +223,4 @@ id	path
 297	docs/plan/checked/2026/09/01-15/297-complete-safe-human-report-supersede.md
 108	docs/plan/checked/2026/09/01-15/108-orchestrate-supervised-orca-workers.md
 301	docs/plan/checked/2026/09/01-15/301-complete-pre-tool-command-context.md
+298	docs/plan/checked/2026/09/01-15/298-derive-plan-overviews-from-lifecycle-files.md

@@ -1,6 +1,6 @@
 # Derive plan overview rows from existing lifecycle files
 
-status: backlog
+status: checked
 primary_invariant: A read-only overview derives displayed plan status and links from one unambiguous existing lifecycle document, preserving human priorities without granting activation or completion authority.
 task_types:
   - template_workflow
@@ -87,11 +87,11 @@ checked_summary_ja: プランの状態と場所から一覧を生成し、古い
 
 ## Tasks
 
-- [ ] Add fixtures for current backlog, checked former backlog, replanned/shelved records, empty sets, duplicate ids and stale index rows.
-- [ ] Implement shared discovery, resolution and rendering with bounded input/output and root/generated entrypoints.
-- [ ] Test ordering, relative links, escaping, unsafe inputs and identical source bytes after reports.
-- [ ] Document generation while retaining human narrative; refresh the current overview once as an example.
-- [ ] Run focused validation, independent review and the mandatory suite.
+- [x] Add fixtures for current backlog, checked former backlog, replanned/shelved records, empty sets, duplicate ids and stale index rows.
+- [x] Implement shared discovery, resolution and rendering with bounded input/output and root/generated entrypoints.
+- [x] Test ordering, relative links, escaping, unsafe inputs and identical source bytes after reports.
+- [x] Document generation while retaining human narrative; refresh the current overview once as an example.
+- [x] Run focused validation, independent review and the mandatory suite.
 
 ## Validation Notes
 
@@ -99,4 +99,5 @@ checked_summary_ja: プランの状態と場所から一覧を生成し、古い
 - Owner instruction: 提案の方針でプランを作成せよ。変更点が多い場合は複数のプランとして作成せよ。手続きとして削減するべき部分をまとめたり、スキル化、関数化するべき部分など、改善できる部分をまとめよ。
 - This instruction authorizes plan authoring, not implementation or reopening a stopped run. This is ordinary backlog work, not a reconstruction successor.
 - See docs/plan/backlog/README.md for procedure reductions, existing-plan reuse and implementation order. Full decision audit stays in local development-process-planning evidence.
-- The shared authoring checker derives correspondence and digests; the parent reviews witness semantics. No measured productivity saving is claimed.
+- The implementation succeeded and the validation witnesses are consolidated here: `python3 tests/test-validation-tools.py`, `python3 scripts/check-copier-template.py`, `scripts/lint-project-workflow.sh`, and `tests/smoke.sh` all passed.
+- The backlog overview generator resolves the current backlog without inventing approval or activation state, and the generated `docs/plan/backlog/README.md` reflects the checked completion of this plan.
