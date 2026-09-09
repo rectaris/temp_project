@@ -1870,6 +1870,24 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
             self.assertNotIn("CODEX_HOME", env)
             self.assertFalse((scratch_dir / "codex-home").exists())
 
+    def test_host_codex_home_is_hidden_only_when_it_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            absent = root / "absent-codex-home"
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(absent)}):
+                self.assertEqual(RUNNER.host_codex_home_hidden(), ())
+            present = root / "present-codex-home"
+            present.mkdir()
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(present)}):
+                self.assertEqual(RUNNER.host_codex_home_hidden(), (present.resolve(),))
+            regular_file = root / "codex-home-file"
+            regular_file.write_text("", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(regular_file)}):
+                with self.assertRaises(RUNNER.RunnerError):
+                    RUNNER.normalize_hidden_directories(
+                        RUNNER.host_codex_home_hidden(), visible_paths=()
+                    )
+
     def test_worker_environment_routes_caches_to_scratch_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

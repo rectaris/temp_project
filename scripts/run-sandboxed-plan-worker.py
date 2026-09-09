@@ -3362,6 +3362,12 @@ def host_codex_home_path() -> Path:
     return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
 
 
+def host_codex_home_hidden() -> tuple[Path, ...]:
+    """Hide the host Codex home only when the account has one; an absent home holds no credentials."""
+    path = host_codex_home_path()
+    return (path,) if path.exists() else ()
+
+
 def prepare_worker_environment(
     *,
     source_repo: Path,
@@ -4002,7 +4008,7 @@ def run_worker(args: argparse.Namespace) -> int:
                     git_bin=git_bin,
                     reserved_artifacts=reserved_artifacts,
                     extra_env=args.worker_env,
-                    hidden_directories=(output_dir, host_codex_home_path()),
+                    hidden_directories=(output_dir, *host_codex_home_hidden()),
                     codex_bin=codex_bin,
                     model=primary_model,
                     reasoning=primary_reasoning,
@@ -4038,7 +4044,7 @@ def run_worker(args: argparse.Namespace) -> int:
                 if known_fallback_reason is not None:
                     skipped_known_unavailable_starts += 1
                     raise RunnerError("fallback model is already recorded unavailable for this orchestration run")
-                hidden_attempt_state = [output_dir, host_codex_home_path()]
+                hidden_attempt_state = [output_dir, *host_codex_home_hidden()]
                 if primary is not None:
                     hidden_attempt_state.append(primary["attempt_root"])
                 fallback = execute_isolated_attempt(
@@ -4597,7 +4603,7 @@ def execute_validation_operation(
         env_vars["PLAYWRIGHT_BROWSERS_PATH"] = str(
             dependency_target / ".playwright-browsers"
         )
-    validation_hidden = [output_dir, manifest_path.parent, host_codex_home_path()]
+    validation_hidden = [output_dir, manifest_path.parent, *host_codex_home_hidden()]
     host_home = Path.home().resolve()
     if host_home.is_dir():
         validation_hidden.append(host_home)
@@ -5427,7 +5433,7 @@ def correct_worker(args: argparse.Namespace) -> int:
                     **common,
                     label="primary",
                     attempt_lineage={"attempt_kind": "correction", **lineage, "attempt_label": "primary"},
-                    hidden_directories=tuple({output_dir.resolve(), host_codex_home_path(), *hidden_prior}),
+                    hidden_directories=tuple({output_dir.resolve(), *host_codex_home_hidden(), *hidden_prior}),
                     codex_bin=codex_bin,
                     model=primary_model,
                     reasoning=primary_reasoning,
@@ -5459,7 +5465,7 @@ def correct_worker(args: argparse.Namespace) -> int:
                     hidden_directories=tuple(
                         {
                             output_dir.resolve(),
-                            host_codex_home_path(),
+                            *host_codex_home_hidden(),
                             *hidden_prior,
                             *([primary["attempt_root"]] if primary is not None else []),
                         }
