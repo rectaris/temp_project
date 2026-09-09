@@ -1,6 +1,6 @@
 # Say how to proceed when an accepted-decision record cannot establish a reuse condition
 
-status: in_progress
+status: checked
 primary_invariant: A reader who cannot establish one reuse condition from a decision record is told exactly what to do next, rather than being left to choose.
 task_types:
   - documentation_policy_alignment
@@ -55,11 +55,17 @@ checked_summary_ja: 決定記録が再利用条件を満たせないときの進
 
 ## Tasks
 
-- [ ] State in the accepted-decision section that a record which cannot establish one of the four conditions is not reusable, and name the decision audit as the required next step.
-- [ ] Mirror the statement into the generated reference.
-- [ ] Add the checker expectation to scripts/check-root-agent-policy.py.
-- [ ] Run the focused checks and then the authoritative suite once.
+- [x] State in the accepted-decision section that a record which cannot establish one of the four conditions is not reusable, and name the decision audit as the required next step.
+- [x] Mirror the statement into the generated reference.
+- [x] Add the checker expectation to scripts/check-root-agent-policy.py.
+- [x] Run the focused checks and then the authoritative suite once.
 
 ## Validation Notes
 
 - The owner's 2026-09-09 instruction to implement every backlog plan authorizes this activation. Replace the nonexistent root SPEC_VALIDATION.md reference with references/validation.md and add the applicable decision-audit and skill-authoring policies.
+- Both references require a decision audit instead of reuse when the record cannot establish any one of the four conditions. Existing explicit-authorization and stopped-run rules remain unchanged.
+- The checker enforces the exact standalone action in the Accepted Decision Reuse section in each copy. Its self-test covers absent, misplaced, negated, quoted and indented instructions; parent mutation checks also rejected those changes independently in both copies.
+- Initial independent read-only Sol review raised hypothetical contradictory surrounding prose. The parent rejected that as outside the statement-presence contract and absent from the actual diff; the final independent rereview confirmed this disposition with no High or Medium findings. No product remediation was needed.
+- Focused validation passed: python3 scripts/check-root-agent-policy.py and python3 scripts/check-copier-template.py. Skill validation python3 scripts/validate-changes.py --all also passed.
+- Authoritative validation passed once: scripts/lint-project-workflow.sh and tests/smoke.sh. Optional actionlint was unavailable and skipped by the existing smoke command.
+- Product commit: bfd98c7. No remote push was performed.
