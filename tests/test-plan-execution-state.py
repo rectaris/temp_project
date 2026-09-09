@@ -7202,20 +7202,39 @@ class ParentDirectPreparationTest(unittest.TestCase):
         self.assert_nothing_created()
 
     def test_a_foreign_state_file_created_after_the_check_is_not_replaced(self) -> None:
-        real = STATE_MODULE.reserve_new_execution_state
+        real = STATE_MODULE.atomic_write
 
-        def intercepted(path: Path) -> None:
+        def intercepted(path: Path, value: dict[str, Any], **keywords: Any) -> None:
             if path == self.state and not self.state.exists():
                 self.state.write_text("foreign\n", encoding="utf-8")
-            real(path)
+            real(path, value, **keywords)
 
-        with mock.patch.object(
-            STATE_MODULE, "reserve_new_execution_state", intercepted
-        ):
+        with mock.patch.object(STATE_MODULE, "atomic_write", intercepted):
             with mock.patch("builtins.print"):
                 with self.assertRaises(STATE_MODULE.StateError):
                     self.prepare_in_process()
         self.assertEqual(self.state.read_text(encoding="utf-8"), "foreign\n")
+
+    def test_a_failed_first_publication_leaves_no_unusable_record(self) -> None:
+        """A retry must not be blocked by a placeholder from a failed attempt."""
+
+        real = STATE_MODULE.atomic_write
+
+        def failing(path: Path, value: dict[str, Any], **keywords: Any) -> None:
+            if path == self.state:
+                raise OSError("injected publication failure")
+            real(path, value, **keywords)
+
+        with mock.patch.object(STATE_MODULE, "atomic_write", failing):
+            with mock.patch("builtins.print"):
+                with self.assertRaises(STATE_MODULE.StateError):
+                    self.prepare_in_process()
+        self.assertFalse(self.state.exists())
+        self.assertEqual(list(self.state.parent.glob(f".{self.state.name}.*.tmp")), [])
+        self.registry.unlink()
+        self.continuation.unlink()
+        self.assertEqual(self.run_cli(*self.arguments()).returncode, 0)
+        self.assertTrue(self.state.exists())
 
     def test_an_occupied_lifecycle_destination_blocks_readiness(self) -> None:
         real = STATE_MODULE.init_state

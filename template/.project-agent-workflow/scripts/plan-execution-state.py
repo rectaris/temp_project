@@ -2640,36 +2640,17 @@ def require_predecessor_ancestry(accepted_source_head: str, successor_source_hea
         raise StateError("successor source HEAD is not based on the accepted predecessor source")
 
 
-def reserve_new_execution_state(path: Path) -> None:
-    """Claim a never-used execution state path exclusively before publication.
+def atomic_write(path: Path, value: dict[str, Any], create_new: bool = False) -> None:
+    """Publish one complete state file.
 
-    `atomic_write` publishes with a replacing rename, which is correct for
-    every later update but would silently overwrite a foreign file created
-    after the absence check. Reserving the final name with an exclusive
-    create makes a concurrent creator fail closed instead.
+    A later update replaces the previous record, so a replacing rename is
+    right. The very first publication must not replace anything, including a
+    foreign file that appears after the caller's absence check, so it is
+    published with a link that fails when the name is taken. Either way the
+    final name only ever appears once the content is written and flushed;
+    a failure leaves the temporary file, never an unusable final record.
     """
 
-    reject_symlink_ancestors(path, include_target=False)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    directory_descriptor = os.open(
-        path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
-    )
-    try:
-        try:
-            descriptor = os.open(
-                path.name,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=directory_descriptor,
-            )
-        except FileExistsError as exc:
-            raise StateError("execution state already exists") from exc
-        os.close(descriptor)
-    finally:
-        os.close(directory_descriptor)
-
-
-def atomic_write(path: Path, value: dict[str, Any]) -> None:
     reject_symlink_ancestors(path, include_target=False)
     data = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
     if len(data) > EXECUTION_STATE_MAX_BYTES:
@@ -2692,10 +2673,19 @@ def atomic_write(path: Path, value: dict[str, Any]) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(
-            temporary_name, path.name,
-            src_dir_fd=directory_descriptor, dst_dir_fd=directory_descriptor,
-        )
+        if create_new:
+            try:
+                os.link(
+                    temporary_name, path.name,
+                    src_dir_fd=directory_descriptor, dst_dir_fd=directory_descriptor,
+                )
+            except FileExistsError as exc:
+                raise StateError("execution state already exists") from exc
+        else:
+            os.replace(
+                temporary_name, path.name,
+                src_dir_fd=directory_descriptor, dst_dir_fd=directory_descriptor,
+            )
         os.fsync(directory_descriptor)
     finally:
         if descriptor >= 0:
@@ -3450,8 +3440,7 @@ def init_state(args: argparse.Namespace) -> None:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         if path.exists() or path.is_symlink():
             raise StateError("execution state already exists")
-        reserve_new_execution_state(path)
-        atomic_write(path, state)
+        atomic_write(path, state, create_new=True)
 
 
 PARENT_DIRECT_PREPARATION_SCHEMA_VERSION = 1
