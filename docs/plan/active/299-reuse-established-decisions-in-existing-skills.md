@@ -1,6 +1,8 @@
 # Reuse established decisions through existing planning skills
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 primary_invariant: Existing planning and execution skills apply one shared decision sequence to the same authorized task without reopening settled choices, inventing successor plans or relaxing normative approval, diagnosis and review boundaries.
 task_types:
   - template_workflow
@@ -114,3 +116,9 @@ checked_summary_ja: 既決事項と失敗の再現確認を既存スキルへま
 - 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. `review_class: B` with `human_approval_status: not_required`, so no separate design approval is needed.
 - 2026-09-09 predecessor gate: The gate "Start after existing Plan 275 is checked" is satisfied by its successor. Plan 275 stopped at `replan_required` and was reconstructed as plan 302, which carries every acceptance item of 275 unchanged and is now checked at `docs/plan/checked/2026/09/01-15/302-complete-routed-agent-policy.md`. The relocation this plan waits for is therefore in place; `context_files` is rebound to the archived 275 record and its checked successor.
 - 2026-09-09 activation baseline: `dfba0d9` in `temp_project`.
+
+- 2026-09-09 candidate: `c817f20`..`299ff52` on `plan/299-reuse-established-decisions-in-existing-skills` adds the shared implementation-preflight reference, routes it from the three existing skills, states the preflight in `SPEC_DECISION_AUDIT.md`, and pins the route by checker-owned expectations in `scripts/check-root-agent-policy.py` and `scripts/check-copier-template.py`. All 14 changed paths are inside `write_scope`.
+- 2026-09-09 focused validation: `python3 scripts/check-root-agent-policy.py`, `python3 scripts/check-copier-template.py`, `python3 tests/test-validation-tools.py` (245), `python3 scripts/validate-changes.py --all`, and `git diff --check` each passed on the candidate. Preflight only, not authoritative: `tests/copier-update.sh --require-copier` passed and the two new template paths appear in the expected generated set.
+- 2026-09-09 review: Four independent reviews across two epochs, the cumulative maximum. Epoch 0 round 1 found two Medium findings, remediated in `2dcdd46`. Epoch 0 round 2 found two Medium findings, remediated in `2015a56` after the owner authorized one continuation epoch. Epoch 1 round 1 found one Medium finding, remediated in `299ff52`. Epoch 1 round 2, the final permitted review, still returned one Medium finding.
+- 2026-09-09 open finding: `markdown_operative_lines()` in `scripts/check-root-agent-policy.py` ends a fenced code block on any line whose stripped form starts with the opening fence token. CommonMark closes a fence only when the closer is indented at most three spaces, repeats the opening character at least as many times, and carries no info string. A closer such as ```` ```not-a-closing-fence ```` or a four-space-indented closer therefore ends the block for the checker but not for Markdown, so a routed instruction can stay inside a code block while both checkers pass. The reviewer reproduced this across all six root and generated skill files.
+- 2026-09-09 stop: The execution epoch's independent review budget is exhausted and the one owner-authorized continuation epoch is already spent, so no further remediation round is available inside this plan. Recorded `status: replan_required` with `parent_remediation_budget_exhausted`. The candidate is retained unpublished on its branch and no acceptance item is withdrawn. Awaiting an owner decision on continuation authorization or reconstruction.
