@@ -120,7 +120,6 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [274](274-preserve-project-owned-agent-model-settings.md) | backlog | Preserve project-owned agent model settings during Copier updates | docs/plan/backlog/274-preserve-project-owned-agent-model-settings.md |
 | [275](275-route-detailed-agent-policy-on-demand.md) | backlog | Route detailed agent policy without losing mandatory requirements | docs/plan/backlog/275-route-detailed-agent-policy-on-demand.md |
 | [276](276-run-bounded-parent-owned-candidate-preflight.md) | backlog | Run one bounded parent-owned preflight per candidate | docs/plan/backlog/276-run-bounded-parent-owned-candidate-preflight.md |
 | [299](299-reuse-established-decisions-in-existing-skills.md) | backlog | Reuse established decisions through existing planning skills | docs/plan/backlog/299-reuse-established-decisions-in-existing-skills.md |

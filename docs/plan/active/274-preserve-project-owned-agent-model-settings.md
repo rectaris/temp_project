@@ -1,6 +1,6 @@
 # Preserve project-owned agent model settings during Copier updates
 
-status: backlog
+status: in_progress
 primary_invariant: Copier preserves every existing project-owned agent model and reasoning value, fills only absent defaults, and rejects unrelated profile changes without altering the qualified writable-runner model policy.
 task_types:
   - template_workflow
@@ -111,3 +111,5 @@ checked_summary_ja: Copier 更新で利用側のモデルと推論設定を保�
 - At activation, resolve every dependency to its unique checked record, confirm that the current source still supports this scope, and record the baseline before implementation.
 - The parent owns policy interpretation, write-scope admission, review acceptance, validation, lifecycle changes, and commits; helpers have no write authority.
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
+
+- 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Activation baseline: `5125827` in `temp_project`. Plan 273 is checked, and the declared source mechanisms are still present.
