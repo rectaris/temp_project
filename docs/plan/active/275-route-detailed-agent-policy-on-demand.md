@@ -1,6 +1,6 @@
 # Route detailed agent policy without losing mandatory requirements
 
-status: backlog
+status: in_progress
 primary_invariant: Every mandatory safety and lifecycle requirement remains directly reachable before its governed action, while always-loaded AGENTS files no longer duplicate task-specific migration and ledger procedures.
 task_types:
   - template_workflow
@@ -8,7 +8,7 @@ task_types:
   - security
 review_class: C
 human_design_required: yes
-human_approval_status: pending
+human_approval_status: approved
 implementation_tier: 2
 implementation_risk: ordinary
 implementation_ambiguity: ordinary
@@ -132,3 +132,7 @@ checked_summary_ja: 起動時の AGENTS.md から重複する詳細手順を規�
 - No measured resource saving is claimed; completion of this plan requires its declared correctness witnesses, not an assumed productivity gain.
 
 - 2026-09-08 planning alignment: This plan keeps its existing policy-relocation scope. Plan 299 separately consolidates operational judgment in existing skills after this plan is checked; do not add that behavior change or another skill to this relocation. The existing detailed-design approval remains pending.
+
+- 2026-09-09 activation: Owner instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」 selected this backlog plan for implementation. Asked separately whether the class C designs of plans 275 and 276 were approved, the owner answered `approve_both`, which supplies the explicit owner approval this plan's first integration gate requires; `human_approval_status` is now `approved`.
+- 2026-09-09 activation baseline: `95af91b` in `temp_project`. Plans 272, 273, and 274 each resolve to one checked record, so their policy is the baseline for this relocation.
+
