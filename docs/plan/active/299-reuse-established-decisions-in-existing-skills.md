@@ -1,8 +1,6 @@
 # Reuse established decisions through existing planning skills
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
+status: in_progress
 primary_invariant: Existing planning and execution skills apply one shared decision sequence to the same authorized task without reopening settled choices, inventing successor plans or relaxing normative approval, diagnosis and review boundaries.
 task_types:
   - template_workflow
@@ -122,3 +120,5 @@ checked_summary_ja: 既決事項と失敗の再現確認を既存スキルへま
 - 2026-09-09 review: Four independent reviews across two epochs, the cumulative maximum. Epoch 0 round 1 found two Medium findings, remediated in `2dcdd46`. Epoch 0 round 2 found two Medium findings, remediated in `2015a56` after the owner authorized one continuation epoch. Epoch 1 round 1 found one Medium finding, remediated in `299ff52`. Epoch 1 round 2, the final permitted review, still returned one Medium finding.
 - 2026-09-09 open finding: `markdown_operative_lines()` in `scripts/check-root-agent-policy.py` ends a fenced code block on any line whose stripped form starts with the opening fence token. CommonMark closes a fence only when the closer is indented at most three spaces, repeats the opening character at least as many times, and carries no info string. A closer such as ```` ```not-a-closing-fence ```` or a four-space-indented closer therefore ends the block for the checker but not for Markdown, so a routed instruction can stay inside a code block while both checkers pass. The reviewer reproduced this across all six root and generated skill files.
 - 2026-09-09 stop: The execution epoch's independent review budget is exhausted and the one owner-authorized continuation epoch is already spent, so no further remediation round is available inside this plan. Recorded `status: replan_required` with `parent_remediation_budget_exhausted`. The candidate is retained unpublished on its branch and no acceptance item is withdrawn. Awaiting an owner decision on continuation authorization or reconstruction.
+- 2026-09-09 owner continuation authorization: Asked the owner to choose between continuation, reconstruction, deferral, and stopping. The owner answered `authorize_continuation`, quoted as 「継続を承認する（新エポックで残り 1 件を修正し、最終レビューまで進める）」, under the standing instruction 「@docs/plan/backlog/ にあるそれぞれのプランついて、実装作業をせよ。」. This authorizes one further execution epoch on the unchanged plan, source baseline, invariant, and acceptance items. No requirement, safety condition, validation authority, or write scope changes.
+- 2026-09-09 reopen: `status` returns to `in_progress` for the authorized epoch. The open finding is narrow and inside `write_scope`, so the epoch remains bounded to the fenced-code closer condition and its evidence.
