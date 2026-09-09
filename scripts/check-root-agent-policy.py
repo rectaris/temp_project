@@ -201,6 +201,77 @@ REUSABLE_SKILLS = (
     "write-for-reader",
 )
 
+# --- decision-reuse routing: expectations are owned here, never by the fixture ---
+DECISION_REUSE_FIXTURE = "tests/fixtures/agent-policy-routing/scenarios.json"
+DECISION_REUSE_REFERENCE = ".codex/skills/decision-audit/references/implementation-preflight.md"
+DECISION_REUSE_GENERATED_REFERENCE = (
+    ".project-agent-workflow/skills/decision-audit/references/implementation-preflight.md"
+)
+DECISION_REUSE_AUTHORIZATIONS = (
+    "reuse_accepted_decision",
+    "require_explicit_authorization",
+    "stop_before_repair_classification",
+    "stop_for_owner_decision",
+)
+DECISION_REUSE_SECTIONS = (
+    "## Accepted Decision Reuse",
+    "## Requirement, Scope, Condition, And Witness Preflight",
+    "## Exact Failure Reproduction",
+)
+# Each required case binds one fixed authorization expectation and the policy
+# file that decides it. Neither may be renegotiated by editing the fixture.
+DECISION_REUSE_REQUIRED_CASES = {
+    "reuse-unchanged-authorized-work": (
+        "reuse_accepted_decision",
+        ("docs/agent/SPEC_DECISION_AUDIT.md",),
+    ),
+    "reauthorize-changed-requirements": (
+        "require_explicit_authorization",
+        ("docs/agent/SPEC_PLAN_WORKFLOW.md",),
+    ),
+    "reauthorize-changed-safety-conditions": (
+        "require_explicit_authorization",
+        ("docs/agent/SPEC_SECURITY.md",),
+    ),
+    "reauthorize-expanded-external-effects": (
+        "require_explicit_authorization",
+        ("docs/agent/SPEC_SECURITY.md",),
+    ),
+    "reproduce-before-formal-diagnosis": (
+        "stop_before_repair_classification",
+        ("docs/agent/SPEC_PLAN_WORKFLOW.md",),
+    ),
+    "stop-on-exhausted-review-budget": (
+        "stop_for_owner_decision",
+        ("docs/agent/SPEC_PLAN_WORKFLOW.md",),
+    ),
+}
+DECISION_REUSE_REQUIRED_POLICY_REFERENCES = (
+    "docs/agent/SPEC_PLAN_WORKFLOW.md",
+    "docs/agent/SPEC_SECURITY.md",
+    "docs/agent/SPEC_DECISION_AUDIT.md",
+)
+# The routed instruction itself, not just the path. Each entry must appear as a
+# whole line so a negated or reversed instruction cannot satisfy it.
+DECISION_REUSE_SKILL_INSTRUCTIONS = {
+    ".codex/skills/decision-audit/SKILL.md": (
+        "Read `references/implementation-preflight.md` when the audit is about to become"
+        " work: when a settled decision would be reopened, before writing long plan prose,"
+        " or after a formal validation failure.",
+    ),
+    ".codex/skills/implementation-guidelines/SKILL.md": (
+        "- Read `{reference}` before reopening an already accepted decision and before"
+        " writing long plan prose.",
+        "- After a formal validation failure, reproduce the exact failure as described in"
+        " `{reference}` before proposing a repair.",
+    ),
+    ".codex/skills/sequential-plan-orchestrator/SKILL.md": (
+        "Read `{reference}` before classifying a repair, before reopening a settled"
+        " decision, and before asking for approval that the unchanged authorization"
+        " already covers.",
+    ),
+}
+
 REQUIRED_AGENT_RULES = [
     "docs/agent/spec-index.yaml",
     ".agent-logs/",
@@ -881,14 +952,29 @@ def check_reusable_skill_parity() -> None:
                 fail(f"root/template reusable skill drift: {skill}/{relative}")
 
 
-def check_decision_reuse_scenarios() -> None:
-    """Check the fixed decision-reuse fixture and the skill links that reach it.
+def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str, ...]:
+    return tuple(
+        instruction.format(reference=reference)
+        for instruction in DECISION_REUSE_SKILL_INSTRUCTIONS[relative]
+    )
 
-    These are structural predicates about the fixture and the routing text. They
-    do not measure how an agent behaves.
+
+def require_decision_reuse_instructions(relative: str, reference: str) -> None:
+    lines = {line.strip() for line in read(relative).splitlines()}
+    for instruction in decision_reuse_instruction_lines(relative, reference):
+        if instruction not in lines:
+            fail(f"{relative} does not carry the routed preflight instruction: {instruction}")
+
+
+def check_decision_reuse_scenarios() -> None:
+    """Check the fixed decision-reuse fixture against checker-owned expectations.
+
+    The fixture supplies cases; it never supplies the expectations those cases
+    are judged against. These are structural predicates about the fixture and
+    the routed instructions. They do not measure how an agent behaves.
     """
 
-    relative = "tests/fixtures/agent-policy-routing/scenarios.json"
+    relative = DECISION_REUSE_FIXTURE
     path = ROOT / relative
     if not path.is_file():
         fail(f"missing decision-reuse scenario fixture: {relative}")
@@ -896,95 +982,100 @@ def check_decision_reuse_scenarios() -> None:
         fixture = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         fail(f"{relative} is not readable JSON: {error}")
+    if not isinstance(fixture, dict):
+        fail(f"{relative} must be a JSON object")
+    scenarios = fixture.get("scenarios")
+    if not isinstance(scenarios, list) or not scenarios:
+        fail(f"{relative} must declare a non-empty scenarios list")
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            fail(f"{relative} scenario {index} is not an object")
+        if not isinstance(scenario.get("id"), str) or not scenario["id"].strip():
+            fail(f"{relative} scenario {index} needs a non-empty string id")
+
     block = fixture.get("decision_reuse")
     if not isinstance(block, dict):
         fail(f"{relative} must declare a decision_reuse block")
-    for key in (
-        "reference",
-        "generated_reference",
-        "authorization_values",
-        "required_case_ids",
-        "required_policy_references",
-        "linking_skills",
-    ):
-        if not block.get(key):
-            fail(f"{relative} decision_reuse block missing {key}")
 
-    allowed = set(block["authorization_values"])
-    cases = {
-        scenario["id"]: scenario
-        for scenario in fixture.get("scenarios", [])
-        if scenario.get("kind") == "decision-reuse"
+    declared = {
+        "reference": DECISION_REUSE_REFERENCE,
+        "generated_reference": DECISION_REUSE_GENERATED_REFERENCE,
     }
-    missing = [case for case in block["required_case_ids"] if case not in cases]
+    for key, expected in declared.items():
+        if block.get(key) != expected:
+            fail(f"{relative} decision_reuse {key} must be {expected}")
+    declared_sets = {
+        "authorization_values": set(DECISION_REUSE_AUTHORIZATIONS),
+        "required_case_ids": set(DECISION_REUSE_REQUIRED_CASES),
+        "required_policy_references": set(DECISION_REUSE_REQUIRED_POLICY_REFERENCES),
+        "linking_skills": set(DECISION_REUSE_SKILL_INSTRUCTIONS),
+    }
+    for key, expected_set in declared_sets.items():
+        value = block.get(key)
+        if not isinstance(value, list) or set(value) != expected_set:
+            fail(
+                f"{relative} decision_reuse {key} must be exactly "
+                f"{sorted(expected_set)}"
+            )
+
+    cases: dict[str, dict] = {}
+    for scenario in scenarios:
+        if scenario.get("kind") != "decision-reuse":
+            continue
+        case_id = scenario["id"]
+        if case_id in cases:
+            fail(f"{relative} declares duplicate decision-reuse case: {case_id}")
+        cases[case_id] = scenario
+    missing = sorted(set(DECISION_REUSE_REQUIRED_CASES) - set(cases))
     if missing:
         fail(f"{relative} missing required decision-reuse cases: {', '.join(missing)}")
 
-    referenced: set[str] = set()
     for case_id, scenario in sorted(cases.items()):
         authorization = scenario.get("authorization")
-        if authorization not in allowed:
+        if authorization not in DECISION_REUSE_AUTHORIZATIONS:
             fail(
                 f"{relative} case {case_id} has an unknown authorization expectation: "
                 f"{authorization!r}"
             )
         for key in ("task", "expected"):
-            if not str(scenario.get(key, "")).strip():
+            if not isinstance(scenario.get(key), str) or not scenario[key].strip():
                 fail(f"{relative} case {case_id} missing {key}")
         for key in ("required_before_action", "critical_failures", "policy_references"):
-            if not scenario.get(key):
+            value = scenario.get(key)
+            if not isinstance(value, list) or not value:
                 fail(f"{relative} case {case_id} missing {key}")
+            if not all(isinstance(item, str) and item.strip() for item in value):
+                fail(f"{relative} case {case_id} has a malformed {key} entry")
         for policy in scenario["policy_references"]:
             if not (ROOT / policy).is_file():
                 fail(f"{relative} case {case_id} names an unresolved policy reference: {policy}")
-            referenced.add(policy)
 
-    uncovered = [
-        policy for policy in block["required_policy_references"] if policy not in referenced
-    ]
-    if uncovered:
-        fail(
-            f"{relative} decision-reuse cases do not cover required policy references: "
-            f"{', '.join(uncovered)}"
-        )
+    for case_id, (authorization, policies) in sorted(DECISION_REUSE_REQUIRED_CASES.items()):
+        scenario = cases[case_id]
+        if scenario["authorization"] != authorization:
+            fail(
+                f"{relative} case {case_id} must expect {authorization}, "
+                f"not {scenario['authorization']}"
+            )
+        absent = [policy for policy in policies if policy not in scenario["policy_references"]]
+        if absent:
+            fail(
+                f"{relative} case {case_id} must cite {', '.join(absent)} as its "
+                "deciding policy"
+            )
 
-    for authorization in ("reuse_accepted_decision", "require_explicit_authorization"):
-        if not any(
-            cases[case_id].get("authorization") == authorization
-            for case_id in block["required_case_ids"]
-        ):
-            fail(f"{relative} required cases never expect {authorization}")
-
-    reference = block["reference"]
-    generated_reference = block["generated_reference"]
-    for target in (reference, "template/" + generated_reference):
+    for target in (DECISION_REUSE_REFERENCE, "template/" + DECISION_REUSE_GENERATED_REFERENCE):
         if not (ROOT / target).is_file():
             fail(f"missing implementation preflight reference: {target}")
-    preflight = read(reference)
-    for section in (
-        "## Accepted Decision Reuse",
-        "## Requirement, Scope, Condition, And Witness Preflight",
-        "## Exact Failure Reproduction",
-    ):
+    preflight = read(DECISION_REUSE_REFERENCE)
+    for section in DECISION_REUSE_SECTIONS:
         if section not in preflight:
-            fail(f"{reference} missing section: {section}")
+            fail(f"{DECISION_REUSE_REFERENCE} missing section: {section}")
 
-    reference_directory = reference.rsplit("references/", 1)[0]
-    for skill in block["linking_skills"]:
+    for skill in sorted(DECISION_REUSE_SKILL_INSTRUCTIONS):
         if not (ROOT / skill).is_file():
-            fail(f"decision-reuse fixture names a missing skill: {skill}")
-        owns_reference = skill.startswith(reference_directory)
-        root_link = "references/implementation-preflight.md" if owns_reference else reference
-        if root_link not in read(skill):
-            fail(f"{skill} does not link the implementation preflight reference")
-        generated_skill = "template/" + skill.replace(
-            ".codex/skills/", ".project-agent-workflow/skills/", 1
-        )
-        generated_link = (
-            "references/implementation-preflight.md" if owns_reference else generated_reference
-        )
-        if generated_link not in read(generated_skill):
-            fail(f"{generated_skill} does not link the implementation preflight reference")
+            fail(f"missing decision-reuse linking skill: {skill}")
+        require_decision_reuse_instructions(skill, DECISION_REUSE_REFERENCE)
 
 
 def check_natural_japanese_contract() -> None:

@@ -701,6 +701,17 @@ def require_referent_first_alignment() -> None:
             fail(f"referent-first root/template files differ: {root_path} != {template_path}")
 
 
+def load_root_policy_module():
+    spec = importlib.util.spec_from_file_location(
+        "decision_reuse_root_policy", ROOT / "scripts/check-root-agent-policy.py"
+    )
+    if spec is None or spec.loader is None:
+        fail("could not load the root agent policy module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def require_decision_reuse_alignment() -> None:
     pairs = (
         (
@@ -719,6 +730,24 @@ def require_decision_reuse_alignment() -> None:
     for root_path, template_path in pairs:
         if read(root_path) != normalized_template_core(template_path):
             fail(f"decision-reuse root/template files differ: {root_path} != {template_path}")
+
+    # The generated skills must carry the routed instruction itself, as whole
+    # lines, so a negated or reworded route cannot pass on path presence alone.
+    policy = load_root_policy_module()
+    for root_skill in sorted(policy.DECISION_REUSE_SKILL_INSTRUCTIONS):
+        generated_skill = "template/" + root_skill.replace(
+            ".codex/skills/", ".project-agent-workflow/skills/", 1
+        )
+        lines = {line.strip() for line in read(generated_skill).splitlines()}
+        for instruction in policy.DECISION_REUSE_SKILL_INSTRUCTIONS[root_skill]:
+            expected = instruction.format(
+                reference=policy.DECISION_REUSE_GENERATED_REFERENCE
+            )
+            if expected not in lines:
+                fail(
+                    f"{generated_skill} does not carry the routed preflight instruction: "
+                    f"{expected}"
+                )
 
     reference = ".codex/skills/decision-audit/references/implementation-preflight.md"
     text = read(reference)
