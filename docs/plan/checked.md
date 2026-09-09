@@ -234,3 +234,4 @@ id	path
 291	docs/plan/checked/2026/09/01-15/291-state-the-no-push-rule-in-security-policy.md
 293	docs/plan/checked/2026/09/01-15/293-state-what-to-do-when-a-decision-record-is-insufficient.md
 294	docs/plan/checked/2026/09/01-15/294-bound-stop-gate-block-repetition.md
+295	docs/plan/checked/2026/09/01-15/295-release-v145-for-downstream-verification.md

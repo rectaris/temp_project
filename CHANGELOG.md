@@ -2,6 +2,8 @@
 
 ## 未リリース
 
+## 2026-09-09 v1.4.5
+
 - 受入条件と最も早い検証witnessの対応付けを、root と生成 project の双方で同じ規定として固定しました。
   witness map の方針文を AGENTS と orchestration の各文書で一意に特定し、段階名、静的witnessの述語、`authoritative_only_reason`、最終検証suiteを弱めない条件を marker として検査したうえで、root と生成側の一致を求めます。
   witness enforcement を運ぶ生成 source を Copier 更新の単一 inventory へ結び付け、生成 project が map なしの統合lane と、限定検証で証明できるのに最終検証だけを最初のwitnessとする定義を拒否することを smoke で確認します。

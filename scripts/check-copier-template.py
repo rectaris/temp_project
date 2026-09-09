@@ -2403,6 +2403,87 @@ def require_agent_profile_task() -> None:
             fail(f"copier.yml missing fixed agent-profile task marker: {marker}")
 
 
+CURRENT_VERSION_ANCHORS = (
+    "導入する版を現在の最新安定版である",
+    "タグ付きバージョンへ明示的に更新する場合",
+)
+
+
+def following_fenced_block(lines: list[str], anchor_index: int) -> tuple[list[str], int]:
+    """Return the first fenced block after an anchor line and its opening index."""
+
+    fence = re.compile(r"^(`{3,})(.*)$")
+    index = anchor_index + 1
+    opening_match = None
+    while index < len(lines):
+        if lines[index].startswith("## "):
+            return [], -1
+        opening_match = fence.match(lines[index])
+        if opening_match is not None:
+            break
+        index += 1
+    if opening_match is None:
+        return [], -1
+    opening = index
+    delimiter = opening_match.group(1)
+    index += 1
+    body: list[str] = []
+    while index < len(lines):
+        closing = fence.match(lines[index])
+        if closing is not None and len(closing.group(1)) >= len(delimiter) and not closing.group(2).strip():
+            return body, opening
+        body.append(lines[index])
+        index += 1
+    return [], -1
+
+
+def require_documented_release_version() -> None:
+    """Bind the documented current template version to the newest release entry."""
+
+    released = [
+        match.group(1)
+        for match in (
+            re.fullmatch(r"## \d{4}-\d{2}-\d{2} (v\d+\.\d+\.\d+)", line.rstrip())
+            for line in read("CHANGELOG.md").splitlines()
+        )
+        if match is not None
+    ]
+    if not released:
+        fail("CHANGELOG.md records no dated release heading")
+    current = released[0]
+
+    lines = read("README.md").splitlines()
+    for anchor in CURRENT_VERSION_ANCHORS:
+        matched = [index for index, line in enumerate(lines) if line.startswith(anchor)]
+        if len(matched) != 1:
+            fail(f"README.md must carry the current fixed-version anchor {anchor!r} exactly once")
+        index = matched[0]
+        body, opening = following_fenced_block(lines, index)
+        if opening < 0:
+            fail(f"README.md anchor {anchor!r} is followed by no closed fenced command block")
+        pinned = re.findall(r"--vcs-ref(?:\s+|=)(\S+)", "\n".join(body))
+        if not pinned:
+            fail(f"README.md anchor {anchor!r} documents no --vcs-ref pin")
+        for reference in pinned:
+            if reference != current:
+                fail(
+                    f"README.md pins template version {reference} under {anchor!r}, "
+                    f"but the newest CHANGELOG release is {current}"
+                )
+
+    declaration = lines[
+        [index for index, line in enumerate(lines) if line.startswith(CURRENT_VERSION_ANCHORS[0])][0]
+    ]
+    declared = re.search(r"`(v\d+\.\d+\.\d+)`", declaration)
+    if declared is None:
+        fail("README.md current stable version declaration names no version")
+    if declared.group(1) != current:
+        fail(
+            f"README.md declares current stable version {declared.group(1)}, "
+            f"but the newest CHANGELOG release is {current}"
+        )
+
+
 def require_copier_documentation_contract() -> None:
     command_docs = (
         "README.md",
@@ -3293,6 +3374,7 @@ def main() -> int:
     require_review_turn_zero_contract()
     require_agent_profile_task()
     require_copier_documentation_contract()
+    require_documented_release_version()
     require_ci_autofix_root_boundaries()
     require_generated_whitespace_range()
     require_namespaced_reference_paths()
