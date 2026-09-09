@@ -1,6 +1,6 @@
 # Restore the continuous integration signal and let the sandboxed worker run on an account that has no Codex home
 
-status: in_progress
+status: checked
 primary_invariant: Every repository check that passes on a maintainer machine reaches its own assertions elsewhere instead of failing on a missing dependency, a missing commit, or host state the check never intended to require.
 task_types:
   - template_workflow
@@ -62,9 +62,14 @@ checked_summary_ja: CI の検証信号を回復し、Codex ホームの無いア
 
 ## Tasks
 
-- [ ] Pin the synced environment to the declared interpreter and place it first on PATH for the jobs that run repository Python checks.
-- [ ] Check out full history for the sandboxed plan worker job.
-- [ ] Hide the host Codex home only when it exists, mirror the runner into the template, and cover the absent, present, and non-directory cases with a test.
-- [ ] Run the focused witness under a home directory without a Codex home and under the ordinary home, then the authoritative suite once.
+- [x] Pin the synced environment to the declared interpreter and place it first on PATH for the jobs that run repository Python checks.
+- [x] Check out full history for the sandboxed plan worker job.
+- [x] Hide the host Codex home only when it exists, mirror the runner into the template, and cover the absent, present, and non-directory cases with a test.
+- [x] Run the focused witness under a home directory without a Codex home and under the ordinary home, then the authoritative suite once.
 
 ## Validation Notes
+
+- 焦点証人 `python3 tests/test-sandboxed-plan-worker.py` は、Codex ホームを持たない一時 HOME でも通常の HOME でも 147 件すべて成功した。修正前の同一証人は前者で `test_apply_finalization_failure_leaves_recoverable_applying_state` が失敗する。
+- 権威検証は `scripts/lint-project-workflow.sh` と `REQUIRE_ACTIONLINT=1 REQUIRE_COPIER=1 tests/smoke.sh` を各 1 回実行し、いずれも通過した。lint 出力中の `root agent policy check failed:` 行は否定試験の期待出力である。
+- `actionlint` 1.7.12 を導入し、`REQUIRE_ACTIONLINT=1 scripts/lint-github-actions.sh .` が無指摘であることを確認した。
+- 独立レビュー（gpt-5.6-sol、読み取り専用）は、テスト側で `CODEX_HOME` を一括指定する当初案が新規アカウントで再現する runner 側の欠陥を隠すと指摘した。指摘を受け入れ、runner 側で「存在するときだけ隠す」条件に改め、テスト側の一括指定を撤去した。受理判断は本セッションが保持する。

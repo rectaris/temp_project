@@ -235,3 +235,4 @@ id	path
 293	docs/plan/checked/2026/09/01-15/293-state-what-to-do-when-a-decision-record-is-insufficient.md
 294	docs/plan/checked/2026/09/01-15/294-bound-stop-gate-block-repetition.md
 295	docs/plan/checked/2026/09/01-15/295-release-v145-for-downstream-verification.md
+304	docs/plan/checked/2026/09/01-15/304-restore-continuous-integration-signal.md
