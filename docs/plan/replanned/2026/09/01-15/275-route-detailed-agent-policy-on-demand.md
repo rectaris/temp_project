@@ -1,9 +1,6 @@
 # Route detailed agent policy without losing mandatory requirements
 
-status: replan_required
-replan_reason_codes:
-  - post_authoritative_design_change
-primary_invariant: Every mandatory safety and lifecycle requirement remains directly reachable before its governed action, while always-loaded AGENTS files no longer duplicate task-specific migration and ledger procedures.
+status: replanned
 task_types:
   - template_workflow
   - planning_docs
@@ -83,19 +80,18 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:cc6bce3e47adc6d2458e09f159030544802ad0ec726fe292435ae3be3854d8b0","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:5cbd7c2aa9e0f2b15125144b977e87d22d3c86c7ea670d21ffe9897bf721d623","stage":"focused","witness":"python3 scripts/check-root-agent-policy.py"}
   - {"acceptance_sha256":"sha256:eedc1ae9fbb9927be2abdfc1df2bed0ac7b3269afb1e9770c329045f50e7f5d1","stage":"focused","witness":"tests/copier-update.sh --require-copier"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/275-route-detailed-agent-policy-on-demand.md
+replan_contract: docs/plan/replanned/contracts/275-route-detailed-agent-policy-on-demand.json
 integration_gates:
-  - Obtain explicit owner approval of this class C design before promotion or implementation; creating this backlog plan does not supply that approval.
-  - Complete plans 272, 273, and 274 first and use their checked policy as the baseline; do not restore their superseded wording during this relocation.
-  - Use bounded parent implementation and independent review because instruction routing and validation authority change.
-  - Do not reduce an instruction merely because it is long; preserve every normative requirement verbatim except mechanical path/context adjustments before editing entrypoint pointers.
-  - Keep direct reads mandatory; no compressed summary, generated index excerpt, or helper paraphrase substitutes for the governing policy.
-  - Do not split or redesign ledger schemas, guardian protocols, review budgets, model routing, skills, or lifecycle implementations.
-  - Keep fixed routing fixtures and critical requirements unchanged during wording adjustment; scenarios.json contains only median and edge cases, never the held-out evaluation input.
-  - Before wording changes, an independent evaluator prepares and SHA-256-seals the held-out case in a parent-owned local artifact outside write_scope; record its digest but withhold the case from the implementer until the final frozen candidate is evaluated.
-  - evaluation-protocol.md specifies this boundary but never embeds the held-out case; a changed case digest or use of its outcome for further tuning invalidates that evaluation.
-  - Replace the duplicated guardian instruction with a mandatory route no longer than 300 UTF-8 bytes in each managed entrypoint; retain the full original rule in the declared normative destination.
-  - Record independent scenario evaluation separately from deterministic route checks; static success is not evidence of agent productivity or empirical semantic success.
-  - If a critical requirement fails or the independent review budget is exhausted, stop under the existing owner-decision policy rather than weakening requirements or repeatedly tuning.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/302-complete-routed-agent-policy.md
+inherited_acceptance_digests:
+  - sha256:cc6bce3e47adc6d2458e09f159030544802ad0ec726fe292435ae3be3854d8b0
+  - sha256:5cbd7c2aa9e0f2b15125144b977e87d22d3c86c7ea670d21ffe9897bf721d623
+  - sha256:eedc1ae9fbb9927be2abdfc1df2bed0ac7b3269afb1e9770c329045f50e7f5d1
 checked_summary_ja: 起動時の AGENTS.md から重複する詳細手順を規範文書へ移し、作業別の直接参照と安全条件の検査を残す。
 
 ## Decisions
