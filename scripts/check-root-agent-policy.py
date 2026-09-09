@@ -961,10 +961,46 @@ def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str
     )
 
 
+MARKDOWN_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
+
+
+def markdown_operative_lines(text: str) -> set[str]:
+    """Return the lines Markdown renders as instructions.
+
+    A byte-identical line inside a fenced code block or an HTML comment is not
+    an instruction, so those regions are excluded. Only trailing whitespace is
+    normalized; leading indentation stays part of the line because Markdown
+    gives it meaning.
+    """
+
+    operative: set[str] = set()
+    fence: str | None = None
+    in_comment = False
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        stripped = line.lstrip()
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        if fence is not None:
+            if stripped.startswith(fence):
+                fence = None
+            continue
+        opener = MARKDOWN_FENCE_RE.match(stripped)
+        if opener is not None and len(line) - len(stripped) <= 3:
+            fence = opener.group(1)
+            continue
+        if "<!--" in line:
+            if line.count("<!--") > line.count("-->"):
+                in_comment = True
+            continue
+        operative.add(line)
+    return operative
+
+
 def require_decision_reuse_instructions(relative: str, reference: str) -> None:
-    # Only trailing whitespace is normalized. Leading indentation is part of the
-    # instruction because Markdown gives it meaning.
-    lines = {line.rstrip() for line in read(relative).splitlines()}
+    lines = markdown_operative_lines(read(relative))
     for instruction in decision_reuse_instruction_lines(relative, reference):
         if instruction not in lines:
             fail(f"{relative} does not carry the routed preflight instruction: {instruction}")
