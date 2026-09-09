@@ -25,6 +25,10 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/run-sandboxed-plan-worker.py"
 ENV_PREFIX = "SANDBOXED_PLAN_WORKER_"
+# The sandbox exposes only the trusted system directories, so a fixture the runner
+# executes must resolve its interpreter there rather than through the ambient one,
+# which may live outside the sandbox on a machine that uses a managed Python.
+SANDBOX_REACHABLE_PYTHON = "/usr/bin/env python3"
 TEMPLATE_SCRIPT = ROOT / "template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py"
 WORKER_CONTRACT_SCENARIOS = ROOT / "tests/fixtures/orchestration/worker-contract-scenarios.json"
 WORKER_CONTRACT_HOLDOUT = ROOT / "tests/fixtures/orchestration/worker-contract-holdout.json"
@@ -828,7 +832,7 @@ def write_fake_codex(path: Path) -> None:
     path.write_text(
         textwrap.dedent(
             f"""\
-            #!{sys.executable}
+            #!{SANDBOX_REACHABLE_PYTHON}
             from __future__ import annotations
 
             import atexit

@@ -1913,7 +1913,8 @@ for relative in sys.argv[2:]:
 )
 SMOKE_GROUP_EOF
 git -C "$group_project" add -A
-git -C "$group_project" commit -qm "generated execution group"
+git -C "$group_project" -c user.email=ci@example.invalid -c user.name=CI \
+  commit -qm "generated execution group"
 (cd "$group_project" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-execution-groups >/dev/null)
 if (cd "$group_project" && .project-agent-workflow/scripts/complete-plan.sh "$group_alpha" \
     >/dev/null 2>"$tmp/generated-group-complete.err"); then
