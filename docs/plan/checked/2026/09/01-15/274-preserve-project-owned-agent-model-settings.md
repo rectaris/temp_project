@@ -1,6 +1,6 @@
 # Preserve project-owned agent model settings during Copier updates
 
-status: ready
+status: checked
 primary_invariant: Copier preserves every existing project-owned agent model and reasoning value, fills only absent defaults, and rejects unrelated profile changes without altering the qualified writable-runner model policy.
 task_types:
   - template_workflow
