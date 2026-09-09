@@ -79,7 +79,7 @@ A plan file is a rendering of one authoring input, not a document assembled by h
 Classify every change into exactly one tier before creating plan artifacts. Plan weight, review depth, and available stop transitions follow from that tier. Tier selection is a bounded parent decision recorded as `implementation_tier` in the active plan; when two tiers are defensible, choose the higher one.
 
 - Tier 0: one file, reversible, already covered by an existing validation command, with no new external effect and an unchanged security boundary. Implement directly and commit without a plan file.
-- Tier 1: bounded multi-file change whose security boundary, validation authority, and external-effect authority are unchanged. Use a short active plan carrying `primary_invariant`, `write_scope`, `validation`, and exactly one `acceptance` item.
+- Tier 1: bounded multi-file change whose security boundary, validation authority, and external-effect authority are unchanged. Use a short active plan carrying `primary_invariant`, `write_scope`, `validation`, and exactly one `acceptance` item. New admission accepts exactly one item and rejects zero or several; a plan that needs several acceptance items is Tier 2.
 - Tier 2: security-boundary change, irreversible effect, external write authority, lifecycle or validation-authority change, or a write scope that cannot be enumerated as exact paths. Use the full manifest contract, review gates, and restructuring contract.
 
 Count one exact mirrored pair as one Tier 0 file. A single mechanical edit and the same edit in that file's established counterpart, such as a source document and its generated copy, stay Tier 0 together when every remaining Tier 0 condition holds for both files.
@@ -91,7 +91,8 @@ Count one exact mirrored pair as one Tier 0 file. A single mechanical edit and t
 
 - Escalate a tier as soon as new evidence crosses its boundary, and treat the escalation as a plan update rather than a stop.
 - Never lower a recorded tier without explicit user authorization.
-- Do not route Tier 0 or Tier 1 work through the restructuring contract. Use the bounded descope transition or stop them instead.
+- Do not route Tier 0 or Tier 1 work through the restructuring contract.
+- A Tier 1 plan carries one acceptance item, so it cannot partition that item and cannot take a bounded descope. When such work must stop, stop it for the owner with its single requirement intact: keep the existing stopped or deferred state and its evidence, and never split, rewrite, or drop the requirement to make a descope look feasible.
 
 ## Parallel Execution Groups
 
@@ -184,9 +185,11 @@ A bounded descope reduces the acceptance set of the current plan without restruc
 - Record `descope_required` in the parent-owned execution ledger through one `descope_classification` event bound to an independent-review receipt, the unchanged plan path, plan digest, source HEAD, primary invariant, and the current candidate lifecycle.
 - Classification requires a bounded write scope and unchanged source scope, validation authority, invariant boundaries, primary invariant, safety conditions, and external-effect authority, with exactly one independent invariant. Any drift escalates to the matching hard replan reason instead of authorizing a descope.
 - Partition every source acceptance digest exactly once into `retained_acceptance_digests` and `deferred_acceptance_digests`, preserving source order. Retain at least one item and defer at least one item. Losing, duplicating, reordering, or adding an acceptance digest is rejected.
+- A descope therefore applies only to a genuinely partitionable acceptance set of at least two items. An acceptance set that cannot be split into two nonempty sides is not descopable, and no rewording, splitting, or restatement of its requirement may manufacture a partition.
 - Move the deferred acceptance items to the exact `deferred_backlog_path` backlog plan. A descope never deletes a requirement; it only changes when that requirement is executed.
 - `descope_required` stops candidate generation, correction, validation, apply, completion, and archival for that execution run. Only the `descope_plan` gate stays open, and the stopped run is never reopened.
-- A descope creates no replan contract, no successor lineage, and no additional active plan. Keep it as the default exit for Tier 0 and Tier 1 work.
+- A descope creates no replan contract, no successor lineage, and no additional active plan. Keep it as the default exit for a Tier 1 plan whose acceptance set is partitionable. Tier 0 work has no plan file, so it has no descope exit at all.
+- Indivisible Tier 1 work leaves the ledger in its existing stopped owner-decision state with its recorded reason and evidence preserved, and its single acceptance item unchanged. Refuse the descope because no nonempty partition exists; do not reopen the run, restart it as unstarted backlog work, fabricate an exhaustion or drift reason, or create a descope, repair, or reconstruction successor to obtain another execution budget. Only an already checked same-plan continuation policy may apply, on its own eligibility conditions.
 - `descope_pending` is a stopped owner-decision state. Create the exact deferred backlog plan only after the owner authorizes the descope and the deferred work independently satisfies the numbered-plan admission contract; otherwise leave the run stopped or shelve the source through the owner-directed lifecycle. No worker, correction, review, or classification effect may bypass that stop.
 
 ### Review-Finding Budgets

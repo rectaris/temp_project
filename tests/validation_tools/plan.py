@@ -689,6 +689,92 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     with self.assertRaises(module.PlanError):
                         module.validate_admission_record(values)
 
+    def tier_one_plan_text(self, acceptance: list[str]) -> str:
+        """Render one admitted Tier 1 plan carrying the given acceptance items."""
+
+        body = "acceptance:\n" + "".join(f"  - {item}\n" for item in acceptance)
+        return self.admission_plan_text(
+            implementation_tier="implementation_tier: 1\n",
+            acceptance=body if acceptance else "acceptance:\n",
+        )
+
+    def test_new_tier_one_admission_requires_exactly_one_acceptance_item(self) -> None:
+        module = load_module(PLANLIB, "planlib_tier_one_admission")
+        cases = {
+            "zero items": [],
+            "two items": [
+                "Stop the indivisible work with its requirement intact.",
+                "Refuse a fabricated acceptance partition.",
+            ],
+            "three items": [
+                "Stop the indivisible work with its requirement intact.",
+                "Refuse a fabricated acceptance partition.",
+                "Preserve the stopped execution evidence.",
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.md"
+
+            plan.write_text(
+                self.tier_one_plan_text(["Stop the indivisible work with its requirement intact."]),
+                encoding="utf-8",
+            )
+            values = module.parse_manifest(plan)
+            self.assertEqual(module.manifest_scalar(values, "implementation_tier"), "1")
+            module.validate_admission_record(values)
+
+            for label, acceptance in cases.items():
+                with self.subTest(case=label):
+                    plan.write_text(self.tier_one_plan_text(acceptance), encoding="utf-8")
+                    values = module.parse_manifest(plan)
+                    with self.assertRaises(module.PlanError) as raised:
+                        module.validate_admission_record(values)
+                    self.assertIn("exactly one acceptance item", str(raised.exception))
+
+            # A Tier 2 plan keeps several acceptance items.
+            plan.write_text(
+                self.admission_plan_text(
+                    implementation_tier="implementation_tier: 2\n",
+                    acceptance="acceptance:\n"
+                    + "".join(f"  - {item}\n" for item in cases["two items"]),
+                ),
+                encoding="utf-8",
+            )
+            module.validate_admission_record(module.parse_manifest(plan))
+
+    def test_root_admission_applies_the_same_tier_one_acceptance_count(self) -> None:
+        module = load_module(self.ROOT_POLICY, "root_policy_tier_one_admission")
+        self.assertIn("implementation_tier", module.ADMISSION_SCALAR_KEYS)
+        self.assertIn("acceptance", module.ADMISSION_LIST_KEYS)
+
+        single = ["Stop the indivisible work with its requirement intact."]
+        values = module.parse_plan_manifest(self.tier_one_plan_text(single))
+        self.assertEqual(values["acceptance"], single)
+        module.check_plan_admission("docs/plan/active/900-tier-one.md", values)
+
+        for acceptance in ([], single + ["Refuse a fabricated acceptance partition."]):
+            with self.subTest(items=len(acceptance)):
+                values = module.parse_plan_manifest(self.tier_one_plan_text(acceptance))
+                with self.assertRaises(SystemExit):
+                    module.check_plan_admission("docs/plan/active/900-tier-one.md", values)
+
+    def test_historical_tier_one_plans_stay_readable_without_an_admission_record(self) -> None:
+        module = load_module(PLANLIB, "planlib_tier_one_historical")
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "legacy.md"
+            legacy.write_text(
+                "status: checked\nimplementation_tier: 1\n"
+                "write_scope:\n  - scripts/tool.py\n"
+                "validation:\n  - git diff --check\n"
+                "acceptance:\n"
+                "  - Preserve the first pre-policy requirement.\n"
+                "  - Preserve the second pre-policy requirement.\n\n## Tasks\n",
+                encoding="utf-8",
+            )
+            values = module.parse_manifest(legacy)
+            self.assertFalse(module.has_admission_record(values))
+            self.assertEqual(len(values["acceptance"]), 2)
+
     def test_lint_keeps_pre_policy_plans_readable_and_checks_admission_on_demand(self) -> None:
         lint = ROOT / "template/.project-agent-workflow/scripts/lint-plan-docs.py"
         with tempfile.TemporaryDirectory() as tmp:

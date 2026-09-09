@@ -152,6 +152,7 @@ ADMISSION_LIFECYCLE_PREFIXES = (
     ".agent-logs/",
     ".agent-artifacts/",
 )
+TIER_ONE_VALUE = "1"
 WITNESS_REQUIRED_STATUSES = {"in_progress"}
 VALIDATION_WITNESS_STAGES = {"static", "focused", "authoritative"}
 STATIC_VALIDATION_WITNESSES = {"resolved-context-files"}
@@ -1848,6 +1849,20 @@ def validate_admission_record(
             "plan_purpose: implementation requires a write_scope path outside "
             "plan-lifecycle records"
         )
+
+    # A Tier 1 plan carries one acceptance item, so it can never partition that
+    # item into the nonempty retained and deferred sides a bounded descope needs.
+    # Checking the count at admission keeps that stop honest instead of pushing
+    # the impossible partition onto the stopped run.
+    if manifest_scalar(values, "implementation_tier").strip() == TIER_ONE_VALUE:
+        acceptance = values.get("acceptance", [])
+        if not isinstance(acceptance, list):
+            raise PlanError("plan acceptance must be a list")
+        if len(acceptance) != 1:
+            raise PlanError(
+                "implementation_tier: 1 requires exactly one acceptance item, not "
+                f"{len(acceptance)}; a plan that needs several acceptance items is Tier 2"
+            )
     return records
 
 

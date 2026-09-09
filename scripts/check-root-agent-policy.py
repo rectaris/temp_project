@@ -57,14 +57,16 @@ ADMISSION_LIFECYCLE_PREFIXES = (
     ".agent-logs/",
     ".agent-artifacts/",
 )
-ADMISSION_SCALAR_KEYS = {"status", "plan_purpose", "execution_group"}
+ADMISSION_SCALAR_KEYS = {"status", "plan_purpose", "execution_group", "implementation_tier"}
 ADMISSION_LIST_KEYS = {
+    "acceptance",
     "write_scope",
     "focused_validation",
     "feasibility_evidence",
     "completion_conditions",
     "completion_witness_map",
 }
+TIER_ONE_VALUE = "1"
 PLAN_FILE_RE = re.compile(r"([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
 MATRIX_MARKER_RE = re.compile(r"^\s*(A|B|C|推奨|理由|Recommended|Reason)\s*[:：]")
 APPROACH_MARKERS = {"A", "B", "C"}
@@ -358,7 +360,7 @@ TIER_ZERO_FILE_MENTIONS = 8
 # fails until it is re-reviewed here. Both specs share one digest because this
 # section carries no command path for the generated rewrite to change.
 TIER_ZERO_SECTION_DIGEST = (
-    "sha256:e212696f9120466a5d31aa4f267edfac8a83bc0ada88f4c8eb4282409a8cc312"
+    "sha256:734d9a1632c0c54710229919359dfc5baf9430f243b07da489ca975501572779"
 )
 
 
@@ -3109,6 +3111,16 @@ def check_plan_admission(relative: str, values: dict[str, str | list[str]]) -> N
             f"{relative} plan_purpose: implementation requires a write_scope path "
             "outside plan-lifecycle records"
         )
+
+    if values.get("implementation_tier", "") == TIER_ONE_VALUE:
+        acceptance = values["acceptance"]
+        assert isinstance(acceptance, list)
+        if len(acceptance) != 1:
+            fail(
+                f"{relative} implementation_tier: 1 requires exactly one acceptance "
+                f"item, not {len(acceptance)}; a plan that needs several acceptance "
+                "items is Tier 2"
+            )
 
 
 def check_plan_admission_boundary() -> None:
