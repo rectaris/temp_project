@@ -973,10 +973,13 @@ def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str
 # to be anything but text.
 MARKDOWN_FENCE_TOKEN_RE = re.compile(r"`{3,}|~{3,}")
 MARKDOWN_BACKTICK_RUN_RE = re.compile(r"`+")
-# A backslash escape makes the next punctuation character literal, so it must be
-# removed before anything else is read, or an escaped delimiter would be counted
-# as a real one and an escaped one would be missed.
-MARKDOWN_ESCAPE_RE = re.compile(r"\\[!-/:-@\[-`{-~]")
+# A backslash decides whether the character after it is a delimiter, and it is
+# read differently inside and outside code, so any attempt to account for it
+# reproduces the parser. The material is refused instead of interpreted.
+MARKDOWN_BACKSLASH = "\\"
+# An inline link carries a destination and an optional quoted title, either of
+# which may continue on following lines, so the whole form is refused rather
+# than parsed for a closing parenthesis.
 MARKDOWN_LINK_DESTINATION_RE = re.compile(r"\]\(")
 # A list container shifts the margin, so a definition can sit at any depth and
 # behind any number of list or quote markers.
@@ -1033,14 +1036,17 @@ def markdown_outside_code(line: str, spans: list[tuple[int, int]]) -> str:
 def markdown_prose_defects(text: str) -> list[str]:
     """Report the constructs that stop this text from being plain prose.
 
-    Escapes are removed first, so an escaped delimiter is not mistaken for a
-    real one. Without a fence token no fenced block exists in any container.
-    Without a tab no indentation is ambiguous. Without an unclosed backtick run
-    no code span reaches the next line. Without an angle bracket outside code no
-    raw HTML block, inline tag, comment, or autolink starts. Without an unclosed
-    label, an unclosed link destination, or a link reference definition, no
-    link, image, or title runs on. What remains renders every line as text, so a
-    line that matches an expected instruction is that instruction.
+    Six rounds of review each defeated a rule that tried to decide how a line
+    parses, because deciding that correctly means being the parser. Each rule
+    below refuses a material instead. Without a tab no indentation is
+    ambiguous. Without a fence token no fenced block exists in any container.
+    Without a backslash no character changes meaning between the checker's
+    reading and the parser's. Without an unclosed backtick run no code span
+    reaches the next line. Without an angle bracket outside code no raw HTML
+    block, inline tag, comment, or autolink starts. Without an unclosed label,
+    an inline link, or a link reference definition, no label, destination, or
+    quoted title runs on. What remains renders every line as text, so a line
+    that matches an expected instruction is that instruction.
     """
 
     defects: list[str] = []
@@ -1050,7 +1056,8 @@ def markdown_prose_defects(text: str) -> list[str]:
             defects.append(f"line {number} contains a tab, which shifts block indentation")
         if MARKDOWN_FENCE_TOKEN_RE.search(line):
             defects.append(f"line {number} contains a code fence token")
-        line = MARKDOWN_ESCAPE_RE.sub("", line)
+        if MARKDOWN_BACKSLASH in line:
+            defects.append(f"line {number} contains a backslash, which changes how the next character is read")
         spans, unclosed = markdown_code_spans(line)
         if unclosed:
             defects.append(f"line {number} leaves a code span open")
@@ -1060,10 +1067,8 @@ def markdown_prose_defects(text: str) -> list[str]:
             defects.append(f"line {number} contains an angle bracket outside code")
         if outside.count("[") != outside.count("]"):
             defects.append(f"line {number} leaves a link or image label open")
-        for match in MARKDOWN_LINK_DESTINATION_RE.finditer(outside):
-            if ")" not in outside[match.end():]:
-                defects.append(f"line {number} leaves a link destination open")
-                break
+        if MARKDOWN_LINK_DESTINATION_RE.search(outside):
+            defects.append(f"line {number} contains an inline link, whose destination or title can run on")
         if MARKDOWN_LINK_DEFINITION_RE.match(markdown_block_content(line)):
             defects.append(f"line {number} is a link reference definition")
     return defects
