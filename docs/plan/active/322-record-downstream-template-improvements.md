@@ -1,6 +1,7 @@
 # Record template improvement evidence in generated repositories
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Each recorded improvement preserves its observed evidence and uncertainty in project-owned files without changing the originating product task or granting external effects.
 task_types:
   - template_workflow
