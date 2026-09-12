@@ -4,21 +4,53 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Iterable
 
 MAX_REQUESTED_IDS = 128
 PLAN_ID_RE = re.compile(r"^([0-9]{3})-[a-z0-9][a-z0-9-]*\.md$")
-ACTIVE_INDEX_TITLE = "# Active Plan"
-ACTIVE_INDEX_HEADER = "id\tpath\tstatus"
 
 
 class OverviewError(ValueError):
     """Raised for unsafe, ambiguous, or missing lifecycle overview inputs."""
+
+
+_PLANLIB: ModuleType | None = None
+
+
+def planlib_module() -> ModuleType:
+    """Load the canonical plan library that sits beside this implementation.
+
+    The overview is reached through two entrypoints and may be loaded from any
+    working directory, so the library is resolved from this file's own
+    directory rather than from the import path.
+    """
+
+    global _PLANLIB
+    if _PLANLIB is not None:
+        return _PLANLIB
+    module_path = Path(__file__).resolve().with_name("planlib.py")
+    if not module_path.is_file():
+        raise OverviewError(f"canonical plan index parser is missing: {module_path}")
+    spec = importlib.util.spec_from_file_location("plan_overview_planlib", module_path)
+    if spec is None or spec.loader is None:
+        raise OverviewError(f"canonical plan index parser is unloadable: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise OverviewError(
+            f"canonical plan index parser could not be loaded: {module_path}: {exc}"
+        ) from exc
+    sys.modules[spec.name] = module
+    _PLANLIB = module
+    return module
 
 
 def markdown_escape(value: Any) -> str:
@@ -150,32 +182,22 @@ def iter_lifecycle_plan_files(root: Path) -> list[Path]:
 
 
 def parse_active_index(index_path: Path) -> list[dict[str, str]]:
+    """Read one present active index through the canonical shared parser.
+
+    A repository that has no active index at all stays supported and reports no
+    active rows. Once the document exists, its whole text is judged by the same
+    parser the enforcing lifecycle commands use, so a read-only overview can no
+    longer report a malformed index as a successful empty result.
+    """
+
     if not index_path.exists():
         return []
-    text = read_utf8(index_path)
-    if not text:
-        return []
-    lines = text.splitlines()
-    if not lines or lines[0] != ACTIVE_INDEX_TITLE:
-        raise OverviewError(f"active index must start with {ACTIVE_INDEX_TITLE!r}: {index_path}")
-    if len(lines) >= 3 and lines[1] == "" and lines[2] == "No active development items.":
-        return []
-    if len(lines) < 4 or lines[1] != "" or lines[2] != ACTIVE_INDEX_HEADER:
-        raise OverviewError(f"active index is not in the accepted canonical format: {index_path}")
-    rows: list[dict[str, str]] = []
-    for raw_line in lines[3:]:
-        if raw_line.strip() == "":
-            continue
-        columns = raw_line.split("\t")
-        if len(columns) != 3:
-            raise OverviewError(f"active index row is malformed: {raw_line!r}")
-        plan_id, relative_path, status = columns
-        if not re.fullmatch(r"[0-9]{3}", plan_id):
-            raise OverviewError(f"active index row has an invalid plan id: {raw_line!r}")
-        if relative_path.startswith("/") or ".." in Path(relative_path).parts:
-            raise OverviewError(f"active index row uses an unsafe path: {raw_line!r}")
-        rows.append({"id": plan_id, "path": relative_path, "status": status})
-    return rows
+    planlib = planlib_module()
+    try:
+        rows = planlib.parse_active_index(planlib.read_active_index(index_path))
+    except planlib.ActiveIndexError as exc:
+        raise OverviewError(f"{index_path}: {exc}") from exc
+    return [{"id": plan_id, "path": path, "status": status} for plan_id, path, status in rows]
 
 
 def build_rows_by_id(root: Path) -> dict[str, list[Path]]:

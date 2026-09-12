@@ -246,3 +246,4 @@ id	path
 290	docs/plan/checked/2026/09/01-15/290-release-v146-for-downstream-archive-reading.md
 303	docs/plan/checked/2026/09/01-15/303-keep-the-active-plan-directory-present.md
 311	docs/plan/checked/2026/09/01-15/311-use-current-files-for-smoke-rendering.md
+310	docs/plan/checked/2026/09/01-15/310-reuse-canonical-index-parser-in-overviews.md

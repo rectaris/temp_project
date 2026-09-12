@@ -1,6 +1,6 @@
 # Use the canonical active-index parser in read-only plan overviews
 
-status: in_progress
+status: checked
 primary_invariant: A read-only plan overview parses the whole present active index through the existing canonical parser and never reports a malformed index as a successful empty result.
 task_types:
   - template_workflow
@@ -71,11 +71,11 @@ checked_summary_ja: プラン一覧の表示と実行前検査で、同じ一覧
 
 ## Tasks
 
-- [ ] Add a registered PlanOverviewTest class in tests/validation_tools/plan.py and import it from tests/test-validation-tools.py; existing searches find no overview-specific behavioral tests.
-- [ ] Assert the reproduced empty-file and empty-marker-plus-trailing-content cases fail. Compare both overview entrypoints with planlib on canonical empty and populated documents, CRLF, missing final newline, header-only input, duplicate rows, wrong ids, invalid status, literal backslash-t and unadopted prose.
-- [ ] Test missing-index compatibility separately from a present invalid index. Exercise status disagreement, missing requested ids, duplicate lifecycle files, checked/replanned/shelved resolution, empty backlog and relative Markdown links.
-- [ ] Use temporary fixtures and before/after file snapshots to prove no rewrite; require nonzero failure and no success JSON or table on invalid input. Keep correct canonical input as positive controls.
-- [ ] Replace the local grammar with the shared parser adapter and update entrypoint loading only if necessary. Run the registered focused suite, independent review and mandatory validation.
+- [x] Add a registered PlanOverviewTest class in tests/validation_tools/plan.py and import it from tests/test-validation-tools.py; existing searches find no overview-specific behavioral tests.
+- [x] Assert the reproduced empty-file and empty-marker-plus-trailing-content cases fail. Compare both overview entrypoints with planlib on canonical empty and populated documents, CRLF, missing final newline, header-only input, duplicate rows, wrong ids, invalid status, literal backslash-t and unadopted prose.
+- [x] Test missing-index compatibility separately from a present invalid index. Exercise status disagreement, missing requested ids, duplicate lifecycle files, checked/replanned/shelved resolution, empty backlog and relative Markdown links.
+- [x] Use temporary fixtures and before/after file snapshots to prove no rewrite; require nonzero failure and no success JSON or table on invalid input. Keep correct canonical input as positive controls.
+- [x] Replace the local grammar with the shared parser adapter and update entrypoint loading only if necessary. Run the registered focused suite, independent review and mandatory validation.
 
 ## Validation Notes
 
@@ -83,3 +83,13 @@ checked_summary_ja: プラン一覧の表示と実行前検査で、同じ一覧
 - Owner instruction: これまでのこのプロジェクトでの開発作業について改善できる部分を探し、改善するためのプランとして作成せよ。
 - This task authorizes plan authoring only. No implementation, stopped-run continuation, remote publication or performance claim is included.
 - Planning evidence and reproduction steps: docs/plan/development-improvements-20260912.md. Regression assertions described here must be added and exercised during implementation; their future success is not claimed now.
+- Implementation baseline: ecaf8ce in temp_project. Owner instruction: 310 312 を順に実装せよ。
+- implementation_mode: parent_direct. Every write in this run was made by the parent session inside the plan-bound worktree.
+- Defect reproduced before the change: with a blank docs/plan/plan.md, and with "# Active Plan\n\nNo active development items.\nstray trailing content\n", both overview entrypoints returned exit 0 and an empty JSON payload while planlib.parse_active_index refused the same bytes.
+- The overview now resolves planlib.py from its own directory and delegates the whole present index to planlib.parse_active_index. A missing docs/plan/plan.md still yields no active rows; a present file is validated in full.
+- Focused validation: python3 tests/test-validation-tools.py, 289 tests, OK.
+- Authoritative validation: scripts/lint-project-workflow.sh OK; tests/smoke.sh passed with REQUIRE_COPIER=1 and a real Copier run.
+- Non-tautology check: reverting template/.project-agent-workflow/scripts/plan_overview.py to its previous committed version produced 15 failing assertions in PlanOverviewTest; the new implementation passes all 14 tests.
+- Independent review: read-only helper, no write scope, advisory only. No Critical, High or Medium findings. Three Low findings were reported.
+- Accepted and fixed: the planlib loader reported an unrelated import-time OSError as a missing parser and let SyntaxError escape as a traceback; it now separates missing, unloadable and load-failure diagnostics. The "trailing row content" fixture duplicated the doubled-final-newline case and now appends a genuine stray row line.
+- Retained by decision: test_the_overview_no_longer_carries_its_own_index_grammar stays as a cheap source marker. The reviewer's stronger alternative edits scripts/check-copier-template.py, which is outside this plan's write scope; the behavioral parity tests carry the invariant.

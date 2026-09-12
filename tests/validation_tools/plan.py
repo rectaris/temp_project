@@ -3964,5 +3964,218 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     module.parse_validation_command(command)
 
 
+class PlanOverviewTest(unittest.TestCase):
+    """Behavioral tests for the read-only plan overview entrypoints."""
+
+    ROOT_ENTRYPOINT = ROOT / "scripts/render-plan-overview.py"
+    GENERATED_ENTRYPOINT = ROOT / "template/.project-agent-workflow/scripts/render-plan-overview.py"
+    PLAN_MANIFEST = "status: {status}\nprimary_invariant: example\n"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.repository = Path(self.temp.name)
+        for relative in ("docs/plan/active", "docs/plan/backlog", "docs/plan/checked/2026/01/01-15"):
+            (self.repository / relative).mkdir(parents=True)
+        self.planlib = load_module(PLANLIB, "plan_overview_reference_planlib")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def write(self, relative: str, content: str) -> Path:
+        path = self.repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def write_plan(self, relative: str, *, status: str, title: str = "Example plan") -> Path:
+        return self.write(relative, f"# {title}\n\n" + self.PLAN_MANIFEST.format(status=status))
+
+    def write_index(self, text: str) -> Path:
+        path = self.repository / "docs/plan/plan.md"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def run_overview(self, *arguments: str, entrypoint: Path | None = None):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(self.ROOT_ENTRYPOINT if entrypoint is None else entrypoint),
+                "--root",
+                str(self.repository),
+                *arguments,
+            ],
+            check=False,
+            text=True,
+            cwd=tempfile.gettempdir(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def snapshot(self) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(self.repository)): path.read_bytes()
+            for path in sorted(self.repository.rglob("*"))
+            if path.is_file()
+        }
+
+    def planlib_accepts(self, text: str) -> bool:
+        try:
+            self.planlib.parse_active_index(text)
+        except self.planlib.ActiveIndexError:
+            return False
+        return True
+
+    def assert_refused(self, *arguments: str) -> None:
+        """Require both entrypoints to refuse without output or a rewrite."""
+
+        before = self.snapshot()
+        for entrypoint in (self.ROOT_ENTRYPOINT, self.GENERATED_ENTRYPOINT):
+            with self.subTest(entrypoint=entrypoint.name):
+                result = self.run_overview(*arguments, entrypoint=entrypoint)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("plan overview failed", result.stderr)
+                self.assertEqual(result.stdout, "")
+        self.assertEqual(self.snapshot(), before)
+
+    def assert_accepted(self, *arguments: str) -> str:
+        before = self.snapshot()
+        outputs = set()
+        for entrypoint in (self.ROOT_ENTRYPOINT, self.GENERATED_ENTRYPOINT):
+            with self.subTest(entrypoint=entrypoint.name):
+                result = self.run_overview(*arguments, entrypoint=entrypoint)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                outputs.add(result.stdout)
+        self.assertEqual(len(outputs), 1)
+        self.assertEqual(self.snapshot(), before)
+        return outputs.pop()
+
+    def populated_index(self) -> str:
+        self.write_plan("docs/plan/active/281-example.md", status="in_progress")
+        return "# Active Plan\n\nid\tpath\tstatus\n281\tdocs/plan/active/281-example.md\tin_progress\n"
+
+    def test_blank_active_index_is_refused(self) -> None:
+        self.write_index("")
+        self.assertFalse(self.planlib_accepts(""))
+        self.assert_refused("--json")
+
+    def test_empty_marker_with_trailing_content_is_refused(self) -> None:
+        text = "# Active Plan\n\nNo active development items.\nstray trailing content\n"
+        self.write_index(text)
+        self.assertFalse(self.planlib_accepts(text))
+        self.assert_refused("--json")
+
+    def test_missing_active_index_still_reports_no_active_rows(self) -> None:
+        self.write_plan("docs/plan/backlog/290-waiting.md", status="backlog")
+        self.assertFalse((self.repository / "docs/plan/plan.md").exists())
+        rows = json.loads(self.assert_accepted("--json"))
+        self.assertEqual([row["id"] for row in rows], ["290"])
+
+    def test_canonical_documents_agree_with_the_shared_parser(self) -> None:
+        accepted = {
+            "empty": "# Active Plan\n\nNo active development items.\n",
+            "populated": self.populated_index(),
+        }
+        for label, text in accepted.items():
+            with self.subTest(document=label):
+                self.write_index(text)
+                self.assertTrue(self.planlib_accepts(text))
+                self.assert_accepted("--json")
+
+    def test_malformed_documents_agree_with_the_shared_parser(self) -> None:
+        self.write_plan("docs/plan/active/281-example.md", status="in_progress")
+        row = "281\tdocs/plan/active/281-example.md\tin_progress"
+        rejected = {
+            "crlf": "# Active Plan\r\n\r\nNo active development items.\r\n",
+            "missing final newline": "# Active Plan\n\nNo active development items.",
+            "double final newline": "# Active Plan\n\nNo active development items.\n\n",
+            "header only": f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n",
+            "missing blank line": f"# Active Plan\n{self.planlib.ACTIVE_INDEX_HEADER}\n{row}\n",
+            "duplicate id": f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n{row}\n{row}\n",
+            "wrong id": (
+                f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n"
+                "282\tdocs/plan/active/281-example.md\tin_progress\n"
+            ),
+            "invalid status": (
+                f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n"
+                "281\tdocs/plan/active/281-example.md\tbacklog\n"
+            ),
+            "literal backslash-t": (
+                "# Active Plan\n\nid\\tpath\\tstatus\n"
+                "281\\tdocs/plan/active/281-example.md\\tin_progress\n"
+            ),
+            "unadopted prose": "Plans we are working on right now.\n",
+            "trailing row content": (
+                f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n{row}\nstray note\n"
+            ),
+        }
+        for label, text in rejected.items():
+            with self.subTest(document=label):
+                self.write_index(text)
+                self.assertFalse(self.planlib_accepts(text), label)
+                self.assert_refused("--json")
+
+    def test_index_status_disagreement_is_refused(self) -> None:
+        self.write_plan("docs/plan/active/281-example.md", status="deferred")
+        self.write_index(
+            "# Active Plan\n\nid\tpath\tstatus\n281\tdocs/plan/active/281-example.md\tin_progress\n"
+        )
+        self.assert_refused("--json")
+
+    def test_index_row_without_its_plan_file_is_refused(self) -> None:
+        self.write_index(
+            "# Active Plan\n\nid\tpath\tstatus\n281\tdocs/plan/active/281-example.md\tin_progress\n"
+        )
+        self.assert_refused("--json")
+
+    def test_missing_requested_id_is_refused(self) -> None:
+        self.write_index("# Active Plan\n\nNo active development items.\n")
+        self.assert_refused("--json", "299")
+
+    def test_duplicate_lifecycle_files_for_one_id_are_refused(self) -> None:
+        self.write_index("# Active Plan\n\nNo active development items.\n")
+        self.write_plan("docs/plan/backlog/290-waiting.md", status="backlog")
+        self.write_plan("docs/plan/checked/2026/01/01-15/290-waiting.md", status="checked")
+        self.assert_refused("--json", "290")
+
+    def test_archived_and_shelved_ids_resolve(self) -> None:
+        self.write_index("# Active Plan\n\nNo active development items.\n")
+        self.write_plan("docs/plan/checked/2026/01/01-15/291-done.md", status="checked")
+        self.write_plan("docs/plan/replanned/2026/01/01-15/292-replaced.md", status="replanned")
+        self.write_plan("docs/plan/shelved/293-shelved.md", status="shelved")
+        rows = json.loads(self.assert_accepted("--json", "291", "292", "293"))
+        self.assertEqual(
+            [(row["id"], row["status"]) for row in rows],
+            [("291", "checked"), ("292", "replanned"), ("293", "shelved")],
+        )
+
+    def test_empty_backlog_renders_an_empty_table(self) -> None:
+        self.write_index("# Active Plan\n\nNo active development items.\n")
+        rendered = self.assert_accepted("--relative-to", "docs/plan/backlog/README.md")
+        self.assertEqual(rendered, "| id | status | title | path |\n| --- | --- | --- | --- |\n")
+
+    def test_markdown_links_stay_relative_to_the_report_path(self) -> None:
+        self.write_index(self.populated_index())
+        self.write_plan("docs/plan/backlog/290-waiting.md", status="backlog", title="Waiting plan")
+        rendered = self.assert_accepted("--relative-to", "docs/plan/backlog/README.md")
+        self.assertIn("[290](290-waiting.md)", rendered)
+        rendered_from_root = self.assert_accepted("--relative-to", "README.md")
+        self.assertIn("[290](docs/plan/backlog/290-waiting.md)", rendered_from_root)
+
+    def test_active_row_is_resolved_for_a_requested_id(self) -> None:
+        self.write_index(self.populated_index())
+        rows = json.loads(self.assert_accepted("--json", "281"))
+        self.assertEqual(
+            [(row["id"], row["status"], row["path"]) for row in rows],
+            [("281", "in_progress", "docs/plan/active/281-example.md")],
+        )
+
+    def test_the_overview_no_longer_carries_its_own_index_grammar(self) -> None:
+        source = (ROOT / "template/.project-agent-workflow/scripts/plan_overview.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("No active development items.", source)
+        self.assertIn("planlib", source)
+
+
 if __name__ == "__main__":
     unittest.main()
