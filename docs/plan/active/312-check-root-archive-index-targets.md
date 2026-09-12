@@ -1,6 +1,6 @@
 # Validate root checked-index targets through the shared archive check
 
-status: backlog
+status: in_progress
 primary_invariant: Every indexed checked plan resolves to its existing same-id archive, and root validation applies the shared checked-index rules without rewriting historical archive content.
 task_types:
   - template_workflow
