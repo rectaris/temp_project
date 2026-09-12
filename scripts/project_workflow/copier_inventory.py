@@ -200,6 +200,7 @@ SOURCE_REQUIRED = [
     "template/docs/plan/checked.md",
     "template/docs/plan/replanned.md",
     "template/docs/plan/plan.md",
+    "template/docs/plan/active/README.md",
     "template/docs/plan/backlog/README.md",
     "template/docs/plan/shelved/README.md",
     "template/docs/plan/handoffs/README.md",
