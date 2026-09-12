@@ -58,3 +58,4 @@ id	path	contract
 254	docs/plan/replanned/2026/09/01-15/254-preserve-identical-human-report-supersede.md	docs/plan/replanned/contracts/254-complete-safe-human-report-supersede.json
 104	docs/plan/replanned/2026/09/01-15/104-interpret-pre-tool-command-context.md	docs/plan/replanned/contracts/104-complete-pre-tool-command-context.json
 275	docs/plan/replanned/2026/09/01-15/275-route-detailed-agent-policy-on-demand.md	docs/plan/replanned/contracts/275-route-detailed-agent-policy-on-demand.json
+320	docs/plan/replanned/2026/09/01-15/320-pin-optional-harness-instructions.md	docs/plan/replanned/contracts/320-pin-optional-harness-instructions.json
