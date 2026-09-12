@@ -1,20 +1,6 @@
 # Pin optional instruction revisions with copy-only selection seeding
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
-primary_invariant: Selecting an optional instruction revision preserves governing requirements and project-owned selection bytes, and never silently activates an unmeasured or changed revision.
-
-replan_sources:
-  - docs/plan/active/320-pin-optional-harness-instructions.md
-replan_contract: docs/plan/replanned/contracts/320-pin-optional-harness-instructions.json
-successor_plans:
-  - docs/plan/active/325-pin-optional-harness-instructions.md
-inherited_acceptance_digests:
-  - sha256:834c5a07b47a3403ef74536faa87a302745fa7727614212a649466a3fd98a370
-  - sha256:0dc0a3f9efccd3cdcabef1de661496138a920902a05f2e7183104d4dabd4d896
-integration_source_ids:
-  - 320
+status: replanned
 task_types:
   - template_workflow
   - planning_docs
@@ -93,8 +79,17 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:834c5a07b47a3403ef74536faa87a302745fa7727614212a649466a3fd98a370","stage":"focused","witness":"scripts/lint-project-workflow.sh"}
   - {"acceptance_sha256":"sha256:0dc0a3f9efccd3cdcabef1de661496138a920902a05f2e7183104d4dabd4d896","stage":"focused","witness":"scripts/lint-project-workflow.sh"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/325-pin-optional-harness-instructions.md
+replan_contract: docs/plan/replanned/contracts/325-pin-optional-harness-instructions.json
 integration_gates:
-  - Consume the checked Plan 319 comparison contract and evidence semantics from docs/plan/checked/2026/09/01-15/319-compare-harness-runs-locally.md.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/326-pin-optional-harness-instructions-review-remediation.md
+inherited_acceptance_digests:
+  - sha256:834c5a07b47a3403ef74536faa87a302745fa7727614212a649466a3fd98a370
+  - sha256:0dc0a3f9efccd3cdcabef1de661496138a920902a05f2e7183104d4dabd4d896
 checked_summary_ja: 補助指示を版指定で選び、比較記録を確認して採用または以前の版への復帰を判断できるようにする。
 
 ## Decisions

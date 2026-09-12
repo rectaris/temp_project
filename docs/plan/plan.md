@@ -1,4 +1,4 @@
 # Active Plan
 
 id	path	status
-325	docs/plan/active/325-pin-optional-harness-instructions.md	replan_required
+326	docs/plan/active/326-pin-optional-harness-instructions-review-remediation.md	in_progress

@@ -59,3 +59,4 @@ id	path	contract
 104	docs/plan/replanned/2026/09/01-15/104-interpret-pre-tool-command-context.md	docs/plan/replanned/contracts/104-complete-pre-tool-command-context.json
 275	docs/plan/replanned/2026/09/01-15/275-route-detailed-agent-policy-on-demand.md	docs/plan/replanned/contracts/275-route-detailed-agent-policy-on-demand.json
 320	docs/plan/replanned/2026/09/01-15/320-pin-optional-harness-instructions.md	docs/plan/replanned/contracts/320-pin-optional-harness-instructions.json
+325	docs/plan/replanned/2026/09/01-15/325-pin-optional-harness-instructions.md	docs/plan/replanned/contracts/325-pin-optional-harness-instructions.json
