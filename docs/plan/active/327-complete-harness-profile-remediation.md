@@ -1,6 +1,8 @@
 # Complete bounded optional harness profile remediation
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 primary_invariant: Selecting an optional instruction revision preserves governing requirements and project-owned selection bytes, and never silently activates an unmeasured or changed revision.
 
 replan_sources:
