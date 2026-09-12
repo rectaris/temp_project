@@ -1566,6 +1566,157 @@ if grep -R 'supportcard-status' "$tmp/typescript/.project-agent-workflow/skills"
   exit 1
 fi
 grep -q 'decision_audit:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
+grep -q 'harness_evaluation:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
+grep -q 'SPEC_HARNESS_EVALUATION.md' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
+grep -q 'Harness Evaluation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md"
+grep -q 'never authorizes adopting a configuration by itself' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/compare-harness-runs.py"
+cmp "$root/template/.project-agent-workflow/scripts/compare-harness-runs.py" \
+  "$tmp/typescript/.project-agent-workflow/scripts/compare-harness-runs.py"
+harness_dir="$tmp/typescript-harness"
+mkdir -p "$harness_dir"
+python3 - "$harness_dir" <<'HARNESS_FIXTURE_EOF'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+rule = "One intervention is one human message that changes the task after it starts."
+
+
+def sha(tag: str) -> str:
+    return "sha256:" + hashlib.sha256(tag.encode("utf-8")).hexdigest()
+
+
+runtime = {"cli_version": "1.4.5", "tool_versions": {"git": "2.43.0"}}
+slots = {
+    "old_model_current_instructions": "model-old",
+    "new_model_current_instructions": "model-new",
+}
+protocol = {
+    "schema_version": 1,
+    "protocol_id": "generated-smoke",
+    "repository_baseline": sha("baseline"),
+    "invariant_digest": sha("invariant"),
+    "authority_digest": sha("authority"),
+    "configurations": {
+        slot: {
+            "slot": slot,
+            "declared_model": model,
+            "reasoning_settings": {"supported": True, "effort": "medium"},
+            "instruction_asset_digests": {"AGENTS.md": sha("instructions")},
+            "runtime": runtime,
+            "configuration_digest": sha("configuration:" + slot),
+        }
+        for slot, model in slots.items()
+    },
+    "cases": [
+        {
+            "case_id": "small-fix",
+            "task_digest": sha("task:small-fix"),
+            "acceptance_digest": sha("acceptance:small-fix"),
+            "rubric_digest": sha("rubric:small-fix"),
+            "fixture_kind": "synthetic",
+        }
+    ],
+    "repetitions": 2,
+    "budget": {"max_total_runs": 16, "max_elapsed_seconds": 3600.0},
+    "metric_boundaries": {
+        "elapsed_seconds": "task_start_to_terminal_outcome",
+        "billed_cost": "directly_recorded_billed_amount",
+        "human_interventions": rule,
+    },
+    "decision_limits": {
+        "require_all_critical_pass": True,
+        "min_quality_pass_delta": 0.0,
+        "max_elapsed_ratio": 1.5,
+        "max_cost_ratio": 1.5,
+        "max_additional_interventions": 0,
+    },
+    "freeze": {
+        "declared_frozen_at": "2026-09-01T00:00:00Z",
+        "holdout_status": "withheld",
+        "ordering_evidence": None,
+    },
+}
+(root / "protocol.json").write_text(json.dumps(protocol, indent=2) + "\n", encoding="utf-8")
+
+names = []
+for slot, model in slots.items():
+    for repetition in (1, 2):
+        cell = slot + "/small-fix#" + str(repetition)
+        record = {
+            "schema_version": 1,
+            "protocol_id": "generated-smoke",
+            "slot": slot,
+            "case_id": "small-fix",
+            "repetition": repetition,
+            "task_digest": sha("task:small-fix"),
+            "acceptance_digest": sha("acceptance:small-fix"),
+            "repository_baseline": sha("baseline"),
+            "invariant_digest": sha("invariant"),
+            "authority_digest": sha("authority"),
+            "configuration_digest": sha("configuration:" + slot),
+            "fixture_kind": "synthetic",
+            "observed_model": {"status": "observed", "identity": model, "resolved_snapshot": None},
+            "observed_reasoning_settings": {"status": "observed", "supported": True, "effort": "medium"},
+            "observed_runtime": {
+                "status": "observed",
+                "cli_version": runtime["cli_version"],
+                "tool_versions": runtime["tool_versions"],
+            },
+            "instruction_loading": {
+                "status": "observed",
+                "effective_instruction_digests": {"AGENTS.md": sha("instructions")},
+                "host_instructions": "known",
+            },
+            "outcome": "completed",
+            "quality": {
+                "status": "observed",
+                "acceptance_result": "pass",
+                "judgment": {
+                    "kind": "deterministic_test",
+                    "identity": "smoke-check",
+                    "source_evidence_digest": sha("judgment:" + cell),
+                    "reviewer_provenance": "smoke fixture",
+                    "acceptance_item_digest": sha("acceptance:small-fix"),
+                    "rubric_digest": sha("rubric:small-fix"),
+                },
+            },
+            "critical_violation": False,
+            "elapsed_seconds": {"status": "observed", "value": 10.0},
+            "billed_cost": {"status": "observed", "amount": 1.0, "currency": "USD"},
+            "human_interventions": {
+                "status": "observed",
+                "count": 0,
+                "counting_rule_digest": sha(rule),
+            },
+            "evidence_digests": {"external_transcript": sha("transcript:" + cell)},
+        }
+        name = "observation-" + slot + "-" + str(repetition) + ".json"
+        (root / name).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        names.append(name)
+(root / "observations.txt").write_text("\n".join(names) + "\n", encoding="utf-8")
+HARNESS_FIXTURE_EOF
+harness_args=""
+while IFS= read -r observation; do
+  [ -n "$observation" ] || continue
+  harness_args="$harness_args --observation $harness_dir/$observation"
+done <"$harness_dir/observations.txt"
+# shellcheck disable=SC2086
+(cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/compare-harness-runs.py \
+  --protocol "$harness_dir/protocol.json" $harness_args --format json \
+  >"$harness_dir/report.json")
+grep -q '"recommendation": "insufficient_evidence"' "$harness_dir/report.json"
+grep -q '"synthetic_fixture"' "$harness_dir/report.json"
+grep -q '"ordering_evidence_not_independently_reviewed"' "$harness_dir/report.json"
+if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/compare-harness-runs.py \
+    --protocol "$harness_dir/protocol.json" >/dev/null 2>"$harness_dir/empty.err"); then
+  echo "generated harness comparison accepted a report without run observations" >&2
+  exit 1
+fi
+grep -q 'at least one run observation is required' "$harness_dir/empty.err"
 grep -q 'skill_authoring:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'referent_first:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'user_communication:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"

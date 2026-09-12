@@ -56,7 +56,7 @@ context_files:
   - template/.project-agent-workflow/scripts/summarize-agent-run.py
   - copier.yml
   - docs/plan/checked/2026/09/01-15/302-complete-routed-agent-policy.md
-  - docs/plan/active/319-compare-harness-runs-locally.md
+  - docs/plan/checked/2026/09/01-15/319-compare-harness-runs-locally.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md

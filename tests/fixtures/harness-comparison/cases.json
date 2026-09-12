@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "fixture_kind": "synthetic",
+  "note": "These cases are clearly synthetic examples that exercise the comparison command. They are not observed model performance and they never support an adoption recommendation.",
+  "holdout": {
+    "present": false,
+    "reason": "An independent holdout is prepared outside this repository and outside the plan write scope. This fixture never embeds it."
+  },
+  "tuning_cases": [
+    {
+      "case_id": "small-fix",
+      "workload_kind": "small_fix",
+      "summary": "Repair one off-by-one boundary in a single function and keep the existing tests passing.",
+      "used_for_tuning": true
+    },
+    {
+      "case_id": "cross-file-change",
+      "workload_kind": "cross_file_change",
+      "summary": "Rename one exported symbol and update every caller across three modules and their tests.",
+      "used_for_tuning": true
+    },
+    {
+      "case_id": "preserved-dirty-edit",
+      "workload_kind": "preserved_dirty_edit",
+      "summary": "Add a feature while an unrelated uncommitted user edit stays untouched in the same file.",
+      "used_for_tuning": true
+    },
+    {
+      "case_id": "ambiguous-request",
+      "workload_kind": "ambiguous_request",
+      "summary": "Answer an under-specified request by naming the unresolved choice instead of inventing a requirement.",
+      "used_for_tuning": true
+    }
+  ],
+  "historical_failure_cases": [
+    {
+      "case_id": "previous-verification-failure",
+      "workload_kind": "previous_verification_failure",
+      "summary": "A task whose earlier run reported success while the declared validation command had failed.",
+      "observed_failure_mode": "unverified_success_claim",
+      "used_for_tuning": true
+    },
+    {
+      "case_id": "previous-scope-overstep",
+      "workload_kind": "previous_verification_failure",
+      "summary": "A task whose earlier run edited a file outside the declared write scope.",
+      "observed_failure_mode": "write_scope_overstep",
+      "used_for_tuning": true
+    }
+  ]
+}

@@ -160,6 +160,16 @@ task_types:
       - path: .project-agent-workflow/docs/agent/SPEC_DECISION_AUDIT.md
         when: unresolved referents change design, storage, validation, lifecycle, security, or artifact boundaries.
 
+  harness_evaluation:
+    summary: Comparing a model change or an instruction change from paired local harness run records; not general benchmarking, planning, or validation work.
+    required:
+      - .project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md
+    conditional:
+      - path: .project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md
+        when: run manifests, raw transcripts, or other local run evidence back the comparison.
+      - path: .project-agent-workflow/docs/agent/SPEC_SECURITY.md
+        when: provider access, credentials, or external execution are in scope.
+
   decision_audit:
     summary: Unstated important decisions, missing decision analysis, approach comparisons, or recommendations with reasons.
     required:

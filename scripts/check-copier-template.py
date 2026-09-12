@@ -701,6 +701,63 @@ def require_referent_first_alignment() -> None:
             fail(f"referent-first root/template files differ: {root_path} != {template_path}")
 
 
+def require_harness_evaluation_alignment() -> None:
+    """Keep the harness comparison command, policy, and routing aligned."""
+
+    root_spec = "docs/agent/SPEC_HARNESS_EVALUATION.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"harness evaluation root/template specifications differ: {root_spec} != {template_spec}")
+
+    command = "template/.project-agent-workflow/scripts/compare-harness-runs.py"
+    if command not in SOURCE_REQUIRED:
+        fail("the harness comparison command must ship in the Copier template")
+    if ".project-agent-workflow/scripts/compare-harness-runs.py" not in GENERATED_REQUIRED:
+        fail("the harness comparison command must reach every generated project")
+    if ".project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md" not in GENERATED_REQUIRED:
+        fail("the harness evaluation specification must reach every generated project")
+
+    wrapper = read("scripts/compare-harness-runs.py")
+    if "compare-harness-runs.py" not in wrapper or "template" not in wrapper:
+        fail("the root harness comparison wrapper must delegate to the template implementation")
+
+    implementation = read(command)
+    for marker in (
+        "old_model_current_instructions",
+        "new_model_candidate_instructions",
+        "uncontrolled runtime inputs",
+        "blocked_critical_failure",
+        "insufficient_evidence",
+        "independently_reviewed_link_verified",
+        "cannot authenticate the real-world truth",
+    ):
+        if marker not in implementation:
+            fail(f"harness comparison command missing required marker: {marker}")
+
+    # The new route must stay narrow: exactly one task type in each index may
+    # require the harness specification.
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        (
+            "template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja",
+            ".project-agent-workflow/",
+        ),
+    ):
+        index = read(index_path)
+        if "  harness_evaluation:" not in index:
+            fail(f"{index_path} is missing the harness evaluation route")
+        if index.count(f"{prefix}docs/agent/SPEC_HARNESS_EVALUATION.md") != 1:
+            fail(f"{index_path} must route the harness evaluation specification exactly once")
+
+    lint = read("scripts/lint-project-workflow.sh")
+    for marker in (
+        'python3 "$root/tests/test-harness-comparison.py"',
+        'python3 "$root/tests/test-harness-comparison.py" --generated',
+    ):
+        if marker not in lint:
+            fail(f"required lint does not register the harness comparison check: {marker}")
+
+
 def load_root_policy_module():
     spec = importlib.util.spec_from_file_location(
         "decision_reuse_root_policy", ROOT / "scripts/check-root-agent-policy.py"
@@ -3408,6 +3465,7 @@ def main() -> int:
     require_fast_scoped_worker()
     require_evidence_synthesizer()
     require_referent_first_alignment()
+    require_harness_evaluation_alignment()
     require_decision_reuse_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()

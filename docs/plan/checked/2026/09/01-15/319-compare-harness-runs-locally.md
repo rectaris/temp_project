@@ -1,6 +1,6 @@
 # Compare model and instruction changes using paired local evidence
 
-status: in_progress
+status: checked
 primary_invariant: A harness comparison reports only comparable, provenance-bound observations and never turns missing evidence, synthetic examples or a critical failure into adoption evidence.
 task_types:
   - template_workflow
@@ -90,15 +90,17 @@ checked_summary_ja: 同じ課題の実行記録から、モデル変更と指示
 
 ## Tasks
 
-- [ ] Define the portable comparison protocol, run-observation schema, outcomes and operator recipe with one focused test for each completion condition.
-- [ ] Implement explicit-input parsing, evidence binding, paired comparison, failure accounting and coverage-aware reports in the template implementation and root wrapper.
-- [ ] Add fixed positive, negative and boundary cases for altered acceptance, stale evidence, missing/duplicate pairs, timeout omission, unknown instruction loading, hidden runtime differences, synthetic data and holdout leakage.
-- [ ] Add root/generated parity and installation coverage, narrow spec routing and required validation registration.
-- [ ] Review the exact diff and invariant, obtain the required independent review, run focused commands then the authoritative suite, commit and publish. State separately whether any real model comparison was performed.
+- [x] Define the portable comparison protocol, run-observation schema, outcomes and operator recipe with one focused test for each completion condition.
+- [x] Implement explicit-input parsing, evidence binding, paired comparison, failure accounting and coverage-aware reports in the template implementation and root wrapper.
+- [x] Add fixed positive, negative and boundary cases for altered acceptance, stale evidence, missing/duplicate pairs, timeout omission, unknown instruction loading, hidden runtime differences, synthetic data and holdout leakage.
+- [x] Add root/generated parity and installation coverage, narrow spec routing and required validation registration.
+- [x] Review the exact diff and invariant, obtain the required independent review, run focused commands then the authoritative suite, commit and publish. State separately whether any real model comparison was performed.
 
 ## Validation Notes
 
 - Owner instruction: 提案の方針でプランを作成せよ。 This authorizes these plans; this authoring task does not execute their implementation or call models.
 - Reuse the accepted direction: preserve project requirements and authority, compare bounded instruction changes, retain failure cases, and pin adoption with a rollback path.
-- Implementation validation is pending. Synthetic fixtures establish tool behavior only; they are not observed model performance.
+- Implementation validation passed: `python3 tests/test-harness-comparison.py` (56 tests), `python3 tests/test-harness-comparison.py --generated` (8 tests), then `scripts/lint-project-workflow.sh` and `tests/smoke.sh` once each.
+- No real model comparison was performed. No model was launched, no provider was called, and no run outcome was observed. Every fixture in this scope is synthetic and establishes tool behavior only; it is not observed model performance.
+- Independent read-only review ran on the exact diff and reported four confirmed High findings: unverified declared evidence, partial metric coverage, unconfirmed runtime, and ignored observed reasoning and effective instruction identity. All four are fixed, each with a regression test, and the review confirmed the remediation clean.
 - Use bounded parent implementation with the existing external execution ledger and independent read-only review because specification and validation registration paths are part of this scope. Preserve all existing execution and review budgets.
