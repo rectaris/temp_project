@@ -63,6 +63,8 @@ if [ -s "$python_list" ]; then
 fi
 
 python3 "$root/scripts/check-copier-template.py"
+python3 "$root/.codex/skills/verify-copier-update/scripts/check-triage-coverage.py"
+python3 "$root/template/.project-agent-workflow/skills/verify-copier-update/scripts/check-triage-coverage.py"
 (cd "$root" && python3 scripts/restructure-plan.py --verify)
 python3 "$root/scripts/check-external-service-policy.py" check
 python3 "$root/scripts/check-root-agent-policy.py" --self-test
@@ -75,6 +77,7 @@ python3 "$root/tests/test-copier-migration.py"
 python3 "$root/tests/test-copier-adoption.py"
 python3 "$root/tests/test-referent-contract.py"
 python3 "$root/tests/test-validation-tools.py"
+python3 "$root/tests/test-verify-copier-update.py"
 "$root/tests/root-plan-lifecycle.sh"
 
 check_hook_activation "$root"

@@ -123,7 +123,9 @@ class ValidateChangesTest(unittest.TestCase):
                     self.assertEqual(payload["status"], "git_query_failed")
                     self.assertIn("git diff --cached --name-only", payload["error"])
 
-    def test_managed_plan_validation_requires_managed_index(self) -> None:
+    def test_managed_plan_validation_follows_the_index_being_kept(self) -> None:
+        """Keeping docs/plan/plan.md selects the plan commands; its contents do not."""
+
         for index, (plan_path, validate_path) in enumerate(
             zip(PLAN_COMMAND_MODULES, VALIDATE_CHANGE_MODULES, strict=True)
         ):
@@ -137,23 +139,32 @@ class ValidateChangesTest(unittest.TestCase):
                 module.ROOT = repo
                 module.existing = lambda _path: True
 
-                plan_index.write_text("# アクティブプラン\n\n既存プロジェクト形式\n", encoding="utf-8")
-                legacy_commands = module.select_commands(["docs/plan/active/.gitkeep"], "all")
+                absent_commands = module.select_commands(["docs/plan/active/.gitkeep"], "all")
                 self.assertFalse(
-                    any(any(part.endswith("lint-plan-docs.py") for part in command) for command in legacy_commands)
+                    any(any(part.endswith("lint-plan-docs.py") for part in command) for command in absent_commands)
                 )
                 self.assertFalse(
-                    any(any(part.endswith("format-plan-docs.py") for part in command) for command in legacy_commands)
+                    any(any(part.endswith("format-plan-docs.py") for part in command) for command in absent_commands)
                 )
 
-                plan_index.write_text("# Active Plan\n\nNo active development items.\n", encoding="utf-8")
-                managed_commands = module.select_commands(["docs/plan/active/.gitkeep"], "all")
-                self.assertTrue(
-                    any(any(part.endswith("lint-plan-docs.py") for part in command) for command in managed_commands)
-                )
-                self.assertTrue(
-                    any(any(part.endswith("format-plan-docs.py") for part in command) for command in managed_commands)
-                )
+                for text in (
+                    "# アクティブプラン\n\n既存プロジェクト形式\n",
+                    "# Active Plan\n\nNo active development items.\n",
+                ):
+                    plan_index.write_text(text, encoding="utf-8")
+                    managed_commands = module.select_commands(["docs/plan/active/.gitkeep"], "all")
+                    self.assertTrue(
+                        any(
+                            any(part.endswith("lint-plan-docs.py") for part in command)
+                            for command in managed_commands
+                        )
+                    )
+                    self.assertTrue(
+                        any(
+                            any(part.endswith("format-plan-docs.py") for part in command)
+                            for command in managed_commands
+                        )
+                    )
 
     def test_malformed_managed_plan_index_fails_instead_of_deselecting(self) -> None:
         malformed = {
@@ -204,14 +215,79 @@ class ValidateChangesTest(unittest.TestCase):
                 )
                 self.assertIsNone(module.active_plan_index_fault())
 
-            with self.subTest(module=validate_path, skipped="unmanaged index"), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(module=validate_path, reported="unadopted index"), tempfile.TemporaryDirectory() as tmp:
                 repo = Path(tmp)
                 plan_index = repo / "docs/plan/plan.md"
                 plan_index.parent.mkdir(parents=True)
                 plan_index.write_text("# アクティブプラン\n\n既存プロジェクト形式\n", encoding="utf-8")
                 module.ROOT = repo
+                self.assertTrue(module.uses_managed_plan_format())
+                fault = module.active_plan_index_fault()
+                self.assertIsNotNone(fault)
+                self.assertIn("has not adopted the index format", str(fault))
+                self.assertIn("confirm the change with its owner", str(fault))
+
+            with self.subTest(module=validate_path, reported="unadopted without a newline"), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                plan_index = repo / "docs/plan/plan.md"
+                plan_index.parent.mkdir(parents=True)
+                plan_index.write_text("# アクティブプラン\r\n\r\n既存形式", encoding="utf-8")
+                module.ROOT = repo
+                self.assertIn("has not adopted the index format", str(module.active_plan_index_fault()))
+
+            with self.subTest(module=validate_path, skipped="no index"), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                (repo / "docs/plan/active").mkdir(parents=True)
+                module.ROOT = repo
                 self.assertFalse(module.uses_managed_plan_format())
                 self.assertIsNone(module.active_plan_index_fault())
+
+    def test_both_enforcing_commands_judge_one_index_alike(self) -> None:
+        """The validator and the completion gate must not disagree about one file."""
+
+        cases = (
+            ("# アクティブプラン\n\n既存プロジェクト形式\n", False),
+            ("# アクティブプラン\n\n改行のない既存形式", False),
+            ("# Active Plan\n\nid\tpath\tstatus\n", False),
+            ("# Active Plan\n\nNo active development items.\n", True),
+            (
+                "# Active Plan\n\nid\tpath\tstatus\n109\tdocs/plan/active/109-a.md\tin_progress\n",
+                True,
+            ),
+        )
+        dependency = load_module(PLAN_COMMAND_MODULES[1], "plan_validation_commands")
+        sys.modules["plan_validation_commands"] = dependency
+        module = load_module(VALIDATE_CHANGE_MODULES[1], "validate_changes_agreement")
+        completion = ROOT / "template/.project-agent-workflow/scripts/check-agent-completion.sh"
+        for text, accepted in cases:
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                (repo / "docs/plan/active").mkdir(parents=True)
+                (repo / "docs/plan/plan.md").write_text(text, encoding="utf-8")
+                (repo / "docs/plan/active/109-a.md").write_text(
+                    "# A\n\nstatus: in_progress\n", encoding="utf-8"
+                )
+                shutil.copytree(
+                    ROOT / "template/.project-agent-workflow/scripts",
+                    repo / ".project-agent-workflow/scripts",
+                )
+                module.ROOT = repo
+                validator_accepts = module.active_plan_index_fault() is None
+                gate = subprocess.run(
+                    ["sh", str(completion), "--plans-only"],
+                    cwd=repo,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(accepted, validator_accepts)
+                if accepted:
+                    self.assertEqual(0, gate.returncode, gate.stderr)
+                    self.assertNotIn("active plan index", gate.stderr)
+                else:
+                    self.assertNotEqual(0, gate.returncode, gate.stdout)
+                    self.assertIn("active plan index", gate.stderr)
 
     def test_the_plan_formatter_never_repairs_a_malformed_active_index(self) -> None:
         formatter = ROOT / "template/.project-agent-workflow/scripts/format-plan-docs.py"

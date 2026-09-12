@@ -32,6 +32,16 @@ OPEN_STATUS_VALUES = {
     "shelved",
 }
 SHELVED_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# An archive written before these fields existed cannot supply them, and a
+# completed record's review history cannot be reconstructed after the fact.
+# Judge each of them only when the record actually carries it.
+ARCHIVE_VINTAGE_OPTIONAL_FIELDS = (
+    "status",
+    "review_class",
+    "human_design_required",
+    "human_approval_status",
+    "acceptance",
+)
 # Copier updates must continue to read archives produced before checked became
 # the terminal manifest value. New finalization is tested to emit checked.
 CLOSED_STATUS_VALUES = {"checked", "completed", "ready_to_archive"}
@@ -175,6 +185,10 @@ def lint_manifest(path: Path) -> None:
         and not parsed.get("task_types")
         and planlib.manifest_scalar(parsed, "task_type")
     )
+    declares = {
+        field: bool(re.search(rf"^{field}:", text, flags=re.MULTILINE))
+        for field in ARCHIVE_VINTAGE_OPTIONAL_FIELDS
+    }
     if not is_legacy_checked:
         legacy_fields = [
             field
@@ -192,14 +206,24 @@ def lint_manifest(path: Path) -> None:
             fail(f"{path} list fields must use indented list items: {', '.join(inline_lists)}")
     try:
         fields = planlib.LEGACY_REQUIRED_FIELDS if is_legacy_checked else planlib.REQUIRED_FIELDS
+        if is_legacy_checked:
+            fields = tuple(
+                field
+                for field in fields
+                if field not in ARCHIVE_VINTAGE_OPTIONAL_FIELDS or declares[field]
+            )
         values = planlib.require_manifest_fields(path, fields)
     except planlib.PlanError as exc:
         fail(str(exc))
+    judges = {
+        field: not is_legacy_checked or declares[field]
+        for field in ARCHIVE_VINTAGE_OPTIONAL_FIELDS
+    }
     review_value = planlib.manifest_scalar(values, "review_class")
-    if review_value not in {"A", "B", "C"}:
+    if judges["review_class"] and review_value not in {"A", "B", "C"}:
         fail(f"{path} review_class must be A, B, or C")
     design_value = planlib.manifest_scalar(values, "human_design_required")
-    if design_value not in HUMAN_DESIGN_VALUES:
+    if judges["human_design_required"] and design_value not in HUMAN_DESIGN_VALUES:
         fail(f"{path} human_design_required must be yes or no")
     tier_value = planlib.manifest_scalar(values, "implementation_tier").strip()
     if tier_value and tier_value not in IMPLEMENTATION_TIER_VALUES:
@@ -230,9 +254,11 @@ def lint_manifest(path: Path) -> None:
                 f"{', '.join(unknown_task_types)}"
             )
     approval_value = planlib.manifest_scalar(values, "human_approval_status")
-    if approval_value not in HUMAN_APPROVAL_VALUES:
+    if judges["human_approval_status"] and approval_value not in HUMAN_APPROVAL_VALUES:
         fail(f"{path} human_approval_status must be not_required, pending, or approved")
     status_value = planlib.manifest_scalar(values, "status")
+    if is_legacy_checked and not declares["status"]:
+        status_value = "checked"
     if is_replanned:
         allowed_statuses = REPLANNED_STATUS_VALUES
     else:
@@ -262,7 +288,12 @@ def lint_manifest(path: Path) -> None:
             fail(f"{path} status: shelved requires shelved_at as YYYY-MM-DD")
     if not is_legacy_checked and review_value == "C" and approval_value not in {"pending", "approved"}:
         fail(f"{path} class C plan requires human_approval_status: pending or approved")
-    if review_value == "C" and status_value in {"in_progress", "ready_to_archive"} and approval_value != "approved":
+    if (
+        judges["human_approval_status"]
+        and review_value == "C"
+        and status_value in {"in_progress", "ready_to_archive"}
+        and approval_value != "approved"
+    ):
         fail(f"{path} class C implementation requires human_approval_status: approved")
     if not is_legacy_checked and design_value == "yes" and review_value != "C":
         fail(f"{path} human_design_required: yes requires review_class: C")

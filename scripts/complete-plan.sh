@@ -125,6 +125,16 @@ ACTIVE_INDEX_HEADER = "id\tpath\tstatus"
 ACTIVE_INDEX_STATUSES = ("in_progress", "ready_to_archive", "deferred", "replan_required")
 ACTIVE_INDEX_ID_RE = re.compile(r"[0-9]{3}")
 ACTIVE_INDEX_ROW_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
+ACTIVE_INDEX_NOT_ADOPTED = (
+    "docs/plan/plan.md does not open with the active plan index title, so it has not "
+    "adopted the index format. This is not a first-line defect: the whole document must "
+    'be the title "# Active Plan", one blank line, and then either the single line '
+    '"No active development items." or the tab header "id\\tpath\\tstatus" followed by '
+    "one tab-separated row per active plan. Nothing else may remain. Adopting the format "
+    "therefore discards whatever this document holds now, so when that content is owned "
+    "by the project rather than the template, confirm the change with its owner instead "
+    "of rewriting the document to satisfy this check."
+)
 
 
 class ActiveIndexError(ValueError):
@@ -147,8 +157,15 @@ def parse_active_index(text: str) -> list[tuple[str, str, str]]:
     marker. The populated representation is the title, one blank line, the
     actual-tab header, and one or more actual-tab rows. Every other nonempty
     document is rejected whole instead of being partially parsed.
+
+    Whether the document opens with the title is decided before the
+    document-wide newline rules, because a document that never adopted this
+    format must be named as such rather than reported for a stray line ending
+    it was never expected to carry.
     """
 
+    if text.split("\n", 1)[0].rstrip("\r") != ACTIVE_INDEX_TITLE:
+        raise ActiveIndexError(ACTIVE_INDEX_NOT_ADOPTED)
     if "\r" in text or not text.endswith("\n") or text.endswith("\n\n"):
         raise ActiveIndexError("active plan index must end with exactly one trailing newline")
     lines = text.split("\n")[:-1]

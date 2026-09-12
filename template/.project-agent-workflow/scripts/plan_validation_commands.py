@@ -34,6 +34,7 @@ PYTHON_SCRIPT_ARGUMENTS = {
     ".project-agent-workflow/scripts/security-static-check.py": {(), ("--changed",), ("--managed",)},
     ".project-agent-workflow/scripts/structure-map.py": {("--check",)},
     ".project-agent-workflow/scripts/plan_validation_commands.py": {("--self-test",)},
+    ".project-agent-workflow/skills/verify-copier-update/scripts/check-triage-coverage.py": {()},
 }
 VALIDATE_CHANGES_FLAGS = frozenset({"--all", "--staged", "--print-only", "--json"})
 SHELL_SCRIPT_ARGUMENTS = {
@@ -54,6 +55,10 @@ GENERATED_PYTHON_COMPILE_FILES = frozenset(
         "scripts/check-japanese-prose.py",
         ".project-agent-workflow/skills/verify-copier-update/"
         "scripts/verify-copier-update.py",
+        ".project-agent-workflow/skills/verify-copier-update/"
+        "scripts/triage-copier-update.py",
+        ".project-agent-workflow/skills/verify-copier-update/"
+        "scripts/check-triage-coverage.py",
     }
 )
 

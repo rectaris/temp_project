@@ -17,12 +17,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / ".codex/skills/verify-copier-update/scripts/verify-copier-update.py"
+SKILL = HELPER.parent.parent
+TRIAGE = SKILL / "scripts/triage-copier-update.py"
+COVERAGE = SKILL / "scripts/check-triage-coverage.py"
+TABLE = SKILL / "references/update-triage.yaml"
+TEMPLATE_SKILL = ROOT / "template/.project-agent-workflow/skills/verify-copier-update"
+DOWNSTREAM = ROOT / "scripts/verify-downstream-baselines.py"
+BASELINES = ROOT / "docs/downstream-baselines.yaml"
 
 
 def load_helper_module():
     spec = importlib.util.spec_from_file_location("verify_copier_update_helper", HELPER)
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load verification helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -203,6 +220,7 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         *,
         validation: str | None = None,
         trust: bool = True,
+        declare_absent: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], Path]:
         output = self.root / output_name
         command = [
@@ -219,6 +237,10 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         ]
         if trust:
             command.append("--trust-template-tasks")
+        if declare_absent:
+            command.append("--declare-no-project-validation")
+        if validation is None and declare_absent:
+            return self.launch(command, output)
         if validation is None:
             validation = json.dumps(
                 [
@@ -228,6 +250,11 @@ class VerifyCopierUpdateTests(unittest.TestCase):
                 ]
             )
         command.extend(["--validation-command-json", validation])
+        return self.launch(command, output)
+
+    def launch(
+        self, command: list[str], output: Path
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
         environment = os.environ.copy()
         environment["PATH"] = f"{self.bin}{os.pathsep}{environment.get('PATH', '')}"
         process = subprocess.run(
@@ -264,6 +291,43 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         self.assertNotIn(str(self.target), json.dumps(manifest))
         self.assertNotIn(str(self.source), json.dumps(manifest))
         self.assert_originals_unchanged()
+
+    def record_remote_source(self, recorded: str) -> str:
+        write(
+            self.target / ".copier-answers.yml",
+            f"# managed answers\n_commit: v1.0.0\n_src_path: {recorded}\n",
+        )
+        run(["git", "add", ".copier-answers.yml"], self.target)
+        run(["git", "commit", "-qm", "record a remote template path"], self.target)
+        self.target_oid = run(["git", "rev-parse", "HEAD"], self.target).stdout.strip()
+        return self.target_oid
+
+    def test_remote_src_path_is_verified_against_the_local_checkout(self) -> None:
+        baseline = self.record_remote_source("https://github.com/example/template.git")
+        process, output = self.invoke("remote-https")
+        self.assertEqual(0, process.returncode, process.stderr)
+        manifest = self.manifest(output)
+        self.assertEqual("verified", manifest["result"])
+        self.assertEqual(baseline, manifest["target"]["baseline_oid"])
+        self.assertEqual("https://github.com/example/template.git", manifest["source"]["recorded_src_path"])
+        self.assertEqual("../source", manifest["source"]["isolated_src_path"])
+        self.assertNotEqual(baseline, manifest["target"]["isolated_baseline_oid"])
+        self.assert_originals_unchanged()
+
+    def test_scp_style_src_path_is_verified_against_the_local_checkout(self) -> None:
+        self.record_remote_source("git@github.com:example/template.git")
+        process, output = self.invoke("remote-scp")
+        self.assertEqual(0, process.returncode, process.stderr)
+        self.assertEqual("verified", self.manifest(output)["result"])
+        self.assert_originals_unchanged()
+
+    def test_a_relative_src_path_keeps_the_original_baseline(self) -> None:
+        process, output = self.invoke("relative")
+        manifest = self.manifest(output)
+        self.assertEqual("../source", manifest["source"]["recorded_src_path"])
+        self.assertEqual("../source", manifest["source"]["isolated_src_path"])
+        self.assertNotIn("isolated_baseline_oid", manifest["target"])
+        self.assertEqual(0, process.returncode, process.stderr)
 
     def test_snapshot_inspection_does_not_change_original_git_state(self) -> None:
         write(self.target / ".gitignore", "ignored-state.txt\n")
@@ -336,6 +400,43 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         process, output = self.invoke("dirty-source")
         self.assertEqual(2, process.returncode)
         self.assertEqual("source_dirty", self.manifest(output)["reason_code"])
+
+    def test_a_project_without_a_runnable_gate_is_verified_with_the_gap_recorded(self) -> None:
+        process, output = self.invoke("declared-absent", declare_absent=True)
+        self.assertEqual(0, process.returncode)
+        manifest = self.manifest(output)
+        self.assertEqual("verified", manifest["result"])
+        self.assertEqual("all_checks_passed_without_project_validation", manifest["reason_code"])
+        self.assertEqual("declared_absent", manifest["project_validation"])
+        self.assert_originals_unchanged()
+
+    def test_declaring_no_gate_while_passing_one_is_blocked(self) -> None:
+        process, output = self.invoke(
+            "declaration-conflict",
+            declare_absent=True,
+            validation=json.dumps(["python3", "-c", "pass"]),
+        )
+        self.assertEqual(2, process.returncode)
+        self.assertEqual("validation_declaration_conflict", self.manifest(output)["reason_code"])
+
+    def test_saying_nothing_about_the_gate_is_still_blocked(self) -> None:
+        output = self.root / "no-validation-statement"
+        command = [
+            "python3",
+            str(HELPER),
+            "--target",
+            str(self.target),
+            "--source",
+            str(self.source),
+            "--source-ref",
+            "v1.1.0",
+            "--output-dir",
+            str(output),
+            "--trust-template-tasks",
+        ]
+        process, _ = self.launch(command, output)
+        self.assertEqual(2, process.returncode)
+        self.assertEqual("validation_missing", self.manifest(output)["reason_code"])
 
     def test_missing_trust_is_blocked(self) -> None:
         process, output = self.invoke("missing-trust", trust=False)
@@ -678,6 +779,534 @@ class VerifyCopierUpdateTests(unittest.TestCase):
         self.assertEqual(2, process.returncode)
         self.assertIn("output directory must be outside", process.stderr)
         self.assertFalse(output.exists())
+
+
+def load_triage_module():
+    spec = importlib.util.spec_from_file_location("triage_copier_update_helper", TRIAGE)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load triage resolver")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_manifest(directory: Path, result: str, reason_code: str) -> Path:
+    path = directory / "verification-manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "result": result,
+                "reason_code": reason_code,
+                "detail": "recorded detail",
+                "unresolved": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+class TriageTableTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.triage = load_triage_module()
+        self.table = self.triage.require_table(TABLE)
+
+    def test_bundled_reader_matches_the_yaml_library(self) -> None:
+        import yaml
+
+        expected = yaml.safe_load(TABLE.read_text(encoding="utf-8"))
+        self.assertEqual(expected, self.triage.parse_triage_without_yaml(TABLE))
+
+    def test_reader_is_used_when_the_yaml_library_is_absent(self) -> None:
+        real_import = __import__
+
+        def without_yaml(name, *arguments):
+            if name == "yaml":
+                raise ModuleNotFoundError("No module named 'yaml'")
+            return real_import(name, *arguments)
+
+        with mock.patch("builtins.__import__", without_yaml):
+            loaded = self.triage.load_yaml(TABLE)
+        self.assertEqual(self.table["schema_version"], loaded["schema_version"])
+
+    def test_every_emitted_reason_code_is_classified(self) -> None:
+        process = run(["python3", str(COVERAGE)], ROOT, check=False)
+        self.assertEqual(0, process.returncode, process.stderr)
+        self.assertIn("reason codes classified", process.stdout)
+
+    def test_coverage_check_reports_an_unclassified_code(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            table = Path(raw) / "update-triage.yaml"
+            text = TABLE.read_text(encoding="utf-8")
+            table.write_text(text.replace("  git_unavailable:\n", "  git_absent:\n", 1), encoding="utf-8")
+            process = run(
+                ["python3", str(COVERAGE), "--triage-table", str(table)], ROOT, check=False
+            )
+        self.assertEqual(1, process.returncode)
+        self.assertIn("git_unavailable", process.stderr)
+
+    def test_longest_subject_wins_over_a_shorter_one(self) -> None:
+        entry = self.triage.resolve_code(self.table, "final_target_index_state_short_read")
+        self.assertEqual("final_target_index_state", entry["subject"])
+        self.assertEqual("short_read", entry["matched"])
+
+    def test_an_exact_code_wins_over_a_subject_split(self) -> None:
+        entry = self.triage.resolve_code(self.table, "source_path_escape")
+        self.assertEqual("code", entry["match"])
+        self.assertIsNone(entry.get("subject"))
+
+    def test_an_unknown_code_is_refused_rather_than_guessed(self) -> None:
+        with self.assertRaises(self.triage.TriageError):
+            self.triage.resolve_code(self.table, "brand_new_code")
+
+    def test_a_stop_exception_built_without_raising_is_still_classified(self) -> None:
+        for code in (
+            "original_target_state_unavailable",
+            "original_target_changed",
+            "original_source_state_unavailable",
+            "original_source_changed",
+        ):
+            with self.subTest(code=code):
+                self.assertEqual("environment", self.triage.resolve_code(self.table, code)["owner"])
+
+    def test_recorded_answer_faults_belong_to_the_project(self) -> None:
+        for code in (
+            "absolute_source_path",
+            "source_path_escape",
+            "source_path_overlap",
+            "source_path_scratch_overlap",
+            "update_wrapper_invalid",
+        ):
+            with self.subTest(code=code):
+                self.assertEqual("project", self.triage.resolve_code(self.table, code)["owner"])
+
+    def test_a_shared_suffix_reports_the_repository_that_owns_it(self) -> None:
+        for code, owner in (
+            ("source_dirty", "template"),
+            ("target_dirty", "project"),
+            ("source_head_state_short_read", "template"),
+            ("target_head_state_short_read", "project"),
+            ("update_source_changed", "template"),
+            ("final_target_invalid_oid", "project"),
+        ):
+            with self.subTest(code=code):
+                self.assertEqual(owner, self.triage.resolve_code(self.table, code)["owner"])
+
+    def test_a_subject_override_outranks_the_subject_owner(self) -> None:
+        for code, owner in (
+            ("source_unavailable", "invocation"),
+            ("target_unavailable", "invocation"),
+            ("source_head_state_unavailable", "template"),
+        ):
+            with self.subTest(code=code):
+                self.assertEqual(owner, self.triage.resolve_code(self.table, code)["owner"])
+
+    def test_a_resolved_entry_does_not_leak_the_override_mapping(self) -> None:
+        self.assertNotIn("subject_owners", self.triage.resolve_code(self.table, "source_dirty"))
+
+    def test_every_declared_subject_owner_is_known(self) -> None:
+        for subject, owner in self.table["subjects"].items():
+            with self.subTest(subject=subject):
+                self.assertIn(owner, self.triage.SUBJECT_OWNERS)
+
+    def test_a_table_that_overrides_an_undeclared_subject_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            table = Path(raw) / "update-triage.yaml"
+            table.write_text(
+                TABLE.read_text(encoding="utf-8").replace(
+                    "      source: invocation\n", "      no_such_subject: invocation\n", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(self.triage.TriageError) as caught:
+                self.triage.require_table(table)
+        self.assertIn("undeclared subject", str(caught.exception))
+
+    def test_an_exact_code_may_not_take_its_owner_from_a_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            table = Path(raw) / "update-triage.yaml"
+            table.write_text(
+                TABLE.read_text(encoding="utf-8").replace(
+                    "    owner: template\n", "    owner: from_subject\n", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(self.triage.TriageError) as caught:
+                self.triage.require_table(table)
+        self.assertIn("owner from a subject", str(caught.exception))
+
+    def test_the_bundled_reader_refuses_syntax_it_cannot_reproduce(self) -> None:
+        original = TABLE.read_text(encoding="utf-8")
+        for replacement in (
+            '    owner: "environment"\n',
+            "    owner: environment # inline\n",
+        ):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as raw:
+                table = Path(raw) / "update-triage.yaml"
+                table.write_text(
+                    original.replace("    owner: environment\n", replacement, 1), encoding="utf-8"
+                )
+                with self.assertRaises(self.triage.TriageError):
+                    self.triage.parse_triage_without_yaml(table)
+
+    def test_the_template_copy_is_identical(self) -> None:
+        for relative in (
+            "SKILL.md",
+            "references/update-triage.yaml",
+            "scripts/triage-copier-update.py",
+            "scripts/check-triage-coverage.py",
+        ):
+            with self.subTest(relative=relative):
+                self.assertEqual(
+                    (SKILL / relative).read_bytes(), (TEMPLATE_SKILL / relative).read_bytes()
+                )
+
+
+class TriageResolverTest(unittest.TestCase):
+    def test_a_passing_manifest_exits_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(Path(raw), "verified", "all_checks_passed")
+            process = run(["python3", str(TRIAGE), str(manifest)], ROOT, check=False)
+        self.assertEqual(0, process.returncode, process.stderr)
+        self.assertIn("owner: none", process.stdout)
+
+    def test_a_failing_manifest_exits_one_with_an_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(Path(raw), "rejected", "not_idempotent")
+            process = run(
+                ["python3", str(TRIAGE), str(manifest), "--format", "json"], ROOT, check=False
+            )
+        self.assertEqual(1, process.returncode)
+        report = json.loads(process.stdout)
+        self.assertEqual("template", report["owner"])
+        self.assertEqual("never", report["retry"])
+
+    def test_a_verified_result_that_leaves_work_names_its_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(
+                Path(raw), "verified", "all_checks_passed_without_project_validation"
+            )
+            process = run(
+                ["python3", str(TRIAGE), str(manifest), "--format", "json"], ROOT, check=False
+            )
+        self.assertEqual(0, process.returncode, process.stderr)
+        report = json.loads(process.stdout)
+        self.assertTrue(report["residual_obligation"])
+        self.assertEqual("project", report["owner"])
+
+    def test_an_ownerless_entry_may_not_leave_work(self) -> None:
+        triage = load_triage_module()
+        table = triage.require_table(TABLE)
+        entry = dict(table["codes"]["all_checks_passed"])
+        entry["residual_obligation"] = True
+        with self.assertRaises(triage.TriageError) as caught:
+            triage.require_entry("codes", "all_checks_passed", entry, table["subjects"])
+        self.assertIn("may not be ownerless", str(caught.exception))
+
+    def test_an_unclassified_code_exits_two(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(Path(raw), "rejected", "brand_new_code")
+            process = run(["python3", str(TRIAGE), str(manifest)], ROOT, check=False)
+        self.assertEqual(2, process.returncode)
+        self.assertIn("not classified", process.stderr)
+
+    def test_a_manifest_that_contradicts_the_table_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = write_manifest(Path(raw), "verified", "not_idempotent")
+            process = run(["python3", str(TRIAGE), str(manifest)], ROOT, check=False)
+        self.assertEqual(2, process.returncode)
+        self.assertIn("disagree", process.stderr)
+
+    def test_an_unusable_manifest_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            manifest = Path(raw) / "verification-manifest.json"
+            manifest.write_text("{ not json", encoding="utf-8")
+            process = run(["python3", str(TRIAGE), str(manifest)], ROOT, check=False)
+        self.assertEqual(2, process.returncode)
+        self.assertIn("not valid JSON", process.stderr)
+
+
+class RemoteSourceDetectionTest(unittest.TestCase):
+    """Pin the helper's classification to the one Copier itself performs.
+
+    A value the helper calls remote is verified against the isolated checkout, so a
+    disagreement with Copier would either verify against a source the real update
+    never uses or refuse a project Copier can update.
+    """
+
+    def setUp(self) -> None:
+        self.helper = load_helper_module()
+
+    def test_a_source_copier_would_clone_is_recognised(self) -> None:
+        for recorded in (
+            "https://github.com/rectaris/temp_project.git",
+            "https://github.com/rectaris/temp_project",
+            "https://gitlab.com/rectaris/temp_project",
+            "git@github.com:rectaris/temp_project.git",
+            "git://example.invalid/template.git",
+            "git+https://example.invalid/template",
+            "gh:rectaris/temp_project",
+            "gl:rectaris/temp_project",
+            "ssh://example.invalid/template.git",
+        ):
+            with self.subTest(recorded=recorded):
+                self.assertTrue(self.helper.is_remote_source(recorded))
+
+    def test_a_source_copier_would_read_as_a_path_is_not(self) -> None:
+        for recorded in (
+            "../temp_project",
+            "./template",
+            "template",
+            "..",
+            "/srv/template",
+            "a:b/c",
+            "C:/windows/template",
+            "https://example.invalid/template",
+            "ssh://example.invalid/template",
+            "file:///srv/template",
+            "user@host:some/path",
+            # A repository Copier would clone, but one that lives on this machine and
+            # must therefore still face every refusal a path faces.
+            "../temp_project.git",
+            "/srv/template.git",
+            "file:///srv/template.git",
+            "git+/srv/template",
+        ):
+            with self.subTest(recorded=recorded):
+                self.assertFalse(self.helper.is_remote_source(recorded))
+
+
+TEMPLATE_REMOTE = "git@github.com:rectaris/temp_project.git"
+# A verification runs inside a fresh clone, so a gate driven by one of these launchers
+# cannot run there and must never be recorded.
+NEEDS_INSTALLED_DEPENDENCIES = frozenset({"npm", "npx", "pnpm", "yarn", "node", "vitest", "tsc"})
+ENTRY = (
+    "schema_version: 1\n"
+    f"template_remote: {TEMPLATE_REMOTE}\n"
+    "baselines:\n"
+    "  - id: one\n"
+    "    path: one\n"
+    "    remote: git@github.com:owner/one.git\n"
+    "    baseline_ref: dev\n"
+    "    template_commit: v1.0.0\n"
+    "    validation_commands:\n"
+    '      - ["true"]\n'
+)
+
+
+class DownstreamBaselineTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.runner = load_module("verify_downstream_baselines", DOWNSTREAM)
+
+    def load_record(self, text: str, root: Path | None = None):
+        with tempfile.TemporaryDirectory() as raw:
+            base = root or Path(raw)
+            record = Path(raw) / "downstream-baselines.yaml"
+            record.write_text(text, encoding="utf-8")
+            return self.runner.load_baselines(record, base)[1]
+
+    def make_checkout(
+        self, root: Path, remote: str, commit: str, source: str = TEMPLATE_REMOTE
+    ) -> Path:
+        checkout = root / "one"
+        checkout.mkdir(parents=True)
+        run(["git", "init", "-q", "-b", "dev"], checkout)
+        run(["git", "config", "user.name", "Test"], checkout)
+        run(["git", "config", "user.email", "test@example.invalid"], checkout)
+        run(["git", "remote", "add", "origin", remote], checkout)
+        (checkout / ".copier-answers.yml").write_text(
+            f"_commit: {commit}\n_src_path: {source}\n", encoding="utf-8"
+        )
+        run(["git", "add", ".copier-answers.yml"], checkout)
+        run(["git", "commit", "-qm", "baseline"], checkout)
+        return checkout
+
+    def check(self, baseline, template_remote: str = TEMPLATE_REMOTE):
+        return self.runner.check_record(baseline, template_remote)[1]
+
+    def test_the_committed_record_names_every_downstream_project(self) -> None:
+        baselines = self.load_record(BASELINES.read_text(encoding="utf-8"))
+        self.assertEqual(
+            ["curiretas-gakumas-portal", "gakumasu-timeline", "supportcard-status"],
+            sorted(baseline.identifier for baseline in baselines),
+        )
+        for baseline in baselines:
+            with self.subTest(baseline=baseline.identifier):
+                self.assertTrue(baseline.path.is_absolute())
+                self.assertTrue(baseline.remote)
+                self.assertTrue(baseline.baseline_ref)
+                self.assertTrue(baseline.template_commit)
+                for command in baseline.validation_commands:
+                    self.assertTrue(all(command))
+                    self.assertNotIn(command[0], NEEDS_INSTALLED_DEPENDENCIES)
+
+    def test_a_project_without_a_runnable_gate_is_recorded_without_one(self) -> None:
+        text = ENTRY.replace('    validation_commands:\n      - ["true"]\n', "    validation_commands: []\n")
+        baselines = self.load_record(text)
+        self.assertEqual((), baselines[0].validation_commands)
+
+    def test_an_omitted_command_list_is_not_read_as_a_declaration(self) -> None:
+        for text in (
+            ENTRY.replace('    validation_commands:\n      - ["true"]\n', ""),
+            ENTRY.replace('    validation_commands:\n      - ["true"]\n', "    validation_commands:\n"),
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(self.runner.BaselineError) as caught:
+                    self.load_record(text)
+                self.assertIn("validation_commands as a list", str(caught.exception))
+
+    def test_a_relative_path_resolves_against_the_given_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            baselines = self.load_record(ENTRY, root)
+        self.assertEqual(root / "one", baselines[0].path)
+
+    def test_the_same_repository_written_two_ways_compares_equal(self) -> None:
+        for left, right in (
+            ("git@github.com:owner/one.git", "https://github.com/owner/one"),
+            ("https://github.com/owner/one/", "https://github.com/owner/one.git"),
+            ("ssh://git@github.com/owner/one.git", "git@github.com:owner/one"),
+            ("https://github.com:443/owner/one.git", "https://github.com/owner/one"),
+        ):
+            with self.subTest(left=left):
+                self.assertEqual(
+                    self.runner.canonical_remote(left), self.runner.canonical_remote(right)
+                )
+        for left, right in (
+            ("git@github.com:owner/one.git", "git@github.com:owner/two.git"),
+            # A path may distinguish two repositories by case, so case is preserved.
+            ("git@github.com:owner/One.git", "git@github.com:owner/one.git"),
+        ):
+            with self.subTest(left=left, right=right):
+                self.assertNotEqual(
+                    self.runner.canonical_remote(left), self.runner.canonical_remote(right)
+                )
+
+    def test_an_unusable_record_is_refused(self) -> None:
+        for text, message in (
+            (ENTRY.replace("schema_version: 1", "schema_version: 2"), "schema_version"),
+            (
+                f"schema_version: 1\ntemplate_remote: {TEMPLATE_REMOTE}\nbaselines: []\n",
+                "non-empty baselines",
+            ),
+            (ENTRY.replace(f"template_remote: {TEMPLATE_REMOTE}\n", ""), "non-empty template_remote"),
+            (ENTRY.replace('      - ["true"]\n', "      - []\n"), "unusable validation command"),
+            (
+                ENTRY.replace('    validation_commands:\n      - ["true"]\n', "    validation_commands: true\n"),
+                "validation_commands as a list",
+            ),
+            (ENTRY + ENTRY.split("baselines:\n", 1)[1], "recorded more than once"),
+            (ENTRY.replace("    path: one\n", '    path: ""\n'), "non-empty path"),
+            (ENTRY.replace("    remote: git@github.com:owner/one.git\n", ""), "non-empty remote"),
+            (ENTRY.replace("    baseline_ref: dev\n", ""), "non-empty baseline_ref"),
+            (ENTRY.replace("    template_commit: v1.0.0\n", ""), "non-empty template_commit"),
+            (ENTRY.replace("  - id: one\n", "  - id: ../escape\n"), "safe as a directory"),
+            (ENTRY.replace("  - id: one\n", "  - id: /absolute\n"), "safe as a directory"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaises(self.runner.BaselineError) as caught:
+                    self.load_record(text)
+                self.assertIn(message, str(caught.exception))
+
+    def test_an_absent_checkout_is_reported_without_running_a_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            baselines = self.load_record(ENTRY, Path(raw))
+            report = self.check(baselines[0])
+        self.assertEqual("blocked", report["result"])
+        self.assertEqual("baseline_checkout_unavailable", report["reason_code"])
+        self.assertEqual("environment", report["owner"])
+
+    def test_a_checkout_of_another_repository_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.make_checkout(root, "git@github.com:owner/other.git", "v1.0.0")
+            baselines = self.load_record(ENTRY, root)
+            report = self.check(baselines[0])
+        self.assertEqual("baseline_remote_mismatch", report["reason_code"])
+        self.assertEqual("project", report["owner"])
+
+    def test_a_checkout_that_left_the_recorded_template_version_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.make_checkout(root, "https://github.com/owner/one", "v9.9.9")
+            baselines = self.load_record(ENTRY, root)
+            report = self.check(baselines[0])
+        self.assertEqual("baseline_template_commit_mismatch", report["reason_code"])
+        self.assertIn("v9.9.9", report["next_action"])
+
+    def test_an_absent_baseline_ref_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.make_checkout(root, "git@github.com:owner/one.git", "v1.0.0")
+            baselines = self.load_record(ENTRY.replace("baseline_ref: dev", "baseline_ref: gone"), root)
+            report = self.check(baselines[0])
+        self.assertEqual("baseline_ref_unavailable", report["reason_code"])
+
+    def test_a_project_generated_from_another_template_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.make_checkout(
+                root,
+                "git@github.com:owner/one.git",
+                "v1.0.0",
+                source="https://github.com/someone-else/temp_project.git",
+            )
+            baselines = self.load_record(ENTRY, root)
+            report = self.check(baselines[0])
+        self.assertEqual("baseline_template_source_mismatch", report["reason_code"])
+
+    def test_a_recorded_version_with_a_comment_is_read_as_copier_reads_it(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            checkout = self.make_checkout(root, "git@github.com:owner/one.git", "v1.0.0")
+            (checkout / ".copier-answers.yml").write_text(
+                f"_commit: v1.0.0 # the current baseline\n_src_path: {TEMPLATE_REMOTE}\n",
+                encoding="utf-8",
+            )
+            run(["git", "commit", "-qam", "comment"], checkout)
+            baselines = self.load_record(ENTRY, root)
+            self.assertIsNone(self.check(baselines[0]))
+
+    def test_a_moving_ref_is_read_and_verified_at_one_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            checkout = self.make_checkout(root, "git@github.com:owner/one.git", "v1.0.0")
+            baselines = self.load_record(ENTRY, root)
+            commit, refused = self.runner.check_record(baselines[0], TEMPLATE_REMOTE)
+            self.assertIsNone(refused)
+            head = run(["git", "rev-parse", "HEAD"], checkout).stdout.strip()
+        self.assertEqual(head, commit)
+
+    def test_an_unrecorded_baseline_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            process = run(
+                [
+                    "python3",
+                    str(DOWNSTREAM),
+                    "--source-ref",
+                    "HEAD",
+                    "--output-dir",
+                    str(Path(raw) / "out"),
+                    "--only",
+                    "no-such-project",
+                ],
+                ROOT,
+                check=False,
+            )
+        self.assertEqual(2, process.returncode)
+        self.assertIn("unrecorded baseline", process.stderr)
+
+    def test_an_existing_output_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            process = run(
+                ["python3", str(DOWNSTREAM), "--source-ref", "HEAD", "--output-dir", raw],
+                ROOT,
+                check=False,
+            )
+        self.assertEqual(2, process.returncode)
+        self.assertIn("already exists", process.stderr)
 
 
 if __name__ == "__main__":
