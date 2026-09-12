@@ -1,6 +1,6 @@
 # Read activation checked archives of every closed vintage
 
-status: in_progress
+status: checked
 primary_invariant: An activation reference resolves against its checked archive through the shared closed-vintage rule, so an archive written before the checked status value is read rather than reported as stale.
 task_types:
   - template_workflow
@@ -62,13 +62,21 @@ checked_summary_ja: 起動参照が読む完了記録を、どの版でも同じ
 
 ## Tasks
 
-- [ ] Add fixtures to tests/validation_tools/plan.py that build an activation reference against an archive declaring checked, one declaring completed and one carrying no status field, plus negative fixtures for an absent archive and one declaring an open status.
-- [ ] Find every site in scripts/restructure-plan.py that judges an already archived record by comparing its status to the literal checked, and record which of them belong to activation and successor resolution.
-- [ ] Route those sites through the shared closed-vintage rule and mirror the exact change into template/.project-agent-workflow/scripts/restructure-plan.py.
-- [ ] Run the focused suite, then an independent read-only review, then the authoritative lint and smoke suites.
-- [ ] Report that plan 312 may resume through a fresh run once this repair is checked.
+- [x] Add fixtures to tests/validation_tools/plan.py that build an activation reference against an archive declaring checked, one declaring completed and one carrying no status field, plus negative fixtures for an absent archive and one declaring an open status.
+- [x] Find every site in scripts/restructure-plan.py that judges an already archived record by comparing its status to the literal checked, and record which of them belong to activation and successor resolution.
+- [x] Route those sites through the shared closed-vintage rule and mirror the exact change into template/.project-agent-workflow/scripts/restructure-plan.py.
+- [x] Run the focused suite, then an independent read-only review, then the authoritative lint and smoke suites.
+- [x] Report that plan 312 may resume through a fresh run once this repair is checked.
 
 ## Validation Notes
 
 - This plan exists because authoritative validation stopped the plan 312 execution run with repair_required. It does not restate or replace any plan 312 acceptance item.
 - The stopped plan 312 candidate is preserved locally at .agent-artifacts/stopped-runs/312-checked-index-candidate.patch and is not authorization to reapply that work here.
+
+- Implementation baseline 84a3e29 on dev. Owner instruction: 313の実装作業をせよ。 implementation_mode: parent_direct.
+- Site survey result. Six sites judge an already archived record and now read it through archive_is_closed: the checked predecessor check in validate_active_predecessors, checked_commit_produced_path, activation_checked_pairs, the pre-boundary archive reconciliation, and the checked branches of verify_prerequisite_lifecycle, verify_schema_three_contract and verify_repository_contracts. Every other checked literal is a lifecycle label taken from index membership or an expected post-transition status of a live record, and stays unchanged.
+- The archive corpus holds three closed shapes: a manifest field, a manifest bullet under the Manifest heading, and no declaration at all. The shared rule reads all three, keeps a declared status including a blank one, refuses an empty file, and never backfills a record outside the checked archive. ready_to_archive is excluded because this script already lists it as an open active status and finalization rewrites it to checked, so a half finalized archive stays a defect.
+- Focused validation: python3 tests/test-validation-tools.py Ran 295 OK; python3 scripts/restructure-plan.py --verify exit 0. Reverting only the two restructure-plan.py copies fails 16 subtests, so the new tests are not tautological.
+- Authoritative validation: bash scripts/lint-project-workflow.sh OK; REQUIRE_COPIER=1 sh tests/smoke.sh passed with a real Copier run.
+- Independent read-only review ran twice with write scope none. Round one raised two Medium and two Low findings, round two one Medium and two Low. All Medium and Low findings were fixed except the missing behavioral fixtures for checked_commit_produced_path and the pre-boundary reconciliation, which need a Git commit and a contract fixture; both were retained with the reviewer's Low rating.
+- A local probe repointed the 23 flat checked index rows at their dated archives and restructuring verification passed, then the probe was reverted. Plan 312 may resume through a fresh run now that this repair is checked.

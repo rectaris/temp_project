@@ -3963,6 +3963,166 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 with self.assertRaises(module.ValidationCommandError):
                     module.parse_validation_command(command)
 
+    RESTRUCTURE_MODULES = (
+        ("root", ROOT / "scripts/restructure-plan.py"),
+        (
+            "generated",
+            ROOT / "template/.project-agent-workflow/scripts/restructure-plan.py",
+        ),
+    )
+
+    CHECKED_PATH = "docs/plan/checked/2026/07/01-15/001-example.md"
+    ACTIVE_PATH = "docs/plan/active/001-example.md"
+
+    ARCHIVE_VINTAGES = {
+        "manifest field": "# Example\n\nstatus: checked\ntask_type: template_workflow\n",
+        "completed manifest field": "# Example\n\nstatus: completed\n",
+        "manifest bullet under a heading": (
+            "# Example\n\n## Manifest\n\n- `status`: `checked`\n- `task_type`: `planning_docs`\n"
+        ),
+        "no status anywhere": "# Example\n\nRecorded before the manifest existed.\n",
+        "status named in prose but never declared": (
+            "# Example\n\n## Notes\n\n- `status`: `in_progress` was the old value\n"
+        ),
+    }
+
+    REFUSED_ARCHIVES = {
+        "absent archive": None,
+        "open status": "# Example\n\nstatus: in_progress\n",
+        "stopped status": "# Example\n\nstatus: replan_required\n",
+        "status declared and left blank": "# Example\n\nstatus:\ntask_type: template_workflow\n",
+        "open status in a manifest bullet": (
+            "# Example\n\n## Manifest\n\n- `status`: `in_progress`\n"
+        ),
+        "open status declared below a heading": (
+            "# Example\n\n## Manifest\n\nstatus: in_progress\n"
+        ),
+        "half finalized status": "# Example\n\nstatus: ready_to_archive\n",
+        "empty archive": "",
+        "whitespace only archive": "\n\n",
+    }
+
+    def build_archive_root(self, directory: Path, archive_text: str | None) -> Path:
+        root = directory / "repo"
+        (root / "docs/plan/checked/2026/07/01-15").mkdir(parents=True)
+        (root / "docs/plan/checked.md").write_text(
+            f"# Checked Plan Index\n\nid\tpath\n001\t{self.CHECKED_PATH}\n",
+            encoding="utf-8",
+        )
+        if archive_text is not None:
+            (root / self.CHECKED_PATH).write_text(archive_text, encoding="utf-8")
+        return root
+
+    @contextlib.contextmanager
+    def restructure_at(self, name: str, path: Path, root: Path):
+        module = load_module(path, f"restructure_vintage_{name}_{root.parent.name}")
+        previous = module.ROOT
+        module.ROOT = root
+        try:
+            yield module
+        finally:
+            module.ROOT = previous
+
+    def test_every_closed_vintage_resolves_its_activation_reference(self) -> None:
+        for name, source in self.RESTRUCTURE_MODULES:
+            for label, archive_text in self.ARCHIVE_VINTAGES.items():
+                with self.subTest(module=name, vintage=label):
+                    with tempfile.TemporaryDirectory() as raw:
+                        root = self.build_archive_root(Path(raw), archive_text)
+                        with self.restructure_at(name, source, root) as module:
+                            self.assertEqual(
+                                module.activation_checked_pairs(),
+                                {self.ACTIVE_PATH: self.CHECKED_PATH},
+                            )
+
+    def test_an_absent_or_open_archive_is_still_refused(self) -> None:
+        for name, source in self.RESTRUCTURE_MODULES:
+            for label, archive_text in self.REFUSED_ARCHIVES.items():
+                with self.subTest(module=name, archive=label):
+                    with tempfile.TemporaryDirectory() as raw:
+                        root = self.build_archive_root(Path(raw), archive_text)
+                        with self.restructure_at(name, source, root) as module:
+                            with self.assertRaises(module.RestructureError) as caught:
+                                module.activation_checked_pairs()
+                        self.assertIn(
+                            "activation checked archive is missing or stale",
+                            str(caught.exception),
+                        )
+
+    def test_a_checked_predecessor_of_every_closed_vintage_resolves(self) -> None:
+        """The predecessor check reads the same archive vintages as activation."""
+
+        plan_text = (
+            "# Successor\n\nstatus: in_progress\npredecessor_plans:\n"
+            f"  - {self.CHECKED_PATH}\n"
+        )
+        for name, source in self.RESTRUCTURE_MODULES:
+            for label, archive_text in self.ARCHIVE_VINTAGES.items():
+                with self.subTest(module=name, vintage=label):
+                    with tempfile.TemporaryDirectory() as raw:
+                        root = self.build_archive_root(Path(raw), archive_text)
+                        (root / "docs/plan/active").mkdir(parents=True)
+                        active = "docs/plan/active/281-successor.md"
+                        (root / active).write_text(plan_text, encoding="utf-8")
+                        with self.restructure_at(name, source, root) as module:
+                            module.validate_active_predecessors(
+                                {active: ("in_progress", module.parse_manifest(plan_text))}
+                            )
+
+    def test_a_checked_predecessor_with_an_open_status_is_still_refused(self) -> None:
+        plan_text = (
+            "# Successor\n\nstatus: in_progress\npredecessor_plans:\n"
+            f"  - {self.CHECKED_PATH}\n"
+        )
+        for name, source in self.RESTRUCTURE_MODULES:
+            with self.subTest(module=name):
+                with tempfile.TemporaryDirectory() as raw:
+                    root = self.build_archive_root(
+                        Path(raw), "# Example\n\nstatus: in_progress\n"
+                    )
+                    (root / "docs/plan/active").mkdir(parents=True)
+                    active = "docs/plan/active/281-successor.md"
+                    (root / active).write_text(plan_text, encoding="utf-8")
+                    with self.restructure_at(name, source, root) as module:
+                        with self.assertRaises(module.RestructureError) as caught:
+                            module.validate_active_predecessors(
+                                {active: ("in_progress", module.parse_manifest(plan_text))}
+                            )
+                    self.assertIn("predecessor is not checked", str(caught.exception))
+
+    def test_a_record_outside_the_checked_archive_is_never_backfilled(self) -> None:
+        for name, source in self.RESTRUCTURE_MODULES:
+            with self.subTest(module=name):
+                module = load_module(source, f"restructure_scope_{name}")
+                text = "# Example\n\nRecorded without a status.\n"
+                self.assertEqual(
+                    module.archived_closed_status(text, self.CHECKED_PATH), "checked"
+                )
+                self.assertEqual(module.archived_closed_status(text, self.ACTIVE_PATH), "")
+                self.assertFalse(module.archive_is_closed(text, self.ACTIVE_PATH))
+
+    def test_the_closed_values_are_the_linter_set_without_the_open_statuses(self) -> None:
+        """A half-finalized archive stays a defect, so an open status is never closed."""
+
+        linter = (
+            ROOT / "template/.project-agent-workflow/scripts/lint-plan-docs.py"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"CLOSED_STATUS_VALUES = \{([^}]*)\}", linter)
+        self.assertIsNotNone(match)
+        linter_values = {
+            value.strip().strip('"') for value in match.group(1).split(",") if value.strip()
+        }
+        for name, source in self.RESTRUCTURE_MODULES:
+            with self.subTest(module=name):
+                module = load_module(source, f"restructure_values_{name}")
+                self.assertEqual(
+                    module.CLOSED_ARCHIVE_STATUS_VALUES,
+                    linter_values - module.ACTIVE_PLAN_STATUSES,
+                )
+                self.assertEqual(module.CLOSED_ARCHIVE_STATUS_VALUES, {"checked", "completed"})
+
+
+
 
 class PlanOverviewTest(unittest.TestCase):
     """Behavioral tests for the read-only plan overview entrypoints."""

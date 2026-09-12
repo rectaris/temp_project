@@ -247,3 +247,4 @@ id	path
 303	docs/plan/checked/2026/09/01-15/303-keep-the-active-plan-directory-present.md
 311	docs/plan/checked/2026/09/01-15/311-use-current-files-for-smoke-rendering.md
 310	docs/plan/checked/2026/09/01-15/310-reuse-canonical-index-parser-in-overviews.md
+313	docs/plan/checked/2026/09/01-15/313-read-activation-archives-of-every-vintage.md
