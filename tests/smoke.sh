@@ -61,160 +61,8 @@ fi
 
 if [ -z "$source_ref" ]; then
   render_source="$tmp/render-source"
-  git clone -q "$root" "$render_source"
-  for candidate_path in \
-    copier.yml \
-    scripts/migrate-sequential-plan-worker.py \
-    scripts/validate-copier-update.py \
-    template/README.md.jinja \
-    template/.githooks/pre-commit \
-    template/.github/hooks/plan-lifecycle.json \
-    template/.github/workflows/project-agent-workflow.yml \
-    template/.github/workflows/codex-ci-autofix.yml.jinja \
-    template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
-    template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
-    template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
-    template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
-    template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
-    template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
-    template/.project-agent-workflow/human-report.json.jinja \
-    template/.project-agent-workflow/scripts/check-external-service-policy.py \
-    template/.project-agent-workflow/scripts/human-report.py \
-    template/.project-agent-workflow/scripts/lint-plan-docs.py \
-    template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
-    template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
-    template/.project-agent-workflow/scripts/create-plan.sh \
-    template/.project-agent-workflow/scripts/plan_authoring.py \
-    template/.project-agent-workflow/scripts/planlib.py \
-    template/.project-agent-workflow/scripts/plan_overview.py \
-    template/.project-agent-workflow/scripts/promote-plan.sh \
-    template/.project-agent-workflow/scripts/render-plan-overview.py \
-    template/.project-agent-workflow/scripts/restructure-plan.py \
-    template/.project-agent-workflow/scripts/plan-execution-state.py \
-    template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
-    template/docs/plan/replanned.md \
-    template/.project-agent-workflow/scripts/run-copier-update.sh \
-    template/.project-agent-workflow/scripts/orca-coordinator.py \
-    template/.project-agent-workflow/scripts/run-parallel-plans.py \
-    template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
-    template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
-    template/.project-agent-workflow/scripts/validate-changes.py \
-    template/.project-agent-workflow/scripts/update-from-copier.sh \
-    template/.project-agent-workflow/scripts/validate-copier-update.py \
-    template/.project-agent-workflow/scripts/worktree_guard.py \
-    template/.agents/skills/browser-ops/SKILL.md \
-    template/.agents/skills/natural-japanese/SKILL.md \
-    template/.agents/skills/verify-copier-update/SKILL.md \
-    template/AGENTS.md.jinja \
-    template/.project-agent-workflow/AGENTS.md.jinja \
-    template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
-    template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
-    template/.project-agent-workflow/ownership.yaml \
-    template/.project-agent-workflow/skills/browser-ops/SKILL.md \
-    template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-    template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-    template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
-    template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
-    template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
-    template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
-    template/.project-agent-workflow/skills/natural-japanese/SKILL.md \
-    template/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml \
-    template/.project-agent-workflow/skills/natural-japanese/references/workflow.md \
-    template/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md \
-    template/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py \
-    template/.project-agent-workflow/skills/natural-japanese/LICENSE \
-    template/.project-agent-workflow/skills/write-for-reader/SKILL.md \
-    template/.project-agent-workflow/skills/graph-memory/SKILL.md \
-    template/.project-agent-workflow/skills/linear-ops/SKILL.md \
-    template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
-    template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
-    template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
-    template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-    template/docs/agent/external-services.yaml.jinja \
-    template/docs/agent/git-retirement.yaml.jinja
-  do
-    mkdir -p "$(dirname "$render_source/$candidate_path")"
-    cp "$root/$candidate_path" "$render_source/$candidate_path"
-  done
-  git -C "$render_source" add \
-    copier.yml \
-    scripts/migrate-sequential-plan-worker.py \
-    scripts/validate-copier-update.py \
-    template/README.md.jinja \
-    template/.githooks/pre-commit \
-    template/.github/hooks/plan-lifecycle.json \
-    template/.github/workflows/project-agent-workflow.yml \
-    template/.github/workflows/codex-ci-autofix.yml.jinja \
-    template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
-    template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
-    template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
-    template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
-    template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
-    template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
-    template/.project-agent-workflow/human-report.json.jinja \
-    template/.project-agent-workflow/scripts/check-external-service-policy.py \
-    template/.project-agent-workflow/scripts/human-report.py \
-    template/.project-agent-workflow/scripts/lint-plan-docs.py \
-    template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
-    template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
-    template/.project-agent-workflow/scripts/create-plan.sh \
-    template/.project-agent-workflow/scripts/plan_authoring.py \
-    template/.project-agent-workflow/scripts/planlib.py \
-    template/.project-agent-workflow/scripts/plan_overview.py \
-    template/.project-agent-workflow/scripts/promote-plan.sh \
-    template/.project-agent-workflow/scripts/render-plan-overview.py \
-    template/.project-agent-workflow/scripts/restructure-plan.py \
-    template/.project-agent-workflow/scripts/plan-execution-state.py \
-    template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
-    template/docs/plan/replanned.md \
-    template/.project-agent-workflow/scripts/run-copier-update.sh \
-    template/.project-agent-workflow/scripts/orca-coordinator.py \
-    template/.project-agent-workflow/scripts/run-parallel-plans.py \
-    template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
-    template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
-    template/.project-agent-workflow/scripts/validate-changes.py \
-    template/.project-agent-workflow/scripts/update-from-copier.sh \
-    template/.project-agent-workflow/scripts/validate-copier-update.py \
-    template/.project-agent-workflow/scripts/worktree_guard.py \
-    template/.agents/skills/browser-ops/SKILL.md \
-    template/.agents/skills/natural-japanese/SKILL.md \
-    template/.agents/skills/verify-copier-update/SKILL.md \
-    template/AGENTS.md.jinja \
-    template/.project-agent-workflow/AGENTS.md.jinja \
-    template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
-    template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
-    template/.project-agent-workflow/ownership.yaml \
-    template/.project-agent-workflow/skills/browser-ops/SKILL.md \
-    template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-    template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-    template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
-    template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
-    template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
-    template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
-    template/.project-agent-workflow/skills/natural-japanese/SKILL.md \
-    template/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml \
-    template/.project-agent-workflow/skills/natural-japanese/references/workflow.md \
-    template/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md \
-    template/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py \
-    template/.project-agent-workflow/skills/natural-japanese/LICENSE \
-    template/.project-agent-workflow/skills/write-for-reader/SKILL.md \
-    template/.project-agent-workflow/skills/graph-memory/SKILL.md \
-    template/.project-agent-workflow/skills/linear-ops/SKILL.md \
-    template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
-    template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
-    template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
-    template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-    template/docs/agent/external-services.yaml.jinja \
-    template/docs/agent/git-retirement.yaml.jinja
-  git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
-    commit --allow-empty -qm "Create isolated smoke candidate"
-  git -C "$render_source" tag v1.2.2
+  python3 "$root/tests/prepare-smoke-source.py" \
+    --source "$root" --destination "$render_source" --tag v1.2.2 >/dev/null
   source_ref=v1.2.2
 fi
 
@@ -1304,16 +1152,18 @@ assert_rejected_input() {
   label=$1
   question=$2
   value=$3
-  if run_copier copy -f --trust --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data "$question=$value" "$root" "$tmp/invalid-$label" >/dev/null 2>&1; then
+  set -- copy -f --trust --data-file "$root/tests/fixtures/docs.answers.yml" --data "$question=$value"
+  if [ -n "$source_ref" ]; then
+    set -- "$@" --vcs-ref "$source_ref"
+  fi
+  set -- "$@" "$render_source" "$tmp/invalid-$label"
+  if run_copier "$@" >/dev/null 2>&1; then
     echo "copier accepted invalid input: $label" >&2
     exit 1
   fi
 }
 
-if run_copier copy -f --trust --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data project_slug='invalid slug' "$root" "$tmp/invalid-slug" >/dev/null 2>&1; then
-  echo "copier accepted an invalid project slug" >&2
-  exit 1
-fi
+assert_rejected_input invalid-slug project_slug 'invalid slug'
 assert_rejected_input empty-name project_name ''
 assert_rejected_input whitespace-name project_name '   '
 assert_rejected_input empty-purpose project_purpose ''

@@ -1,6 +1,6 @@
 # Use the selected current files for every generated-project smoke copy
 
-status: in_progress
+status: checked
 primary_invariant: Every smoke copy uses the same explicitly selected source and ref; the default isolated source reflects current Copier input files without mutating the original checkout.
 task_types:
   - template_workflow
@@ -70,12 +70,12 @@ checked_summary_ja: 生成テストが未コミットの変更も含む同じ入
 
 ## Tasks
 
-- [ ] Add SmokeSourceTest in tests/validation_tools/smoke_source.py and import it from tests/test-validation-tools.py. Register new Python files in scripts/project_workflow/copier_inventory.py.
-- [ ] Reproduce an edit to template/.project-agent-workflow/scripts/tool_command_context.py absent from the old lists; require the prepared clone to contain the edited bytes, not the old committed bytes. Cover an edited copy-task script under scripts/ as a second case.
-- [ ] Cover staged plus later unstaged changes to one file, a new nonignored template file, a deletion, a path containing spaces, and an executable-bit change. Assert the original source HEAD, refs, index digest and worktree snapshot remain unchanged.
-- [ ] Cover ignored local evidence, an untracked file outside the selected prefixes, unreadable input via controlled fault injection, and symlink/special-file refusal. Initialize disposable repositories with their own Git identity.
-- [ ] Implement the helper and route all copy paths through the same source/ref selection. Add subprocess argument-capture tests for ordinary and invalid-answer copy functions; assert explicit-ref selection bypasses the overlay.
-- [ ] Review the input boundary and registered tests, then run focused validation and the mandatory suite. Require a real Copier for the implementation smoke run and record the selected source mode with the results.
+- [x] Add SmokeSourceTest in tests/validation_tools/smoke_source.py and import it from tests/test-validation-tools.py. Register new Python files in scripts/project_workflow/copier_inventory.py.
+- [x] Reproduce an edit to template/.project-agent-workflow/scripts/tool_command_context.py absent from the old lists; require the prepared clone to contain the edited bytes, not the old committed bytes. Cover an edited copy-task script under scripts/ as a second case.
+- [x] Cover staged plus later unstaged changes to one file, a new nonignored template file, a deletion, a path containing spaces, and an executable-bit change. Assert the original source HEAD, refs, index digest and worktree snapshot remain unchanged.
+- [x] Cover ignored local evidence, an untracked file outside the selected prefixes, unreadable input via controlled fault injection, and symlink/special-file refusal. Initialize disposable repositories with their own Git identity.
+- [x] Implement the helper and route all copy paths through the same source/ref selection. Add subprocess argument-capture tests for ordinary and invalid-answer copy functions; assert explicit-ref selection bypasses the overlay.
+- [x] Review the input boundary and registered tests, then run focused validation and the mandatory suite. Require a real Copier for the implementation smoke run and record the selected source mode with the results.
 
 ## Validation Notes
 
@@ -83,3 +83,11 @@ checked_summary_ja: 生成テストが未コミットの変更も含む同じ入
 - Owner instruction: これまでのこのプロジェクトでの開発作業について改善できる部分を探し、改善するためのプランとして作成せよ。
 - This task authorizes plan authoring only. No implementation, stopped-run continuation, remote publication or performance claim is included.
 - Planning evidence and reproduction steps: docs/plan/development-improvements-20260912.md. Regression assertions described here must be added and exercised during implementation; their future success is not claimed now.
+
+- Implementation baseline: 57ea1793ec4eaf8c2aca9aaf811531a99866a4ae in temp_project.
+- Owner instruction: docs/plan/backlog/ のプランについて、サブエージェントを利用して並列開発せよ。並列実行は各プランの integration gate が禁じているため、README の指定順で311のみを直列実装した。
+- Implementation mode: parent_direct. A sub-agent was used for the independent read-only review only; it held no write scope.
+- Selected source mode for the smoke run: prepared isolated source with no COPIER_SMOKE_REF, rendered from tag v1.2.2 of the overlaid clone.
+- Focused validation: python3 tests/test-validation-tools.py passed with 275 tests.
+- Authoritative validation: scripts/lint-project-workflow.sh passed, and REQUIRE_COPIER=1 sh tests/smoke.sh passed with a real Copier.
+- Independent review reported no Critical or High findings. The Low finding that a git clone failure escaped as an uncaught traceback was fixed and covered by a regression test. The Low finding that a stray special file refuses preparation is the plan's declared decision and was retained.

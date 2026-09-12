@@ -14,6 +14,7 @@ from validation_tools.generated import (
 )
 from validation_tools.plan import PlanValidationCommandsTest
 from validation_tools.plan_authoring import PlanAuthoringInRepositoryTest, PlanAuthoringTest
+from validation_tools.smoke_source import SmokeCopySelectionTest, SmokeSourceTest
 from validation_tools.worktrees import (
     ManagedPlanWorktreesTest,
     PlanIdentifierReservationTest,
