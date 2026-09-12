@@ -1,6 +1,6 @@
 # Validate root checked-index targets through the shared archive check
 
-status: deferred
+status: in_progress
 primary_invariant: Every indexed checked plan resolves to its existing same-id archive, and root validation applies the shared checked-index rules without rewriting historical archive content.
 task_types:
   - template_workflow
@@ -94,3 +94,4 @@ checked_summary_ja: 完了記録の索引に残る古い保存先を直し、既
 - Classification: repair_required. The defect is independently repairable, its files are scripts/restructure-plan.py and its mirrored template copy, and both lie outside this plan's write_scope. This plan's scope, invariant, acceptance items and validation authority are unchanged.
 - Owner decision on the stop: repair_plan. Plan 313 was created in docs/plan/backlog/ for the bounded repair. This plan stays deferred and resumes only through a fresh run after plan 313 is checked.
 - The stopped candidate is preserved locally at .agent-artifacts/stopped-runs/312-checked-index-candidate.patch. It is evidence, not authorization to reapply.
+- Resumed in a fresh run after plan 313 was checked at f71c311. The repair is docs/plan/checked/2026/09/01-15/313-read-activation-archives-of-every-vintage.md; this plan's scope, acceptance items and validation authority are unchanged.
