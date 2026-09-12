@@ -1,6 +1,6 @@
 # Validate root checked-index targets through the shared archive check
 
-status: in_progress
+status: checked
 primary_invariant: Every indexed checked plan resolves to its existing same-id archive, and root validation applies the shared checked-index rules without rewriting historical archive content.
 task_types:
   - template_workflow
@@ -73,11 +73,11 @@ checked_summary_ja: 完了記録の索引に残る古い保存先を直し、既
 
 ## Tasks
 
-- [ ] Add isolated checked-index fixtures for empty and populated valid indexes, missing target, duplicate id/path, wrong filename id and a path outside checked/. Run the same cases through the root policy entry and generated index adapter. Include parent-traversal paths, absolute paths, a symlinked file and a symlinked directory leading outside checked/, plus a valid nested dated path as the positive control.
-- [ ] Add a legacy archive fixture with no new manifest fields and prove the shared check only validates the index relationship. Snapshot fixture bytes before and after both successful and rejected reads.
-- [ ] Extract the existing checked-index rules into a shared planlib function with an explicit repository root, adapt generated lint, and call it from the ordinary root policy path and its self-test path.
-- [ ] Resolve each stale row by exact id and basename to its unique dated archive before editing docs/plan/checked.md. Assert only those paths change and that every archive retains its original bytes.
-- [ ] Use the already registered validation test class; demonstrate that removing the root call makes the stale-index regression fail. Review the root/generated boundary and run focused validation, independent review and mandatory lint/smoke.
+- [x] Add isolated checked-index fixtures for empty and populated valid indexes, missing target, duplicate id/path, wrong filename id and a path outside checked/. Run the same cases through the root policy entry and generated index adapter. Include parent-traversal paths, absolute paths, a symlinked file and a symlinked directory leading outside checked/, plus a valid nested dated path as the positive control.
+- [x] Add a legacy archive fixture with no new manifest fields and prove the shared check only validates the index relationship. Snapshot fixture bytes before and after both successful and rejected reads.
+- [x] Extract the existing checked-index rules into a shared planlib function with an explicit repository root, adapt generated lint, and call it from the ordinary root policy path and its self-test path.
+- [x] Resolve each stale row by exact id and basename to its unique dated archive before editing docs/plan/checked.md. Assert only those paths change and that every archive retains its original bytes.
+- [x] Use the already registered validation test class; demonstrate that removing the root call makes the stale-index regression fail. Review the root/generated boundary and run focused validation, independent review and mandatory lint/smoke.
 
 ## Validation Notes
 
@@ -95,3 +95,10 @@ checked_summary_ja: 完了記録の索引に残る古い保存先を直し、既
 - Owner decision on the stop: repair_plan. Plan 313 was created in docs/plan/backlog/ for the bounded repair. This plan stays deferred and resumes only through a fresh run after plan 313 is checked.
 - The stopped candidate is preserved locally at .agent-artifacts/stopped-runs/312-checked-index-candidate.patch. It is evidence, not authorization to reapply.
 - Resumed in a fresh run after plan 313 was checked at f71c311. The repair is docs/plan/checked/2026/09/01-15/313-read-activation-archives-of-every-vintage.md; this plan's scope, acceptance items and validation authority are unchanged.
+- Fresh run baseline: 1b12793 in temp_project. Owner instruction: 312 の実装作業をせよ。 implementation_mode: parent_direct.
+- The preserved candidate from the stopped run was reapplied with a three-way merge. Only tests/validation_tools/plan.py conflicted, because plan 313 had appended its own cases to the same class; both blocks were kept and an AST scan confirmed no duplicate or shadowed class member.
+- Checked-index repair result: 247 rows before and after, ids identical in order, basenames identical in order, exactly 23 path values changed, and no file under docs/plan/checked/ modified.
+- Focused validation: python3 tests/test-validation-tools.py Ran 302 OK. The authoritative step that stopped the previous run, python3 scripts/restructure-plan.py --verify, now exits 0 because plan 313 repaired the archive vintage rule.
+- Non-tautology: reverting only scripts/check-root-agent-policy.py fails 1 test and errors 12, so the root call is load-bearing. Deleting only the planlib symlink walk fails 11 subtests and no other rule masks them.
+- Authoritative validation: bash scripts/lint-project-workflow.sh OK; REQUIRE_COPIER=1 sh tests/smoke.sh passed with a real Copier run.
+- Independent read-only review in this run reported no Critical, High or Medium findings and one Low: the two symlink refusal cases asserted a message every rule shares, so the symlink walk was not uniquely pinned. Fixed by binding each rejected case to its own message and adding two symlink fixtures that stay inside the archive.

@@ -1,5 +1,6 @@
 """Plan validation-command tests."""
 
+import ast
 import contextlib
 import hashlib
 import io
@@ -4122,6 +4123,243 @@ class PlanValidationCommandsTest(unittest.TestCase):
                 self.assertEqual(module.CLOSED_ARCHIVE_STATUS_VALUES, {"checked", "completed"})
 
 
+    CHECKED_INDEX_HEADER = "# Checked Plan Index\n\nid\tpath\n"
+    CHECKED_ARCHIVE_ROW = "001\tdocs/plan/checked/2026/07/01-15/001-example.md\n"
+    LEGACY_ARCHIVE_RECORD = (
+        "task_type: tooling\n"
+        "target_files:\n"
+        "  - scripts/example.sh\n"
+        "expected_output: patch-only\n"
+        "checked_summary_ja: 旧世代のアーカイブ記録。\n"
+        "\n# 001 example\n\n## Goal\n\nHistorical record.\n"
+    )
+
+    def build_checked_index_fixture(self, root: Path) -> Path:
+        """Install one dated archive record, one outside record and two symlinks."""
+
+        archive = root / "docs/plan/checked/2026/07/01-15"
+        archive.mkdir(parents=True)
+        (archive / "001-example.md").write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+        (archive / "001-other.md").write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+        (archive / "002-example.md").write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+        outside = root / "outside"
+        outside.mkdir()
+        (outside / "001-example.md").write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+        (outside / "dated").mkdir()
+        (outside / "dated/001-example.md").write_text(
+            self.LEGACY_ARCHIVE_RECORD, encoding="utf-8"
+        )
+        checked = root / "docs/plan/checked"
+        (checked / "001-linked.md").symlink_to(outside / "001-example.md")
+        (checked / "escape").symlink_to(outside / "dated")
+        (archive / "001-inside-link.md").symlink_to(archive / "001-example.md")
+        (checked / "2026/07/16-31").symlink_to(archive)
+        index = root / "docs/plan/checked.md"
+        index.write_text(self.CHECKED_INDEX_HEADER, encoding="utf-8")
+        return index
+
+    def rejected_checked_index_rows(self) -> dict[str, tuple[str, str]]:
+        """Map each rejected index to the rule that must refuse it.
+
+        Each case names the message of one rule, so a removed rule cannot stay
+        hidden behind another rule that happens to refuse the same row.
+        """
+
+        return {
+            "missing target": (
+                "001\tdocs/plan/checked/2026/07/01-15/001-absent.md\n",
+                "checked index points to missing file",
+            ),
+            "duplicate id": (
+                self.CHECKED_ARCHIVE_ROW
+                + "001\tdocs/plan/checked/2026/07/01-15/001-other.md\n",
+                "duplicate checked index id",
+            ),
+            "duplicate path": (
+                self.CHECKED_ARCHIVE_ROW
+                + "002\tdocs/plan/checked/2026/07/01-15/001-example.md\n",
+                "duplicate checked index path",
+            ),
+            "wrong filename id": (
+                "002\tdocs/plan/checked/2026/07/01-15/001-example.md\n",
+                "checked index id does not match filename",
+            ),
+            "outside the archive": (
+                "001\toutside/001-example.md\n",
+                "checked index path is outside checked archive",
+            ),
+            "parent traversal": (
+                "001\tdocs/plan/checked/../../../outside/001-example.md\n",
+                "must not contain empty or traversal components",
+            ),
+            "absolute path": (
+                "001\t/tmp/001-example.md\n",
+                "checked index path must be repository-relative",
+            ),
+            "symlinked file leaving the archive": (
+                "001\tdocs/plan/checked/001-linked.md\n",
+                "checked index path passes through a symlink",
+            ),
+            "symlinked directory leaving the archive": (
+                "001\tdocs/plan/checked/escape/001-example.md\n",
+                "checked index path passes through a symlink",
+            ),
+            "symlinked file inside the archive": (
+                "001\tdocs/plan/checked/2026/07/01-15/001-inside-link.md\n",
+                "checked index path passes through a symlink",
+            ),
+            "symlinked directory inside the archive": (
+                "001\tdocs/plan/checked/2026/07/16-31/001-example.md\n",
+                "checked index path passes through a symlink",
+            ),
+            "bad row shape": (
+                "001\tdocs/plan/checked/2026/07/01-15/001-example.md\tchecked\n",
+                "bad checked index row",
+            ),
+        }
+
+    def snapshot_fixture(self, root: Path) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(root)): path.read_bytes()
+            for path in sorted(root.rglob("*"))
+            if path.is_file() and not path.is_symlink()
+        }
+
+    def test_root_policy_refuses_broken_checked_index_targets(self) -> None:
+        for case, (rows, message) in self.rejected_checked_index_rows().items():
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    index = self.build_checked_index_fixture(root)
+                    index.write_text(self.CHECKED_INDEX_HEADER + rows, encoding="utf-8")
+                    before = self.snapshot_fixture(root)
+                    module = load_module(
+                        self.ROOT_POLICY, f"root_checked_{case.replace(' ', '_')}"
+                    )
+                    module.ROOT = root
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        with self.assertRaises(SystemExit):
+                            module.check_checked_index()
+                    self.assertIn(message, stderr.getvalue())
+                    self.assertEqual(self.snapshot_fixture(root), before)
+
+    def test_root_policy_accepts_valid_checked_indexes(self) -> None:
+        for case, rows in {"empty": "", "populated": self.CHECKED_ARCHIVE_ROW}.items():
+            with self.subTest(accepted=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    index = self.build_checked_index_fixture(root)
+                    index.write_text(self.CHECKED_INDEX_HEADER + rows, encoding="utf-8")
+                    before = self.snapshot_fixture(root)
+                    module = load_module(
+                        self.ROOT_POLICY, f"root_checked_ok_{case}"
+                    )
+                    module.ROOT = root
+                    module.check_checked_index()
+                    self.assertEqual(self.snapshot_fixture(root), before)
+
+    def test_generated_lint_shares_the_checked_index_rules(self) -> None:
+        for case, (rows, message) in self.rejected_checked_index_rows().items():
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    scripts = self.build_generated_index_fixture(
+                        root, self.ACTIVE_INDEX_POPULATED
+                    )
+                    index = self.build_checked_index_fixture(root)
+                    index.write_text(self.CHECKED_INDEX_HEADER + rows, encoding="utf-8")
+                    before = self.snapshot_fixture(root)
+                    module = self.load_generated_plan_module(
+                        root, scripts, "lint-plan-docs.py", f"gen_checked_{case.replace(' ', '_')}"
+                    )
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        with self.assertRaises(SystemExit):
+                            module.lint_checked_index()
+                    self.assertIn(message, stderr.getvalue())
+                    self.assertEqual(self.snapshot_fixture(root), before)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts = self.build_generated_index_fixture(root, self.ACTIVE_INDEX_POPULATED)
+            index = self.build_checked_index_fixture(root)
+            index.write_text(
+                self.CHECKED_INDEX_HEADER + self.CHECKED_ARCHIVE_ROW, encoding="utf-8"
+            )
+            before = self.snapshot_fixture(root)
+            module = self.load_generated_plan_module(
+                root, scripts, "lint-plan-docs.py", "gen_checked_accepted"
+            )
+            module.lint_checked_index()
+            self.assertEqual(self.snapshot_fixture(root), before)
+
+    def test_the_shared_check_reads_an_archive_older_than_todays_manifest(self) -> None:
+        """The index relationship is judged; archive vintage is not re-linted."""
+
+        module = load_module(PLANLIB, "shared_checked_index_vintage")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index = self.build_checked_index_fixture(root)
+            index.write_text(
+                self.CHECKED_INDEX_HEADER + self.CHECKED_ARCHIVE_ROW, encoding="utf-8"
+            )
+            record = root / "docs/plan/checked/2026/07/01-15/001-example.md"
+            self.assertNotIn("status:", record.read_text(encoding="utf-8"))
+            before = self.snapshot_fixture(root)
+            self.assertEqual(
+                module.validate_checked_index(root),
+                [("001", "docs/plan/checked/2026/07/01-15/001-example.md")],
+            )
+            self.assertEqual(self.snapshot_fixture(root), before)
+
+    def test_the_repository_checked_index_resolves_every_archived_plan(self) -> None:
+        module = load_module(PLANLIB, "repository_checked_index")
+        rows = module.validate_checked_index(ROOT)
+        self.assertGreater(len(rows), 0)
+        for plan_id, path in rows:
+            self.assertTrue(path.startswith("docs/plan/checked/"), path)
+            self.assertTrue(Path(path).name.startswith(f"{plan_id}-"), path)
+
+    def test_the_root_policy_run_carries_the_checked_index_call(self) -> None:
+        """The call must stay an unconditional statement on the ordinary path."""
+
+        tree = ast.parse(self.ROOT_POLICY.read_text(encoding="utf-8"))
+        main = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        called = [
+            node.value.func.id
+            for node in main.body
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+        ]
+        self.assertIn("check_checked_index", called)
+        self.assertLess(called.index("check_active_plans"), called.index("check_checked_index"))
+
+    def test_a_relocated_archive_directory_is_refused(self) -> None:
+        """A symlink at docs, docs/plan or checked/ moves the whole archive."""
+
+        module = load_module(PLANLIB, "relocated_checked_archive")
+        for relocated in ("docs", "docs/plan", "docs/plan/checked"):
+            with self.subTest(relocated=relocated):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    real = root / "elsewhere"
+                    (real / "docs/plan/checked/2026/07/01-15").mkdir(parents=True)
+                    (root / relocated).parent.mkdir(parents=True, exist_ok=True)
+                    (root / relocated).symlink_to(real / relocated)
+                    record = root / "docs/plan/checked/2026/07/01-15/001-example.md"
+                    record.write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+                    index = root / "docs/plan/checked.md"
+                    index.parent.mkdir(parents=True, exist_ok=True)
+                    index.write_text(
+                        self.CHECKED_INDEX_HEADER + self.CHECKED_ARCHIVE_ROW, encoding="utf-8"
+                    )
+                    with self.assertRaises(module.CheckedIndexError):
+                        module.validate_checked_index(root)
 
 
 class PlanOverviewTest(unittest.TestCase):
