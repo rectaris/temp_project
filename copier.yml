@@ -16,6 +16,7 @@ _envops:
 _exclude:
   - "__pycache__"
   - "*.pyc"
+  - "[% if _copier_operation != 'copy' %]docs/agent/harness-profile.json[% else %]__never_exclude_harness_profile__[% endif %]"
   - "[% if codex_hooks_mode != 'enable_local_logging' %].codex/hooks.json[% else %]__never_exclude_hooks_json__[% endif %]"
   - "[% if skillspector_mode != 'document_optional' %].project-agent-workflow/scripts/skillspector-scan.sh[% else %]__never_exclude_skillspector__[% endif %]"
   - "[% if ci_autofix_mode == 'disabled' %].github/workflows/codex-ci-autofix.yml[% else %]__never_exclude_ci_autofix__[% endif %]"

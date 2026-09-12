@@ -78,6 +78,8 @@ python3 "$root/tests/test-copier-adoption.py"
 python3 "$root/tests/test-referent-contract.py"
 python3 "$root/tests/test-harness-comparison.py"
 python3 "$root/tests/test-harness-comparison.py" --generated
+python3 "$root/tests/test-harness-profiles.py"
+REQUIRE_COPIER=1 "$root/tests/smoke.sh" --harness-profile-preservation
 python3 "$root/tests/test-validation-tools.py"
 python3 "$root/tests/test-verify-copier-update.py"
 "$root/tests/root-plan-lifecycle.sh"

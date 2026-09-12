@@ -251,3 +251,4 @@ id	path
 312	docs/plan/checked/2026/09/01-15/312-check-root-archive-index-targets.md
 314	docs/plan/checked/2026/09/01-15/314-allow-conversation-during-plan-work.md
 319	docs/plan/checked/2026/09/01-15/319-compare-harness-runs-locally.md
+328	docs/plan/checked/2026/09/01-15/328-land-optional-harness-profile-tooling.md

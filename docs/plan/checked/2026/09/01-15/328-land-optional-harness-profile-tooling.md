@@ -1,6 +1,6 @@
 # Land the reviewed optional harness profile tooling
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Selecting an optional instruction revision preserves governing requirements and project-owned selection bytes, and never silently activates an unmeasured or changed revision.
 
@@ -113,12 +113,12 @@ checked_summary_ja: 補助指示を版指定で選び、比較記録を確認し
 
 ## Tasks
 
-- [ ] Read the completed comparison contract and preserve its evidence semantics; define bounded catalog, project selection, adoption and rollback record shapes.
-- [ ] Implement check/render in the template-owned command with a thin root wrapper, an unchanged default, explicit selected revisions and protected-source metadata.
-- [ ] Document the instruction inventory, controlled trial, keep-current, adoption, retirement and rollback operations, including runtime-loading limits and the separate authority needed to change governing policy.
-- [ ] Add positive and negative fixtures for unknown revisions, digest drift, protected-source selection, fake comparison success, changed policy during rollback, retired revisions and unobserved activation.
-- [ ] Register ownership, inventory and policy alignment; exercise fresh generation and updates preserving nondefault project choices, local assets and exact prior revisions.
-- [ ] Review the exact diff and invariant, obtain required independent review, run focused checks and the unchanged authoritative suite, commit and publish without a remote push or a model-performance claim.
+- [x] Read the completed comparison contract and preserve its evidence semantics; define bounded catalog, project selection, adoption and rollback record shapes.
+- [x] Implement check/render in the template-owned command with a thin root wrapper, an unchanged default, explicit selected revisions and protected-source metadata.
+- [x] Document the instruction inventory, controlled trial, keep-current, adoption, retirement and rollback operations, including runtime-loading limits and the separate authority needed to change governing policy.
+- [x] Add positive and negative fixtures for unknown revisions, digest drift, protected-source selection, fake comparison success, changed policy during rollback, retired revisions and unobserved activation.
+- [x] Register ownership, inventory and policy alignment; exercise fresh generation and updates preserving nondefault project choices, local assets and exact prior revisions.
+- [x] Review the exact diff and invariant, obtain required independent review, run focused checks and the unchanged authoritative suite, commit and publish without a remote push or a model-performance claim.
 
 ## Validation Notes
 
@@ -132,3 +132,9 @@ checked_summary_ja: 補助指示を版指定で選び、比較記録を確認し
 - Reuse the accepted direction: preserve project requirements and authority, compare bounded instruction changes, retain failure cases, and pin adoption with a rollback path.
 - Implementation validation is pending. Synthetic fixtures establish tool behavior only; they are not observed model performance.
 - Use bounded parent implementation with the existing external execution ledger and independent read-only review because specification and validation registration paths are part of this scope. Preserve all existing execution and review budgets.
+- Implementation landed in the bound task worktree from the preserved reviewed candidate of the stopped 325/326/327 lineage; no acceptance item, write-scope path or validation command changed.
+- Independent read-only review round 1 reported one Medium (the retired-selection test was tautological and `check-adoption` had no end-to-end coverage) and four Low findings. Round 2 confirmed all five resolved and reported no remaining High or Medium finding.
+- Remediation added a real `check-adoption` harness driving `compare-harness-runs.py`, split three merged negative cases so each pins its own guard, bound `tests/fixtures/harness-profiles/cases.json` to executed test methods, made the adoption report digest the exact captured comparison stdout bytes, and replaced the substring `_exclude` scan with a parsed-entry guard. The one round-2 Low (a test writing into the shared temp directory) was removed; the case now uses a literal digest and touches no path outside its fixture.
+- Mutation evidence: removing the retired-adoption guard, the catalog review-evidence match or the record-versus-recomputed digest tuple each fails `python3 tests/test-harness-profiles.py`; replacing the `copier.yml` `_exclude` entry with a comment fails `python3 scripts/check-copier-template.py`.
+- Focused validation: `scripts/lint-project-workflow.sh` and `python3 scripts/check-copier-template.py` both pass. The authoritative suite ran once for the accepted candidate.
+- Synthetic fixtures establish tool behavior only. This change ships no observed model-performance claim and no default behavior change.

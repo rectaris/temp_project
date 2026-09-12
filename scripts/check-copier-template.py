@@ -758,6 +758,60 @@ def require_harness_evaluation_alignment() -> None:
             fail(f"required lint does not register the harness comparison check: {marker}")
 
 
+def copier_exclude_entries() -> list[str]:
+    """Return the parsed `_exclude` patterns, so a comment cannot satisfy a check."""
+
+    configuration = yaml.safe_load(read("copier.yml"))
+    entries = configuration.get("_exclude") if isinstance(configuration, dict) else None
+    if not isinstance(entries, list) or not all(isinstance(entry, str) for entry in entries):
+        fail("copier.yml must declare a list of _exclude patterns")
+    return entries
+
+
+def require_harness_profile_alignment() -> None:
+    """Keep optional profile policy, command, routing, and copy boundary aligned."""
+
+    root_spec = "docs/agent/SPEC_HARNESS_PROFILES.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_HARNESS_PROFILES.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"harness profile root/template specifications differ: {root_spec} != {template_spec}")
+    for path in (
+        "scripts/check-harness-profile.py",
+        "template/.project-agent-workflow/scripts/check-harness-profile.py",
+        "docs/agent/harness-instructions.json",
+        "template/.project-agent-workflow/docs/agent/harness-instructions.json",
+        "docs/agent/harness-profile.json",
+        "template/docs/agent/harness-profile.json.jinja",
+        "tests/test-harness-profiles.py",
+    ):
+        if path not in SOURCE_REQUIRED:
+            fail(f"harness profile source is not inventoried: {path}")
+    for path in (
+        ".project-agent-workflow/scripts/check-harness-profile.py",
+        ".project-agent-workflow/docs/agent/SPEC_HARNESS_PROFILES.md",
+        ".project-agent-workflow/docs/agent/harness-instructions.json",
+        "docs/agent/harness-profile.json",
+    ):
+        if path not in GENERATED_REQUIRED:
+            fail(f"harness profile output is not inventoried: {path}")
+    if not any(
+        "_copier_operation != 'copy'" in entry and "docs/agent/harness-profile.json" in entry
+        for entry in copier_exclude_entries()
+    ):
+        fail("harness profile selection must be excluded from Copier updates")
+    if "check-harness-profile.py" not in read("scripts/check-harness-profile.py"):
+        fail("root harness profile wrapper must delegate to the template implementation")
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
+    ):
+        index = read(index_path)
+        if "  harness_profiles:" not in index or index.count(f"{prefix}docs/agent/SPEC_HARNESS_PROFILES.md") != 1:
+            fail(f"{index_path} must contain one harness profile route")
+    if 'python3 "$root/tests/test-harness-profiles.py"' not in read("scripts/lint-project-workflow.sh"):
+        fail("required lint does not register harness profile tests")
+
+
 def load_root_policy_module():
     spec = importlib.util.spec_from_file_location(
         "decision_reuse_root_policy", ROOT / "scripts/check-root-agent-policy.py"
@@ -3466,6 +3520,7 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_harness_evaluation_alignment()
+    require_harness_profile_alignment()
     require_decision_reuse_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()

@@ -115,6 +115,12 @@ task_types:
       - path: docs/agent/SPEC_SECURITY.md
         when: provider access, credentials, or external execution are in scope.
 
+  harness_profiles:
+    summary: Selecting, rendering, adopting, retiring, or rolling back explicitly pinned optional harness instruction revisions.
+    required:
+      - docs/agent/SPEC_HARNESS_PROFILES.md
+    conditional: []
+
   japanese_prose:
     summary: Japanese README text, documentation, plans, prompts, issues, review comments, or prose.
     required:

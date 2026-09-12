@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "governing_sources": [
+    {
+      "id": "harness-evaluation-policy",
+      "revision": "v1",
+      "path": ".project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md",
+      "content_digest": "sha256:04fae67c4565c3d7001c1380bfda05fac999fdc8b73bfef43c567c460a9edcbf",
+      "rationale": "This policy governs evidence-bound harness comparison and remains outside optional supplemental selection."
+    },
+    {
+      "id": "security-policy",
+      "revision": "v1",
+      "path": ".project-agent-workflow/docs/agent/SPEC_SECURITY.md",
+      "content_digest": "sha256:74f782eb8a67654255832a37d670aefaf95dfcb74e98cd65c783c589d56819a4",
+      "rationale": "This policy governs security boundaries and remains outside optional supplemental selection."
+    }
+  ],
+  "supplemental_revisions": []
+}

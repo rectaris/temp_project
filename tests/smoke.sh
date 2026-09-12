@@ -1,6 +1,16 @@
 #!/bin/sh
 set -eu
 
+profile_preservation_only=0
+if [ "${1:-}" = "--harness-profile-preservation" ]; then
+  profile_preservation_only=1
+  shift
+fi
+if [ "$#" -ne 0 ]; then
+  echo "Usage: $0 [--harness-profile-preservation]" >&2
+  exit 2
+fi
+
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 scratch_base=${SANDBOXED_PLAN_WORKER_SCRATCH_DIR:-${TMPDIR:-/tmp}}
 tmp=$(mktemp -d "$scratch_base/project-agent-workflow-smoke.XXXXXX")
@@ -8,6 +18,9 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 . "$root/tests/lib-copier.sh"
 source_ref=${COPIER_SMOKE_REF:-}
 render_source=$root
+explicit_source_head=
+explicit_source_status=
+explicit_source_refs=
 
 create_admitted_plan() {
   .project-agent-workflow/scripts/create-plan.sh "$@" \
@@ -27,7 +40,7 @@ strip_admission_record() {
 
 run_root_python() {
   if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
-    (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" uv run python "$@")
+    (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" UV_PROJECT_ENVIRONMENT="$tmp/root-python-venv" uv run python "$@")
   else
     python3 "$@"
   fi
@@ -49,12 +62,15 @@ if ! command -v copier >/dev/null 2>&1; then
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/copier" <<'EOF_COPIER_SHIM'
 #!/bin/sh
-exec env UV_CACHE_DIR="$COPIER_TEST_CACHE" uv run --project "$COPIER_TEST_ROOT" copier "$@"
+exec env UV_CACHE_DIR="$COPIER_TEST_CACHE" \
+  UV_PROJECT_ENVIRONMENT="$COPIER_TEST_ENVIRONMENT" \
+  uv run --project "$COPIER_TEST_ROOT" copier "$@"
 EOF_COPIER_SHIM
   chmod +x "$tmp/bin/copier"
   COPIER_TEST_CACHE="$tmp/uv-cache"
+  COPIER_TEST_ENVIRONMENT="$tmp/copier-venv"
   COPIER_TEST_ROOT="$root"
-  export COPIER_TEST_CACHE COPIER_TEST_ROOT
+  export COPIER_TEST_CACHE COPIER_TEST_ENVIRONMENT COPIER_TEST_ROOT
   PATH="$tmp/bin:$PATH"
   export PATH
 fi
@@ -64,6 +80,12 @@ if [ -z "$source_ref" ]; then
   python3 "$root/tests/prepare-smoke-source.py" \
     --source "$root" --destination "$render_source" --tag v1.2.2 >/dev/null
   source_ref=v1.2.2
+else
+  if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+    explicit_source_head=$(git -C "$root" rev-parse HEAD)
+    explicit_source_status=$(git -C "$root" status --porcelain=v1 --untracked-files=all)
+    explicit_source_refs=$(git -C "$root" for-each-ref --format='%(refname) %(objectname)')
+  fi
 fi
 
 render_fixture() {
@@ -85,6 +107,52 @@ render_defaults() {
   fi
   run_copier "$@" "$render_source" "$out" >/dev/null
 }
+
+run_harness_profile_preservation() {
+  profile_update_source="$tmp/profile-update-source"
+  git clone -q "$render_source" "$profile_update_source"
+  git -C "$profile_update_source" checkout -q "$source_ref"
+  git -C "$profile_update_source" -c user.name=CI -c user.email=ci@example.invalid \
+    commit --allow-empty -qm "Exercise profile-only Copier update"
+  profile_update_ref=$(git -C "$profile_update_source" rev-parse HEAD)
+
+  profile_preserve_out="$tmp/profile-preserve"
+  render_fixture "$root/tests/fixtures/typescript.answers.yml" "$profile_preserve_out"
+  git -C "$profile_preserve_out" init -b main >/dev/null
+  git -C "$profile_preserve_out" config user.name CI
+  git -C "$profile_preserve_out" config user.email ci@example.invalid
+  printf 'Local pinned supplemental instruction.\n' >"$profile_preserve_out/docs/agent/local-harness-advice.md"
+  printf '{"schema_version":1,"selections":[{"id":"local-fixture","revision":"v1","content_digest":"sha256:%064d","asset_path":"docs/agent/local-harness-advice.md"}]}\n' 0 \
+    >"$profile_preserve_out/docs/agent/harness-profile.json"
+  profile_before=$(sha256sum "$profile_preserve_out/docs/agent/harness-profile.json")
+  asset_before=$(sha256sum "$profile_preserve_out/docs/agent/local-harness-advice.md")
+  sed -i "s|^_src_path:.*|_src_path: $profile_update_source|" \
+    "$profile_preserve_out/.copier-answers.yml"
+  git -C "$profile_preserve_out" add -A
+  git -C "$profile_preserve_out" commit -qm "Customize harness profile"
+  run_copier update -q --trust --defaults --vcs-ref "$profile_update_ref" "$profile_preserve_out" >/dev/null
+  test "$(sha256sum "$profile_preserve_out/docs/agent/harness-profile.json")" = "$profile_before"
+  test "$(sha256sum "$profile_preserve_out/docs/agent/local-harness-advice.md")" = "$asset_before"
+
+  profile_absent_out="$tmp/profile-absent"
+  render_fixture "$root/tests/fixtures/docs.answers.yml" "$profile_absent_out"
+  git -C "$profile_absent_out" init -b main >/dev/null
+  git -C "$profile_absent_out" config user.name CI
+  git -C "$profile_absent_out" config user.email ci@example.invalid
+  rm "$profile_absent_out/docs/agent/harness-profile.json"
+  sed -i "s|^_src_path:.*|_src_path: $profile_update_source|" \
+    "$profile_absent_out/.copier-answers.yml"
+  git -C "$profile_absent_out" add -A
+  git -C "$profile_absent_out" commit -qm "Remove local harness profile"
+  run_copier update -q --trust --defaults --vcs-ref "$profile_update_ref" "$profile_absent_out" >/dev/null
+  test ! -e "$profile_absent_out/docs/agent/harness-profile.json"
+}
+
+if [ "$profile_preservation_only" = "1" ]; then
+  run_harness_profile_preservation
+  echo "harness profile Copier preservation passed"
+  exit 0
+fi
 
 assert_generated_inventory() {
   out=$1
@@ -120,6 +188,19 @@ assert_generated_hook_surfaces() {
     echo "generation selected core.hooksPath in the generated project: $out" >&2
     exit 1
   fi
+}
+
+assert_harness_profile() {
+  out=$1
+  test -f "$out/docs/agent/harness-profile.json"
+  (cd "$out" && python3 .project-agent-workflow/scripts/check-harness-profile.py \
+    check \
+    --catalog .project-agent-workflow/docs/agent/harness-instructions.json \
+    --profile docs/agent/harness-profile.json >/dev/null)
+  (cd "$out" && python3 .project-agent-workflow/scripts/check-harness-profile.py \
+    render \
+    --catalog .project-agent-workflow/docs/agent/harness-instructions.json \
+    --profile docs/agent/harness-profile.json) | grep -q '"runtime_activation": "not_observed"'
 }
 
 assert_managed_orchestration_reports() {
@@ -1072,6 +1153,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   out="$tmp/$name"
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
+  assert_harness_profile "$out"
   assert_managed_orchestration_reports "$out"
   assert_generated_whitespace_range "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
@@ -1111,6 +1193,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode human_repo
   } >"$fixture"
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
+  assert_harness_profile "$out"
   assert_managed_orchestration_reports "$out"
   assert_generated_hook_surfaces "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
@@ -1118,8 +1201,16 @@ while IFS="$tab" read -r case_name primary_language human_report_mode human_repo
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
 done <"$root/tests/fixtures/copier-pairwise.tsv"
 
+run_harness_profile_preservation
+if [ -n "$explicit_source_head" ]; then
+  test "$(git -C "$root" rev-parse HEAD)" = "$explicit_source_head"
+  test "$(git -C "$root" status --porcelain=v1 --untracked-files=all)" = "$explicit_source_status"
+  test "$(git -C "$root" for-each-ref --format='%(refname) %(objectname)')" = "$explicit_source_refs"
+fi
+
 default_out="$tmp/defaults"
 render_defaults "$default_out"
+assert_harness_profile "$default_out"
 assert_managed_orchestration_reports "$default_out"
 assert_generated_hook_surfaces "$default_out"
 run_root_python "$root/tests/assert-generated-semantics.py" "$default_out"

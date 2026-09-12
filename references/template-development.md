@@ -14,6 +14,7 @@
 - Version this template repo with Git tags before recommending `copier update`.
 - Keep replaceable workflow content under `.project-agent-workflow/`.
 - Use `_skip_if_exists` for root entrypoints and mutable repository state that Copier seeds but does not own after creation.
+- Seed `docs/agent/harness-profile.json` only during an initial copy. Updates exclude that path, so an existing selection is preserved and an intentionally missing selection is not recreated.
 - Put domain-specific content under generated `docs/agent/` or another declared project extension, not in the managed core.
 - Keep host-discovered bridge files small and route them to the managed core.
 - Treat `*.rej` files from `copier update` as manual review blockers.
