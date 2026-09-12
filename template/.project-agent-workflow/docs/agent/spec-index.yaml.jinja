@@ -76,6 +76,16 @@ task_types:
       - path: .project-agent-workflow/docs/agent/SPEC_SECURITY.md
         when: imported text could carry credentials, private data, or embedded instructions.
 
+  development_direction:
+    summary: Recording owner requirement decisions, rendering the development direction, or emitting adopted requirement references.
+    required:
+      - .project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_DIRECTION.md
+    conditional:
+      - path: .project-agent-workflow/docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md
+        when: the requirement candidate a decision binds to is in scope.
+      - path: .project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md
+        when: an adopted requirement is being carried toward numbered plan admission.
+
   japanese_prose:
     summary: Japanese README text, documentation, plans, specs, prompts, review comments, issue text, or other prose.
     required:

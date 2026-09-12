@@ -1,6 +1,6 @@
 # Render development direction from explicitly adopted requirements
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: The development direction reflects explicit owner decisions bound to exact requirement revisions; regeneration and template updates preserve those decisions, source evidence and project-owned content.
 task_types:
@@ -94,13 +94,27 @@ checked_summary_ja: 採用判断を保ちながら開発方針を生成し、コ
 
 ## Tasks
 
-- [ ] Implement revision-bound decision history and shared write guarding; include unsupported-authority and fabricated-quotation refusal examples. The parent verifies the real owner instruction before recording; the CLI validates supplied structure and never claims human authentication.
-- [ ] Render development-direction prose from accepted data while preserving manual sections; expose pending implementation and downstream-verification references.
-- [ ] Add root/generated direction tests and a real Copier round-trip fixture, register the suite and confirm all generic counterparts through the alignment checker.
-- [ ] Obtain an independent reader review of source-to-requirement-to-direction fidelity, then run focused checks and the unchanged authoritative suites exactly once for the accepted implementation.
+- [x] Implement revision-bound decision history and shared write guarding; include unsupported-authority and fabricated-quotation refusal examples. The parent verifies the real owner instruction before recording; the CLI validates supplied structure and never claims human authentication.
+- [x] Render development-direction prose from accepted data while preserving manual sections; expose pending implementation and downstream-verification references.
+- [x] Add root/generated direction tests and a real Copier round-trip fixture, register the suite and confirm all generic counterparts through the alignment checker.
+- [x] Obtain an independent reader review of source-to-requirement-to-direction fidelity, then run focused checks and the unchanged authoritative suites exactly once for the accepted implementation.
 
 ## Validation Notes
 
 - Owner instruction: 提案の方針のプランを作成せよ。 Accepted proposal stays local; automated external delivery is a later separately authorized extension.
 - This record authorizes only its bounded future implementation after backlog promotion and plan publication. No implementation tests have run during plan authoring.
 - Independent plan review required bounded agent-behavior claims, non-sensitive evidence review, data-only handling of imported instructions and verification of real owner adoption. Those boundaries are explicit tasks and negative cases in this plan chain.
+
+### Implementation Result
+
+- `template/.project-agent-workflow/scripts/development-direction.py` holds the decision history, rendering and inspection commands; `scripts/development-direction.py` is a loader that delegates to it, so root and generated projects run one implementation.
+- Decisions are bound to a candidate revision. One live decision answers one requirement: a second decision on the same revision is refused unless it explicitly supersedes the earlier one, and a supersession may only replace a decision about that same requirement.
+- `render` replaces only the region between the generated markers and preserves surrounding prose byte for byte. Imported report prose is written as evidence, never as structure: every value the renderer emits must stay on one line and carry no section marker, and a requirement whose text breaks that rule is listed as not rendered with its reason instead of entering the document.
+- `SPEC_DEVELOPMENT_DIRECTION.md` ships in both layouts as aligned bytes, the spec index routes the new task type in both, and the inventory plus `require_development_direction_alignment()` keep the pair from drifting.
+
+### Validation Result
+
+- Focused: `python3 tests/test-development-direction.py` (31 tests, OK), `REQUIRE_COPIER=1 python3 tests/test-template-feedback-pipeline.py` (1 test, OK, a real Copier round trip), `python3 scripts/check-copier-template.py` (passed).
+- Authoritative, run once for the accepted implementation: `./scripts/lint-project-workflow.sh` (passed) and `./tests/smoke.sh` (passed).
+- Independent review ran three rounds. Round 1 raised 2 High, 2 Medium and 3 Low; round 2 confirmed those fixes and raised one Medium of its own, a minimum-Python guard that could not detect the defect it named, plus one Low; round 3 confirmed both fixes by mutation and reported nothing at High or Medium. Every protection the reviewer mutated now fails the suite when removed.
+- Residual, recorded rather than relied upon: the minimum-Python compile finds a real 3.11 interpreter locally, but on a hosted runner it is expected to skip, because the job that runs this suite uses 3.12 and the job that has 3.11 runs only `tests/copier-minimum.sh`. Closing that gap means editing `.github/workflows/ci.yml`, which this plan does not own, so it is left for a separate decision rather than taken silently.

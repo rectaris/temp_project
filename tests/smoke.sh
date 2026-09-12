@@ -977,6 +977,60 @@ run_template_requirements_smoke() {
   rm -r "$out/docs/improvements" "$out/$input" "$out/$candidate"
 }
 
+run_development_direction_smoke() {
+  out=$1
+  report=development-direction-report.json
+  candidate=development-direction-candidate.json
+  decision=development-direction-decision.json
+  (cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py example) >"$out/$report"
+  python3 -c 'import json,sys; record=json.loads(open(sys.argv[1],encoding="utf-8").read()); record["project_alias"]="upstream-reporter"; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(record,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$report"
+  report_digest=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py check --report "$report" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  stored=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py import --report "$report" --checked-digest "$report_digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["written"][0])')
+
+  (cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py example) >"$out/$candidate"
+  python3 -c 'import hashlib,json,sys; held=open(sys.argv[2],"rb").read(); value=json.loads(open(sys.argv[1],encoding="utf-8").read()); value["sources"]=[{"project_alias":"upstream-reporter","report_id":"plan-worktree-publish-confusion","digest":"sha256:"+hashlib.sha256(held).hexdigest()}]; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$candidate" "$out/$stored"
+  candidate_digest=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py check-candidate --candidate "$candidate" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  held_candidate=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py record-candidate --candidate "$candidate" --checked-digest "$candidate_digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["candidate_path"])')
+
+  # An undecided candidate is a suggestion; it never reaches the adopted list.
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py render) >/dev/null
+  grep -q 'no decision recorded' "$out/docs/development-direction.md"
+  grep -q 'None adopted yet.' "$out/docs/development-direction.md"
+
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py example) >"$out/$decision"
+  python3 -c 'import hashlib,json,sys; held=open(sys.argv[2],"rb").read(); value=json.loads(open(sys.argv[1],encoding="utf-8").read()); value["candidate_digest"]="sha256:"+hashlib.sha256(held).hexdigest(); open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$decision" "$out/$held_candidate"
+  decision_digest=$(cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py check-decision --decision "$decision" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  written=$(cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py record-decision --decision "$decision" --checked-digest "$decision_digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["decision_path"])')
+  test -f "$out/$written"
+  if git -C "$out" check-ignore "$written" >/dev/null 2>&1; then
+    echo "recorded owner decisions must stay tracked: $written" >&2
+    exit 1
+  fi
+
+  # Manual prose outside the generated section survives a re-render.
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py render) >/dev/null
+  printf 'A local note the generator must not touch.\n' >>"$out/docs/development-direction.md"
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py render) >/dev/null
+  grep -q 'A local note the generator must not touch.' "$out/docs/development-direction.md"
+  grep -q 'Adopted, in order' "$out/docs/development-direction.md"
+
+  # Adoption is not admission: no numbered plan appears.
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py plan-input) | grep -q 'not an admitted plan'
+  test -z "$(find "$out/docs/plan/active" -name '[0-9]*.md')"
+
+  rm -r "$out/docs/improvements" "$out/docs/development-direction.md" \
+    "$out/$report" "$out/$candidate" "$out/$decision"
+}
+
 run_shared_human_report_smoke() {
   out=$1
   shared="$out-shared"
@@ -1344,6 +1398,7 @@ run_referent_contract_smoke "$tmp/typescript"
 run_human_report_smoke "$tmp/typescript"
 run_template_feedback_smoke "$tmp/typescript"
 run_template_requirements_smoke "$tmp/typescript"
+run_development_direction_smoke "$tmp/typescript"
 run_shared_human_report_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"
 

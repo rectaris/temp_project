@@ -947,6 +947,75 @@ def require_template_requirements_alignment() -> None:
     if 'python3 "$root/tests/test-template-feedback-collection.py"' not in read("scripts/lint-project-workflow.sh"):
         fail("required lint does not register template requirement tests")
 
+def require_development_direction_alignment() -> None:
+    """Keep direction policy, command, routing, and data ownership aligned."""
+
+    root_spec = "docs/agent/SPEC_DEVELOPMENT_DIRECTION.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_DIRECTION.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"development direction root/template specifications differ: {root_spec} != {template_spec}")
+    for path in (
+        "scripts/development-direction.py",
+        "template/.project-agent-workflow/scripts/development-direction.py",
+        root_spec,
+        template_spec,
+        "tests/test-development-direction.py",
+        "tests/test-template-feedback-pipeline.py",
+    ):
+        if path not in SOURCE_REQUIRED:
+            fail(f"development direction source is not inventoried: {path}")
+    for path in (
+        ".project-agent-workflow/scripts/development-direction.py",
+        ".project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_DIRECTION.md",
+    ):
+        if path not in GENERATED_REQUIRED:
+            fail(f"development direction output is not inventoried: {path}")
+    # Owner decisions and a rendered direction are project-owned runtime
+    # records. Shipping one would hand every generated project a decision its
+    # owner never made.
+    for inventory, label in ((SOURCE_REQUIRED, "source"), (GENERATED_REQUIRED, "generated")):
+        for path in inventory:
+            if "docs/improvements/decisions" in path or path.endswith("docs/development-direction.md"):
+                fail(f"actual decision records must stay out of the {label} inventory: {path}")
+    for shipped in (
+        "template/docs/improvements",
+        "template/.project-agent-workflow/docs/improvements",
+        "template/docs/development-direction.md",
+        "template/.project-agent-workflow/docs/development-direction.md",
+    ):
+        if (ROOT / shipped).exists():
+            fail(f"actual decision or improvement data must not ship in the Copier template: {shipped}")
+    wrapper = read("scripts/development-direction.py")
+    if (
+        '"template"' not in wrapper
+        or '".project-agent-workflow"' not in wrapper
+        or "spec.loader.exec_module(module)" not in wrapper
+        or "module.main()" not in wrapper
+    ):
+        fail("root direction wrapper must delegate to the template implementation")
+    # The direction command reuses the checked collection command, so one
+    # candidate shape and one storage layout govern both layouts.
+    command = read("template/.project-agent-workflow/scripts/development-direction.py")
+    if 'Path(__file__).resolve().parent / "collect-template-feedback.py"' not in command:
+        fail("the direction command must reuse the shipped improvement collection command")
+    if "require_task_binding" not in command:
+        fail("the direction command must guard its repository effects")
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
+    ):
+        route = spec_index_route(index_path, "development_direction")
+        if route.get("required") != [f"{prefix}docs/agent/SPEC_DEVELOPMENT_DIRECTION.md"]:
+            fail(f"{index_path} must route the development direction to its own specification")
+    lint = read("scripts/lint-project-workflow.sh")
+    for suite in ("tests/test-development-direction.py", "tests/test-template-feedback-pipeline.py"):
+        if f'python3 "$root/{suite}"' not in lint:
+            fail(f"required lint does not register {suite}")
+    # The round-trip witness asserts nothing when Copier is missing, so required
+    # lint has to demand it rather than accept a silent skip.
+    if 'REQUIRE_COPIER=1 python3 "$root/tests/test-template-feedback-pipeline.py"' not in lint:
+        fail("required lint must demand a real Copier round trip")
+
 def load_root_policy_module():
     spec = importlib.util.spec_from_file_location(
         "decision_reuse_root_policy", ROOT / "scripts/check-root-agent-policy.py"
@@ -3658,6 +3727,7 @@ def main() -> int:
     require_harness_profile_alignment()
     require_template_feedback_alignment()
     require_template_requirements_alignment()
+    require_development_direction_alignment()
     require_decision_reuse_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()

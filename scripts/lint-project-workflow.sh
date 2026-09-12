@@ -81,6 +81,8 @@ python3 "$root/tests/test-harness-comparison.py" --generated
 python3 "$root/tests/test-harness-profiles.py"
 python3 "$root/tests/test-template-feedback.py"
 python3 "$root/tests/test-template-feedback-collection.py"
+python3 "$root/tests/test-development-direction.py"
+REQUIRE_COPIER=1 python3 "$root/tests/test-template-feedback-pipeline.py"
 REQUIRE_COPIER=1 "$root/tests/smoke.sh" --harness-profile-preservation
 python3 "$root/tests/test-validation-tools.py"
 python3 "$root/tests/test-verify-copier-update.py"
