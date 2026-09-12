@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
-"""Deterministic Stop-hook gate for incomplete plan lifecycle state.
+"""Read-only Stop reminders that never prevent ending a conversation turn.
 
 One adapter serves the Codex `Stop` event and the Copilot `agentStop` event.
-Both surfaces read a decision object from stdout and treat a non-zero exit as
-a hook error, so every path here exits zero and prints exactly one object.
+Both surfaces receive an empty decision on stdout and exit zero. Diagnostics
+go to stderr; completion and write enforcement belong to operation boundaries.
 """
 
 from __future__ import annotations
 
-import fcntl
-import hashlib
 import json
-import os
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -27,7 +23,7 @@ MISSING_GATE_REASON = (
     "This repository ships no plan completion gate at "
     ".project-agent-workflow/scripts/check-agent-completion.sh or "
     "scripts/check-agent-completion.sh. Restore the managed gate, then report "
-    "the plan lifecycle state before finishing this turn."
+    "the plan lifecycle state before claiming completion of the affected work."
 )
 
 FALLBACK_REASON = (
@@ -41,94 +37,11 @@ GUARD_CANDIDATES = (
     "scripts/project_workflow/worktree_guard.py",
 )
 
-MAX_RETAINED_BLOCKS = 3
-REPETITION_STATE = "project-agent-workflow-stop-repetition.json"
-
-
-def block(reason: str) -> int:
-    json.dump({"decision": "block", "reason": reason}, sys.stdout)
-    sys.stdout.write("\n")
-    return 0
-
-
-def retained_block_required(repo: Path, reason: str | None) -> bool:
-    result = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=repo,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        if reason is None:
-            return False
-        raise ValueError("cannot locate the common Git directory")
-    path = Path(result.stdout.strip()) / REPETITION_STATE
-    flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
-    if reason is not None:
-        flags |= os.O_CREAT
-    try:
-        descriptor = os.open(path, flags, 0o600)
-    except FileNotFoundError:
-        if reason is None:
-            return False
-        raise
-    with os.fdopen(descriptor, "r+", encoding="utf-8") as handle:
-        info = os.fstat(handle.fileno())
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_nlink != 1
-            or info.st_uid != os.getuid()
-            or stat.S_IMODE(info.st_mode) != 0o600
-        ):
-            raise ValueError("repetition state must be an owner-only single-linked regular file")
-        # Keep one inode under the lock: unlinking a reset would split concurrent readers.
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        raw = handle.read(513)
-        if len(raw) > 512:
-            raise ValueError("repetition state exceeds its size bound")
-        state = json.loads(raw) if raw else {"reason_digest": None, "count": 0}
-        if not isinstance(state, dict) or set(state) != {"reason_digest", "count"}:
-            raise ValueError("invalid repetition state fields")
-        previous = state["reason_digest"]
-        count = state["count"]
-        if (
-            type(count) is not int
-            or not 0 <= count <= MAX_RETAINED_BLOCKS
-            or not (
-                previous is None and count == 0
-                or isinstance(previous, str)
-                and len(previous) == 64
-                and all(char in "0123456789abcdef" for char in previous)
-                and count > 0
-            )
-        ):
-            raise ValueError("invalid repetition state values")
-        current = hashlib.sha256(reason.encode("utf-8")).hexdigest() if reason else None
-        if current is not None and previous == current and count == MAX_RETAINED_BLOCKS:
-            return False
-        state = {
-            "reason_digest": current,
-            "count": (count + 1 if current == previous else 1) if current else 0,
-        }
-        handle.seek(0)
-        json.dump(state, handle, sort_keys=True)
-        handle.write("\n")
-        handle.truncate()
-        handle.flush()
-        os.fsync(handle.fileno())
-    return reason is not None
-
-
 def unretired_task(repo: Path) -> str | None:
     """Report the task worktree that still owes publication and retirement.
 
-    A success response requires the accepted commit on its source branch and
-    the task worktree and temporary branch gone. While a live binding remains,
-    the task is unfinished, so this reports the exact remaining action. A
-    stopped task is still not a success: the agent reports its retained state
-    on the forced continuation rather than retiring anything here.
+    This is repository-wide context, not an assignment to this session. Ending
+    a turn grants no publication, retirement or completion authority.
     """
 
     guard = None
@@ -146,6 +59,7 @@ def unretired_task(repo: Path) -> str | None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        timeout=5,
     )
     manager = ".project-agent-workflow/scripts/manage-plan-worktrees.py"
     if not (repo / manager).is_file():
@@ -157,8 +71,8 @@ def unretired_task(repo: Path) -> str | None:
         return (
             "The task-worktree guard could not report retained state"
             + (f": {detail[-1]}" if detail else ".")
-            + " A success response requires no task worktree to remain. Resolve the "
-            f"guard failure, then run `python3 {manager} publish` for a completed task."
+            + " Retirement remains unverified. The owning task must resolve the "
+            "guard failure before claiming completion."
         )
     try:
         entries = json.loads(result.stdout or "{}").get("outstanding")
@@ -166,8 +80,8 @@ def unretired_task(repo: Path) -> str | None:
         entries = None
     if not isinstance(entries, list):
         return (
-            "The task-worktree guard returned no readable retained-state report. A "
-            "success response requires no task worktree to remain."
+            "The task-worktree guard returned no readable retained-state report. "
+            "The owning task must verify retirement before claiming completion."
         )
     if not entries:
         return None
@@ -181,16 +95,15 @@ def unretired_task(repo: Path) -> str | None:
         return (
             f"This repository still owns a record for {first.get('task')} whose task "
             f"worktree at {first.get('worktree_path')} is already gone, so its "
-            "retirement was interrupted. A success response requires no retained task "
-            f"state. Run `python3 {manager} retire` to finish that retirement." + remainder
+            "retirement was interrupted. That task remains incomplete. "
+            f"Its owning session uses `python3 {manager} retire` to finish that retirement." + remainder
         )
     return (
         f"This repository still owns the task worktree for {first.get('task')} at "
-        f"{first.get('worktree_path')}. A success response requires its accepted commit "
+        f"{first.get('worktree_path')}. Completing that task requires its accepted commit "
         f"on {first.get('source_ref')} and this worktree and its temporary branch "
-        f"absent. Run `python3 {manager} publish` to publish and retire the completed "
-        "task, or report the exact retained state and blocker if the work is not "
-        "complete." + remainder
+        f"absent. Its owning session uses `python3 {manager} publish` to publish and retire the completed "
+        "task; unfinished work remains recorded until its owner can complete it." + remainder
     )
 
 
@@ -201,6 +114,7 @@ def repo_root() -> Path:
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         check=False,
+        timeout=5,
     )
     if result.returncode == 0 and result.stdout.strip():
         return Path(result.stdout.strip())
@@ -208,55 +122,54 @@ def repo_root() -> Path:
 
 
 def main() -> int:
+    # Stop is a conversation boundary, not evidence of task completion. Never
+    # classify message text, require a session id, or consume shared counters.
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
-    except Exception:
-        payload = {}
-    if payload.get("stop_hook_active"):
-        print("{}")
-        return 0
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+        except (ValueError, UnicodeError):
+            payload = {}
+        if isinstance(payload, dict) and payload.get("stop_hook_active"):
+            return 0
 
-    repo = repo_root()
-    completion_script = None
-    for candidate in GATE_CANDIDATES:
-        resolved = repo / candidate
-        if resolved.is_file():
-            completion_script = resolved
-            break
-    pending = None
-    if completion_script is None:
-        reason = MISSING_GATE_REASON
-    else:
-        completion = subprocess.run(
-            ["sh", str(completion_script), "--plans-only"],
-            cwd=repo,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+        repo = repo_root()
+        completion_script = next(
+            (repo / candidate for candidate in GATE_CANDIDATES if (repo / candidate).is_file()),
+            None,
         )
-        if completion.returncode != 0:
-            reason = completion.stderr.strip() or FALLBACK_REASON
+        if completion_script is None:
+            reason = MISSING_GATE_REASON
         else:
-            pending = unretired_task(repo)
-            reason = pending
-    try:
-        keep_blocking = retained_block_required(repo, pending)
-    except (OSError, ValueError) as error:
-        return block(
-            (reason + " " if reason else "")
-            + f"The retained-task repetition counter is unavailable: {error}. "
-            "Report this blocker; do not claim the task was published or retired."
-        )
-    if reason is not None and (pending is None or keep_blocking):
-        return block(reason)
-    if pending is not None:
+            completion = subprocess.run(
+                ["sh", str(completion_script), "--plans-only"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=5,
+            )
+            reason = (
+                completion.stderr.strip() or FALLBACK_REASON
+                if completion.returncode != 0
+                else unretired_task(repo)
+            )
+        if reason:
+            print(
+                "Unfinished repository work (advisory only; this does not assign "
+                "another session's task or require continuing this turn): " + reason,
+                file=sys.stderr,
+            )
+    except Exception as error:
+        # Diagnostics are best-effort; unexpected report shapes cannot turn a
+        # conversation boundary into a hook error or a forced continuation.
         print(
-            "The identical retained-task blocker was already reported three times. "
-            "End this turn by reporting it; publication and retirement remain incomplete.",
+            f"Stop reminder unavailable: {error}. Ending this turn does not "
+            "establish task completion; the owning task must verify its state.",
             file=sys.stderr,
         )
-    print("{}")
+    finally:
+        print("{}")
     return 0
 
 

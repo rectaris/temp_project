@@ -3268,13 +3268,18 @@ def require_completion_gate_distribution() -> None:
     adapter = read(".project-agent-workflow/hooks/stop_review_gate.py")
     for marker in (
         'payload.get("stop_hook_active")',
-        '"decision": "block"',
+        'print("{}")',
+        'timeout=5',
+        'advisory only',
         "MISSING_GATE_REASON",
         "FALLBACK_REASON",
         "--plans-only",
     ):
         if marker not in adapter:
             fail(f"shared Stop adapter missing completion-gate marker: {marker}")
+
+    if '"decision": "block"' in adapter or "REPETITION_STATE" in adapter:
+        fail("shared Stop adapter must neither block turns nor maintain repetition state")
 
     detector = read("scripts/lint-project-workflow.sh")
     for marker in (
@@ -3323,6 +3328,8 @@ def require_completion_gate_distribution() -> None:
     generated_spec = read("template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md")
     for marker in (
         "## Completion Gate Boundaries",
+        "## Separate Sessions",
+        "Ending a conversation turn is not a completion claim",
         "git config core.hooksPath .githooks",
         "git commit --no-verify",
         "`.github/hooks/plan-lifecycle.json`",
