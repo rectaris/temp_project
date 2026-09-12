@@ -1,6 +1,8 @@
 # Pin optional instruction revisions and retain a measured adoption path
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - scope_drift
 primary_invariant: Selecting an optional instruction revision preserves governing requirements and project-owned selection bytes, and never silently activates an unmeasured or changed revision.
 task_types:
   - template_workflow
