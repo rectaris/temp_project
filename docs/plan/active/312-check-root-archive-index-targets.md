@@ -1,6 +1,6 @@
 # Validate root checked-index targets through the shared archive check
 
-status: in_progress
+status: deferred
 primary_invariant: Every indexed checked plan resolves to its existing same-id archive, and root validation applies the shared checked-index rules without rewriting historical archive content.
 task_types:
   - template_workflow
@@ -85,3 +85,12 @@ checked_summary_ja: 完了記録の索引に残る古い保存先を直し、既
 - Owner instruction: これまでのこのプロジェクトでの開発作業について改善できる部分を探し、改善するためのプランとして作成せよ。
 - This task authorizes plan authoring only. No implementation, stopped-run continuation, remote publication or performance claim is included.
 - Planning evidence and reproduction steps: docs/plan/development-improvements-20260912.md. Regression assertions described here must be added and exercised during implementation; their future success is not claimed now.
+- Implementation baseline: a30119e in temp_project. Owner instruction: 310 312 を順に実装せよ。
+- implementation_mode: parent_direct. This run is stopped at repair_required; no plan 312 product change is committed.
+- Defect reproduced before the change: 23 of 246 rows in docs/plan/checked.md named absent flat paths while root validation passed, because only the generated linter carried a checked-index check. The old narrow check also exited 0 for a same-id target reached through docs/plan/checked/../../../outside/ and for a checked/ symlink leaving the archive.
+- A candidate implementation reached focused validation (python3 tests/test-validation-tools.py, 296 tests, OK) and one independent read-only review. That review reported no Critical or High findings, one Medium and three Low, and every one of them was addressed in the candidate.
+- Authoritative validation then failed: scripts/lint-project-workflow.sh stops at python3 scripts/restructure-plan.py --verify with "activation checked archive is missing or stale: docs/plan/checked/2026/07/01-15/001-initial-package.md".
+- Diagnosis: activation_checked_pairs in scripts/restructure-plan.py skips an index row whose path has no dated subdirectory, so the 23 stale rows kept that code path unexercised. Once the rows name their real archives the function applies, and it accepts only a manifest status of exactly checked. Archives 001 and 002 declare status: completed and 003 through 019 carry no status field, all vintages that planlib.archived_status and the generated linter already read as closed.
+- Classification: repair_required. The defect is independently repairable, its files are scripts/restructure-plan.py and its mirrored template copy, and both lie outside this plan's write_scope. This plan's scope, invariant, acceptance items and validation authority are unchanged.
+- Owner decision on the stop: repair_plan. Plan 313 was created in docs/plan/backlog/ for the bounded repair. This plan stays deferred and resumes only through a fresh run after plan 313 is checked.
+- The stopped candidate is preserved locally at .agent-artifacts/stopped-runs/312-checked-index-candidate.patch. It is evidence, not authorization to reapply.
