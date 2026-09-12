@@ -1,6 +1,6 @@
 # Read activation checked archives of every closed vintage
 
-status: backlog
+status: in_progress
 primary_invariant: An activation reference resolves against its checked archive through the shared closed-vintage rule, so an archive written before the checked status value is read rather than reported as stale.
 task_types:
   - template_workflow
