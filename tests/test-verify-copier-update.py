@@ -1113,6 +1113,8 @@ class DownstreamBaselineTest(unittest.TestCase):
         checkout = root / "one"
         checkout.mkdir(parents=True)
         run(["git", "init", "-q", "-b", "dev"], checkout)
+        run(["git", "config", "user.name", "Test"], checkout)
+        run(["git", "config", "user.email", "test@example.invalid"], checkout)
         run(["git", "remote", "add", "origin", remote], checkout)
         (checkout / ".copier-answers.yml").write_text(
             f"_commit: {commit}\n_src_path: {source}\n", encoding="utf-8"
