@@ -581,6 +581,22 @@ def read_checked_rows() -> list[tuple[str, str]]:
     return rows
 
 
+def archived_status(path: Path) -> str:
+    """Read a checked record's status, including an archive older than the field.
+
+    A record under the checked archive that predates the status field states the
+    same fact through its location, so read it as checked rather than refusing it.
+    """
+
+    values = parse_manifest(path)
+    status = manifest_scalar(values, "status").strip()
+    if status:
+        return status
+    if CHECKED_DIR in path.parents and manifest_scalar(values, "task_type").strip():
+        return "checked"
+    return status
+
+
 def _matching_checked_paths(
     plan_id: str,
     basename: str,
@@ -619,7 +635,7 @@ def require_predecessors_checked(path: Path) -> None:
         target = ROOT / predecessor
         if not target.is_file():
             raise PlanError(f"{path} checked predecessor is missing: {predecessor}")
-        if manifest_scalar(parse_manifest(target), "status") != "checked":
+        if archived_status(target) != "checked":
             raise PlanError(f"{path} predecessor is not checked: {predecessor}")
 
 
@@ -670,7 +686,7 @@ def validate_active_plan_predecessors() -> None:
             checked_file = ROOT / predecessor
             if not checked_file.is_file():
                 raise PlanError(f"{path} checked predecessor is missing: {predecessor}")
-            if manifest_scalar(parse_manifest(checked_file), "status") != "checked":
+            if archived_status(checked_file) != "checked":
                 raise PlanError(f"{path} predecessor is not checked: {predecessor}")
 
         if unresolved and status != "deferred":

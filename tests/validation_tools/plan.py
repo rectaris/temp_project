@@ -2543,6 +2543,108 @@ class PlanValidationCommandsTest(unittest.TestCase):
             )
             module.lint_plan_index()
 
+    PRE_VINTAGE_ARCHIVE = (
+        "task_type: tooling\n"
+        "target_files:\n"
+        "  - scripts/example.sh\n"
+        "required_specs:\n"
+        "  - docs/agent/SPEC_VALIDATION.md\n"
+        "validation:\n"
+        "  - git diff --check\n"
+        "expected_output: patch-only\n"
+        "checked_summary_ja: 旧世代のアーカイブ記録。\n"
+        "\n# 001 example\n\n## Goal\n\nHistorical record.\n"
+    )
+
+    def build_pre_vintage_archive(self, root: Path, manifest: str) -> tuple[Path, Path]:
+        """Install the generated lint beside one archived record of an old vintage."""
+
+        scripts = self.build_generated_index_fixture(root, self.ACTIVE_INDEX_POPULATED)
+        archive = root / "docs/plan/checked/001-example.md"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_text(manifest, encoding="utf-8")
+        (root / "docs/plan/checked.md").write_text(
+            "# Checked Plan Index\n\nid\tpath\n001\tdocs/plan/checked/001-example.md\n",
+            encoding="utf-8",
+        )
+        return scripts, archive
+
+    def test_generated_lint_reads_an_archive_older_than_the_fields_it_requires(self) -> None:
+        """A record cannot supply review metadata its vintage never wrote."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts, archive = self.build_pre_vintage_archive(root, self.PRE_VINTAGE_ARCHIVE)
+            module = self.load_generated_plan_module(
+                root, scripts, "lint-plan-docs.py", "archive_vintage_accepted"
+            )
+            module.lint_manifest(archive)
+
+    def test_generated_lint_still_judges_archive_fields_that_are_present(self) -> None:
+        """Relaxing an absent field must not stop judging a field that is written."""
+
+        cases = {
+            "review_class": "review_class: D\n",
+            "human_design_required": "human_design_required: maybe\n",
+            "human_approval_status": "human_approval_status: later\n",
+            "status": "status: in_progress\n",
+        }
+        for field, line in cases.items():
+            with self.subTest(rejected=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                scripts, archive = self.build_pre_vintage_archive(
+                    root, line + self.PRE_VINTAGE_ARCHIVE
+                )
+                module = self.load_generated_plan_module(
+                    root, scripts, "lint-plan-docs.py", f"archive_vintage_{field}"
+                )
+                with self.assertRaises(SystemExit):
+                    module.lint_manifest(archive)
+
+    def test_generated_lint_refuses_an_archive_that_declares_a_field_but_leaves_it_empty(
+        self,
+    ) -> None:
+        """Declaring a field and leaving it blank is a defect, not an old vintage."""
+
+        for field in (
+            "status",
+            "review_class",
+            "human_design_required",
+            "human_approval_status",
+            "acceptance",
+        ):
+            with self.subTest(rejected=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                scripts, archive = self.build_pre_vintage_archive(
+                    root, f"{field}:\n" + self.PRE_VINTAGE_ARCHIVE
+                )
+                module = self.load_generated_plan_module(
+                    root, scripts, "lint-plan-docs.py", f"archive_empty_{field}"
+                )
+                with self.assertRaises(SystemExit):
+                    module.lint_manifest(archive)
+
+    def test_generated_lint_reads_a_status_less_archive_as_a_checked_predecessor(self) -> None:
+        """An archive older than the status field still satisfies a predecessor gate."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts, archive = self.build_pre_vintage_archive(root, self.PRE_VINTAGE_ARCHIVE)
+            module = self.load_generated_plan_module(
+                root, scripts, "planlib.py", "archive_vintage_predecessor"
+            )
+            self.assertEqual("checked", module.archived_status(archive))
+            open_plan = root / "docs/plan/active/281-example.md"
+            open_plan.write_text(
+                "# Example\n\nstatus: in_progress\npredecessor_plans:\n"
+                "  - docs/plan/checked/001-example.md\n\n## Tasks\n\n- [ ] work\n",
+                encoding="utf-8",
+            )
+            lint = self.load_generated_plan_module(
+                root, scripts, "lint-plan-docs.py", "archive_vintage_predecessor_lint"
+            )
+            lint.lint_manifest(archive)
+
     def test_root_policy_rejects_broken_active_index_identities(self) -> None:
         cases = {
             "malformed document": self.ACTIVE_INDEX_POPULATED.replace("\t", "\\t"),

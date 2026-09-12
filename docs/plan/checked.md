@@ -242,3 +242,4 @@ id	path
 308	docs/plan/checked/2026/09/01-15/308-record-the-real-downstream-gate.md
 309	docs/plan/checked/2026/09/01-15/309-record-the-unchecked-project-gate.md
 109	docs/plan/checked/2026/09/01-15/109-judge-one-plan-index-one-way.md
+289	docs/plan/checked/2026/09/01-15/289-read-archives-older-than-the-schema.md
