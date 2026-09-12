@@ -20,7 +20,14 @@
 
 ## 現在のbacklog一覧
 
-次の一覧は`python3 scripts/render-plan-overview.py --relative-to docs/plan/backlog/README.md`で生成した。未着手の計画は現在ない。
+次の一覧は`python3 scripts/render-plan-overview.py --relative-to docs/plan/backlog/README.md`で生成した。
 
 | id | status | title | path |
 | --- | --- | --- | --- |
+| [320](320-pin-optional-harness-instructions.md) | backlog | Pin optional instruction revisions and retain a measured adoption path | docs/plan/backlog/320-pin-optional-harness-instructions.md |
+
+## ハーネスのモデル更新への対応
+
+[比較ツールのプラン](../active/319-compare-harness-runs-locally.md)の完了後に、[補助指示の版選択のプラン](320-pin-optional-harness-instructions.md)を開始する。
+共通の要件と権限を保ち、比較記録に基づいて補助指示の採用を判断できるようにする。
+両プランの完了は、実モデルでの性能改善を確認したことを意味しない。
