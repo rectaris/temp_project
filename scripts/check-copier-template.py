@@ -812,6 +812,19 @@ def require_harness_profile_alignment() -> None:
         fail("required lint does not register harness profile tests")
 
 
+def spec_index_route(index_path: str, name: str) -> dict:
+    """Return one named routing entry so a check reads the route, not the file.
+
+    Another route may legitimately cite the same specification as a
+    conditional read, so counting whole-file occurrences would misreport it.
+    """
+
+    index = yaml.safe_load(read(index_path))
+    routes = index.get("task_types") if isinstance(index, dict) else None
+    if not isinstance(routes, dict) or not isinstance(routes.get(name), dict):
+        fail(f"{index_path} must contain the {name} route")
+    return routes[name]
+
 def require_template_feedback_alignment() -> None:
     """Keep improvement-record policy, command, routing, and data ownership aligned."""
 
@@ -872,9 +885,9 @@ def require_template_feedback_alignment() -> None:
         ("docs/agent/spec-index.yaml", ""),
         ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
     ):
-        index = read(index_path)
-        if "  template_feedback:" not in index or index.count(f"{prefix}docs/agent/SPEC_TEMPLATE_FEEDBACK.md") != 1:
-            fail(f"{index_path} must contain one template feedback route")
+        route = spec_index_route(index_path, "template_feedback")
+        if route.get("required") != [f"{prefix}docs/agent/SPEC_TEMPLATE_FEEDBACK.md"]:
+            fail(f"{index_path} must route template feedback to its own specification")
     for policy_path, command in (
         ("AGENTS.md", "scripts/template-feedback.py"),
         ("template/.project-agent-workflow/AGENTS.md.jinja", ".project-agent-workflow/scripts/template-feedback.py"),
@@ -884,6 +897,55 @@ def require_template_feedback_alignment() -> None:
             fail(f"{policy_path} must route improvement record preparation to its command and mode")
     if 'python3 "$root/tests/test-template-feedback.py"' not in read("scripts/lint-project-workflow.sh"):
         fail("required lint does not register template feedback tests")
+
+def require_template_requirements_alignment() -> None:
+    """Keep collection policy, command, routing, and data ownership aligned."""
+
+    root_spec = "docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"template requirement root/template specifications differ: {root_spec} != {template_spec}")
+    for path in (
+        "scripts/collect-template-feedback.py",
+        "template/.project-agent-workflow/scripts/collect-template-feedback.py",
+        root_spec,
+        template_spec,
+        "tests/test-template-feedback-collection.py",
+    ):
+        if path not in SOURCE_REQUIRED:
+            fail(f"template requirement source is not inventoried: {path}")
+    for path in (
+        ".project-agent-workflow/scripts/collect-template-feedback.py",
+        ".project-agent-workflow/docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md",
+    ):
+        if path not in GENERATED_REQUIRED:
+            fail(f"template requirement output is not inventoried: {path}")
+    # Imported reports and derived requirement candidates are project-owned
+    # runtime data. Shipping one would seed every generated project with
+    # another project's observations and proposals.
+    for inventory, label in ((SOURCE_REQUIRED, "source"), (GENERATED_REQUIRED, "generated")):
+        for path in inventory:
+            if path.startswith("docs/improvements/") or "/docs/improvements/" in path:
+                fail(f"actual improvement data must stay out of the {label} inventory: {path}")
+    for shipped in ("template/docs/improvements", "template/.project-agent-workflow/docs/improvements"):
+        if (ROOT / shipped).exists():
+            fail(f"actual improvement data must not ship in the Copier template: {shipped}")
+    if "collect-template-feedback.py" not in read("scripts/collect-template-feedback.py"):
+        fail("root collection wrapper must delegate to the template implementation")
+    # The collector reuses the checked record validator that ships beside it,
+    # so both layouts apply one record shape and one evidence policy.
+    command = read("template/.project-agent-workflow/scripts/collect-template-feedback.py")
+    if 'Path(__file__).resolve().parent / "template-feedback.py"' not in command:
+        fail("the collection command must reuse the shipped improvement record validator")
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
+    ):
+        route = spec_index_route(index_path, "template_requirements")
+        if route.get("required") != [f"{prefix}docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md"]:
+            fail(f"{index_path} must route template requirements to its own specification")
+    if 'python3 "$root/tests/test-template-feedback-collection.py"' not in read("scripts/lint-project-workflow.sh"):
+        fail("required lint does not register template requirement tests")
 
 def load_root_policy_module():
     spec = importlib.util.spec_from_file_location(
@@ -3595,6 +3657,7 @@ def main() -> int:
     require_harness_evaluation_alignment()
     require_harness_profile_alignment()
     require_template_feedback_alignment()
+    require_template_requirements_alignment()
     require_decision_reuse_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()

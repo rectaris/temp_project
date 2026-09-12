@@ -1,6 +1,6 @@
 # Collect local feedback as traceable template requirement candidates
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Collection and requirement synthesis retain source evidence, distinct reports and uncertainty without promoting suggestions into accepted development requirements.
 task_types:
@@ -85,13 +85,28 @@ checked_summary_ja: コピー先の改善報告を取り込み、根拠を追え
 
 ## Tasks
 
-- [ ] Implement a bounded file-only importer using the predecessor validator and a preflighted, recoverable receiver write with no partial accepted report set.
-- [ ] Implement candidate validation and explicit mappings from reports to proposed outcomes and priority reasons; preserve earlier versions and disagreements.
-- [ ] Add policy routing, mirror generic files and register tests for schema, idempotency, sensitive-excerpt rejection, hostile embedded instructions and path boundaries. Review hostile and over-generalization examples independently; CLI checks prove structural refusal, not universal agent compliance.
-- [ ] Use two synthetic source projects to verify provenance remains distinct, then obtain independent review and run focused and authoritative suites.
+- [x] Implement a bounded file-only importer using the predecessor validator and a preflighted, recoverable receiver write with no partial accepted report set.
+- [x] Implement candidate validation and explicit mappings from reports to proposed outcomes and priority reasons; preserve earlier versions and disagreements.
+- [x] Add policy routing, mirror generic files and register tests for schema, idempotency, sensitive-excerpt rejection, hostile embedded instructions and path boundaries. Review hostile and over-generalization examples independently; CLI checks prove structural refusal, not universal agent compliance.
+- [x] Use two synthetic source projects to verify provenance remains distinct, then obtain independent review and run focused and authoritative suites.
 
 ## Validation Notes
 
 - Owner instruction: 提案の方針のプランを作成せよ。 Accepted proposal stays local; automated external delivery is a later separately authorized extension.
 - This record authorizes only its bounded future implementation after backlog promotion and plan publication. No implementation tests have run during plan authoring.
 - Independent plan review required bounded agent-behavior claims, non-sensitive evidence review, data-only handling of imported instructions and verification of real owner adoption. Those boundaries are explicit tasks and negative cases in this plan chain.
+
+### Implementation Result
+
+- Implemented `scripts/collect-template-feedback.py` and `template/.project-agent-workflow/scripts/collect-template-feedback.py` with `example`, `check`, `import`, `check-candidate`, `record-candidate` and `inspect`. The command reuses the checked record validator shipped beside it, so both installed layouts apply one record shape and one non-sensitive evidence policy.
+- Import accepts an explicit file list only. It validates every supplied report before the receiver writes anything, refuses a repeated identity, refuses changed bytes under a held identity, and refuses a report whose canonical stored form would exceed the size the reader accepts. An identical repeat across invocations writes nothing.
+- Candidates bind to the exact held report bytes. Shape validation is separated from provenance verification, so a candidate stays readable and keeps its pending questions when a cited report later stops being held; the write paths still require intact provenance.
+- Recorded policy in `docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md` and its template mirror, routed both spec indexes, inventoried both layouts, added `require_template_requirements_alignment()` to the static checker, and registered `tests/test-template-feedback-collection.py` in required lint plus `run_template_requirements_smoke` in the generated-project smoke.
+- Two synthetic source projects keep their provenance distinct: reports are stored under their own project alias, neither copy is merged into the other, and neither is deleted.
+
+### Validation Result
+
+- Focused: `python3 tests/test-template-feedback-collection.py` (35 tests) and `python3 scripts/check-copier-template.py` both passed.
+- Authoritative: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` both passed once on the accepted candidate.
+- Independent review: a read-only reviewer ran three rounds against the exact working tree. Round 1 reported one Medium and four Low, round 2 reported one Medium regression introduced by the round 1 remediation and three Low, and round 3 reported no High or Medium and one residual Low. Every finding was remediated, each with a regression test where the protection was testable, and the final round is clear of High and Medium findings. Final acceptance stayed in the main session.
+- Reviewer-confirmed non-vacuity: removing the inspection re-validation, the duplicate-identity refusal, the source identity type check, the collector secret rejection, the stored-form byte bound, the provenance reporting or the skipped-entry count each fails at least one test.

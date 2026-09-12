@@ -940,6 +940,43 @@ run_template_feedback_smoke() {
   rm -r "$out/docs/template-feedback" "$out/.agent-artifacts/template-feedback" "$out/$input"
 }
 
+run_template_requirements_smoke() {
+  out=$1
+  input=template-requirements-smoke.json
+  candidate=template-requirements-candidate.json
+  (cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py example) >"$out/$input"
+  # The report arrives from a different project, so its alias stays its own.
+  python3 -c 'import json,sys; record=json.loads(open(sys.argv[1],encoding="utf-8").read()); record["project_alias"]="upstream-reporter"; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(record,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$input"
+
+  checked=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py check --report "$input")
+  printf '%s' "$checked" | grep -q '"outcome": "new"'
+  digest=$(printf '%s' "$checked" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  stored=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py import --report "$input" --checked-digest "$digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["written"][0])')
+  test -f "$out/$stored"
+  if git -C "$out" check-ignore "$stored" >/dev/null 2>&1; then
+    echo "imported improvement reports must stay tracked: $stored" >&2
+    exit 1
+  fi
+
+  # A candidate cites the exact held bytes, so provenance survives collection.
+  (cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py example) >"$out/$candidate"
+  python3 -c 'import hashlib,json,sys; held=open(sys.argv[2],"rb").read(); value=json.loads(open(sys.argv[1],encoding="utf-8").read()); value["sources"]=[{"project_alias":"upstream-reporter","report_id":"plan-worktree-publish-confusion","digest":"sha256:"+hashlib.sha256(held).hexdigest()}]; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$candidate" "$out/$stored"
+  assessed=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py check-candidate --candidate "$candidate")
+  printf '%s' "$assessed" | grep -q '"applicability_certainty": "unknown"'
+  candidate_digest=$(printf '%s' "$assessed" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  recorded=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py record-candidate --candidate "$candidate" --checked-digest "$candidate_digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["candidate_path"])')
+  test -f "$out/$recorded"
+  # Collection reports and questions; it admits no plan and decides nothing.
+  (cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py inspect) | grep -q 'not an owner decision'
+  test ! -d "$out/docs/plan/active" || test -z "$(find "$out/docs/plan/active" -name '*.md' -newer "$out/$input")"
+
+  rm -r "$out/docs/improvements" "$out/$input" "$out/$candidate"
+}
+
 run_shared_human_report_smoke() {
   out=$1
   shared="$out-shared"
@@ -1306,6 +1343,7 @@ run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
 run_human_report_smoke "$tmp/typescript"
 run_template_feedback_smoke "$tmp/typescript"
+run_template_requirements_smoke "$tmp/typescript"
 run_shared_human_report_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"
 

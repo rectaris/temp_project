@@ -253,3 +253,4 @@ id	path
 319	docs/plan/checked/2026/09/01-15/319-compare-harness-runs-locally.md
 328	docs/plan/checked/2026/09/01-15/328-land-optional-harness-profile-tooling.md
 322	docs/plan/checked/2026/09/01-15/322-record-downstream-template-improvements.md
+323	docs/plan/checked/2026/09/01-15/323-collect-template-improvement-requirements.md
