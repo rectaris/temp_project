@@ -1,6 +1,6 @@
 # Pin optional instruction revisions and retain a measured adoption path
 
-status: backlog
+status: in_progress
 primary_invariant: Selecting an optional instruction revision preserves governing requirements and project-owned selection bytes, and never silently activates an unmeasured or changed revision.
 task_types:
   - template_workflow
