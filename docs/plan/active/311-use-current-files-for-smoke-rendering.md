@@ -1,6 +1,6 @@
 # Use the selected current files for every generated-project smoke copy
 
-status: backlog
+status: in_progress
 primary_invariant: Every smoke copy uses the same explicitly selected source and ref; the default isolated source reflects current Copier input files without mutating the original checkout.
 task_types:
   - template_workflow

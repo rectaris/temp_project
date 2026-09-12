@@ -2,11 +2,12 @@
 
 2026年9月12日に、現行コードで再現した三件の問題を実装プランとして追加した。
 [調査結果と根拠](../development-improvements-20260912.md)に、以前の改善を再利用する範囲と今回の完了条件をまとめている。
-三件とも未着手であり、実装開始を指示されたものを公開済みの状態から一件ずつactiveへ昇格する。
+このうち311はactiveへ昇格済みであり、残る二件は未着手である。
+実装開始を指示されたものを、公開済みの状態から一件ずつactiveへ昇格する。
 
 ## 実行順
 
-[311](311-use-current-files-for-smoke-rendering.md)で、生成テストが現在のファイルを取りこぼさないようにする。
+[311](../active/311-use-current-files-for-smoke-rendering.md)で、生成テストが現在のファイルを取りこぼさないようにする。
 その後、[310](310-reuse-canonical-index-parser-in-overviews.md)で、プラン一覧の表示と実行前検査が同じ解析規則を使うようにする。
 続けて[312](312-check-root-archive-index-targets.md)で、完了記録の索引が実在する保存先を指すことをrootでも検査する。
 この順序は優先順位であり、310と312の必須の前提条件ではない。
@@ -23,5 +24,4 @@
 | id | status | title | path |
 | --- | --- | --- | --- |
 | [310](310-reuse-canonical-index-parser-in-overviews.md) | backlog | Use the canonical active-index parser in read-only plan overviews | docs/plan/backlog/310-reuse-canonical-index-parser-in-overviews.md |
-| [311](311-use-current-files-for-smoke-rendering.md) | backlog | Use the selected current files for every generated-project smoke copy | docs/plan/backlog/311-use-current-files-for-smoke-rendering.md |
 | [312](312-check-root-archive-index-targets.md) | backlog | Validate root checked-index targets through the shared archive check | docs/plan/backlog/312-check-root-archive-index-targets.md |
