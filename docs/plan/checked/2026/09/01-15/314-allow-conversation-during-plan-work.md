@@ -1,6 +1,6 @@
 # Allow conversation during plan work across sessions
 
-status: in_progress
+status: checked
 primary_invariant: Ending a conversation turn never requires completing repository work; publication, write ownership and plan completion remain enforced at their existing operation boundaries.
 task_types:
   - hook_behavior
@@ -72,11 +72,18 @@ checked_summary_ja: プランの実装中にも会話を終え、別セッショ
 
 ## Tasks
 
-- [ ] Replace Stop blocking and repetition persistence with bounded read-only reminders in both adapter copies.
-- [ ] Align root/generated communication and workflow policy and document separate-session entry.
-- [ ] Update Stop regression cases and parity assertions while retaining write and commit boundary tests.
-- [ ] Obtain independent review, run focused and authoritative checks, commit and publish the accepted change.
+- [x] Replace Stop blocking and repetition persistence with bounded read-only reminders in both adapter copies.
+- [x] Align root/generated communication and workflow policy and document separate-session entry.
+- [x] Update Stop regression cases and parity assertions while retaining write and commit boundary tests.
+- [x] Obtain independent review, run focused and authoritative checks, commit and publish the accepted change.
 
 ## Validation Notes
 
 - Owner request on 2026-09-12 explicitly asks to allow conversation during implementation and start plan creation or implementation from a separate session.
+- Stop now returns one empty decision on the first and every later turn, including absent/failing gates, malformed input or guard reports and diagnostic timeouts. It preserves task records and ignores legacy repetition state without deleting it.
+- Added root/generated separate-session instructions using existing direct-task and published-plan preparation. Same-task concurrent writers, execution-group admission, review budgets and publication refusals remain governed by their existing rules.
+- Read-only exploration confirmed that separate task preparation already works and isolated the repository-wide Stop enumeration as the interference. Independent read-only change review reported no High or Medium findings; the parent accepted the exact eight-file diff after checking its invariants and focused witnesses.
+- Focused validation passed: python3 tests/test-hooks.py (122 tests), python3 tests/test-validation-tools.py (302 tests), python3 scripts/check-copier-template.py, python3 scripts/check-root-agent-policy.py and git diff --check.
+- Authoritative validation passed once for this accepted implementation: scripts/lint-project-workflow.sh and tests/smoke.sh. Smoke rendered generated projects and ended with smoke test passed.
+- Implementation commit: 0d6a54e. Publication of the checked descendant commit and retirement of this task worktree are the final manager transaction; no remote push is authorized or performed.
+- Diagnostic timeouts bound the directly launched process. A custom gate that starts descendants may leave those processes running after a timeout; the shipped checks remain read-only and this does not delay the Stop response.

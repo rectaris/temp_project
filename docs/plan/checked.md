@@ -249,3 +249,4 @@ id	path
 310	docs/plan/checked/2026/09/01-15/310-reuse-canonical-index-parser-in-overviews.md
 313	docs/plan/checked/2026/09/01-15/313-read-activation-archives-of-every-vintage.md
 312	docs/plan/checked/2026/09/01-15/312-check-root-archive-index-targets.md
+314	docs/plan/checked/2026/09/01-15/314-allow-conversation-during-plan-work.md
