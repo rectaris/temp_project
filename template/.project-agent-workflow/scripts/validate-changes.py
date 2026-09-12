@@ -68,6 +68,16 @@ ACTIVE_INDEX_HEADER = "id\tpath\tstatus"
 ACTIVE_INDEX_STATUSES = ("in_progress", "ready_to_archive", "deferred", "replan_required")
 ACTIVE_INDEX_ID_RE = re.compile(r"[0-9]{3}")
 ACTIVE_INDEX_ROW_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-[a-z0-9][a-z0-9-]*\.md")
+ACTIVE_INDEX_NOT_ADOPTED = (
+    "docs/plan/plan.md does not open with the active plan index title, so it has not "
+    "adopted the index format. This is not a first-line defect: the whole document must "
+    'be the title "# Active Plan", one blank line, and then either the single line '
+    '"No active development items." or the tab header "id\\tpath\\tstatus" followed by '
+    "one tab-separated row per active plan. Nothing else may remain. Adopting the format "
+    "therefore discards whatever this document holds now, so when that content is owned "
+    "by the project rather than the template, confirm the change with its owner instead "
+    "of rewriting the document to satisfy this check."
+)
 
 
 class ActiveIndexError(ValueError):
@@ -90,8 +100,15 @@ def parse_active_index(text: str) -> list[tuple[str, str, str]]:
     marker. The populated representation is the title, one blank line, the
     actual-tab header, and one or more actual-tab rows. Every other nonempty
     document is rejected whole instead of being partially parsed.
+
+    Whether the document opens with the title is decided before the
+    document-wide newline rules, because a document that never adopted this
+    format must be named as such rather than reported for a stray line ending
+    it was never expected to carry.
     """
 
+    if text.split("\n", 1)[0].rstrip("\r") != ACTIVE_INDEX_TITLE:
+        raise ActiveIndexError(ACTIVE_INDEX_NOT_ADOPTED)
     if "\r" in text or not text.endswith("\n") or text.endswith("\n\n"):
         raise ActiveIndexError("active plan index must end with exactly one trailing newline")
     lines = text.split("\n")[:-1]
@@ -145,18 +162,19 @@ def render_active_index(rows: list[tuple[str, str, str]]) -> str:
 # --- end active plan index grammar ---
 
 def managed_plan_index() -> Path | None:
-    """Return the active plan index when this project manages plan documents."""
+    """Return the active plan index when this project keeps one.
+
+    Every project that keeps ``docs/plan/plan.md`` is held to the same index
+    grammar. Whether the project has adopted that grammar is not inferred from
+    the presence of ``docs/plan/active/`` or from the document's own contents,
+    because inferring it let a project that kept an unadopted document be
+    reported as holding a malformed one, and let this command and
+    ``check-agent-completion.sh`` reach different conclusions about the same
+    file.
+    """
 
     path = ROOT / "docs/plan/plan.md"
-    if not path.is_file():
-        return None
-    if (ROOT / "docs/plan/active").is_dir():
-        return path
-    try:
-        text = read_active_index(path)
-    except ActiveIndexError:
-        return path
-    return path if ACTIVE_INDEX_TITLE in text.splitlines() else None
+    return path if path.is_file() else None
 
 
 def active_plan_index_fault() -> str | None:

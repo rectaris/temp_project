@@ -3722,10 +3722,19 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     self.assertEqual(result.returncode, variant["ready_returncode"])
                     self.assertIn(str(variant["ready_message"]), result.stderr)
 
+    UNADOPTED_ACTIVE_INDEXES = frozenset(
+        {"blank file", "newline only", "content before the title", "leading blank line"}
+    )
+
     def test_completion_gate_rejects_a_malformed_active_index(self) -> None:
         for case, malformed in self.rejected_active_indexes().items():
             if not malformed:
                 continue
+            expected = (
+                "unadopted active plan index blocks completion"
+                if case in self.UNADOPTED_ACTIVE_INDEXES
+                else "malformed active plan index blocks completion"
+            )
             for variant in self.COMPLETION_GATE_VARIANTS:
                 with self.subTest(gate=variant["name"], rejected=case):
                     with tempfile.TemporaryDirectory() as tmp:
@@ -3735,9 +3744,7 @@ class PlanValidationCommandsTest(unittest.TestCase):
                         result = self.run_completion_gate(repo, variant, "--plans-only")
                         self.assertEqual(result.returncode, 1)
                         self.assertEqual(result.stdout, "")
-                        self.assertIn(
-                            "malformed active plan index blocks completion", result.stderr
-                        )
+                        self.assertIn(expected, result.stderr)
                         self.assertEqual(self.durable_state(repo), before)
 
     def test_completion_stops_on_a_malformed_active_index(self) -> None:
