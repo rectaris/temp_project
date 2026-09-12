@@ -1,20 +1,18 @@
-# Complete optional harness profiles after bounded review remediation
+# Complete bounded optional harness profile remediation
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
+status: in_progress
 primary_invariant: Selecting an optional instruction revision preserves governing requirements and project-owned selection bytes, and never silently activates an unmeasured or changed revision.
 
 replan_sources:
-  - docs/plan/active/325-pin-optional-harness-instructions.md
-replan_contract: docs/plan/replanned/contracts/325-pin-optional-harness-instructions.json
-successor_plans:
   - docs/plan/active/326-pin-optional-harness-instructions-review-remediation.md
+replan_contract: docs/plan/replanned/contracts/326-pin-optional-harness-instructions-review-remediation.json
+successor_plans:
+  - docs/plan/active/327-complete-harness-profile-remediation.md
 inherited_acceptance_digests:
   - sha256:834c5a07b47a3403ef74536faa87a302745fa7727614212a649466a3fd98a370
   - sha256:0dc0a3f9efccd3cdcabef1de661496138a920902a05f2e7183104d4dabd4d896
 integration_source_ids:
-  - 325
+  - 326
 task_types:
   - template_workflow
   - planning_docs
@@ -123,6 +121,8 @@ checked_summary_ja: 補助指示を版指定で選び、比較記録を確認し
 
 ## Validation Notes
 
+- Owner continuation authorization: `後継プランへ再構成して続行する`
+- Plan 326 exhausted its continuation epoch with four bounded review findings. Preserve all implementation and acceptance scope, remediate only those findings, and obtain a fresh independent review.
 - Owner continuation authorization: `後継プランへ再構成して続行する`
 - Plan 325 exhausted its one continuation epoch after rereview retained a High explicit-ref smoke source-mutation finding and a Medium confounded-comparison finding. Preserve the implementation and acceptance scope, correct only those defects, and obtain a fresh independent review.
 - Owner continuation authorization: `すべてのプランを実装せよ。要件を維持し、書き込み範囲を追加して再構成する。`

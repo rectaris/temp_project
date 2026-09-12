@@ -60,3 +60,4 @@ id	path	contract
 275	docs/plan/replanned/2026/09/01-15/275-route-detailed-agent-policy-on-demand.md	docs/plan/replanned/contracts/275-route-detailed-agent-policy-on-demand.json
 320	docs/plan/replanned/2026/09/01-15/320-pin-optional-harness-instructions.md	docs/plan/replanned/contracts/320-pin-optional-harness-instructions.json
 325	docs/plan/replanned/2026/09/01-15/325-pin-optional-harness-instructions.md	docs/plan/replanned/contracts/325-pin-optional-harness-instructions.json
+326	docs/plan/replanned/2026/09/01-15/326-pin-optional-harness-instructions-review-remediation.md	docs/plan/replanned/contracts/326-pin-optional-harness-instructions-review-remediation.json
