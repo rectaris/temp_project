@@ -243,3 +243,4 @@ id	path
 309	docs/plan/checked/2026/09/01-15/309-record-the-unchecked-project-gate.md
 109	docs/plan/checked/2026/09/01-15/109-judge-one-plan-index-one-way.md
 289	docs/plan/checked/2026/09/01-15/289-read-archives-older-than-the-schema.md
+290	docs/plan/checked/2026/09/01-15/290-release-v146-for-downstream-archive-reading.md
