@@ -1,6 +1,7 @@
 # Render development direction from explicitly adopted requirements
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: The development direction reflects explicit owner decisions bound to exact requirement revisions; regeneration and template updates preserve those decisions, source evidence and project-owned content.
 task_types:
   - template_workflow
@@ -51,8 +52,8 @@ context_files:
   - tests/prepare-smoke-source.py
   - tests/lib-copier.sh
   - copier.yml
-  - docs/plan/backlog/322-record-downstream-template-improvements.md
-  - docs/plan/backlog/323-collect-template-improvement-requirements.md
+  - docs/plan/checked/2026/09/01-15/322-record-downstream-template-improvements.md
+  - docs/plan/checked/2026/09/01-15/323-collect-template-improvement-requirements.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
@@ -74,8 +75,8 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:d010a995e2043b4555cc9410c511117baae110e5642122ba545cb79e3a10af12","stage":"focused","witness":"python3 tests/test-development-direction.py"}
   - {"acceptance_sha256":"sha256:71c31201c7f67ea4fa482f88aff9c3451c8afd845bdd1aec154556e63937f2f8","stage":"focused","witness":"python3 tests/test-template-feedback-pipeline.py"}
 integration_gates:
-  - Start only after plan 322 (docs/plan/backlog/322-record-downstream-template-improvements.md) has been promoted, implemented, checked and published. Resolve its same-id checked archive at promotion; an existing backlog file is not completion evidence.
-  - Start only after plan 323 (docs/plan/backlog/323-collect-template-improvement-requirements.md) has been promoted, implemented, checked and published. Resolve its same-id checked archive at promotion; an existing backlog file is not completion evidence.
+  - Start only after plan 322 (docs/plan/checked/2026/09/01-15/322-record-downstream-template-improvements.md) has been promoted, implemented, checked and published. Resolve its same-id checked archive at promotion; an existing backlog file is not completion evidence.
+  - Start only after plan 323 (docs/plan/checked/2026/09/01-15/323-collect-template-improvement-requirements.md) has been promoted, implemented, checked and published. Resolve its same-id checked archive at promotion; an existing backlog file is not completion evidence.
   - Before implementation, prepare this exact published active plan worktree and initialize the parent-owned execution ledger and reviewer registry. Keep bounded parent-direct scope, exact-target adversarial preflight, independent review budgets, focused witnesses and the unchanged authoritative suite; a stopped state remains stopped under the existing policy.
 checked_summary_ja: 採用判断を保ちながら開発方針を生成し、コピー先からの流れを検証する。
 
