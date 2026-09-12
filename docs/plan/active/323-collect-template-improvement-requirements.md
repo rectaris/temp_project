@@ -1,6 +1,7 @@
 # Collect local feedback as traceable template requirement candidates
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Collection and requirement synthesis retain source evidence, distinct reports and uncertainty without promoting suggestions into accepted development requirements.
 task_types:
   - template_workflow
@@ -44,7 +45,7 @@ context_files:
   - scripts/template-feedback.py
   - docs/agent/SPEC_TEMPLATE_FEEDBACK.md
   - template/.project-agent-workflow/scripts/human-report.py
-  - docs/plan/backlog/322-record-downstream-template-improvements.md
+  - docs/plan/checked/2026/09/01-15/322-record-downstream-template-improvements.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
@@ -65,7 +66,7 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:11a73000c251b7175b855de3527168cc5333c85fa1c49b8aa1256072fe88d637","stage":"focused","witness":"python3 tests/test-template-feedback-collection.py"}
   - {"acceptance_sha256":"sha256:1efe35f45cf2552ffd284e2bbeed33e62aa1342fa651128bfa3d34060a2f0785","stage":"focused","witness":"python3 tests/test-template-feedback-collection.py"}
 integration_gates:
-  - Start only after plan 322 (docs/plan/backlog/322-record-downstream-template-improvements.md) has been promoted, implemented, checked and published. Resolve its same-id checked archive at promotion; an existing backlog file is not completion evidence.
+  - Plan 322 was promoted, implemented, checked and published; its checked archive is docs/plan/checked/2026/09/01-15/322-record-downstream-template-improvements.md.
   - Before implementation, prepare this exact published active plan worktree and initialize the parent-owned execution ledger and reviewer registry. Keep bounded parent-direct scope, exact-target adversarial preflight, independent review budgets, focused witnesses and the unchanged authoritative suite; a stopped state remains stopped under the existing policy.
 checked_summary_ja: コピー先の改善報告を取り込み、根拠を追える変更要件にまとめる。
 
