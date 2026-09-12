@@ -1,6 +1,6 @@
 # Record template improvement evidence in generated repositories
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Each recorded improvement preserves its observed evidence and uncertainty in project-owned files without changing the originating product task or granting external effects.
 task_types:
@@ -87,13 +87,20 @@ checked_summary_ja: コピー先で見つかったテンプレートの改善案
 
 ## Tasks
 
-- [ ] Implement bounded check/record commands and safe idempotent storage using the existing direct-task guard.
-- [ ] Add local mode configuration and root/generated task routing, including pending-draft recovery after ordinary task publication.
-- [ ] Add root/generated cases for schema, identity, suspected-sensitive excerpts and task boundaries. Check named trigger/no-finding/disabled examples through deterministic routing fixtures and independent semantic review; do not claim universal real-task detection. Register files and parity without weakening checks.
-- [ ] Exercise a generated local fixture and obtain independent semantic review of the trigger examples before focused and authoritative validation.
+- [x] Implement bounded check/record commands and safe idempotent storage using the existing direct-task guard.
+- [x] Add local mode configuration and root/generated task routing, including pending-draft recovery after ordinary task publication.
+- [x] Add root/generated cases for schema, identity, suspected-sensitive excerpts and task boundaries. Check named trigger/no-finding/disabled examples through deterministic routing fixtures and independent semantic review; do not claim universal real-task detection. Register files and parity without weakening checks.
+- [x] Exercise a generated local fixture and obtain independent semantic review of the trigger examples before focused and authoritative validation.
 
 ## Validation Notes
 
 - Owner instruction: 提案の方針のプランを作成せよ。 Accepted proposal stays local; automated external delivery is a later separately authorized extension.
 - This record authorizes only its bounded future implementation after backlog promotion and plan publication. No implementation tests have run during plan authoring.
 - Independent plan review required bounded agent-behavior claims, non-sensitive evidence review, data-only handling of imported instructions and verification of real owner adoption. Those boundaries are explicit tasks and negative cases in this plan chain.
+- Owner instruction to implement: `docs/plan/active/ docs/plan/backlog/ のプランをすべて実装作業をせよ。` The plan was promoted from backlog and published before implementation started.
+- Implementation is bounded parent-direct. `template/.project-agent-workflow/scripts/template-feedback.py` holds the command, `scripts/template-feedback.py` is a thin root wrapper, and both specification copies stay byte-aligned after the `.project-agent-workflow/` rewrite.
+- Independent read-only review round 1 reported two Medium findings: evidence references bypassed the credential refusal, and the Copier `project_slug` domain admitted slugs the command rejected, which would have left such a project permanently unable to record anything. Round 2 confirmed both resolved and reported no remaining High or Medium finding.
+- Remediation scans every persisted text field including each evidence reference, keeps a reference a whitespace-free repository-relative location, aligns `ALIAS_RE` with a `project_slug` validator bounded at 64 characters, binds both domains in `require_template_feedback_alignment()`, and resolves the working-tree top before the supplied root so a nested `--root` still meets the repository task guard.
+- Mutation evidence: reverting the reference scan, the whitespace refusal and the guard lookup fails six tests in `python3 tests/test-template-feedback.py`; dropping the `project_slug` length bound or reverting `ALIAS_RE` fails `python3 scripts/check-copier-template.py`.
+- Focused validation: `python3 tests/test-template-feedback.py` (33 tests) and `python3 scripts/check-copier-template.py` pass. The authoritative suite ran once for the accepted candidate.
+- The command performs no network access. Its only process starts are the shared task guard and the working-tree lookup that locates it. Actual improvement records stay project owned and never ship in `template/`.

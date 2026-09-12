@@ -812,6 +812,79 @@ def require_harness_profile_alignment() -> None:
         fail("required lint does not register harness profile tests")
 
 
+def require_template_feedback_alignment() -> None:
+    """Keep improvement-record policy, command, routing, and data ownership aligned."""
+
+    root_spec = "docs/agent/SPEC_TEMPLATE_FEEDBACK.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_TEMPLATE_FEEDBACK.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"template feedback root/template specifications differ: {root_spec} != {template_spec}")
+    for path in (
+        "scripts/template-feedback.py",
+        "template/.project-agent-workflow/scripts/template-feedback.py",
+        root_spec,
+        template_spec,
+        "docs/agent/template-feedback.json",
+        "template/docs/agent/template-feedback.json.jinja",
+        "tests/test-template-feedback.py",
+    ):
+        if path not in SOURCE_REQUIRED:
+            fail(f"template feedback source is not inventoried: {path}")
+    for path in (
+        ".project-agent-workflow/scripts/template-feedback.py",
+        ".project-agent-workflow/docs/agent/SPEC_TEMPLATE_FEEDBACK.md",
+        "docs/agent/template-feedback.json",
+    ):
+        if path not in GENERATED_REQUIRED:
+            fail(f"template feedback output is not inventoried: {path}")
+    # Improvement records are project-owned runtime data. Shipping one as a
+    # Copier payload would seed every generated project with another project's
+    # observations.
+    for inventory, label in ((SOURCE_REQUIRED, "source"), (GENERATED_REQUIRED, "generated")):
+        for path in inventory:
+            if path.startswith("docs/template-feedback/") or "/docs/template-feedback/" in path:
+                fail(f"actual improvement records must stay out of the {label} inventory: {path}")
+    shipped = ROOT / "template/docs/template-feedback"
+    if shipped.exists():
+        fail("actual improvement records must not ship in the Copier template")
+    if "template-feedback.py" not in read("scripts/template-feedback.py"):
+        fail("root template feedback wrapper must delegate to the template implementation")
+    configuration = yaml.safe_load(read("copier.yml"))
+    question = configuration.get("template_feedback_mode") if isinstance(configuration, dict) else None
+    if not isinstance(question, dict) or set(question.get("choices", {}).values()) != {
+        "disabled",
+        "agent_select_local",
+    }:
+        fail("copier.yml must offer the disabled and agent_select_local improvement record modes")
+    if question.get("default") != "agent_select_local":
+        fail("copier.yml must default improvement record preparation to agent_select_local")
+    # The generated configuration copies project_slug into project_alias, so the
+    # slug domain Copier accepts must stay inside the domain the command accepts.
+    slug = configuration.get("project_slug") if isinstance(configuration, dict) else None
+    validator = slug.get("validator", "") if isinstance(slug, dict) else ""
+    if "^[a-z0-9][a-z0-9-]*$" not in validator or "project_slug | length > 64" not in validator:
+        fail("copier.yml must bound project_slug to the alias domain the improvement record command accepts")
+    if 'ALIAS_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")' not in read(
+        "template/.project-agent-workflow/scripts/template-feedback.py"
+    ):
+        fail("the improvement record command must accept every project_slug Copier admits")
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
+    ):
+        index = read(index_path)
+        if "  template_feedback:" not in index or index.count(f"{prefix}docs/agent/SPEC_TEMPLATE_FEEDBACK.md") != 1:
+            fail(f"{index_path} must contain one template feedback route")
+    for policy_path, command in (
+        ("AGENTS.md", "scripts/template-feedback.py"),
+        ("template/.project-agent-workflow/AGENTS.md.jinja", ".project-agent-workflow/scripts/template-feedback.py"),
+    ):
+        policy = read(policy_path)
+        if command not in policy or "docs/agent/template-feedback.json" not in policy:
+            fail(f"{policy_path} must route improvement record preparation to its command and mode")
+    if 'python3 "$root/tests/test-template-feedback.py"' not in read("scripts/lint-project-workflow.sh"):
+        fail("required lint does not register template feedback tests")
+
 def load_root_policy_module():
     spec = importlib.util.spec_from_file_location(
         "decision_reuse_root_policy", ROOT / "scripts/check-root-agent-policy.py"
@@ -3521,6 +3594,7 @@ def main() -> int:
     require_referent_first_alignment()
     require_harness_evaluation_alignment()
     require_harness_profile_alignment()
+    require_template_feedback_alignment()
     require_decision_reuse_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()

@@ -121,6 +121,14 @@ task_types:
       - docs/agent/SPEC_HARNESS_PROFILES.md
     conditional: []
 
+  template_feedback:
+    summary: Recording, drafting, or persisting template improvement evidence observed while working in this repository.
+    required:
+      - docs/agent/SPEC_TEMPLATE_FEEDBACK.md
+    conditional:
+      - path: docs/agent/SPEC_SECURITY.md
+        when: report evidence could carry credentials, private data, or other non-shareable content.
+
   japanese_prose:
     summary: Japanese README text, documentation, plans, prompts, issues, review comments, or prose.
     required:

@@ -58,6 +58,14 @@ task_types:
       - path: .project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md
         when: Japanese UI copy, labels, help text, documentation, prompts, plans, or prose are written or edited.
 
+  template_feedback:
+    summary: Recording, drafting, or persisting template improvement evidence observed while working in this repository.
+    required:
+      - .project-agent-workflow/docs/agent/SPEC_TEMPLATE_FEEDBACK.md
+    conditional:
+      - path: .project-agent-workflow/docs/agent/SPEC_SECURITY.md
+        when: report evidence could carry credentials, private data, or other non-shareable content.
+
   japanese_prose:
     summary: Japanese README text, documentation, plans, specs, prompts, review comments, issue text, or other prose.
     required:

@@ -907,6 +907,39 @@ PY
   rm "$out/$input"
 }
 
+run_template_feedback_smoke() {
+  out=$1
+  input=template-feedback-smoke.json
+  (cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py example) >"$out/$input"
+  # The generated project owns its alias, so bind the reviewed record to it.
+  python3 -c 'import json,sys; record=json.loads(open(sys.argv[1],encoding="utf-8").read()); record["project_alias"]=json.loads(open(sys.argv[2],encoding="utf-8").read())["project_alias"]; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(record,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$input" "$out/docs/agent/template-feedback.json"
+
+  # The generated default prepares a local draft and leaves the tracked tree alone.
+  checked=$(cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py check --record "$input")
+  printf '%s' "$checked" | grep -q '"decision": "record"'
+  drafted=$(cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py draft --record "$input" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["draft_path"])')
+  test -f "$out/$drafted"
+  git -C "$out" check-ignore "$drafted" >/dev/null
+  test ! -e "$out/docs/template-feedback"
+
+  digest=$(printf '%s' "$checked" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  written=$(cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py record --record "$input" --checked-digest "$digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["record_path"])')
+  test -f "$out/$written"
+  if git -C "$out" check-ignore "$written" >/dev/null 2>&1; then
+    echo "recorded improvement evidence must stay tracked: $written" >&2
+    exit 1
+  fi
+  # A repeat of the same reviewed bytes is the same record, not a second one.
+  (cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py record --record "$input" --checked-digest "$digest") \
+    | grep -q '"outcome": "unchanged"'
+  test "$(find "$out/docs/template-feedback" -name '*.json' | wc -l)" -eq 1
+
+  rm -r "$out/docs/template-feedback" "$out/.agent-artifacts/template-feedback" "$out/$input"
+}
+
 run_shared_human_report_smoke() {
   out=$1
   shared="$out-shared"
@@ -1272,6 +1305,7 @@ run_pre_v1_plan_compatibility_smoke "$tmp/typescript"
 run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
 run_human_report_smoke "$tmp/typescript"
+run_template_feedback_smoke "$tmp/typescript"
 run_shared_human_report_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"
 
