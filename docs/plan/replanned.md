@@ -61,3 +61,4 @@ id	path	contract
 320	docs/plan/replanned/2026/09/01-15/320-pin-optional-harness-instructions.md	docs/plan/replanned/contracts/320-pin-optional-harness-instructions.json
 325	docs/plan/replanned/2026/09/01-15/325-pin-optional-harness-instructions.md	docs/plan/replanned/contracts/325-pin-optional-harness-instructions.json
 326	docs/plan/replanned/2026/09/01-15/326-pin-optional-harness-instructions-review-remediation.md	docs/plan/replanned/contracts/326-pin-optional-harness-instructions-review-remediation.json
+327	docs/plan/replanned/2026/09/01-15/327-complete-harness-profile-remediation.md	docs/plan/replanned/contracts/327-complete-harness-profile-remediation.json

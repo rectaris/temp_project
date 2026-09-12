@@ -1,4 +1,4 @@
 # Active Plan
 
 id	path	status
-327	docs/plan/active/327-complete-harness-profile-remediation.md	replan_required
+328	docs/plan/active/328-land-optional-harness-profile-tooling.md	in_progress

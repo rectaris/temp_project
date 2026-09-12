@@ -1,20 +1,19 @@
-# Complete bounded optional harness profile remediation
+# Land the reviewed optional harness profile tooling
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Selecting an optional instruction revision preserves governing requirements and project-owned selection bytes, and never silently activates an unmeasured or changed revision.
 
 replan_sources:
-  - docs/plan/active/326-pin-optional-harness-instructions-review-remediation.md
-replan_contract: docs/plan/replanned/contracts/326-pin-optional-harness-instructions-review-remediation.json
-successor_plans:
   - docs/plan/active/327-complete-harness-profile-remediation.md
+replan_contract: docs/plan/replanned/contracts/327-complete-harness-profile-remediation.json
+successor_plans:
+  - docs/plan/active/328-land-optional-harness-profile-tooling.md
 inherited_acceptance_digests:
   - sha256:834c5a07b47a3403ef74536faa87a302745fa7727614212a649466a3fd98a370
   - sha256:0dc0a3f9efccd3cdcabef1de661496138a920902a05f2e7183104d4dabd4d896
 integration_source_ids:
-  - 326
+  - 327
 task_types:
   - template_workflow
   - planning_docs
@@ -123,8 +122,8 @@ checked_summary_ja: 補助指示を版指定で選び、比較記録を確認し
 
 ## Validation Notes
 
-- Owner continuation authorization: `後継プランへ再構成して続行する`
-- Plan 326 exhausted its continuation epoch with four bounded review findings. Preserve all implementation and acceptance scope, remediate only those findings, and obtain a fresh independent review.
+- Owner continuation authorization: `docs/plan/active/ docs/plan/backlog/ のプランをすべて実装作業をせよ。`
+- Plan 327 exhausted its continuation epoch. Preserve all implementation and acceptance scope, remediate the remaining findings under bounded parent-direct implementation, and land the reviewed result.
 - Owner continuation authorization: `後継プランへ再構成して続行する`
 - Plan 325 exhausted its one continuation epoch after rereview retained a High explicit-ref smoke source-mutation finding and a Medium confounded-comparison finding. Preserve the implementation and acceptance scope, correct only those defects, and obtain a fresh independent review.
 - Owner continuation authorization: `すべてのプランを実装せよ。要件を維持し、書き込み範囲を追加して再構成する。`
