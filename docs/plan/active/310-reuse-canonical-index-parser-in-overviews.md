@@ -1,6 +1,6 @@
 # Use the canonical active-index parser in read-only plan overviews
 
-status: backlog
+status: in_progress
 primary_invariant: A read-only plan overview parses the whole present active index through the existing canonical parser and never reports a malformed index as a successful empty result.
 task_types:
   - template_workflow
