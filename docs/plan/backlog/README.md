@@ -25,6 +25,9 @@
 | id | status | title | path |
 | --- | --- | --- | --- |
 | [320](320-pin-optional-harness-instructions.md) | backlog | Pin optional instruction revisions and retain a measured adoption path | docs/plan/backlog/320-pin-optional-harness-instructions.md |
+| [322](322-record-downstream-template-improvements.md) | backlog | Record template improvement evidence in generated repositories | docs/plan/backlog/322-record-downstream-template-improvements.md |
+| [323](323-collect-template-improvement-requirements.md) | backlog | Collect local feedback as traceable template requirement candidates | docs/plan/backlog/323-collect-template-improvement-requirements.md |
+| [324](324-derive-development-direction-from-accepted-requirements.md) | backlog | Render development direction from explicitly adopted requirements | docs/plan/backlog/324-derive-development-direction-from-accepted-requirements.md |
 
 ## ハーネスのモデル更新への対応
 
