@@ -1,6 +1,6 @@
 # Add a root release skill grounded in recorded release work
 
-status: in_progress
+status: replan_required
 primary_invariant: The release skill guides the exact requested release phase through existing policy and validation, without treating preparation, invocation, or historical publication permission as authority or proof of publication.
 task_types:
   - skill_authoring
@@ -80,6 +80,8 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:f20020c6f8c1338cddb6b7c0b935c933a19203bf280403b7b5016f8e9765d9c6","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
+replan_reason_codes:
+  - scope_drift
 checked_summary_ja: 過去のリリース手順を基に、このリポジトリ専用のスキルを作る
 
 ## Decisions
