@@ -410,6 +410,15 @@ Plan restructuring changes execution boundaries, ordering, implementation method
 - The registry is write-once: once committed, its live bytes must equal its committed bytes and it must have exactly one commit in history. It admits nothing else and weakens no other lifecycle rule.
 - Do not use the registry for new work. A plan that leaves `deferred` after the boundary must record an activation record.
 
+### Pre-Boundary Contract Source Reconciliation
+
+- Restructuring requires a canonically stopped source, and verification reasserts that requirement against every archived contract. An archived contract that records a source which was never stopped can never satisfy it: its bytes are immutable committed history, and an independently recorded parent contract may bind the same plan text.
+- Close exactly those named records with the write-once registry `docs/plan/replanned/baselines/pre-boundary-contract-sources-v1.json`. Each entry binds the contract path and bytes digest, the archive path and bytes digest, the recorded source status, and a reason.
+- The registry names one `boundary_commit` that must be an ancestor of `HEAD`, and every listed contract and archive must already exist with those exact bytes at that commit. A record created after the boundary can never be admitted.
+- Admit an entry only when the contract is a single-source contract that owns the named archive, the recorded source status is an active status other than `replan_required`, and the recorded source carries neither `replan_reason_codes` nor a stale `completion_deferred_reason`. Any drift rejects.
+- A registered contract source is verified against its recorded status instead of the canonical stopped status. Its path, plan digest, acceptance records, inherited acceptance digests, preservation scope, archive status and lineage, and committed-byte immutability are still verified, and every other archived contract still requires canonical stopping.
+- The registry never authorizes a restructuring. Creating a contract still refuses a source that is not canonically stopped, so the registry cannot be used for new work.
+
 ### Coupled Lineage Reconstruction
 
 - Use a schema-3 contract when one stopped source plan and one or more immutable dependent plans must be replaced together. Keep `sources` ordered and non-empty, and bind each source's live content digest, deterministically derived `replan_required` digest, acceptance records, archive path, reason codes, and, for a contract-successor source, its owning historical contract path and digest.

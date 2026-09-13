@@ -121,6 +121,9 @@ REBIND_BASELINE_PATH = "docs/plan/replanned/baselines/live-successor-rebinds-v1.
 PRE_BOUNDARY_PATH = (
     "docs/plan/replanned/baselines/pre-boundary-lifecycle-reconciliations-v1.json"
 )
+PRE_BOUNDARY_CONTRACT_SOURCE_PATH = (
+    "docs/plan/replanned/baselines/pre-boundary-contract-sources-v1.json"
+)
 COMPANION_PLAN_PATH = "docs/plan/active/190-migrate-live-plan-contracts.md"
 SHA_RE = re.compile(r"sha256:[0-9a-f]{64}")
 CHECKED_PATH_RE = re.compile(
@@ -1650,6 +1653,7 @@ def validate_replanned_successor(
     expected_acceptance: list[str],
     expected_preservation: list[str] | None,
     expected_projection: dict[str, Any] | None,
+    registered_sources: dict[str, str] | None = None,
 ) -> dict[str, str]:
     records = replanned_records_for_id(plan_id, expected_path)
     if len(records) != 1:
@@ -1854,6 +1858,7 @@ def validate_replanned_successor(
         return {
             "original_content": source["original_content"],
             "stopped_content": stopped_content,
+            "effective_status": "replan_required",
         }
     exact_object(
         contract,
@@ -1898,11 +1903,20 @@ def validate_replanned_successor(
             f"replanned successor source acceptance mismatch: {expected_path}"
         )
     source_manifest = parse_manifest(source["content"])
-    validate_canonical_stopped_manifest(
-        source_manifest,
-        f"replanned successor source {plan_id}",
-        expected_reason_codes=contract["reason_codes"],
+    reconciled_status = pre_boundary_contract_source_status(
+        registered_sources or {}, contract_path, source_manifest
     )
+    if reconciled_status is None:
+        validate_canonical_stopped_manifest(
+            source_manifest,
+            f"replanned successor source {plan_id}",
+            expected_reason_codes=contract["reason_codes"],
+        )
+    else:
+        validate_reason_codes(
+            contract["reason_codes"],
+            f"replanned successor source {plan_id} contract reason_codes",
+        )
     if items(source_manifest, "inherited_acceptance_digests") != expected_digests:
         raise RestructureError(
             f"replanned successor source lineage mismatch: {expected_path}"
@@ -1953,6 +1967,7 @@ def validate_replanned_successor(
     return {
         "original_content": source["content"],
         "stopped_content": source["content"],
+        "effective_status": reconciled_status or "replan_required",
     }
 
 
@@ -7113,6 +7128,151 @@ def reconciled_pre_boundary_archive(
     return True
 
 
+def load_pre_boundary_contract_sources() -> dict[str, str]:
+    """Read the frozen registry of archived contracts whose source was never stopped.
+
+    Restructuring requires a source plan to be canonically stopped first, and
+    verification reasserts that requirement against every archived contract. An
+    archived contract that records an unstopped source can never satisfy it: its
+    bytes are immutable committed history, and an independently recorded parent
+    contract may bind the same plan text. The registry closes exactly those named
+    records. Every entry binds the contract path and bytes, the archive path and
+    bytes, and the recorded source status, and every listed artifact must already
+    exist with those exact bytes at a boundary commit the registry itself names.
+    The file is write-once, so a record created after the boundary is never
+    admitted, and contract creation keeps requiring a canonically stopped source.
+    """
+    path = ROOT / PRE_BOUNDARY_CONTRACT_SOURCE_PATH
+    label_registry = "pre-boundary contract source registry"
+    if not path.exists():
+        if path.is_symlink():
+            raise RestructureError(f"{label_registry} is a symlink")
+        return {}
+    reject_symlink_ancestors(PRE_BOUNDARY_CONTRACT_SOURCE_PATH, include_target=True)
+    published = read_regular_file(path, PRE_BOUNDARY_CONTRACT_SOURCE_PATH)
+    try:
+        registry = json.loads(published)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RestructureError(f"invalid {label_registry}") from exc
+    exact_object(
+        registry,
+        {"schema_version", "boundary_commit", "reconciliations"},
+        label_registry,
+    )
+    entries = registry["reconciliations"]
+    if registry["schema_version"] != 1 or not isinstance(entries, list) or not entries:
+        raise RestructureError(f"{label_registry} schema mismatch")
+    boundary = registry["boundary_commit"]
+    if not isinstance(boundary, str) or not re.fullmatch(r"[0-9a-f]{40}", boundary):
+        raise RestructureError(f"{label_registry} boundary commit is invalid")
+    if not commit_is_ancestor_of_head(boundary):
+        raise RestructureError(f"{label_registry} boundary commit is unreachable")
+    committed = committed_file_bytes(PRE_BOUNDARY_CONTRACT_SOURCE_PATH)
+    if committed is not None:
+        if committed != published:
+            raise RestructureError(f"{label_registry} is not write-once")
+        history = run_git(
+            "log", "--all", "--format=%H", "--", PRE_BOUNDARY_CONTRACT_SOURCE_PATH
+        ).decode("utf-8").split()
+        if len(history) != 1:
+            raise RestructureError(f"{label_registry} was rewritten")
+    sources: dict[str, str] = {}
+    for index, raw in enumerate(entries):
+        label = f"pre-boundary contract source {index}"
+        entry = exact_object(
+            raw,
+            {
+                "contract_path",
+                "contract_digest",
+                "archive_path",
+                "archive_digest",
+                "source_status",
+                "reason",
+            },
+            label,
+        )
+        contract_path = normalized_path(
+            entry["contract_path"], CONTRACT_PATH_RE, f"{label} contract path"
+        )
+        archive_path = normalized_path(
+            entry["archive_path"], ARCHIVE_PATH_RE, f"{label} archive path"
+        )
+        if contract_path in sources:
+            raise RestructureError(f"{label} duplicates a reconciled contract")
+        for field in ("contract_digest", "archive_digest"):
+            if not isinstance(entry[field], str) or not SHA_RE.fullmatch(entry[field]):
+                raise RestructureError(f"{label} {field} is invalid")
+        if not isinstance(entry["reason"], str) or not entry["reason"].strip():
+            raise RestructureError(f"{label} records no reason")
+        status = entry["source_status"]
+        if (
+            not isinstance(status, str)
+            or status not in ACTIVE_PLAN_STATUSES
+            or status == "replan_required"
+        ):
+            raise RestructureError(f"{label} source status is not an unstopped status")
+        for relative, digest in (
+            (contract_path, entry["contract_digest"]),
+            (archive_path, entry["archive_digest"]),
+        ):
+            reject_symlink_ancestors(relative, include_target=True)
+            live = ROOT / relative
+            if not live.is_file():
+                raise RestructureError(f"{label} is missing {relative}")
+            live_bytes = read_regular_file(live, relative)
+            if sha256(live_bytes) != digest:
+                raise RestructureError(f"{label} bytes changed: {relative}")
+            if blob_bytes_at_commit(boundary, relative) != live_bytes:
+                raise RestructureError(
+                    f"{label} was not committed before the boundary: {relative}"
+                )
+        try:
+            contract = json.loads((ROOT / contract_path).read_bytes())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RestructureError(f"{label} contract is invalid JSON") from exc
+        if (
+            not isinstance(contract, dict)
+            or contract.get("schema_version") not in {1, 2}
+            or contract.get("contract_path") != contract_path
+            or contract.get("archive_path") != archive_path
+        ):
+            raise RestructureError(f"{label} contract identity mismatch")
+        source = contract.get("source")
+        if not isinstance(source, dict) or not isinstance(source.get("content"), str):
+            raise RestructureError(f"{label} contract records no source content")
+        if not isinstance(source.get("path"), str) or Path(source["path"]).stem != Path(
+            archive_path
+        ).stem:
+            raise RestructureError(f"{label} archive is not the recorded source plan")
+        source_manifest = parse_manifest(source["content"])
+        if scalar(source_manifest, "status") != status:
+            raise RestructureError(f"{label} recorded source status mismatch")
+        if "replan_reason_codes" in source_manifest:
+            raise RestructureError(f"{label} recorded source was already stopped")
+        if status != "deferred" and "completion_deferred_reason" in source_manifest:
+            raise RestructureError(
+                f"{label} recorded source carries stale completion_deferred_reason"
+            )
+        sources[contract_path] = status
+    return sources
+
+
+def pre_boundary_contract_source_status(
+    registered: dict[str, str],
+    contract_path: str,
+    source_manifest: dict[str, str | list[str]],
+) -> str | None:
+    """Return the reconciled status of a registered contract source, or None."""
+    status = registered.get(contract_path)
+    if status is None:
+        return None
+    if scalar(source_manifest, "status") != status:
+        raise RestructureError(
+            f"pre-boundary contract source {contract_path} status drifted"
+        )
+    return status
+
+
 def compare_contract_identity(
     original: dict[str, str | list[str]],
     base: dict[str, str | list[str]],
@@ -7716,6 +7876,7 @@ def verify_schema_three_contract(
     contract_digests: dict[str, str],
     direct_active_sources: dict[str, str],
     schema_version: int = 3,
+    registered_sources: dict[str, str] | None = None,
 ) -> None:
     contract_fields = {
         "schema_version",
@@ -8006,11 +8167,12 @@ def verify_schema_three_contract(
                 items(successor["manifest"], "acceptance"),
                 None,
                 None,
+                registered_sources,
             )
             live_content = replanned_state["stopped_content"]
             replan_original_content = replanned_state["original_content"]
             live_file = None
-            expected_status = "replan_required"
+            expected_status = replanned_state["effective_status"]
             lifecycle = "replanned"
         if live_file is not None and not live_file.is_file():
             raise RestructureError(f"schema-3 successor file is missing: {path}")
@@ -8255,6 +8417,7 @@ def verify_repository_contracts(
     pending_reservations: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     allowed_legacy_stopped_sources = legacy_stopped_sources or set()
+    registered_sources = load_pre_boundary_contract_sources()
     validate_repository_active_predecessors()
     validate_repository_plan_id_reservations()
     validate_repository_shelved_plans()
@@ -8309,6 +8472,7 @@ def verify_repository_contracts(
                 contract_digests,
                 direct_active_sources,
                 schema_version=schema_version,
+                registered_sources=registered_sources,
             )
             verified_schema_three.add(contract_path)
             continue
@@ -8346,13 +8510,22 @@ def verify_repository_contracts(
         if acceptance_records(source["content"]) != source["acceptance"]:
             raise RestructureError(f"contract source acceptance mismatch for {plan_id}")
         source_manifest = parse_manifest(source["content"])
-        if scalar(source_manifest, "status") != "replan_required":
-            raise RestructureError(f"contract source status mismatch for {plan_id}")
-        validate_canonical_stopped_manifest(
-            source_manifest,
-            f"contract source {plan_id}",
-            expected_reason_codes=contract["reason_codes"],
+        reconciled_status = pre_boundary_contract_source_status(
+            registered_sources, contract_path, source_manifest
         )
+        if reconciled_status is None:
+            if scalar(source_manifest, "status") != "replan_required":
+                raise RestructureError(f"contract source status mismatch for {plan_id}")
+            validate_canonical_stopped_manifest(
+                source_manifest,
+                f"contract source {plan_id}",
+                expected_reason_codes=contract["reason_codes"],
+            )
+        else:
+            validate_reason_codes(
+                contract["reason_codes"],
+                f"contract source {plan_id} contract reason_codes",
+            )
         contract_digest = sha256(contract_bytes)
         contract_digests[contract_path] = contract_digest
         source_records = source["acceptance"]
@@ -8521,11 +8694,12 @@ def verify_repository_contracts(
                     expected_successor_acceptance,
                     None,
                     None,
+                    registered_sources,
                 )
                 live_content = replanned_state["stopped_content"]
                 replan_original_content = replanned_state["original_content"]
                 live_successor_file = None
-                expected_live_status = "replan_required"
+                expected_live_status = replanned_state["effective_status"]
                 lifecycle = "replanned"
             else:
                 raise RestructureError(f"missing live successor plan for {plan_id}: {path}")
