@@ -258,3 +258,4 @@ id	path
 329	docs/plan/checked/2026/09/01-15/329-release-v147-for-downstream-improvement-flow.md
 330	docs/plan/checked/2026/09/01-15/330-check-tracked-text-hygiene-locally.md
 331	docs/plan/checked/2026/09/01-15/331-clean-up-test-owned-worktree-records.md
+332	docs/plan/checked/2026/09/01-15/332-retire-unreachable-worktree-records.md

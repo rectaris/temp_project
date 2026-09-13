@@ -89,6 +89,17 @@ def unretired_task(repo: Path) -> str | None:
     remainder = (
         f" {len(entries) - 1} further task worktree(s) also remain." if len(entries) > 1 else ""
     )
+    if first.get("retired"):
+        # The record was moved aside as unreachable, but it still matches this
+        # repository. `publish` and `retire` both load the record from its live
+        # location, so neither can run until it is put back.
+        return (
+            f"This repository still owns a record for {first.get('task')} that was "
+            "retired as unreachable, so the retirement was wrong or this repository "
+            "reuses a deleted one's identity. That task remains incomplete. Its "
+            f"owning session moves the record files back from the `retired` directory "
+            "beside them to resume, or deletes them deliberately to start over." + remainder
+        )
     if not first.get("worktree_present", True):
         # The record outlived the directory it names, so publication is no
         # longer possible from here. Name the one command that clears it.

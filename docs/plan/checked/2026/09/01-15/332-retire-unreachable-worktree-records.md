@@ -1,6 +1,6 @@
 # Remove ownership records no repository can ever reach again
 
-status: in_progress
+status: checked
 primary_invariant: A record is removed only when no existing repository can reproduce its identity, proven from a mounted filesystem rather than from an absent path, and every other record is left exactly as it was found.
 task_types:
   - template_workflow
@@ -35,6 +35,10 @@ write_scope:
   - scripts/project_workflow/copier_inventory.py
   - docs/agent/SPEC_GIT_RETIREMENT.md
   - template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md
+  - template/.project-agent-workflow/scripts/retire-stale-worktree-records.py
+  - scripts/check-copier-template.py
+  - template/.project-agent-workflow/scripts/worktree_guard.py
+  - scripts/check-root-agent-policy.py
   - scripts/project_workflow/worktree_guard.py
 preservation_scope:
   - none
@@ -76,12 +80,26 @@ checked_summary_ja: 到達不能になった所有権記録を、ファイルシ
 
 ## Tasks
 
-- [ ] Add scripts/retire-stale-worktree-records.py with a read-only scan that writes a digest-bearing manifest below .agent-artifacts/ and an apply-local that consumes one exact manifest.
-- [ ] Implement the eligibility test: lease expired beyond the grace period, worktree absent or reidentified, repository absent or reidentified, and a nearest existing ancestor on the recorded device for each absent path.
-- [ ] Revalidate every manifest fact immediately before each unlink, and stop without widening the set when any fact changed.
-- [ ] Name the removal command in the guard's implausible-count refusal.
-- [ ] Add tests/test-stale-record-retirement.py covering accepted, blocked, changed-state, idempotency and holdout cases against an isolated directory.
-- [ ] Register the script and its tests in lint-project-workflow.sh and the Copier inventory.
-- [ ] Record the new authority in SPEC_GIT_RETIREMENT.md and mirror it into the template.
+- [x] Add scripts/retire-stale-worktree-records.py with a read-only scan that writes a digest-bearing manifest below .agent-artifacts/ and an apply-local that consumes one exact manifest.
+- [x] Implement the eligibility test: lease expired beyond the grace period, worktree absent, repository absent, no symlink component, and for each absent path a nearest existing ancestor on the recorded device confirmed by the deepest covering mount.
+- [x] Revalidate every manifest fact immediately before each move, and stop without widening the set when any fact changed.
+- [x] Name the retirement command in the guard's implausible-count refusal.
+- [x] Add tests/test-stale-record-retirement.py covering accepted, blocked, changed-state, idempotency and holdout cases against an isolated directory.
+- [x] Register the script and its tests in lint-project-workflow.sh and the Copier inventory.
+- [x] Record the new authority in SPEC_GIT_RETIREMENT.md and mirror it into the template.
 
 ## Validation Notes
+
+`./scripts/lint-project-workflow.sh` and `./tests/smoke.sh` pass. `tests/test-stale-record-retirement.py` holds 59 tests. Every guard this plan adds was mutation-tested: each was replaced with a permissive variant and each replacement was killed by at least one test. Three guards survived their first mutation round and gained the tests that prove them; two tests that passed against a mutated implementation were rewritten, and one ordering guard that no reachable state could observe was deleted rather than covered artificially.
+
+Six independent read-only `code-review` rounds were obtained. They changed the design twice.
+
+The first round rejected treating a path that exists under a different device and inode as unreachable, because device numbers are not stable across a reboot; present paths are now never retirable. It also found that the command took the per-key lock and then unlinked it, that a non-regular sibling could leave a key partly deleted, and that manifest validation checked names but not types or provenance.
+
+The third round showed that no local check can prove unreachability at all: the mount table describes one namespace, and a same-device bind mount or a reused device number defeats any device comparison. The plan's premise was that deletion needed proof. It does not need proof if it is not deletion. The command now MOVES a record, its journal and its publication journal into a `retired` directory beside them, and never touches the lock. A wrong verdict costs an operator one move: the guard still fails closed, the refusal is visible, and the bytes are intact.
+
+Making retirement reversible moved the risk to visibility, and the later rounds closed it. A retired record that matches a live repository indicates a wrong retirement, so outstanding-task reporting reads the retired directory and labels each entry, every record-creating path refuses a retired key, and the stop gate names the restore instead of `publish` or `retire`, which both need the record that moved. The retired directory carries no count limit, because refusing on it would stop completion checks for every repository on the account and would push an operator to hide the only evidence that a retirement was wrong.
+
+The final two rounds reproduced two races in that new reporting. A record can move while it is being enumerated, so enumeration reads live, retired and live again, resolves each name against both locations rather than trusting a scan result, and retries the live location after the retired one.
+
+Residual, accepted: a repository whose device and inode are reused at the same path can match a retired record. The result is a labelled report and a refusal that names both ways out, never a deletion. Recording a non-reusable repository incarnation would need a record-schema change, which would not help the existing records this plan exists to clear.

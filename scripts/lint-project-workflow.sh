@@ -84,6 +84,7 @@ python3 "$root/tests/test-template-feedback.py"
 python3 "$root/tests/test-template-feedback-collection.py"
 python3 "$root/tests/test-development-direction.py"
 python3 "$root/tests/test-text-hygiene.py"
+python3 "$root/tests/test-stale-record-retirement.py"
 REQUIRE_COPIER=1 python3 "$root/tests/test-template-feedback-pipeline.py"
 REQUIRE_COPIER=1 "$root/tests/smoke.sh" --harness-profile-preservation
 python3 "$root/tests/test-validation-tools.py"

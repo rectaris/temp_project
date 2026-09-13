@@ -1155,6 +1155,13 @@ def require_git_retirement_alignment() -> None:
     if (root_cli.stat().st_mode & 0o777) != (template_cli.stat().st_mode & 0o777):
         fail("root and generated Git-retirement CLI modes differ")
 
+    root_records_cli = ROOT / "scripts/retire-stale-worktree-records.py"
+    template_records_cli = ROOT / "template/.project-agent-workflow/scripts/retire-stale-worktree-records.py"
+    if root_records_cli.read_bytes() != template_records_cli.read_bytes():
+        fail("root and generated stale-record retirement CLIs differ")
+    if (root_records_cli.stat().st_mode & 0o777) != (template_records_cli.stat().st_mode & 0o777):
+        fail("root and generated stale-record retirement CLI modes differ")
+
     root_spec = read("docs/agent/SPEC_GIT_RETIREMENT.md")
     template_spec = read("template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md")
     expected_template_spec = root_spec.replace(
@@ -1163,6 +1170,9 @@ def require_git_retirement_alignment() -> None:
     ).replace(
         "`scripts/manage-plan-worktrees.py",
         "`.project-agent-workflow/scripts/manage-plan-worktrees.py",
+    ).replace(
+        "`scripts/retire-stale-worktree-records.py",
+        "`.project-agent-workflow/scripts/retire-stale-worktree-records.py",
     )
     if template_spec != expected_template_spec:
         fail("root and generated Git-retirement specifications differ beyond command paths")

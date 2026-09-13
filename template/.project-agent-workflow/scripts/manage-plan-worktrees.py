@@ -816,6 +816,23 @@ def create_worktree(
     return record
 
 
+def reject_retired_record(paths: dict[str, Path]) -> None:
+    """Refuse to build a second record for a task whose record was retired.
+
+    Creating one would hide the mistake and leave two records competing for a
+    single task once the first is put back. It also covers the case where a new
+    repository reuses the device and inode of a deleted one: the operator is
+    told both ways out rather than silently given a duplicate.
+    """
+
+    if paths["retired_record"].exists():
+        raise WorktreeError(
+            "this task was retired as unreachable; its record is at "
+            f"{paths['retired_record']}. Move it back to "
+            f"{paths['directory']} to resume that task, or delete it to start over"
+        )
+
+
 def create(args: argparse.Namespace) -> None:
     repository = repository_root()
     allowed_root = resolve_allowed_root(repository, args.allowed_root)
@@ -831,6 +848,7 @@ def create(args: argparse.Namespace) -> None:
     paths = metadata_paths(identity, task)
     ensure_metadata_directory(paths["directory"])
     with locked_file(paths["lock"]):
+        reject_retired_record(paths)
         record = create_worktree(
             repository,
             allowed_root,
@@ -945,6 +963,7 @@ def prepare(args: argparse.Namespace) -> None:
                 )
             )
             return
+        reject_retired_record(paths)
         default_target, default_branch = default_placement(task, allowed_root)
         target = validate_target(
             args.worktree or str(default_target),
