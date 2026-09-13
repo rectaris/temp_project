@@ -1,6 +1,6 @@
 # Make each test remove the ownership records it created, so a validation run leaves the shared record directory as it found it.
 
-status: in_progress
+status: checked
 primary_invariant: A validation run leaves no ownership record for the task worktrees its own tests created, so repeated runs cannot drive the shared record directory toward the count at which the guard refuses to read it.
 task_types:
   - template_workflow
@@ -57,9 +57,49 @@ checked_summary_ja: テストが自ら作成した所有権記録を後始末し
 
 ## Tasks
 
-- [ ] Give bind_direct_task_worktree the TestCase that calls it and register removal of the record, journal and lock paths through addCleanup.
-- [ ] Update every caller in tests/hooks/gates.py to pass its test case.
-- [ ] Register the same cleanup for the prepare helper in tests/test-sandboxed-plan-worker.py, which currently discards the record paths.
-- [ ] Add a regression test that runs an inner test case binding a task worktree and asserts that none of its three record paths survive.
+- [x] Give bind_direct_task_worktree the TestCase that calls it and register removal of the record, journal and lock paths through addCleanup.
+- [x] Update every caller in tests/hooks/gates.py to pass its test case.
+- [x] Register the same cleanup for the prepare helper in tests/test-sandboxed-plan-worker.py, which currently discards the record paths.
+- [x] Add a regression test that runs an inner test case binding a task worktree and asserts that none of its three record paths survive.
 
 ## Validation Notes
+
+The two suites that call prepare now take ownership of the record, journal and
+lock paths before the call, not after it. The manager writes the journal, then
+the record, then unlinks the journal, so a preparation that fails partway
+leaves metadata behind; ownership taken afterwards would never see it.
+
+Ownership is refused for a path that already exists when it is taken. The
+record directory is shared by every run on the account, so a test that took a
+path it did not create could delete a record another run is still using. A
+regression test writes a record, has an inner case try to take it, and asserts
+the content survives.
+
+Cleanup is held in two places. The test's own addCleanup removes the paths as
+soon as it ends. A module-level pending set drained by an atexit hook holds the
+same responsibility one level up, because unittest re-raises KeyboardInterrupt
+before it runs any cleanup: without the set, interrupting a run left records
+behind. Sending SIGINT to a live run confirmed the directory count is unchanged.
+The helper is written twice, once per suite, because the plan's write scope
+names only these files and a shared third file would fall outside it.
+
+What remains open: ownership checks whether a path exists and deletes it later,
+so a record another process creates in between could still be removed. Reaching
+that state needs two processes preparing the same repository identity and the
+same task at once, and the identity carries the device and inode of the common
+git directory, which two live repositories cannot share. Every caller builds a
+fresh temporary repository. The earlier hand-written cleanup deleted by path in
+the same way, so this is not new here, and closing it needs an ownership token
+in the record itself, which is a change to the guard rather than to its tests.
+
+Measured: both suites leave the directory count unchanged, 128 before and 128
+after. Removing either the addCleanup registration, the pending-set update, or
+the existence filter makes the matching regression test fail.
+
+Reviewed three times by an independent read-only reviewer. The first round found
+that addCleanup does not run on KeyboardInterrupt and that ownership was taken
+after prepare rather than before. The second found that ownership of an already
+existing path could delete another run's record. The third found the regression
+test creating the shared directory with default permissions, which now goes
+through the guard's own ensure_metadata_directory. Acceptance stayed in the main
+session.
