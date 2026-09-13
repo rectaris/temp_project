@@ -1,6 +1,6 @@
 # Release Workflow
 
-This runbook covers one release of this template repository, from resolving the request to reporting the outcome. Follow the steps in order. Stop at the step where the request ends: a preparation request ends at step 5.
+This runbook covers one release of this template repository, from resolving the request to reporting the outcome. Follow the steps in order, with one exception: when a previous attempt's outcome is uncertain, read step 11 and establish the current state before any write, then resume at the first step whose effect is still missing. Stop at the step where the request ends: a preparation request ends at step 6, because finishing the task locally is part of preparing, not part of publishing.
 
 ## 1. Resolve The Request
 
@@ -15,7 +15,7 @@ Establish these before writing anything, from live repository state:
 
 Do not copy `dev`, `main`, or a version number from a past release plan. Past plans record what those refs were at the time; read the current ones.
 
-If the request is preparation only, say so explicitly in the final report and stop after step 5. A preparation report states what was changed locally and what remains unauthorized, and claims nothing about remote state.
+If the request is preparation only, say so explicitly in the final report and stop after step 6. A preparation report states what was changed locally and what remains unauthorized, and claims nothing about remote state.
 
 ## 2. Choose The Version
 
@@ -60,7 +60,7 @@ Confirm agreement with the check that owns it rather than by reading:
 python3 scripts/check-copier-template.py
 ```
 
-A release also follows the normal plan workflow: classify the tier, carry the plan through `scripts/complete-plan.sh` and `scripts/finalize-active-plan.sh`, and commit inside the worktree.
+A release also follows the normal plan workflow: classify the tier, carry the plan through `scripts/complete-plan.sh` and `scripts/finalize-active-plan.sh`, and commit inside the worktree. Name the chosen version in the release plan itself, so the plan record cannot drift from the version the change log and `README.md` declare; the version check compares those two files and does not read the plan.
 
 ## 4. Validate The Candidate
 
@@ -76,7 +76,7 @@ Run the repository's own validation, following `references/template-development.
 - `git diff --check` as the whitespace gate;
 - the current minimum-compatibility and `actionlint` checks.
 
-The Copier and workflow checks are release-relevant: a template release that never exercised a generated project has not been tested on the thing it ships. If a check cannot run — no Copier CLI, no network, no `uv` — name it as skipped in the report instead of treating the suite as complete.
+The Copier and workflow checks are release-relevant: a template release that never exercised a generated project has not been tested on the thing it ships. If a check cannot run — no Copier CLI, no network, no `uv` — name it as skipped in the report and treat the suite as incomplete. An incomplete suite stops publication and goes to the owner; it never becomes a silent pass.
 
 Record which commit each result belongs to. A result may be reused only when both the tested input and the command are unchanged. Success on a pull-request head does not carry over to the merge commit or to the tag commit, because those are different trees or different parents.
 
@@ -85,7 +85,7 @@ Record which commit each result belongs to. A result may be reused only when bot
 Run the downstream verification for the exact candidate source OID and every configured baseline in `docs/downstream-baselines.yaml`, writing evidence outside the repository as the command requires:
 
 ```sh
-python3 scripts/verify-downstream-baselines.py --source-commit <oid> --output <external-dir>
+python3 scripts/verify-downstream-baselines.py --source-ref <oid> --output-dir <external-dir>
 ```
 
 Read the result and the reason for each baseline separately:
@@ -95,16 +95,20 @@ Read the result and the reason for each baseline separately:
 
 Never clean or modify a downstream checkout to obtain a result, never invent a product command for a baseline, never drop a configured baseline, and never infer a waiver from what plans 290 or 329 once accepted.
 
-Preparation ends here. Everything below is publication.
+This step verifies baselines; it does not adopt the release anywhere. A later live `copier update` in a generated project belongs to that project's own policy and its own task. When such an update conflicts, leaves `.rej` files, or fails that project's validation, stop there: preserve the conflicted state and the evidence, report the exact project and reason, and never force the update, resolve it by hand-editing generated files, or delete the rejection files to make the run look clean.
 
 ## 6. Finish The Task Locally
 
-Publish the task worktree before any remote operation, so the accepted commit reaches the source branch and the temporary branch and checkout are gone:
+This step is local. It performs no remote operation and needs no external authorization.
+
+Publish the task worktree so the accepted commit reaches the source branch and the temporary branch and checkout are gone:
 
 ```sh
 python3 scripts/manage-plan-worktrees.py publish <plan-path>
 python3 scripts/manage-plan-worktrees.py publish --direct-task <task-id>
 ```
+
+Preparation ends here. Everything below is publication.
 
 ## 7. Authorize Each External Effect
 
@@ -117,35 +121,57 @@ Apply `docs/agent/SPEC_EXTERNAL_SERVICES.md` and the `mcp-ops` guidance to each 
 
 Reuse an existing user authorization only when it already names that exact effect and target. Ask for a missing authorization only after the target and payload are concrete enough to review; an authorization request that does not name what will be written is not reviewable.
 
-Use exact refs rather than bulk pushes, so the effect matches what was authorized:
+Use exact refs rather than bulk pushes, so each effect matches what was authorized. These are the shapes the later steps use, not instructions to run now:
 
 ```sh
 git push origin refs/heads/<source-branch>
 git push origin refs/tags/<tag>
 ```
 
+This step establishes which effects the owner has agreed to at all. It does not pre-approve a payload that does not exist yet: the publication OID appears in step 8, the tag object in step 9, and the Release notes in step 10. Immediately before each call, confirm that the authorization still names that effect and that exact target, and ask again when the concrete payload differs from what was described here.
+
 ## 8. Integrate
 
-For a requested pull-request path, open the pull request with the exact head and base and a body that describes the release, then wait for the required merge. Do not introduce an automatic merge step: the merge is the owner's or the platform's action, and the release does not assume it happened.
+For a requested pull-request path, push the source branch first, so the pull request describes the commit that was actually validated rather than a stale remote branch:
+
+```sh
+git push origin refs/heads/<source-branch>
+```
+
+Then open the pull request with the exact head and base and a body that describes the release, and wait for the required merge. Do not introduce an automatic merge step: the merge is the owner's or the platform's action, and the release does not assume it happened.
 
 After the merge, establish the exact remote OID of the publication branch and confirm it contains the preparation commit. That OID, not the local branch tip, is what a tag points at.
 
 ## 9. Tag
 
-Before creating the tag, inspect whether it already exists, locally and remotely:
+Before creating the tag, inspect whether it already exists, locally and remotely. For an annotated tag the plain ref names the tag object, so read the peeled ref as well to learn which commit it dereferences to:
 
 ```sh
 git tag -l <tag>
-git ls-remote --tags origin refs/tags/<tag>
+git ls-remote origin refs/tags/<tag> 'refs/tags/<tag>^{}'
 ```
 
-An existing tag at the intended target is evidence that a previous attempt got this far. Resume from it; do not recreate it. An existing tag at a different target stops the operation and goes to the owner. Never force-move and never delete a published tag.
+A remote annotated tag reports two lines: the tag object at `refs/tags/<tag>` and the commit at `refs/tags/<tag>^{}`. Compare the peeled commit, not the tag object, against the intended publication OID. A lightweight tag reports one line, which is already the commit.
+
+An existing tag whose commit is the intended target is evidence that a previous attempt got this far. Resume from it; do not recreate it. An existing tag at a different commit stops the operation and goes to the owner. Never force-move and never delete a published tag.
 
 Otherwise create an annotated tag at the verified publication OID and confirm what it dereferences to:
 
 ```sh
 git tag -a <tag> -m "Release <tag>" <publication-oid>
 git rev-parse <tag>^{commit}
+```
+
+Then push that one tag, under the authorization obtained in step 7:
+
+```sh
+git push origin refs/tags/<tag>
+```
+
+Confirm the published result before treating the tag as released:
+
+```sh
+git ls-remote origin 'refs/tags/<tag>^{}'
 ```
 
 ## 10. Inspect Post-Tag CI
@@ -156,15 +182,20 @@ Inspect the CI outcome for the exact tag commit before publishing a GitHub Relea
 
 - keep the published tag; deleting it destroys the evidence and breaks anyone who already resolved it;
 - withhold both the success claim and the Release publication;
-- route diagnosis and correction through current repository policy.
+- route diagnosis and correction through current repository policy, which separates a real defect, repaired at its root without weakening tests, from a missing secret, provider outage, or environment-only failure, which stops and goes to the owner.
 
 Do not quietly move to another version number to escape a failure.
 
+If it passes and a GitHub Release was requested and authorized in step 7, publish exactly one Release for that tag, after confirming that no Release object already exists for it. Build its notes from the change-log section of this version; do not restate unverified claims about downstream projects. If no Release was requested, publish none and say so in the report.
+
 ## 11. Recover From An Interrupted Release
 
-When a previous attempt's outcome is uncertain, read state before writing:
+When a previous attempt's outcome is uncertain, read state before writing. Read both the local task state and the remote release state, because an interruption can leave either one half-finished:
 
-- `git ls-remote origin` for the exact branch and tag refs;
+- the task worktree and its temporary branch, through `python3 scripts/manage-plan-worktrees.py inspect <plan-path>` or `python3 scripts/manage-plan-worktrees.py inspect --direct-task <task-id>`, which needs that selector and reports whether a resume is pending;
+- the source branch itself, because a publication interrupted after the commit reached it leaves the worktree gone and the commit present, which `inspect` alone does not show;
+- the plan's own lifecycle state, so a plan is not carried forward as if it were still unstarted;
+- `git ls-remote origin` for the exact branch and tag refs, reading the peeled ref for an annotated tag;
 - the pull request and merge state;
 - the CI runs for the relevant commits;
 - whether a GitHub Release object exists for the tag.

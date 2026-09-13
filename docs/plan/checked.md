@@ -264,3 +264,4 @@ id	path
 338	docs/plan/checked/2026/09/01-15/338-release-v149-for-pre-boundary-contract-sources.md
 339	docs/plan/checked/2026/09/01-15/339-implement-root-only-release-skill.md
 340	docs/plan/checked/2026/09/01-15/340-integrate-root-only-release-skill.md
+315	docs/plan/checked/2026/09/01-15/315-repair-release-runbook-execution-steps.md
