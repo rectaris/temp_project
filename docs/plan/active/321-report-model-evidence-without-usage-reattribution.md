@@ -1,6 +1,7 @@
 # Report verified model evidence and gaps without reattributing usage
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Model reporting exposes only source-bound execution facts and their coverage without treating mixed or unknown usage, unverified records or runtime settings as stronger execution evidence.
 task_types:
   - template_workflow
@@ -47,7 +48,7 @@ context_files:
   - tests/test-hooks.py
   - tests/test-harness-comparison.py
   - docs/plan/checked/2026/09/01-15/319-compare-harness-runs-locally.md
-  - docs/plan/backlog/318-preserve-model-evidence-in-agent-logs.md
+  - docs/plan/checked/2026/09/01-15/318-preserve-model-evidence-in-agent-logs.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
@@ -69,12 +70,12 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:0a4d3c530bddf1389030cf0202159241c09a26807775b45204fcfa7f1386fb96","stage":"focused","witness":"python3 tests/test-hooks.py ResourceSummaryTest"}
   - {"acceptance_sha256":"sha256:94f35529e9ac2cbe1b38d8734a173a3b4970389ebc1d863e5031a4da5d684805","stage":"focused","witness":"python3 tests/test-hooks.py ResourceSummaryTest"}
 integration_gates:
-  - docs/plan/backlog/318-preserve-model-evidence-in-agent-logs.md must be checked and published before this plan starts; resolve immutable plan id 318 in its current lifecycle location.
+  - docs/plan/checked/2026/09/01-15/318-preserve-model-evidence-in-agent-logs.md must be checked and published before this plan starts; resolve immutable plan id 318 in its current lifecycle location.
 checked_summary_ja: モデル情報の取得状況と不一致を表示し、既存の利用量を誤ってモデル別に割り当てない。
 
 ## Decisions
 
-- Start only after Plan 318 (docs/plan/backlog/318-preserve-model-evidence-in-agent-logs.md) is checked and its optional model observation contract is available at the published baseline. Resolve its immutable id after lifecycle moves. Consume that contract unchanged; do not fork or loosen its source semantics. These two plans share policy and fixture helpers and execute serially.
+- Start only after Plan 318 (docs/plan/checked/2026/09/01-15/318-preserve-model-evidence-in-agent-logs.md) is checked and its optional model observation contract is available at the published baseline. Resolve its immutable id after lifecycle moves. Consume that contract unchanged; do not fork or loosen its source semantics. These two plans share policy and fixture helpers and execute serially.
 - Extend the existing summarize-agent-run.py JSON and text outputs, keeping existing totals and input limits intact. Use only explicitly supplied manifests and --evidence files; do not discover sessions, read the home directory, call a provider, mutate logs, start models or introduce a periodic collector.
 - Verify model evidence by recomputing the supplied source digests and validating record references through the preceding contract before presenting a statement as source-verified. A declaration without its bytes remains unverified. Source verification establishes content consistency and recorded provenance, not the truth of a runtime claim or provider-resolved identity.
 - Report requested, runtime-reported and provider-reported values separately, with source kind, observable execution identity, missing/unverified coverage and bounded record references. Use deterministic ordering and preserve units and denominators. List multiple models when distinct valid execution scopes report them; never choose the most recent model as the identity of the whole run.

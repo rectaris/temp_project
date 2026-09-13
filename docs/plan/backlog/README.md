@@ -24,7 +24,8 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [321](321-report-model-evidence-without-usage-reattribution.md) | backlog | Report verified model evidence and gaps without reattributing usage | docs/plan/backlog/321-report-model-evidence-without-usage-reattribution.md |
+| [341](341-restore-shelved-manifest-fields.md) | backlog | Restore shelved_reason and shelved_at to the manifest parser the plan lint reads | docs/plan/backlog/341-restore-shelved-manifest-fields.md |
+| [343](343-admit-project-source-compile-checks.md) | backlog | Admit the compile checks the change-aware selector emits for a generated project's own source roots | docs/plan/backlog/343-admit-project-source-compile-checks.md |
 
 ## ハーネスのモデル更新への対応
 
@@ -34,7 +35,7 @@
 
 ## モデル情報の記録と確認
 
-[318：取得・保存](../active/318-preserve-model-evidence-in-agent-logs.md)で、モデルと推論設定を出典付きで保存する。
-その完了後に[321：確認・集計](321-report-model-evidence-without-usage-reattribution.md)で、取得できた情報、未観測、不一致を表示する。
-318は実装中であり、321は未着手である。
+[318：取得・保存](../checked/2026/09/01-15/318-preserve-model-evidence-in-agent-logs.md)で、モデルと推論設定を出典付きで保存する。
+その完了後に[321：確認・集計](../active/321-report-model-evidence-without-usage-reattribution.md)で、取得できた情報、未観測、不一致を表示する。
+318は完了しており、321は実装中である。
 どちらにも、既存ログの自動書き換え、モデル別のトークン配分、実モデルの比較実行は含まない。
