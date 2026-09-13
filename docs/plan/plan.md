@@ -1,4 +1,4 @@
 # Active Plan
 
 id	path	status
-336	docs/plan/active/336-add-project-release-skill.md	replan_required
+339	docs/plan/active/339-implement-root-only-release-skill.md	in_progress

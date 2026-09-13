@@ -1,7 +1,6 @@
 # Add a root release skill grounded in recorded release work
 
-status: replan_required
-primary_invariant: The release skill guides the exact requested release phase through existing policy and validation, without treating preparation, invocation, or historical publication permission as authority or proof of publication.
+status: replanned
 task_types:
   - skill_authoring
   - planning_docs
@@ -82,6 +81,16 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:f20020c6f8c1338cddb6b7c0b935c933a19203bf280403b7b5016f8e9765d9c6","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 replan_reason_codes:
   - scope_drift
+primary_invariant: preserve the complete source acceptance baseline
+replan_source: docs/plan/active/336-add-project-release-skill.md
+replan_contract: docs/plan/replanned/contracts/336-add-project-release-skill.json
+integration_gates:
+  - combined successors must satisfy every source acceptance item
+successor_plans:
+  - docs/plan/active/339-implement-root-only-release-skill.md
+  - docs/plan/active/340-integrate-root-only-release-skill.md
+inherited_acceptance_digests:
+  - sha256:f20020c6f8c1338cddb6b7c0b935c933a19203bf280403b7b5016f8e9765d9c6
 checked_summary_ja: 過去のリリース手順を基に、このリポジトリ専用のスキルを作る
 
 ## Decisions
