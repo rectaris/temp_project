@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
@@ -85,12 +86,28 @@ def init_guarded_repository(
 
 
 def bind_direct_task_worktree(
-    repo: Path, allowed_root: Path, task_id: str = "gate-task"
+    case: unittest.TestCase,
+    repo: Path,
+    allowed_root: Path,
+    task_id: str = "gate-task",
 ) -> tuple[Path, list[Path]]:
-    """Prepare one direct-task worktree and report it with its record paths."""
+    """Prepare one direct-task worktree and report it with its record paths.
+
+    The ownership record lives in the account's own state directory, which the
+    guard reads by design and no temporary directory can stand in for. The
+    test that creates the record therefore has to remove it, or a validation
+    run leaves work behind for a later owner to find and judge. The test case
+    is required rather than optional so that a caller cannot forget.
+    """
 
     allowed_root.mkdir(parents=True, exist_ok=True)
     allowed_root.chmod(0o700)
+    owned = owned_record_paths(
+        repo, {"kind": worktree_guard().DIRECT_TASK, "identity": {"id": task_id}}
+    )
+    # Ownership is taken before the records can exist, because a preparation
+    # that fails partway still leaves the lock and the journal behind.
+    own_records(case, owned)
     result = subprocess.run(
         [
             "python3",
@@ -111,17 +128,64 @@ def bind_direct_task_worktree(
         stderr=subprocess.PIPE,
         check=True,
     )
-    created = json.loads(result.stdout)
+    return Path(json.loads(result.stdout)["worktree"]), owned
+
+
+def worktree_guard():
+    """The guard module, loaded from the repository it belongs to."""
+
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("gate_worktree_guard", ROOT_GUARD)
     guard = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(guard)
-    paths = guard.metadata_paths(
-        guard.repository_identity(repo),
-        {"kind": guard.DIRECT_TASK, "identity": {"id": task_id}},
+    return guard
+
+
+def owned_record_paths(repo: Path, task: dict) -> list[Path]:
+    """Where the guard keeps the records for one task in one repository."""
+
+    paths = worktree_guard().metadata_paths(
+        worktree_guard().repository_identity(repo), task
     )
-    return Path(created["worktree"]), [paths[key] for key in ("record", "journal", "lock")]
+    return [paths[key] for key in ("record", "journal", "lock")]
+
+
+PENDING_RECORDS: set[Path] = set()
+
+
+def own_records(case: unittest.TestCase, paths: list[Path]) -> None:
+    """Take responsibility for records one test is about to create.
+
+    The test's own cleanup removes them as soon as it ends. The process-wide
+    set is the same responsibility held one level up, for an interrupt: a
+    KeyboardInterrupt reaches the interpreter without unittest running any
+    cleanup, so without it an interrupted run would leave records in the
+    account's shared directory.
+
+    A path that already exists belongs to whoever wrote it. The directory is
+    shared by every run on the account, so a test that took a path it did not
+    create could delete a record another run is still using.
+    """
+
+    ours = [path for path in paths if not path.exists()]
+    PENDING_RECORDS.update(ours)
+    case.addCleanup(remove_owned_records, ours)
+
+
+def remove_owned_records(paths: list[Path]) -> None:
+    """Remove the records one test created, and only those."""
+
+    for path in paths:
+        path.unlink(missing_ok=True)
+        PENDING_RECORDS.discard(path)
+
+
+def remove_pending_records() -> None:
+    remove_owned_records(list(PENDING_RECORDS))
+
+
+atexit.register(remove_pending_records)
 
 
 def run_hook(

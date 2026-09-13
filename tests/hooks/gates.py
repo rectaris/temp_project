@@ -25,6 +25,10 @@ from .support import (
     exec_payload,
     init_gate_repository,
     init_guarded_repository,
+    own_records,
+    owned_record_paths,
+    remove_pending_records,
+    worktree_guard,
     load_command_context,
     run_hook,
 )
@@ -196,7 +200,7 @@ class ExecutionDirectoryCases:
 
     def bound_pair(self, tmp: str) -> tuple[Path, Path]:
         repo = init_guarded_repository(Path(tmp) / "source")
-        worktree, _ = bind_direct_task_worktree(repo, Path(tmp) / "allowed")
+        worktree, _ = bind_direct_task_worktree(self, repo, Path(tmp) / "allowed")
         return repo, worktree
 
     def test_supplied_workdir_selects_the_bound_worktree(self) -> None:
@@ -445,12 +449,8 @@ class TaskWorktreeGateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
-            worktree, records = bind_direct_task_worktree(repo, base / "managed")
-            try:
-                output = run_stop_reminder(ROOT_STOP_REVIEW, worktree)
-            finally:
-                for record in records:
-                    record.unlink(missing_ok=True)
+            worktree, _ = bind_direct_task_worktree(self, repo, base / "managed")
+            output = run_stop_reminder(ROOT_STOP_REVIEW, worktree)
         self.assertIn(str(worktree), output)
         self.assertIn("publish", output)
 
@@ -486,12 +486,8 @@ class TaskWorktreeGateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
-            worktree, records = bind_direct_task_worktree(repo, base / "managed")
-            try:
-                output = run_stop_reminder(ROOT_STOP_REVIEW, repo)
-            finally:
-                for record in records:
-                    record.unlink(missing_ok=True)
+            worktree, _ = bind_direct_task_worktree(self, repo, base / "managed")
+            output = run_stop_reminder(ROOT_STOP_REVIEW, repo)
         self.assertIn(str(worktree), output)
         self.assertIn("publish", output)
 
@@ -552,19 +548,87 @@ class TaskWorktreeGateTest(unittest.TestCase):
             output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
         self.assertEqual(output, {})
 
+    def test_binding_a_task_worktree_leaves_no_record_behind(self) -> None:
+        """The account's state directory is shared, so nothing may accumulate there.
+
+        The guard reads that directory by design and refuses to read it once
+        it holds an implausible number of records, so a suite that leaves its
+        own records behind eventually fails a later run for a reason that has
+        nothing to do with the change under test. An inner test case is run
+        and its own record paths are checked, rather than the count of the
+        shared directory, so the answer does not depend on what else has run
+        on this account.
+        """
+
+        captured: list[Path] = []
+
+        class Inner(unittest.TestCase):
+            def runTest(self) -> None:
+                with tempfile.TemporaryDirectory() as tmp:
+                    base = Path(tmp)
+                    repo = init_guarded_repository(base / "repository")
+                    _, records = bind_direct_task_worktree(self, repo, base / "managed")
+                    captured.extend(records)
+                    self.assertTrue(any(path.exists() for path in records))
+
+        result = Inner().run()
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertTrue(captured)
+        self.assertEqual([path for path in captured if path.exists()], [])
+
+    def test_a_record_another_run_owns_is_left_alone(self) -> None:
+        """The records directory is shared, so only our own records are ours."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_guarded_repository(base / "repository")
+            record = owned_record_paths(
+                repo,
+                {
+                    "kind": worktree_guard().DIRECT_TASK,
+                    "identity": {"id": "gate-task"},
+                },
+            )[0]
+            worktree_guard().ensure_metadata_directory(record.parent)
+            record.write_text("another run owns this\n", encoding="utf-8")
+            self.addCleanup(record.unlink, True)
+
+            class Inner(unittest.TestCase):
+                def runTest(inner) -> None:
+                    own_records(inner, [record])
+
+            Inner().run()
+            self.assertEqual(record.read_text(encoding="utf-8"), "another run owns this\n")
+
+    def test_an_interrupted_run_still_removes_the_records_it_created(self) -> None:
+        """unittest runs no cleanup when a KeyboardInterrupt leaves a test."""
+
+        captured: list[Path] = []
+
+        class Inner(unittest.TestCase):
+            def runTest(self) -> None:
+                with tempfile.TemporaryDirectory() as tmp:
+                    base = Path(tmp)
+                    repo = init_guarded_repository(base / "repository")
+                    _, records = bind_direct_task_worktree(self, repo, base / "managed")
+                    captured.extend(records)
+                    raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            Inner().run()
+        self.assertTrue(any(path.exists() for path in captured))
+        remove_pending_records()
+        self.assertEqual([path for path in captured if path.exists()], [])
+
     def test_stop_gate_names_retirement_for_a_worktree_already_gone(self) -> None:
         """A record whose directory is gone cannot be published, only retired."""
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
-            worktree, records = bind_direct_task_worktree(repo, base / "managed")
-            try:
-                shutil.rmtree(worktree)
-                output = run_stop_reminder(ROOT_STOP_REVIEW, repo)
-            finally:
-                for record in records:
-                    record.unlink(missing_ok=True)
+            worktree, records = bind_direct_task_worktree(self, repo, base / "managed")
+            shutil.rmtree(worktree)
+            output = run_stop_reminder(ROOT_STOP_REVIEW, repo)
         self.assertIn("retire", output)
         self.assertNotIn("publish", output)
 
@@ -578,52 +642,44 @@ class TaskWorktreeGateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
-            worktree, records = bind_direct_task_worktree(repo, base / "managed")
-            other, other_records = bind_direct_task_worktree(repo, base / "managed", "author-plan")
+            worktree, records = bind_direct_task_worktree(self, repo, base / "managed")
+            other, other_records = bind_direct_task_worktree(self, repo, base / "managed", "author-plan")
             records += other_records
             snapshots = {path: path.read_bytes() for path in records if path.is_file()}
-            try:
-                for hook in (ROOT_STOP_REVIEW, STOP_REVIEW):
-                    for cwd in (repo, worktree, other):
-                        for session in (None, "implementation", "conversation", "authoring"):
-                            with self.subTest(hook=hook, cwd=cwd, session=session):
-                                payload = {"session_id": session} if session else {}
-                                reminder = run_stop_reminder(hook, cwd, payload)
-                                self.assertIn("advisory only", reminder)
-                                self.assertIn("publish", reminder)
-                for path, content in snapshots.items():
-                    self.assertEqual(path.read_bytes(), content)
-                for cwd in (worktree, other):
-                    self.assertTrue(cwd.is_dir())
-                    self.assertEqual(subprocess.run(
-                        ["git", "status", "--porcelain"], cwd=cwd, capture_output=True,
-                        text=True, check=True,
-                    ).stdout, "")
-                self.assertFalse((repo / ".git/project-agent-workflow-stop-repetition.json").exists())
-                # Existing unrelated work does not grant writes in the source
-                # checkout or prevent writes in another properly bound task.
-                for cwd in (worktree, other):
-                    self.assertEqual(run_hook(ROOT_PRE_TOOL, {"cmd": "git add intended.txt"}, cwd=cwd), {})
-                self.assertEqual(run_hook(ROOT_PRE_TOOL, {"cmd": "git add intended.txt"}, cwd=repo)["decision"], "block")
-            finally:
-                for record in records:
-                    record.unlink(missing_ok=True)
+            for hook in (ROOT_STOP_REVIEW, STOP_REVIEW):
+                for cwd in (repo, worktree, other):
+                    for session in (None, "implementation", "conversation", "authoring"):
+                        with self.subTest(hook=hook, cwd=cwd, session=session):
+                            payload = {"session_id": session} if session else {}
+                            reminder = run_stop_reminder(hook, cwd, payload)
+                            self.assertIn("advisory only", reminder)
+                            self.assertIn("publish", reminder)
+            for path, content in snapshots.items():
+                self.assertEqual(path.read_bytes(), content)
+            for cwd in (worktree, other):
+                self.assertTrue(cwd.is_dir())
+                self.assertEqual(subprocess.run(
+                    ["git", "status", "--porcelain"], cwd=cwd, capture_output=True,
+                    text=True, check=True,
+                ).stdout, "")
+            self.assertFalse((repo / ".git/project-agent-workflow-stop-repetition.json").exists())
+            # Existing unrelated work does not grant writes in the source
+            # checkout or prevent writes in another properly bound task.
+            for cwd in (worktree, other):
+                self.assertEqual(run_hook(ROOT_PRE_TOOL, {"cmd": "git add intended.txt"}, cwd=cwd), {})
+            self.assertEqual(run_hook(ROOT_PRE_TOOL, {"cmd": "git add intended.txt"}, cwd=repo)["decision"], "block")
 
     def test_repeated_turns_preserve_an_already_gone_worktree_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
-            worktree, records = bind_direct_task_worktree(repo, base / "managed")
-            try:
-                shutil.rmtree(worktree)
-                snapshots = {p: p.read_bytes() for p in records if p.is_file()}
-                for _ in range(5):
-                    self.assertIn("already gone", run_stop_reminder(ROOT_STOP_REVIEW, repo))
-                for path, content in snapshots.items():
-                    self.assertEqual(path.read_bytes(), content)
-            finally:
-                for record in records:
-                    record.unlink(missing_ok=True)
+            worktree, records = bind_direct_task_worktree(self, repo, base / "managed")
+            shutil.rmtree(worktree)
+            snapshots = {p: p.read_bytes() for p in records if p.is_file()}
+            for _ in range(5):
+                self.assertIn("already gone", run_stop_reminder(ROOT_STOP_REVIEW, repo))
+            for path, content in snapshots.items():
+                self.assertEqual(path.read_bytes(), content)
 
     def test_changed_or_cleared_reports_need_no_counter(self) -> None:
         for hook in (ROOT_STOP_REVIEW, STOP_REVIEW):

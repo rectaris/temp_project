@@ -20,4 +20,3 @@ validation:
 ## Summary
 
 Made Copier the long-term template interface. Moved generated files from copy-only `assets/templates/` to `template/`, added `copier.yml`, persisted `.copier-answers.yml` in generated repos, added answer fixtures, added static template validation, and documented update/migration practice.
-

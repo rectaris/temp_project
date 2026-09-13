@@ -37,6 +37,22 @@ SCHEMA_VERSION = 2
 MAX_RECORD_BYTES = 65_536
 MAX_LEASE_SECONDS = 86_400
 MAX_RECORDS_SCANNED = 512
+# Retired records carry no count limit. The live limit exists because an
+# implausible count there means the directory is wrong, and failing closed
+# costs one repository. A large retired directory is ordinary, and refusing on
+# it would stop completion checks for every repository on the account, which is
+# the systemic failure this command exists to remove. It would also push the
+# operator to move aside the only evidence that a retirement was wrong.
+RETIRED_DIRECTORY_NAME = "retired"
+# The refusal stops every guarded command, so it carries its own remedy rather
+# than leaving the reader to discover which command clears the directory. The
+# command is named without a directory because this module is shipped verbatim
+# to generated projects, where it sits under a different prefix.
+IMPLAUSIBLE_RECORD_COUNT_MESSAGE = (
+    "ownership-record directory holds an implausible record count; "
+    "run retire-stale-worktree-records.py scan to see which records "
+    "no repository can reach, then apply-local to move them aside"
+)
 
 PLAN_TASK = "plan"
 DIRECT_TASK = "direct"
@@ -344,6 +360,7 @@ def metadata_paths(identity: dict[str, Any], task: dict[str, Any]) -> dict[str, 
         # record enumeration continues to skip it.
         "publication": directory / f"{key}.publish.journal.json",
         "lock": directory / f"{key}.lock",
+        "retired_record": directory / RETIRED_DIRECTORY_NAME / f"{key}.json",
     }
 
 
@@ -686,8 +703,36 @@ def candidate_record_paths() -> list[Path]:
         if path.name.endswith(".json") and not path.name.endswith(".journal.json")
     )
     if len(paths) > MAX_RECORDS_SCANNED:
-        raise WorktreeError("ownership-record directory holds an implausible record count")
+        raise WorktreeError(IMPLAUSIBLE_RECORD_COUNT_MESSAGE)
     return paths
+
+
+def retired_record_paths() -> list[Path]:
+    """Enumerate records moved aside as unreachable.
+
+    A retired record that matches a live repository indicates the retirement was
+    wrong, because a correct one names a repository that no longer exists.
+    Reading them therefore surfaces mistakes without reviving finished work. A
+    reused device and inode at the same path can also produce a match, so a
+    match is a prompt to look, not a proof on its own.
+
+    A retired directory that exists but cannot be read is an error, never an
+    empty answer: reporting no retired records would hide exactly the mistakes
+    this enumeration exists to show.
+    """
+
+    directory = state_directory() / RETIRED_DIRECTORY_NAME
+    if not directory.exists() and not directory.is_symlink():
+        return []
+    if has_symlink_component(directory) or directory.is_symlink():
+        raise WorktreeError("retired ownership-record directory is reached through a symlink")
+    if not directory.is_dir():
+        raise WorktreeError("retired ownership-record path is not a directory")
+    return sorted(
+        path
+        for path in directory.iterdir()
+        if path.name.endswith(".json") and not path.name.endswith(".journal.json")
+    )
 
 
 def verify_binding(
@@ -753,6 +798,10 @@ def find_binding(
 def outstanding_tasks(cwd: Path | None = None, *, now: int | None = None) -> list[dict[str, Any]]:
     """Report every live task binding this repository still owes retirement for.
 
+    Retired records are included and labelled. One that matches this repository
+    indicates the retirement was wrong, so hiding it would let a completion
+    check pass while a real task was still unfinished.
+
     A binding is owed by the repository, not by the directory the caller happens
     to stand in. `find_binding` answers only for the current worktree, so a
     completion check asked from the pre-existing checkout would see nothing
@@ -764,17 +813,42 @@ def outstanding_tasks(cwd: Path | None = None, *, now: int | None = None) -> lis
     repository = repository_root(cwd)
     identity = repository_identity(repository)
     outstanding: list[dict[str, Any]] = []
-    for path in candidate_record_paths():
-        try:
-            record = read_record(path)
-        except (OSError, WorktreeError):
-            # An unreadable record cannot be attributed to this repository, so
-            # it is left to the manager's own actionable diagnostics.
+    # Read in three passes, because a record can move between the live and the
+    # retired directory while this runs. Scanning each directory once misses a
+    # record that moves out of the one already read, and no single order is
+    # safe in both directions. Taking the union of live, retired and live
+    # again cannot lose a record to one move either way.
+    live = {path.name for path in candidate_record_paths()}
+    retired = {path.name for path in retired_record_paths()}
+    live |= {path.name for path in candidate_record_paths()}
+    directory = state_directory()
+    for name in sorted(live | retired):
+        # Both locations are derived from the name rather than taken from a
+        # scan, so a record read here is found wherever it now sits, not only
+        # where it sat when its directory was listed.
+        record = None
+        source = None
+        # The live location is tried again after the retired one, because a
+        # restore can move the record back between the two reads and leave
+        # both of them looking at an empty path.
+        live_path = directory / name
+        for candidate in (live_path, directory / RETIRED_DIRECTORY_NAME / name, live_path):
+            try:
+                record = read_record(candidate)
+            except (OSError, WorktreeError):
+                # An unreadable record cannot be attributed to this repository,
+                # so it is left to the manager's own actionable diagnostics. A
+                # record that moved after its scan is read from the other side.
+                continue
+            source = candidate
+            break
+        if record is None:
             continue
         if record["repository_identity"] != identity:
             continue
         outstanding.append(
             {
+                "retired": source.parent.name == RETIRED_DIRECTORY_NAME,
                 "task": task_label(record["task"]),
                 "worktree_path": record["worktree_path"],
                 "branch_ref": record["branch_ref"],

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import importlib.util
 import hashlib
 import json
@@ -6140,6 +6141,19 @@ class GroupedExecutionAdapterTests(unittest.TestCase):
 ROOT_GUARD = ROOT / "scripts/project_workflow/worktree_guard.py"
 ROOT_WORKTREE_MANAGER = ROOT / "scripts/manage-plan-worktrees.py"
 
+PENDING_RECORDS: set[Path] = set()
+
+
+def remove_pending_records() -> None:
+    """Remove whatever an interrupted run did not get to remove itself."""
+
+    for path in list(PENDING_RECORDS):
+        path.unlink(missing_ok=True)
+        PENDING_RECORDS.discard(path)
+
+
+atexit.register(remove_pending_records)
+
 
 class RunnerTaskWorktreeBoundaryTests(unittest.TestCase):
     """The runner and the grouped adapter must start from their bound worktree.
@@ -6183,6 +6197,15 @@ class RunnerTaskWorktreeBoundaryTests(unittest.TestCase):
         git(self.repo, "commit", "-qm", "baseline", "--no-verify")
 
     def prepare(self, selector: str) -> Path:
+        """Bind a task worktree and take responsibility for its record.
+
+        The ownership record is written into the account's own state
+        directory, which the guard reads by design. Leaving it there would
+        make every later run of this suite add to a directory the guard
+        refuses to read once it grows too large.
+        """
+
+        self.own_records(selector)
         result = subprocess.run(
             [
                 sys.executable,
@@ -6201,6 +6224,95 @@ class RunnerTaskWorktreeBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return Path(json.loads(result.stdout)["worktree"])
+
+    def owned_record_paths(self, selector: str) -> list[Path]:
+        """Where the guard keeps the records this test's worktree owns.
+
+        setUp points HOME at a temporary directory, but the guard reads the
+        account's own home by design so that a caller cannot redirect it. The
+        records therefore land in the real state directory whatever the test
+        environment says.
+        """
+
+        spec = importlib.util.spec_from_file_location("boundary_worktree_guard", ROOT_GUARD)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        paths = guard.metadata_paths(
+            guard.repository_identity(self.repo),
+            {"kind": guard.PLAN_TASK, "identity": {"path": selector}},
+        )
+        return [paths[key] for key in ("record", "journal", "lock")]
+
+    def own_records(self, selector: str) -> None:
+        """Take responsibility for records this test is about to create.
+
+        The test's own cleanup removes them as soon as it ends. The
+        process-wide set is the same responsibility held one level up, for an
+        interrupt: a KeyboardInterrupt reaches the interpreter without
+        unittest running any cleanup, so without it an interrupted run would
+        leave records in the account's shared directory.
+
+        A path that already exists belongs to whoever wrote it. The directory
+        is shared by every run on the account, so a test that took a path it
+        did not create could delete a record another run is still using.
+        """
+
+        ours = [path for path in self.owned_record_paths(selector) if not path.exists()]
+        PENDING_RECORDS.update(ours)
+        self.addCleanup(self.remove_owned_records, ours)
+
+    def remove_owned_records(self, paths: list[Path]) -> None:
+        """Remove the records this test created, and only those."""
+
+        for path in paths:
+            path.unlink(missing_ok=True)
+            PENDING_RECORDS.discard(path)
+
+    def test_preparing_a_worktree_leaves_no_record_behind(self) -> None:
+        """A suite that keeps its records eventually fails a later run.
+
+        The guard refuses to read the shared record directory once it holds an
+        implausible number of records, and that refusal has nothing to do with
+        the change under test. An inner test case is run and its own record
+        paths are checked, rather than the count of the shared directory, so
+        the answer does not depend on what else has run on this account.
+        """
+
+        captured: list[Path] = []
+        selector = self.PLAN
+
+        class Inner(type(self)):
+            def runTest(self) -> None:
+                self.ship_guard()
+                self.commit()
+                self.prepare(selector)
+                captured.extend(self.owned_record_paths(selector))
+                self.assertTrue(any(path.exists() for path in captured))
+
+        result = Inner().run()
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertTrue(captured)
+        self.assertEqual([path for path in captured if path.exists()], [])
+
+    def test_an_interrupted_run_still_removes_the_records_it_created(self) -> None:
+        """unittest runs no cleanup when a KeyboardInterrupt leaves a test."""
+
+        captured: list[Path] = []
+        selector = self.PLAN
+
+        class Inner(type(self)):
+            def runTest(self) -> None:
+                self.ship_guard()
+                self.commit()
+                self.prepare(selector)
+                captured.extend(self.owned_record_paths(selector))
+                raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            Inner().run()
+        self.assertTrue(any(path.exists() for path in captured))
+        remove_pending_records()
+        self.assertEqual([path for path in captured if path.exists()], [])
 
     def test_repository_without_the_guard_keeps_previous_behaviour(self) -> None:
         self.commit()

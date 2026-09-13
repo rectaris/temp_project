@@ -2,7 +2,9 @@
 
 This specification governs local inspection and removal of registered linked worktrees and their checked-out local branches.
 
-It does not authorize remote branch deletion, provider writes, force deletion, filesystem removal, or destructive stale-worktree metadata pruning.
+It does not authorize remote branch deletion, provider writes, force deletion, or filesystem removal.
+
+It authorizes retirement of an ownership record only through the bounded command and conditions in `Unreachable Ownership Record Retirement` below.
 
 ## Configuration
 
@@ -112,12 +114,92 @@ It never calls filesystem removal, `git worktree remove --force`, `git branch -D
 
 Repeated scans and applies must remain deterministic and must not expand the removal set.
 
+## Unreachable Ownership Record Retirement
+
+`scripts/manage-plan-worktrees.py` unlinks the ownership record it owns, and needs the repository that record names to do it.
+
+A record whose repository no longer exists outlives every command that could reach it, and enough of them push the shared directory past the count at which the guard refuses to read it.
+
+`scripts/retire-stale-worktree-records.py scan` is read-only and `scripts/retire-stale-worktree-records.py apply-local` is an explicit local effect.
+
+Both subcommands require `--state-directory` as a runtime argument, so the directory about to be changed is named rather than assumed.
+
+The command refuses a directory that is the filesystem root, the current user's home directory, not owned by the current user, readable by others, or reached through a symlink component.
+
+Retirement moves a record aside instead of unlinking it, because absence of a path is evidence that a repository is gone and never proof of it. The command reads one mount namespace, and device numbers are reused across reboots, so no local check can establish that nothing anywhere can still reach the repository.
+
+Keeping the bytes is what makes the evidence below sufficient. A wrong verdict costs an operator one move rather than the ownership record: the guard keeps failing closed, the refusal is visible, and the record can be put back byte for byte.
+
+A record is retirable only when every condition below is true:
+
+- The record is readable and valid under the guard's own record schema.
+- Its filename equals the key the guard derives from the record's own repository identity and task selector.
+- Its lease expired more than the command's fixed clock-skew allowance ago.
+- Its worktree is absent.
+- Its repository common Git directory is absent.
+- Neither of those paths passes through a symlink at any component.
+- For each of those paths, the nearest existing ancestor reports the device the record itself recorded, and the deepest current mount covering the path carries that same device.
+
+A path that still exists is never treated as unreachable, whatever its device and inode now report. Device numbers are not stable across a reboot, so reading a mismatch as a different object would retire the record of a task that is still present.
+
+The ancestor and mount conditions raise the cost of a wrong verdict; they do not remove it. A same-device bind mount, a reused device number, and a repository held in another mount namespace can all satisfy them.
+
+The command refuses to judge anything when the mount table cannot be read.
+
+The clock-skew allowance is a constant in the command. It is not configuration, because a configurable allowance can be shortened.
+
+Retirement covers the record, its journal, and its publication journal, because leaving any of them keeps the key half present. All three move into a `retired` directory below the record directory, which the guard does not read.
+
+Retirement for one key runs under the same per-key lock the task worktree manager takes for prepare, resume, publish, and retire.
+
+The lock file is never moved or unlinked. It is the mutual-exclusion primitive itself, so removing it while holding it would let a second process create and lock a new file of that name and believe it held the key. A lock left beside no record is inert and is not counted against the record limit.
+
+A key whose record is already gone is reported without taking its lock, so repeated runs leave no new lock files behind.
+
+Every file the key owns is checked before any of them moves, the destination name must be free, and the record itself moves last, so a refusal partway through leaves the key accounted for by the record that describes it.
+
+Restoring a retired record is moving its files back into the record directory. The command never writes to the `retired` directory except to place files in it.
+
+A retired record stays visible where a wrong verdict would otherwise be silent. A correctly retired record names a repository that no longer exists, so it does not match a live repository identity. A record that does match indicates the retirement was wrong, or that a new repository reuses the device and inode of a deleted one at the same path. Either way it is a prompt to look, not a proof.
+
+Outstanding-task reporting therefore reads the `retired` directory as well and labels each entry, so a completion check cannot pass while a real task is unfinished.
+
+A record can move between the live and the retired directory while outstanding work is being enumerated, so reading each directory once is not enough: whichever is read first can lose a record that moves out of it afterwards, and no single order is safe in both directions. Enumeration reads the live directory, the retired directory, and the live directory again. Each name it collects is then resolved against the live location, the retired location, and the live location once more, because a restore between the first two reads would otherwise leave both looking at an empty path. One move in either direction cannot hide a record.
+
+A retired directory that exists but cannot be read is an error, never an empty answer. Reporting nothing would hide exactly the mistakes this enumeration exists to show, so a symlinked, dangling, or non-directory path is refused.
+
+Every path that creates an ownership record refuses a task whose record is retired, and the refusal names the retired path and both ways out, so a second record is never created for one task.
+
+The stop gate reports a retired entry with the recovery it needs. Publication and retirement both load the record from its live location, so neither can run until the record is put back.
+
+Retired records carry no count limit. The live limit exists because an implausible count there means the directory is wrong, and failing closed costs one repository. A large retired directory is ordinary, and refusing on it would stop completion checks for every repository on the account. It would also push an operator to move aside the only evidence that a retirement was wrong.
+
+A record the command cannot read is reported and left in place. A file that is not named like a record is never considered.
+
+`scan` writes one versioned JSON manifest below `.agent-artifacts/git-retirement/` recording the record directory, every candidate key, its task label, the recorded worktree and repository paths, the lease expiry, every eligibility result, and a content digest.
+
+Manifest ordering and digest calculation must be deterministic.
+
+`apply-local` accepts one exact manifest path directly below `.agent-artifacts/git-retirement/`, opens it without following a symlink at any component, reads at most the size bound, and verifies its schema, field types, and content digest before using any field.
+
+It refuses a manifest produced for another record directory, a candidate whose verdict disagrees with its own recorded evidence, and a candidate naming any file outside its own key.
+
+Immediately before each move it derives every eligibility fact again and requires the result to equal the manifest entry exactly.
+
+Any changed, missing, or mismatched fact stops that candidate without broadening the set.
+
+An already absent record is reported separately from one that changed since the scan.
+
+Repeated scans and applies must remain deterministic and must not expand the retirement set.
+
+Scheduled automation may run `scan`. Scheduled automation must not run `apply-local`.
+
 ## Validation Isolation
 
-Every removal test creates its repository and linked worktrees below an isolated temporary directory.
+Every retirement test creates its repository and linked worktrees below an isolated temporary directory.
 
 Tests snapshot the source repository's registered worktrees and refs before and after execution and require them to remain unchanged.
 
 Fixtures must cover accepted, blocked, state-change, path-boundary, unsupported-operation, idempotency, and untuned holdout cases.
 
-Provider-assisted squash or rebase evidence, remote branch deletion, and actual stale-worktree metadata pruning require separate active plans and applicable authorization.
+Provider-assisted squash or rebase evidence and remote branch deletion require separate active plans and applicable authorization.

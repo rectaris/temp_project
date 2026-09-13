@@ -256,3 +256,7 @@ id	path
 323	docs/plan/checked/2026/09/01-15/323-collect-template-improvement-requirements.md
 324	docs/plan/checked/2026/09/01-15/324-derive-development-direction-from-accepted-requirements.md
 329	docs/plan/checked/2026/09/01-15/329-release-v147-for-downstream-improvement-flow.md
+330	docs/plan/checked/2026/09/01-15/330-check-tracked-text-hygiene-locally.md
+331	docs/plan/checked/2026/09/01-15/331-clean-up-test-owned-worktree-records.md
+332	docs/plan/checked/2026/09/01-15/332-retire-unreachable-worktree-records.md
+334	docs/plan/checked/2026/09/01-15/334-release-v148-for-ownership-record-retirement.md
