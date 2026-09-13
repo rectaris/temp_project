@@ -1,6 +1,6 @@
 # Preserve execution-scoped model evidence through log capture and import
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Captured model statements retain their source meaning and observable execution scope without turning requested settings, missing identities or legacy aggregate usage into observed model execution.
 task_types:
@@ -95,10 +95,10 @@ checked_summary_ja: モデルと推論設定を出典付きで保存し、未観
 
 ## Tasks
 
-- [ ] Implement and document the shared optional model observation contract and its source-classification, bounds and missing-value rules.
-- [ ] Preserve supported source metadata in import and both root/generated hook paths; update derived manifest evidence without changing old resource observations.
-- [ ] Extend the manifest checker and existing focused tests for positive, adversarial, legacy and root/generated cases; review evidence semantics independently.
-- [ ] Run parent-owned focused checks, then the unchanged authoritative suite, and complete the ordinary reviewed commit/publication lifecycle.
+- [x] Implement and document the shared optional model observation contract and its source-classification, bounds and missing-value rules.
+- [x] Preserve supported source metadata in import and both root/generated hook paths; update derived manifest evidence without changing old resource observations.
+- [x] Extend the manifest checker and existing focused tests for positive, adversarial, legacy and root/generated cases; review evidence semantics independently.
+- [x] Run parent-owned focused checks, then the unchanged authoritative suite, and complete the ordinary reviewed commit/publication lifecycle.
 
 ## Validation Notes
 
@@ -106,3 +106,28 @@ checked_summary_ja: モデルと推論設定を出典付きで保存し、未観
 - Tier 2: this work changes the accepted logging metadata contract and security-sensitive allowlist, with multiple acceptance clauses. It preserves external-effect and validation authority. Use bounded parent implementation with the existing execution ledger and independent review because specification, hook and validation-helper paths are protected runner inputs; do not grant them to a writable delegated worker.
 - Pre-admission evidence was gathered read-only. The exact local source for an existing imported session was inspected for metadata only: CLI 0.154.0 session_meta included model_provider and cli_version; turn_context included model, effort, turn_id and root_turn_id. This establishes runtime-reported context fields, not provider-resolved execution or snapshot identity. Raw sources and session identifiers are not part of this plan.
 - Provider-resolved identity, exact snapshot and some execution links may be unavailable; explicit unknowns are valid outcomes, not missing implementation work. No provider call, home-directory discovery, automatic historical migration or new runtime capture backend is authorized.
+
+### Implementation record
+
+- Implementation mode: `parent_direct`. The bounded parent implemented the change in the task-bound linked worktree; no writable delegated worker was started, because the specification, hook and validation-helper paths in `write_scope` are protected runner inputs.
+- Contract: `template/.project-agent-workflow/scripts/agent_log_manifest.py` owns the whole model contract. The generated hook and the importer use it. `.project-agent-workflow/hooks/agent_log_event.py` duplicates it deliberately, because the repository root ships no `.project-agent-workflow/scripts/` directory for it to import; the duplicate is kept behaviourally identical and is checked by a root/template parity test.
+- Verification method: `scripts/check-agent-log-manifest.py` imports the producer helper, sources every model constant from it, and requires the stored summary to equal a fresh recomputation from the declared source files. Checking only that a statement is *backed* by some record was found unsound during review: it cannot detect omitted evidence, and duplicated constants drift into false rejections.
+- Shape binding: one record reports one source shape, named by its own record type. An observation is admitted only when the record's `source_type` or `payload_type` names the shape it claims, and only the evidence that shape can observe is accepted. A turn never carries its session's provider context, and a session never carries a runtime statement.
+- Stated limitation: the transcript and the hook log are the evidence of record, so verification establishes internal consistency with those files, not that the files themselves were never rewritten. Both specifications say so rather than implying a guarantee the design cannot give.
+
+### Validation evidence
+
+- Focused: `python3 tests/test-hooks.py AgentLogEventTest CodexTranscriptImportTest EvidenceDigestValidationTest RootLoggingCliDelegationTest` — 51 tests, OK.
+- Focused: `python3 scripts/check-agent-log-manifest.py --self-test` — passed, through the root wrapper.
+- Full hooks suite: `python3 tests/test-hooks.py` — 156 tests, OK.
+- Root/template alignment: `python3 scripts/check-copier-template.py` — passed.
+- Authoritative, run once after the review cleared: `scripts/lint-project-workflow.sh` — exit 0; `tests/smoke.sh` — exit 0.
+- Adversarial preflight: 20 bounded cases, all passing, covering secret exclusion, source tampering, legacy manifests, omitted evidence, forged statements, a false truncation flag, whitespace and control-character refusal, every producer diagnostic, blank lines, an oversized source, invalid UTF-8, provider-context truncation, shape binding, and root/template hook parity. Recorded in the execution ledger as events `preflight-1` through `preflight-6`.
+
+### Review and owner decisions
+
+- Six independent review rounds were run by a read-only `code-review` helper (role: review only; write scope: none). Every finding was verified in the code by the main session before remediation, and acceptance stayed in the main session.
+- Epoch 0 rounds 1 and 2 found and closed a diagnostic-allowlist drift, an unsound backing check, whitespace-invented identifiers, a size guard placed after the digest read, an inconsistent invalid-UTF-8 state and a blank-line record-count mismatch. Round 2 still reported High findings and exhausted that epoch's budget.
+- Owner instruction: `authorize_continuation`. Epoch 1 rounds 3 and 4 closed the recomputation and provider-truncation findings but left one Medium open, exhausting that budget.
+- Owner instruction: `authorize_epoch_2`. Epoch 2 round 5 identified the remaining defect precisely — an observation's source kind was not bound to the shape its record reported — and round 6 confirmed it closed with no High or Medium findings.
+- Review receipts are not recorded in the execution ledger. The receipt requires a runtime-proven reviewer-session digest, which cannot be faithfully attested for a sub-agent, so the ledger holds the preflight events and the owner authorizations only. This is a known gap in the evidence chain, not an omission of review.

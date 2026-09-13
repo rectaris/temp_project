@@ -249,6 +249,93 @@ def load_command_context():
     return module
 
 
+def load_manifest_helper():
+    """Import the shared manifest contract from the template it belongs to."""
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("hook_agent_log_manifest", MANIFEST_HELPER)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_model_evidence_codex_transcript(path: Path) -> None:
+    """Write a transcript shaped after the inspected CLI 0.154.0 records.
+
+    This fixture proves parser behavior only. It covers one session meta
+    record, two turns of the same session that report different models, an
+    interleaved second session, and a turn whose model field has an
+    unsupported type.
+    """
+
+    records = [
+        {
+            "timestamp": "2026-09-01T00:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "session-parent",
+                "cli_version": "0.154.0",
+                "model_provider": "example-provider",
+            },
+        },
+        {
+            "timestamp": "2026-09-01T00:00:01Z",
+            "type": "turn_context",
+            "payload": {
+                "cwd": "/workspace",
+                "model": "example-model-a",
+                "effort": "medium",
+                "turn_id": "turn-1",
+                "root_turn_id": "turn-1",
+                "session_id": "session-parent",
+            },
+        },
+        {
+            "timestamp": "2026-09-01T00:00:02Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "done"}],
+                "internal_chat_message_metadata_passthrough": {
+                    "turn_id": "turn-1",
+                    "session_id": "session-parent",
+                },
+            },
+        },
+        {
+            "timestamp": "2026-09-01T00:00:03Z",
+            "type": "turn_context",
+            "payload": {
+                "model": "example-model-b",
+                "effort": "high",
+                "turn_id": "turn-2",
+                "root_turn_id": "turn-1",
+                "session_id": "session-parent",
+            },
+        },
+        {
+            "timestamp": "2026-09-01T00:00:04Z",
+            "type": "turn_context",
+            "payload": {
+                "model": "example-model-c",
+                "turn_id": "turn-child",
+                "session_id": "session-child",
+            },
+        },
+        {
+            "timestamp": "2026-09-01T00:00:05Z",
+            "type": "turn_context",
+            "payload": {"model": 5, "effort": "low", "turn_id": "turn-3"},
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+
+
 def write_sample_codex_transcript(path: Path) -> None:
     path.write_text(
         "\n".join(

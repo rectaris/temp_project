@@ -26,8 +26,10 @@ MAX_LIST = 200
 MAX_DICT = 200
 ALLOWED_METADATA_KEYS = {
     "cwd",
+    "effort",
     "hook_event_name",
     "inherited_turns",
+    "model",
     "review_packet_digest",
     "session_id",
     "stop_hook_active",
@@ -137,6 +139,15 @@ def event_metadata(event: str, payload: dict[str, Any]) -> dict[str, Any]:
     ):
         metadata.pop("review_packet_digest", None)
         metadata.pop("inherited_turns", None)
+    model_observation = agent_log_manifest.build_model_observation(
+        "hook_event_metadata",
+        runtime_model=metadata.get("model"),
+        runtime_effort=metadata.get("effort"),
+        session_id=metadata.get("session_id"),
+    )
+    agent_log_manifest.retain_bounded_model_fields(metadata, model_observation)
+    if model_observation is not None:
+        metadata["model_observation"] = model_observation
     return metadata
 
 

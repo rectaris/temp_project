@@ -11,6 +11,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import agent_log_manifest  # noqa: E402
+
 
 REQUIRED_KEYS = {
     "run_id",
@@ -60,6 +64,32 @@ RESOURCE_METRICS = {
     "helper_turn_count",
     "tool_call_count",
 }
+# The model contract is owned by agent_log_manifest, which produces every
+# summary this checker validates. Sourcing the constants from there keeps a
+# newly supported diagnostic or bound from silently diverging into a false
+# rejection of legitimate producer output.
+MODEL_OBSERVATION_SCHEMA_VERSION = agent_log_manifest.MODEL_OBSERVATION_SCHEMA_VERSION
+MODEL_ATTRIBUTES = agent_log_manifest.MODEL_ATTRIBUTES
+MODEL_EVIDENCE_CLASSES = agent_log_manifest.MODEL_EVIDENCE_CLASSES
+MODEL_SOURCE_KINDS = agent_log_manifest.MODEL_SOURCE_KINDS
+MODEL_PROVIDER_CONTEXT_FIELDS = agent_log_manifest.MODEL_PROVIDER_CONTEXT_FIELDS
+MODEL_DIAGNOSTIC_CODES = agent_log_manifest.MODEL_DIAGNOSTIC_CODES
+MODEL_STATEMENT_FIELDS = {
+    "source",
+    "record_line",
+    "source_line",
+    "source_kind",
+    "attribute",
+    "evidence_class",
+    "value",
+    "session_digest",
+    "turn_id",
+    "root_turn_id",
+}
+MAX_MODEL_VALUE_LENGTH = agent_log_manifest.MAX_MODEL_VALUE_LENGTH
+MAX_MODEL_STATEMENTS = agent_log_manifest.MAX_MODEL_STATEMENTS
+MAX_MODEL_PROVIDER_VALUES = agent_log_manifest.MAX_MODEL_PROVIDER_VALUES
+MAX_MODEL_DIAGNOSTICS = agent_log_manifest.MAX_MODEL_DIAGNOSTICS
 
 
 class ValidationError(Exception):
@@ -358,6 +388,254 @@ def validate_resource_observations(value: Any, run_dir: Path, manifest: dict[str
             raise ValidationError(f"unavailable resource metric {name} must remain not_observed")
 
 
+def is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 71 and value.startswith("sha256:")
+
+
+def bounded_identifier(value: Any) -> bool:
+    return value is None or (
+        isinstance(value, str) and bool(value) and len(value) <= MAX_MODEL_VALUE_LENGTH
+    )
+
+
+def require_recomputed_model_observations(
+    value: dict[str, Any], run_dir: Path, manifest: dict[str, Any]
+) -> None:
+    """Require the summary to be exactly what the declared sources produce.
+
+    A matching file digest proves only that the bytes are unchanged. It says
+    nothing about whether the summary reports what those bytes contain, so the
+    summary is rebuilt from the sources and compared as a whole. That rejects a
+    forged statement, a fabricated provider value and an inflated count, and it
+    equally rejects a summary that silently omits evidence the sources hold.
+    """
+
+    try:
+        expected = agent_log_manifest.compute_model_observations(run_dir, manifest)
+    except Exception as error:  # pragma: no cover - defensive
+        raise ValidationError(
+            f"model_observations could not be recomputed from its sources: {error}"
+        ) from error
+    if expected is None:
+        raise ValidationError("model_observations is present without any declared source file")
+    if value != expected:
+        raise ValidationError(
+            "model_observations does not match the summary recomputed from its source files"
+        )
+
+
+def validate_model_observations(value: Any, run_dir: Path, manifest: dict[str, Any]) -> None:
+    """Validate the optional model observation summary against its own version.
+
+    This object is versioned separately from `resource_observations` and adds
+    nothing to it. A model statement is never a token count, so nothing here
+    may be read as usage attribution.
+    """
+
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "evidence_digests",
+        "coverage",
+        "statements",
+        "provider_context",
+        "identity_counts",
+        "diagnostics",
+        "truncated",
+    }:
+        raise ValidationError("model_observations has an invalid exact field shape")
+    if value["schema_version"] != MODEL_OBSERVATION_SCHEMA_VERSION:
+        raise ValidationError("model_observations has an unsupported schema version")
+    if not isinstance(value["truncated"], bool):
+        raise ValidationError("model_observations.truncated must be a boolean")
+    evidence_digests = value["evidence_digests"]
+    if not isinstance(evidence_digests, dict) or set(evidence_digests) != set(SOURCES):
+        raise ValidationError("model_observations.evidence_digests has an invalid exact field shape")
+    source_paths = {
+        "external_transcript": manifest.get("transcript_log"),
+        "codex_hooks": manifest.get("hook_event_log"),
+    }
+    for source_key, declared_digest in evidence_digests.items():
+        if declared_digest is None:
+            continue
+        if not is_sha256(declared_digest):
+            raise ValidationError(
+                f"model_observations.evidence_digests.{source_key} must be a SHA-256 digest or null"
+            )
+        source_rel = source_paths.get(source_key)
+        if not isinstance(source_rel, str):
+            raise ValidationError(
+                f"model_observations.evidence_digests.{source_key} is set but the source path is not declared"
+            )
+        source_file = run_dir / source_rel
+        if not source_file.is_file():
+            raise ValidationError(
+                f"model_observations.evidence_digests.{source_key} is set but the source file is missing"
+            )
+        actual = "sha256:" + hashlib.sha256(source_file.read_bytes()).hexdigest()
+        if actual != declared_digest:
+            raise ValidationError(
+                f"model_observations.evidence_digests.{source_key} does not match recomputed source file digest"
+            )
+    coverage = value["coverage"]
+    if not isinstance(coverage, dict) or set(coverage) != set(SOURCES):
+        raise ValidationError("model_observations.coverage has an invalid exact field shape")
+    for source_key, entry in coverage.items():
+        if not isinstance(entry, dict) or set(entry) != {
+            "status",
+            "records_scanned",
+            "records_with_model_observation",
+        }:
+            raise ValidationError(
+                f"model_observations.coverage.{source_key} has an invalid exact field shape"
+            )
+        if entry["status"] not in {"present", "missing", "unreadable"}:
+            raise ValidationError(
+                f"model_observations.coverage.{source_key}.status has an unsupported value"
+            )
+        for count_key in ("records_scanned", "records_with_model_observation"):
+            count = entry[count_key]
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise ValidationError(
+                    f"model_observations.coverage.{source_key}.{count_key} must be a nonnegative integer"
+                )
+        if entry["records_with_model_observation"] > entry["records_scanned"]:
+            raise ValidationError(
+                f"model_observations.coverage.{source_key} reports more observations than records"
+            )
+        if entry["status"] == "present" and not is_sha256(evidence_digests.get(source_key)):
+            raise ValidationError(
+                f"model_observations.coverage.{source_key} is present without a bound evidence digest"
+            )
+        if entry["status"] != "present" and (
+            entry["records_scanned"] or entry["records_with_model_observation"]
+        ):
+            raise ValidationError(
+                f"model_observations.coverage.{source_key} counts records without a present source"
+            )
+    statements = value["statements"]
+    if not isinstance(statements, list):
+        raise ValidationError("model_observations.statements must be a list")
+    if len(statements) > MAX_MODEL_STATEMENTS:
+        raise ValidationError("model_observations.statements exceeds the declared bound")
+    if value["truncated"] and len(statements) != MAX_MODEL_STATEMENTS:
+        raise ValidationError("a truncated statement list must hold exactly the declared bound")
+    seen: set[tuple[Any, ...]] = set()
+    for index, statement in enumerate(statements):
+        validate_model_statement(index, statement, evidence_digests, coverage)
+        key = (
+            statement["source"],
+            statement["record_line"],
+            statement["attribute"],
+            statement["evidence_class"],
+        )
+        if key in seen:
+            raise ValidationError(
+                f"model_observations.statements[{index}] duplicates an earlier source record reference"
+            )
+        seen.add(key)
+    provider_context = value["provider_context"]
+    if not isinstance(provider_context, dict) or set(provider_context) != set(
+        MODEL_PROVIDER_CONTEXT_FIELDS
+    ):
+        raise ValidationError("model_observations.provider_context has an invalid exact field shape")
+    for field, entry in provider_context.items():
+        if not isinstance(entry, dict) or set(entry) != {"status", "values"}:
+            raise ValidationError(
+                f"model_observations.provider_context.{field} has an invalid exact field shape"
+            )
+        values = entry["values"]
+        if not isinstance(values, list) or len(values) > MAX_MODEL_PROVIDER_VALUES:
+            raise ValidationError(
+                f"model_observations.provider_context.{field}.values is not a bounded list"
+            )
+        if any(not bounded_identifier(item) or item is None for item in values):
+            raise ValidationError(
+                f"model_observations.provider_context.{field}.values holds an unsupported value"
+            )
+        if len(set(values)) != len(values):
+            raise ValidationError(
+                f"model_observations.provider_context.{field}.values repeats a value"
+            )
+        expected_status = "observed" if values else "not_observed"
+        if entry["status"] != expected_status:
+            raise ValidationError(
+                f"model_observations.provider_context.{field}.status must be {expected_status}"
+            )
+        if values and not any(is_sha256(digest) for digest in evidence_digests.values()):
+            raise ValidationError(
+                f"model_observations.provider_context.{field} requires at least one bound evidence digest"
+            )
+    identity_counts = value["identity_counts"]
+    if not isinstance(identity_counts, dict) or set(identity_counts) != {
+        "session_digests",
+        "turn_ids",
+    }:
+        raise ValidationError("model_observations.identity_counts has an invalid exact field shape")
+    expected_counts = {
+        "session_digests": len(
+            {item["session_digest"] for item in statements if item["session_digest"]}
+        ),
+        "turn_ids": len({item["turn_id"] for item in statements if item["turn_id"]}),
+    }
+    for count_key, expected in expected_counts.items():
+        count = identity_counts[count_key]
+        if isinstance(count, bool) or not isinstance(count, int) or count != expected:
+            raise ValidationError(
+                f"model_observations.identity_counts.{count_key} must be {expected}"
+            )
+    diagnostics = value["diagnostics"]
+    if not isinstance(diagnostics, list) or len(diagnostics) > MAX_MODEL_DIAGNOSTICS:
+        raise ValidationError("model_observations.diagnostics is not a bounded list")
+    if any(code not in MODEL_DIAGNOSTIC_CODES for code in diagnostics):
+        raise ValidationError("model_observations.diagnostics holds an unsupported code")
+    if len(set(diagnostics)) != len(diagnostics):
+        raise ValidationError("model_observations.diagnostics repeats a code")
+    require_recomputed_model_observations(value, run_dir, manifest)
+
+
+def validate_model_statement(
+    index: int,
+    statement: Any,
+    evidence_digests: dict[str, Any],
+    coverage: dict[str, Any],
+) -> None:
+    label = f"model_observations.statements[{index}]"
+    if not isinstance(statement, dict) or set(statement) != MODEL_STATEMENT_FIELDS:
+        raise ValidationError(f"{label} has an invalid exact field shape")
+    if statement["source"] not in SOURCES:
+        raise ValidationError(f"{label}.source names an unsupported evidence source")
+    if not is_sha256(evidence_digests.get(statement["source"])):
+        raise ValidationError(f"{label} requires a bound evidence digest for its source")
+    if coverage[statement["source"]]["status"] != "present":
+        raise ValidationError(f"{label} references a source that is not present")
+    record_line = statement["record_line"]
+    if isinstance(record_line, bool) or not isinstance(record_line, int) or record_line < 1:
+        raise ValidationError(f"{label}.record_line must be a positive integer")
+    source_line = statement["source_line"]
+    if source_line is not None and (
+        isinstance(source_line, bool) or not isinstance(source_line, int) or source_line < 1
+    ):
+        raise ValidationError(f"{label}.source_line must be a positive integer or null")
+    if statement["source_kind"] not in MODEL_SOURCE_KINDS:
+        raise ValidationError(f"{label}.source_kind names an unsupported source shape")
+    if statement["attribute"] not in MODEL_ATTRIBUTES:
+        raise ValidationError(f"{label}.attribute names an unsupported model attribute")
+    if statement["evidence_class"] not in MODEL_EVIDENCE_CLASSES:
+        raise ValidationError(f"{label}.evidence_class names an unsupported evidence class")
+    model_value = statement["value"]
+    if (
+        not isinstance(model_value, str)
+        or not model_value
+        or len(model_value) > MAX_MODEL_VALUE_LENGTH
+    ):
+        raise ValidationError(f"{label}.value must be a bounded non-empty string")
+    if statement["session_digest"] is not None and not is_sha256(statement["session_digest"]):
+        raise ValidationError(f"{label}.session_digest must be a SHA-256 digest or null")
+    for field in ("turn_id", "root_turn_id"):
+        if not bounded_identifier(statement[field]):
+            raise ValidationError(f"{label}.{field} must be a bounded string or null")
+
+
 def validate_manifest(path: Path, require_transcript: bool = False, require_hooks: bool = False) -> list[str]:
     manifest = load_json(path)
     if not isinstance(manifest, dict):
@@ -397,6 +675,8 @@ def validate_manifest(path: Path, require_transcript: bool = False, require_hook
     validate_hook_events(run_dir, manifest)
     if "resource_observations" in manifest:
         validate_resource_observations(manifest["resource_observations"], run_dir, manifest)
+    if "model_observations" in manifest:
+        validate_model_observations(manifest["model_observations"], run_dir, manifest)
     if require_transcript and "external_transcript" in computed_missing_sources:
         raise ValidationError("external transcript coverage is required but missing")
     if require_hooks and "codex_hooks" in computed_missing_sources:
@@ -571,6 +851,139 @@ def self_test() -> None:
         manifest["resource_observations"]["evidence_digests"]["external_transcript"] = "sha256:" + "b" * 64
         write_json(mismatched_digest, manifest)
         expect_failure(mismatched_digest)
+
+        legacy = create_run(root, "legacy-model", transcript=True, hooks=False)
+        validate_manifest(legacy)
+
+        model_run = create_run(root, "model-evidence", transcript=True, hooks=False)
+        write_json(model_run, with_model_observations(load_json(model_run), model_run.parent))
+        validate_manifest(model_run)
+
+        for label, mutate in (
+            ("model-unbound", _drop_model_evidence_digest),
+            ("model-stale", _stale_model_evidence_digest),
+            ("model-duplicate", _duplicate_model_statement),
+            ("model-unknown-version", _unknown_model_version),
+            ("model-bad-count", _wrong_model_identity_count),
+            ("model-outside-source", _model_statement_outside_source),
+            ("model-bad-class", _model_statement_bad_class),
+            ("model-forged-value", _forged_model_statement_value),
+            ("model-forged-scope", _forged_model_statement_scope),
+            ("model-forged-source-line", _forged_model_statement_source_line),
+            ("model-fabricated-provider", _fabricated_model_provider_value),
+            ("model-inflated-coverage", _inflated_model_coverage),
+            ("model-false-truncation", _false_model_truncation),
+        ):
+            case = create_run(root, label, transcript=True, hooks=False)
+            manifest = with_model_observations(load_json(case), case.parent)
+            mutate(manifest)
+            write_json(case, manifest)
+            expect_failure(case)
+
+
+def with_model_observations(manifest: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    """Write one source record and attach the summary that record produces.
+
+    The summary comes from the producer rather than from a hand-written
+    literal, so every mutator below is tested against real producer output and
+    the positive case cannot pass because the fixture happened to agree with a
+    weaker rule.
+    """
+
+    observation = agent_log_manifest.build_model_observation(
+        "transcript_turn_context",
+        runtime_model="example-model",
+        model_provider="example-provider",
+        session_id="session-1",
+        turn_id="turn-1",
+    )
+    transcript = run_dir / "raw/transcript.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "record_type": "system_event",
+                "created_at": "2026-09-01T00:00:00Z",
+                "run_id": manifest["run_id"],
+                "turn_id": "turn-1",
+                "role": "system_event",
+                "content": "",
+                "metadata": {
+                    "source_line": 4,
+                    "source_type": "turn_context",
+                    "payload_type": "turn_context",
+                    "model_observation": observation,
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    resource = manifest.get("resource_observations")
+    if isinstance(resource, dict) and isinstance(resource.get("evidence_digests"), dict):
+        resource["evidence_digests"]["external_transcript"] = _file_digest(transcript)
+    manifest["model_observations"] = agent_log_manifest.compute_model_observations(
+        run_dir, manifest
+    )
+    return manifest
+
+
+def _forged_model_statement_value(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["statements"][0]["value"] = "forged-model"
+
+
+def _forged_model_statement_scope(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["statements"][0]["turn_id"] = "turn-forged"
+    manifest["model_observations"]["identity_counts"]["turn_ids"] = 1
+
+
+def _forged_model_statement_source_line(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["statements"][0]["source_line"] = 999
+
+
+def _fabricated_model_provider_value(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["provider_context"]["cli_version"] = {
+        "status": "observed",
+        "values": ["9.9.9"],
+    }
+
+
+def _inflated_model_coverage(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["coverage"]["external_transcript"]["records_scanned"] = 9
+
+
+def _false_model_truncation(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["truncated"] = True
+
+
+def _drop_model_evidence_digest(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["evidence_digests"]["external_transcript"] = None
+
+
+def _stale_model_evidence_digest(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["evidence_digests"]["external_transcript"] = "sha256:" + "d" * 64
+
+
+def _duplicate_model_statement(manifest: dict[str, Any]) -> None:
+    statements = manifest["model_observations"]["statements"]
+    statements.append(json.loads(json.dumps(statements[0])))
+
+
+def _unknown_model_version(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["schema_version"] = 2
+
+
+def _wrong_model_identity_count(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["identity_counts"]["turn_ids"] = 5
+
+
+def _model_statement_outside_source(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["statements"][0]["record_line"] = 99
+
+
+def _model_statement_bad_class(manifest: dict[str, Any]) -> None:
+    manifest["model_observations"]["statements"][0]["evidence_class"] = "provider_confirmed"
 
 
 def discover_manifests(paths: list[str]) -> list[Path]:

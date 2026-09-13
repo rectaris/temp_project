@@ -118,6 +118,70 @@ def nested_turn_id(raw: dict[str, Any], line_number: int) -> str:
     return f"source-line-{line_number}"
 
 
+def model_context_payloads(
+    raw: dict[str, Any], payload: dict[str, Any], top_type: str, payload_type: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Locate the turn-context and session-meta objects a record reports.
+
+    A shape is read only when the record's own type names it, and the nested
+    object of that name is preferred when the record carries one. Binding the
+    shape to the record type is what keeps an observation from claiming a
+    shape the record never reported: the type is written by the source and
+    read by unrelated parts of this importer, so it is not something a
+    forged observation can grant itself.
+    """
+
+    turn_context: dict[str, Any] | None = None
+    session_meta: dict[str, Any] | None = None
+    record_types = {top_type, payload_type}
+    if "turn_context" in record_types:
+        nested = payload.get("turn_context")
+        turn_context = nested if isinstance(nested, dict) else (payload or raw)
+    if "session_meta" in record_types:
+        nested = payload.get("session_meta")
+        session_meta = nested if isinstance(nested, dict) else (payload or raw)
+    return turn_context, session_meta
+
+
+def transcript_model_observation(
+    raw: dict[str, Any],
+    payload: dict[str, Any],
+    top_type: str,
+    payload_type: str,
+    session_id: Any,
+) -> dict[str, Any] | None:
+    """Build the record's model observation from allowlisted source fields.
+
+    A record reports one source shape, named by its own record type, and the
+    observation stays inside what that shape can observe. A turn reports what
+    the runtime used for that turn; it is not a request the caller made, not
+    proof that a provider resolved the identifier, and not the session's
+    provider context. A session reports the provider context and the session
+    identity, and makes no statement about any turn.
+    """
+
+    turn_context, session_meta = model_context_payloads(raw, payload, top_type, payload_type)
+    if turn_context is not None:
+        return agent_log_manifest.build_model_observation(
+            "transcript_turn_context",
+            runtime_model=turn_context.get("model"),
+            runtime_effort=turn_context.get("effort"),
+            session_id=session_id,
+            turn_id=turn_context.get("turn_id"),
+            root_turn_id=turn_context.get("root_turn_id"),
+        )
+    if session_meta is not None:
+        if not isinstance(session_id, str):
+            session_id = session_meta.get("id")
+        return agent_log_manifest.build_model_observation(
+            "transcript_session_meta",
+            model_provider=session_meta.get("model_provider"),
+            cli_version=session_meta.get("cli_version"),
+            session_id=session_id,
+        )
+    return None
+
+
 def normalize_record(raw: dict[str, Any], run_id: str, line_number: int) -> dict[str, Any]:
     payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
     assert isinstance(payload, dict)
@@ -159,6 +223,11 @@ def normalize_record(raw: dict[str, Any], run_id: str, line_number: int) -> dict
     }
     if provider_usage:
         metadata["provider_usage"] = provider_usage
+    model_observation = transcript_model_observation(
+        raw, payload, top_type, payload_type, metadata.get("session_id")
+    )
+    if model_observation is not None:
+        metadata["model_observation"] = model_observation
     if payload_type == "review_packet_start":
         packet_digest = payload.get("review_packet_digest")
         inherited_turns = payload.get("inherited_turns")
