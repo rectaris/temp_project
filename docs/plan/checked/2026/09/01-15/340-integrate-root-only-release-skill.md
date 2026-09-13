@@ -1,6 +1,6 @@
 # Integrate and verify the root-only release skill
 
-status: backlog
+status: checked
 primary_invariant: The structural regressions prove the skill's discovery metadata, reference resolution, routing, placement, and bounded Git examples, and never claim that word matching proves an agent made a correct release decision.
 replan_source: docs/plan/active/336-add-project-release-skill.md
 replan_contract: docs/plan/replanned/contracts/336-add-project-release-skill.json
@@ -72,11 +72,21 @@ checked_summary_ja: リリーススキルの構造的回帰を既存の検証系
 
 ## Tasks
 
-- [ ] Add tests/validation_tools/release_skill.py with structural tests that read the skill frontmatter, require exactly name and description, require the folder name to match, and require the metadata file to supply display name, short description, and default prompt.
-- [ ] Resolve every repository-local Markdown link in the skill body, the runbook, and both routing documents, and assert that both routing documents reach the runbook.
-- [ ] Assert that the skill is absent from template/.agents/skills/ and template/.project-agent-workflow/skills/, so a later change cannot silently turn it into generated content.
-- [ ] Exercise the detection side in temporary fixtures: missing frontmatter, a broken local reference, and an unexpected frontmatter field must each be observable rather than silently accepted.
-- [ ] Validate the runbook's Git examples: every push example must name one exact refs/heads or refs/tags target, no write example may fan out or force, and the annotated tag example must run against an isolated temporary repository and dereference to the expected commit.
-- [ ] Assert that the README external link targets and the current stable-version copy example are unchanged, and perform no network call.
-- [ ] Import the three test classes exactly once in tests/test-validation-tools.py and register tests/validation_tools/release_skill.py in SOURCE_REQUIRED in scripts/project_workflow/copier_inventory.py.
-- [ ] Run python3 tests/test-validation-tools.py and python3 scripts/check-copier-template.py, then the authoritative suite once, and have an independent read-only reviewer walk preparation-only, normal publication, blocked downstream, existing-tag mismatch, tag-CI failure, and interrupted-write scenarios against the authored skill before acceptance.
+- [x] Add tests/validation_tools/release_skill.py with structural tests that read the skill frontmatter, require exactly name and description, require the folder name to match, and require the metadata file to supply display name, short description, and default prompt.
+- [x] Resolve every repository-local Markdown link in the skill body, the runbook, and both routing documents, and assert that both routing documents reach the runbook.
+- [x] Assert that the skill is absent from template/.agents/skills/ and template/.project-agent-workflow/skills/, so a later change cannot silently turn it into generated content.
+- [x] Exercise the detection side in temporary fixtures: missing frontmatter, a broken local reference, and an unexpected frontmatter field must each be observable rather than silently accepted.
+- [x] Validate the runbook's Git examples: every push example must name one exact refs/heads or refs/tags target, no write example may fan out or force, and the annotated tag example must run against an isolated temporary repository and dereference to the expected commit.
+- [x] Assert that the README external link targets and the current stable-version copy example are unchanged, and perform no network call.
+- [x] Import the three test classes exactly once in tests/test-validation-tools.py and register tests/validation_tools/release_skill.py in SOURCE_REQUIRED in scripts/project_workflow/copier_inventory.py.
+- [x] Run python3 tests/test-validation-tools.py and python3 scripts/check-copier-template.py, then the authoritative suite once, and have an independent read-only reviewer walk preparation-only, normal publication, blocked downstream, existing-tag mismatch, tag-CI failure, and interrupted-write scenarios against the authored skill before acceptance.
+
+## Validation Notes
+
+- `python3 tests/test-validation-tools.py` passes with 316 tests, which includes the three new release-skill classes.
+- `python3 scripts/check-copier-template.py`, `python3 scripts/validate-changes.py --all`, `scripts/lint-project-workflow.sh`, and `tests/smoke.sh` each exit 0.
+- Two independent read-only reviews ran against this change: a diff review of the committed skill and the uncommitted regressions, and the scenario walkthrough required by the last task.
+- The diff review confirmed the named parity exemption still rejects an unnamed root skill, a generated skill without a root counterpart, an exempt name that is absent from the root, and an exempt name that is also generated. It found two ineffective regressions, both repaired here: the annotated-tag test asserted a property of Git instead of reading the runbook, and the push and write scans matched only unindented commands. Injecting a wrong dereference into the runbook now fails the repaired test, so it observes the file it claims to check.
+- The scenario walkthrough covered preparation only, normal publication, blocked downstream adoption, an existing tag at a different commit, post-tag CI failure, and an interrupted write. It confirmed the CI-failure path and found the runbook operationally defective elsewhere. Those defects are outside this plan's protected write scope and are repaired under a separate bounded plan; this plan records them rather than claiming they were fixed here.
+- The regressions prove structure, routing, placement, and that the documented Git examples run. They do not prove that an agent following the runbook makes a correct release decision, which is why the independent walkthrough remains part of acceptance.
+- The owner authorized repairing the runbook defects the walkthrough found. The restructure lifecycle protects a live successor's declared write scope, so the repair could not be absorbed here and is carried out under a separate bounded plan against the runbook body. This plan kept its declared scope unchanged.

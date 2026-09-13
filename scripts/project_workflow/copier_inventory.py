@@ -337,6 +337,7 @@ SOURCE_REQUIRED = [
     "tests/validation_tools/__init__.py",
     "tests/validation_tools/support.py",
     "tests/validation_tools/plan.py",
+    "tests/validation_tools/release_skill.py",
     "tests/validation_tools/external.py",
     "tests/validation_tools/changes.py",
     "tests/validation_tools/generated.py",
