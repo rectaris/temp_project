@@ -76,4 +76,3 @@ checked_summary_ja: 計画のたびに作り直される docs/plan/active を常
 - 置き場の保持に `.gitkeep` を使わなかったのは、commit `62ceb88` が `template/docs/plan/` 配下の `.gitkeep` を削除し、CHANGELOG が「生成先が削除した `.gitkeep` を通常の update で再生成しない」と記録している一方、兄弟ディレクトリの `README.md` は残され、`shelved/README.md` はその後に追加されているためである。
 
 独立レビューは受けていない。Tier 1 の文書追加であり、製品の挙動、検証権限、安全境界のいずれも変更していない。
-
