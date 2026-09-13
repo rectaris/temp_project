@@ -24,13 +24,17 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [320](320-pin-optional-harness-instructions.md) | backlog | Pin optional instruction revisions and retain a measured adoption path | docs/plan/backlog/320-pin-optional-harness-instructions.md |
-| [322](322-record-downstream-template-improvements.md) | backlog | Record template improvement evidence in generated repositories | docs/plan/backlog/322-record-downstream-template-improvements.md |
-| [323](323-collect-template-improvement-requirements.md) | backlog | Collect local feedback as traceable template requirement candidates | docs/plan/backlog/323-collect-template-improvement-requirements.md |
-| [324](324-derive-development-direction-from-accepted-requirements.md) | backlog | Render development direction from explicitly adopted requirements | docs/plan/backlog/324-derive-development-direction-from-accepted-requirements.md |
+| [318](318-preserve-model-evidence-in-agent-logs.md) | backlog | Preserve execution-scoped model evidence through log capture and import | docs/plan/backlog/318-preserve-model-evidence-in-agent-logs.md |
+| [321](321-report-model-evidence-without-usage-reattribution.md) | backlog | Report verified model evidence and gaps without reattributing usage | docs/plan/backlog/321-report-model-evidence-without-usage-reattribution.md |
 
 ## ハーネスのモデル更新への対応
 
 [比較ツールのプラン](../active/319-compare-harness-runs-locally.md)の完了後に、[補助指示の版選択のプラン](320-pin-optional-harness-instructions.md)を開始する。
 共通の要件と権限を保ち、比較記録に基づいて補助指示の採用を判断できるようにする。
 両プランの完了は、実モデルでの性能改善を確認したことを意味しない。
+
+## モデル情報の記録と確認
+
+[318：取得・保存](318-preserve-model-evidence-in-agent-logs.md)で、モデルと推論設定を出典付きで保存する。
+その完了後に[321：確認・集計](321-report-model-evidence-without-usage-reattribution.md)で、取得できた情報、未観測、不一致を表示する。
+両プランは未着手であり、既存ログの自動書き換え、モデル別のトークン配分、実モデルの比較実行は含まない。
