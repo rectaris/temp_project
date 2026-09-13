@@ -1,6 +1,6 @@
 # Check tracked text hygiene in local validation instead of only at the release boundary
 
-status: in_progress
+status: checked
 primary_invariant: Every rule the release boundary enforces on tracked text is reachable from a local validation run, so no tracked-text defect can first become visible after a push.
 task_types:
   - template_workflow
@@ -67,9 +67,16 @@ checked_summary_ja: 追跡テキストの体裁を、公開時ではなく手元
 
 ## Tasks
 
-- [ ] Add scripts/check-text-hygiene.py, which reads the tracked file set, skips files holding a NUL byte, and reports every violation with its path and line.
-- [ ] Register the checker and its suite in required lint and add the command to the deterministic source inventory.
-- [ ] Add tests/test-text-hygiene.py, which proves each rule refuses a constructed defect and that removing a rule fails the suite.
-- [ ] Remove the blank line at end of file from the four named files and add the missing final newline to tests/root-plan-lifecycle.sh.
+- [x] Add scripts/check-text-hygiene.py, which asks Git for the verdict over the whole tracked file set and reports every violation with its path and line.
+- [x] Register the checker and its suite in required lint and add the command to the deterministic source inventory.
+- [x] Add tests/test-text-hygiene.py, which proves each rule refuses a constructed defect and that removing a rule fails the suite.
+- [x] Remove the blank line at end of file from the four named files and add the missing final newline to tests/root-plan-lifecycle.sh.
 
 ## Validation Notes
+
+- The checker does not implement the rule; it compares the empty tree against the index and against the working tree so that `git diff --check` answers for every tracked line. Three review rounds drove this. The first two reviewed a hand-written scanner and returned nine Medium findings that were all the same defect in different places: a private binary probe, a private line-ending inference, a private path decoder and private symlink handling each formed a second opinion that disagreed with Git. Delegating removed the class rather than the instances.
+- Git's exit status is the verdict and its messages are only read for the location, so a message this command cannot parse still refuses. A repository that disables part of the whitespace rule is overridden, and a configured or exported diff program is refused, because the release boundary runs Git with its defaults.
+- Both the index and the working tree are read. A commit records the index, so a defect repaired only in the working tree would otherwise reach the release boundary; a report that names index-only content is marked `(staged)` and asks for the repair to be staged.
+- One rule is added beyond the release boundary: a missing final newline, which Git reports in the patch without refusing. `tests/root-plan-lifecycle.sh` was the single instance.
+- A carriage return is refused as trailing whitespace, which is Git's own treatment. A lone carriage return in the middle of a line is not refused, here or at the release boundary.
+- Every guard was mutation-checked: removing the whitespace reports, the missing-newline reports, the symlink and gitlink mode test, the working-tree root test, the machine-readable path lookup, the pinned whitespace rule, the native-diff flags, the index scope, or the unreadable-message fallback each fails the suite. Guards that survived mutation were removed rather than kept, so the pinned configuration holds only the setting that changes the verdict.

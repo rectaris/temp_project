@@ -4,4 +4,3 @@ interface:
   default_prompt: "Use $project-agent-workflow to set up task routing, planning, validation, and Git hygiene in this repository."
 policy:
   allow_implicit_invocation: true
-

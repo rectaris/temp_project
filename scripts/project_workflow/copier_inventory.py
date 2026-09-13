@@ -50,6 +50,7 @@ SOURCE_REQUIRED = [
     "scripts/check-agent-log-manifest.py",
     "scripts/check-codex-toml.py",
     "scripts/check-yaml.py",
+    "scripts/check-text-hygiene.py",
     "scripts/check-root-agent-policy.py",
     "scripts/compare-harness-runs.py",
     "scripts/check-harness-profile.py",

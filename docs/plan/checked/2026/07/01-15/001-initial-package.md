@@ -18,4 +18,3 @@ validation:
 ## Summary
 
 Created the initial reusable project-agent workflow package with Codex skill metadata, progressive references, installable repository templates, deterministic hook templates, helper agent definitions, and smoke validation.
-
