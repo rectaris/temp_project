@@ -3626,6 +3626,37 @@ def load_parallel_group_module():
     return module
 
 
+def load_planlib_module():
+    """Load the shared plan library that owns the checked-index rules.
+
+    The library ships with this command, so it is resolved from this file
+    rather than from the repository under inspection.
+    """
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "template/.project-agent-workflow/scripts/planlib.py"
+    )
+    if not path.is_file():
+        fail("template/.project-agent-workflow/scripts/planlib.py is required for index policy")
+    spec = importlib.util.spec_from_file_location("root_shared_planlib", path)
+    if spec is None or spec.loader is None:
+        fail("could not load the shared plan library")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_checked_index() -> None:
+    """Apply the shared checked-index rules to this repository's own archive."""
+
+    module = load_planlib_module()
+    try:
+        module.validate_checked_index(ROOT)
+    except module.CheckedIndexError as exc:
+        fail(str(exc))
+
+
 def execution_group_members() -> dict[str, str]:
     """Return every enrolled member plan path mapped to its group description."""
 
@@ -4089,6 +4120,45 @@ def self_test() -> None:
         fail("self-test rejected passing paired threshold")
     if median_for_self_test(failing) <= median_for_self_test(before) * 0.7:
         fail("self-test accepted failing paired threshold")
+    self_test_checked_index()
+
+
+def self_test_checked_index() -> None:
+    """Prove the shared checked-index rules accept and refuse on isolated fixtures."""
+
+    module = load_planlib_module()
+    header = "# Checked Plan Index\n\nid\tpath\n"
+    good = "001\tdocs/plan/checked/2026/07/01-15/001-example.md\n"
+    rejected = (
+        "001\tdocs/plan/checked/001-absent.md\n",
+        "001\tdocs/plan/checked/2026/07/01-15/002-example.md\n",
+        "001\tdocs/plan/checked/../../../outside/001-example.md\n",
+        "001\t/tmp/001-example.md\n",
+        good + good,
+    )
+    with tempfile.TemporaryDirectory(prefix="checked-index-self-test-") as raw_temp:
+        root = Path(raw_temp)
+        archive = root / "docs/plan/checked/2026/07/01-15"
+        archive.mkdir(parents=True)
+        (archive / "001-example.md").write_text("# 001\n", encoding="utf-8")
+        outside = root / "outside"
+        outside.mkdir()
+        (outside / "001-example.md").write_text("# 001\n", encoding="utf-8")
+        index = root / "docs/plan/checked.md"
+        index.write_text(header, encoding="utf-8")
+        module.validate_checked_index(root)
+        index.write_text(header + good, encoding="utf-8")
+        if module.validate_checked_index(root) != [
+            ("001", "docs/plan/checked/2026/07/01-15/001-example.md")
+        ]:
+            fail("self-test lost a valid checked index row")
+        for rows in rejected:
+            index.write_text(header + rows, encoding="utf-8")
+            try:
+                module.validate_checked_index(root)
+            except module.CheckedIndexError:
+                continue
+            fail(f"self-test accepted an invalid checked index row: {rows!r}")
 
 
 def median_for_self_test(values: list[float]) -> float:
@@ -4150,6 +4220,7 @@ def main() -> int:
     check_plan_admission_boundary()
     check_execution_groups()
     check_active_plans()
+    check_checked_index()
     print("root agent policy check passed")
     return 0
 

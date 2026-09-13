@@ -407,6 +407,112 @@ def render_active_index(rows: list[tuple[str, str, str]]) -> str:
 # --- end active plan index grammar ---
 
 
+CHECKED_INDEX_PATH = "docs/plan/checked.md"
+CHECKED_INDEX_TITLE = "# Checked Plan Index"
+CHECKED_INDEX_HEADER = "id\tpath"
+CHECKED_INDEX_ROW_RE = re.compile(r"^\d{3}\t")
+CHECKED_ARCHIVE_COMPONENTS = ("docs", "plan", "checked")
+
+
+class CheckedIndexError(ValueError):
+    """Raised when the checked plan index or one of its targets is not valid."""
+
+
+def parse_checked_index(text: str) -> list[tuple[str, str]]:
+    """Return the id and path of every row in one checked plan index document.
+
+    Only the index structure is judged here. Resolving a row to a file is a
+    separate step so that a caller can report a structural defect without
+    touching the archive.
+    """
+
+    if not text.startswith(f"{CHECKED_INDEX_TITLE}\n"):
+        raise CheckedIndexError(f"{CHECKED_INDEX_PATH} must start with '{CHECKED_INDEX_TITLE}'")
+    if CHECKED_INDEX_HEADER not in text:
+        raise CheckedIndexError("checked index must contain TSV header: id path")
+    rows: list[tuple[str, str]] = []
+    seen_ids: set[str] = set()
+    seen_paths: set[str] = set()
+    for line in text.splitlines():
+        if not CHECKED_INDEX_ROW_RE.match(line):
+            continue
+        columns = line.split("\t")
+        if len(columns) != 2:
+            raise CheckedIndexError(f"bad checked index row: {line}")
+        plan_id, path = columns
+        if plan_id in seen_ids:
+            raise CheckedIndexError(f"duplicate checked index id: {plan_id}")
+        if path in seen_paths:
+            raise CheckedIndexError(f"duplicate checked index path: {path}")
+        seen_ids.add(plan_id)
+        seen_paths.add(path)
+        rows.append((plan_id, path))
+    return rows
+
+
+def checked_index_target(root: Path, plan_id: str, path: str) -> Path:
+    """Resolve one checked index row to its archive file beneath an explicit root.
+
+    A row names a repository-relative archive path. Containment is decided on
+    the written components and on the resolved target, because a lexical prefix
+    alone still permits a parent traversal or a symlink that leaves the archive.
+    The symlink walk starts at the repository root, because a symlink at docs,
+    docs/plan or docs/plan/checked relocates the whole archive while every path
+    below it still looks contained.
+    """
+
+    if not path or path != path.strip():
+        raise CheckedIndexError(f"checked index path is not normalized: {path!r}")
+    if path.startswith("/") or PurePosixPath(path).is_absolute():
+        raise CheckedIndexError(f"checked index path must be repository-relative: {path}")
+    components = path.split("/")
+    if any(component in ("", ".", "..") for component in components):
+        raise CheckedIndexError(
+            f"checked index path must not contain empty or traversal components: {path}"
+        )
+    if len(components) < 4 or tuple(components[:3]) != CHECKED_ARCHIVE_COMPONENTS:
+        raise CheckedIndexError(f"checked index path is outside checked archive: {path}")
+    if not components[-1].startswith(f"{plan_id}-"):
+        raise CheckedIndexError(f"checked index id does not match filename: {plan_id}\t{path}")
+    archive = root.joinpath(*CHECKED_ARCHIVE_COMPONENTS)
+    walked = root
+    for component in components:
+        walked = walked / component
+        if walked.is_symlink():
+            raise CheckedIndexError(f"checked index path passes through a symlink: {path}")
+    target = root / path
+    if not target.is_file():
+        raise CheckedIndexError(f"checked index points to missing file: {path}")
+    try:
+        resolved_archive = archive.resolve(strict=True)
+        resolved_target = target.resolve(strict=True)
+    except OSError as exc:
+        raise CheckedIndexError(f"checked index target is unreadable: {path}") from exc
+    if resolved_archive not in resolved_target.parents:
+        raise CheckedIndexError(f"checked index path is outside checked archive: {path}")
+    return target
+
+
+def validate_checked_index(root: Path) -> list[tuple[str, str]]:
+    """Validate the checked plan index and every archive target beneath root.
+
+    Only the index relationship is judged. Archive content keeps whatever
+    manifest vintage it was written with.
+    """
+
+    index_path = root / CHECKED_INDEX_PATH
+    if not index_path.is_file():
+        raise CheckedIndexError(f"missing {CHECKED_INDEX_PATH}")
+    try:
+        text = index_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CheckedIndexError(f"{CHECKED_INDEX_PATH} is not readable UTF-8 text: {exc}") from exc
+    rows = parse_checked_index(text)
+    for plan_id, path in rows:
+        checked_index_target(root, plan_id, path)
+    return rows
+
+
 def atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)

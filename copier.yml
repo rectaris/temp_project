@@ -16,6 +16,7 @@ _envops:
 _exclude:
   - "__pycache__"
   - "*.pyc"
+  - "[% if _copier_operation != 'copy' %]docs/agent/harness-profile.json[% else %]__never_exclude_harness_profile__[% endif %]"
   - "[% if codex_hooks_mode != 'enable_local_logging' %].codex/hooks.json[% else %]__never_exclude_hooks_json__[% endif %]"
   - "[% if skillspector_mode != 'document_optional' %].project-agent-workflow/scripts/skillspector-scan.sh[% else %]__never_exclude_skillspector__[% endif %]"
   - "[% if ci_autofix_mode == 'disabled' %].github/workflows/codex-ci-autofix.yml[% else %]__never_exclude_ci_autofix__[% endif %]"
@@ -125,7 +126,7 @@ project_slug:
   type: str
   help: エージェント文書で使う安定したリポジトリ識別子を入力してください。
   default: "example-project"
-  validator: "[% if not (project_slug | regex_search('^[a-z0-9][a-z0-9-]*$')) %]slug は小文字英数字で始め、小文字英数字とハイフンだけを使ってください。[% endif %]"
+  validator: "[% if not (project_slug | regex_search('^[a-z0-9][a-z0-9-]*$')) %]slug は小文字英数字で始め、小文字英数字とハイフンだけを使ってください。[% elif project_slug | length > 64 %]slug は64文字以内で入力してください。[% endif %]"
 
 project_purpose:
   type: str
@@ -149,6 +150,14 @@ human_report_mode:
   choices:
     無効にする: disabled
     AI エージェントが判断してローカル生成する: agent_select_local
+  default: "agent_select_local"
+
+template_feedback_mode:
+  type: str
+  help: コピー先で見つけたテンプレートの改善点を、ローカルの記録として残す機能を選んでください。
+  choices:
+    無効にする: disabled
+    AI エージェントが判断してローカルに下書きを用意する: agent_select_local
   default: "agent_select_local"
 
 human_report_shared_mode:

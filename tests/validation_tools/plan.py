@@ -1,5 +1,6 @@
 """Plan validation-command tests."""
 
+import ast
 import contextlib
 import hashlib
 import io
@@ -3962,6 +3963,616 @@ class PlanValidationCommandsTest(unittest.TestCase):
             with self.subTest(command=command):
                 with self.assertRaises(module.ValidationCommandError):
                     module.parse_validation_command(command)
+
+    RESTRUCTURE_MODULES = (
+        ("root", ROOT / "scripts/restructure-plan.py"),
+        (
+            "generated",
+            ROOT / "template/.project-agent-workflow/scripts/restructure-plan.py",
+        ),
+    )
+
+    CHECKED_PATH = "docs/plan/checked/2026/07/01-15/001-example.md"
+    ACTIVE_PATH = "docs/plan/active/001-example.md"
+
+    ARCHIVE_VINTAGES = {
+        "manifest field": "# Example\n\nstatus: checked\ntask_type: template_workflow\n",
+        "completed manifest field": "# Example\n\nstatus: completed\n",
+        "manifest bullet under a heading": (
+            "# Example\n\n## Manifest\n\n- `status`: `checked`\n- `task_type`: `planning_docs`\n"
+        ),
+        "no status anywhere": "# Example\n\nRecorded before the manifest existed.\n",
+        "status named in prose but never declared": (
+            "# Example\n\n## Notes\n\n- `status`: `in_progress` was the old value\n"
+        ),
+    }
+
+    REFUSED_ARCHIVES = {
+        "absent archive": None,
+        "open status": "# Example\n\nstatus: in_progress\n",
+        "stopped status": "# Example\n\nstatus: replan_required\n",
+        "status declared and left blank": "# Example\n\nstatus:\ntask_type: template_workflow\n",
+        "open status in a manifest bullet": (
+            "# Example\n\n## Manifest\n\n- `status`: `in_progress`\n"
+        ),
+        "open status declared below a heading": (
+            "# Example\n\n## Manifest\n\nstatus: in_progress\n"
+        ),
+        "half finalized status": "# Example\n\nstatus: ready_to_archive\n",
+        "empty archive": "",
+        "whitespace only archive": "\n\n",
+    }
+
+    def build_archive_root(self, directory: Path, archive_text: str | None) -> Path:
+        root = directory / "repo"
+        (root / "docs/plan/checked/2026/07/01-15").mkdir(parents=True)
+        (root / "docs/plan/checked.md").write_text(
+            f"# Checked Plan Index\n\nid\tpath\n001\t{self.CHECKED_PATH}\n",
+            encoding="utf-8",
+        )
+        if archive_text is not None:
+            (root / self.CHECKED_PATH).write_text(archive_text, encoding="utf-8")
+        return root
+
+    @contextlib.contextmanager
+    def restructure_at(self, name: str, path: Path, root: Path):
+        module = load_module(path, f"restructure_vintage_{name}_{root.parent.name}")
+        previous = module.ROOT
+        module.ROOT = root
+        try:
+            yield module
+        finally:
+            module.ROOT = previous
+
+    def test_every_closed_vintage_resolves_its_activation_reference(self) -> None:
+        for name, source in self.RESTRUCTURE_MODULES:
+            for label, archive_text in self.ARCHIVE_VINTAGES.items():
+                with self.subTest(module=name, vintage=label):
+                    with tempfile.TemporaryDirectory() as raw:
+                        root = self.build_archive_root(Path(raw), archive_text)
+                        with self.restructure_at(name, source, root) as module:
+                            self.assertEqual(
+                                module.activation_checked_pairs(),
+                                {self.ACTIVE_PATH: self.CHECKED_PATH},
+                            )
+
+    def test_an_absent_or_open_archive_is_still_refused(self) -> None:
+        for name, source in self.RESTRUCTURE_MODULES:
+            for label, archive_text in self.REFUSED_ARCHIVES.items():
+                with self.subTest(module=name, archive=label):
+                    with tempfile.TemporaryDirectory() as raw:
+                        root = self.build_archive_root(Path(raw), archive_text)
+                        with self.restructure_at(name, source, root) as module:
+                            with self.assertRaises(module.RestructureError) as caught:
+                                module.activation_checked_pairs()
+                        self.assertIn(
+                            "activation checked archive is missing or stale",
+                            str(caught.exception),
+                        )
+
+    def test_a_checked_predecessor_of_every_closed_vintage_resolves(self) -> None:
+        """The predecessor check reads the same archive vintages as activation."""
+
+        plan_text = (
+            "# Successor\n\nstatus: in_progress\npredecessor_plans:\n"
+            f"  - {self.CHECKED_PATH}\n"
+        )
+        for name, source in self.RESTRUCTURE_MODULES:
+            for label, archive_text in self.ARCHIVE_VINTAGES.items():
+                with self.subTest(module=name, vintage=label):
+                    with tempfile.TemporaryDirectory() as raw:
+                        root = self.build_archive_root(Path(raw), archive_text)
+                        (root / "docs/plan/active").mkdir(parents=True)
+                        active = "docs/plan/active/281-successor.md"
+                        (root / active).write_text(plan_text, encoding="utf-8")
+                        with self.restructure_at(name, source, root) as module:
+                            module.validate_active_predecessors(
+                                {active: ("in_progress", module.parse_manifest(plan_text))}
+                            )
+
+    def test_a_checked_predecessor_with_an_open_status_is_still_refused(self) -> None:
+        plan_text = (
+            "# Successor\n\nstatus: in_progress\npredecessor_plans:\n"
+            f"  - {self.CHECKED_PATH}\n"
+        )
+        for name, source in self.RESTRUCTURE_MODULES:
+            with self.subTest(module=name):
+                with tempfile.TemporaryDirectory() as raw:
+                    root = self.build_archive_root(
+                        Path(raw), "# Example\n\nstatus: in_progress\n"
+                    )
+                    (root / "docs/plan/active").mkdir(parents=True)
+                    active = "docs/plan/active/281-successor.md"
+                    (root / active).write_text(plan_text, encoding="utf-8")
+                    with self.restructure_at(name, source, root) as module:
+                        with self.assertRaises(module.RestructureError) as caught:
+                            module.validate_active_predecessors(
+                                {active: ("in_progress", module.parse_manifest(plan_text))}
+                            )
+                    self.assertIn("predecessor is not checked", str(caught.exception))
+
+    def test_a_record_outside_the_checked_archive_is_never_backfilled(self) -> None:
+        for name, source in self.RESTRUCTURE_MODULES:
+            with self.subTest(module=name):
+                module = load_module(source, f"restructure_scope_{name}")
+                text = "# Example\n\nRecorded without a status.\n"
+                self.assertEqual(
+                    module.archived_closed_status(text, self.CHECKED_PATH), "checked"
+                )
+                self.assertEqual(module.archived_closed_status(text, self.ACTIVE_PATH), "")
+                self.assertFalse(module.archive_is_closed(text, self.ACTIVE_PATH))
+
+    def test_the_closed_values_are_the_linter_set_without_the_open_statuses(self) -> None:
+        """A half-finalized archive stays a defect, so an open status is never closed."""
+
+        linter = (
+            ROOT / "template/.project-agent-workflow/scripts/lint-plan-docs.py"
+        ).read_text(encoding="utf-8")
+        match = re.search(r"CLOSED_STATUS_VALUES = \{([^}]*)\}", linter)
+        self.assertIsNotNone(match)
+        linter_values = {
+            value.strip().strip('"') for value in match.group(1).split(",") if value.strip()
+        }
+        for name, source in self.RESTRUCTURE_MODULES:
+            with self.subTest(module=name):
+                module = load_module(source, f"restructure_values_{name}")
+                self.assertEqual(
+                    module.CLOSED_ARCHIVE_STATUS_VALUES,
+                    linter_values - module.ACTIVE_PLAN_STATUSES,
+                )
+                self.assertEqual(module.CLOSED_ARCHIVE_STATUS_VALUES, {"checked", "completed"})
+
+
+    CHECKED_INDEX_HEADER = "# Checked Plan Index\n\nid\tpath\n"
+    CHECKED_ARCHIVE_ROW = "001\tdocs/plan/checked/2026/07/01-15/001-example.md\n"
+    LEGACY_ARCHIVE_RECORD = (
+        "task_type: tooling\n"
+        "target_files:\n"
+        "  - scripts/example.sh\n"
+        "expected_output: patch-only\n"
+        "checked_summary_ja: 旧世代のアーカイブ記録。\n"
+        "\n# 001 example\n\n## Goal\n\nHistorical record.\n"
+    )
+
+    def build_checked_index_fixture(self, root: Path) -> Path:
+        """Install one dated archive record, one outside record and two symlinks."""
+
+        archive = root / "docs/plan/checked/2026/07/01-15"
+        archive.mkdir(parents=True)
+        (archive / "001-example.md").write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+        (archive / "001-other.md").write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+        (archive / "002-example.md").write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+        outside = root / "outside"
+        outside.mkdir()
+        (outside / "001-example.md").write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+        (outside / "dated").mkdir()
+        (outside / "dated/001-example.md").write_text(
+            self.LEGACY_ARCHIVE_RECORD, encoding="utf-8"
+        )
+        checked = root / "docs/plan/checked"
+        (checked / "001-linked.md").symlink_to(outside / "001-example.md")
+        (checked / "escape").symlink_to(outside / "dated")
+        (archive / "001-inside-link.md").symlink_to(archive / "001-example.md")
+        (checked / "2026/07/16-31").symlink_to(archive)
+        index = root / "docs/plan/checked.md"
+        index.write_text(self.CHECKED_INDEX_HEADER, encoding="utf-8")
+        return index
+
+    def rejected_checked_index_rows(self) -> dict[str, tuple[str, str]]:
+        """Map each rejected index to the rule that must refuse it.
+
+        Each case names the message of one rule, so a removed rule cannot stay
+        hidden behind another rule that happens to refuse the same row.
+        """
+
+        return {
+            "missing target": (
+                "001\tdocs/plan/checked/2026/07/01-15/001-absent.md\n",
+                "checked index points to missing file",
+            ),
+            "duplicate id": (
+                self.CHECKED_ARCHIVE_ROW
+                + "001\tdocs/plan/checked/2026/07/01-15/001-other.md\n",
+                "duplicate checked index id",
+            ),
+            "duplicate path": (
+                self.CHECKED_ARCHIVE_ROW
+                + "002\tdocs/plan/checked/2026/07/01-15/001-example.md\n",
+                "duplicate checked index path",
+            ),
+            "wrong filename id": (
+                "002\tdocs/plan/checked/2026/07/01-15/001-example.md\n",
+                "checked index id does not match filename",
+            ),
+            "outside the archive": (
+                "001\toutside/001-example.md\n",
+                "checked index path is outside checked archive",
+            ),
+            "parent traversal": (
+                "001\tdocs/plan/checked/../../../outside/001-example.md\n",
+                "must not contain empty or traversal components",
+            ),
+            "absolute path": (
+                "001\t/tmp/001-example.md\n",
+                "checked index path must be repository-relative",
+            ),
+            "symlinked file leaving the archive": (
+                "001\tdocs/plan/checked/001-linked.md\n",
+                "checked index path passes through a symlink",
+            ),
+            "symlinked directory leaving the archive": (
+                "001\tdocs/plan/checked/escape/001-example.md\n",
+                "checked index path passes through a symlink",
+            ),
+            "symlinked file inside the archive": (
+                "001\tdocs/plan/checked/2026/07/01-15/001-inside-link.md\n",
+                "checked index path passes through a symlink",
+            ),
+            "symlinked directory inside the archive": (
+                "001\tdocs/plan/checked/2026/07/16-31/001-example.md\n",
+                "checked index path passes through a symlink",
+            ),
+            "bad row shape": (
+                "001\tdocs/plan/checked/2026/07/01-15/001-example.md\tchecked\n",
+                "bad checked index row",
+            ),
+        }
+
+    def snapshot_fixture(self, root: Path) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(root)): path.read_bytes()
+            for path in sorted(root.rglob("*"))
+            if path.is_file() and not path.is_symlink()
+        }
+
+    def test_root_policy_refuses_broken_checked_index_targets(self) -> None:
+        for case, (rows, message) in self.rejected_checked_index_rows().items():
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    index = self.build_checked_index_fixture(root)
+                    index.write_text(self.CHECKED_INDEX_HEADER + rows, encoding="utf-8")
+                    before = self.snapshot_fixture(root)
+                    module = load_module(
+                        self.ROOT_POLICY, f"root_checked_{case.replace(' ', '_')}"
+                    )
+                    module.ROOT = root
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        with self.assertRaises(SystemExit):
+                            module.check_checked_index()
+                    self.assertIn(message, stderr.getvalue())
+                    self.assertEqual(self.snapshot_fixture(root), before)
+
+    def test_root_policy_accepts_valid_checked_indexes(self) -> None:
+        for case, rows in {"empty": "", "populated": self.CHECKED_ARCHIVE_ROW}.items():
+            with self.subTest(accepted=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    index = self.build_checked_index_fixture(root)
+                    index.write_text(self.CHECKED_INDEX_HEADER + rows, encoding="utf-8")
+                    before = self.snapshot_fixture(root)
+                    module = load_module(
+                        self.ROOT_POLICY, f"root_checked_ok_{case}"
+                    )
+                    module.ROOT = root
+                    module.check_checked_index()
+                    self.assertEqual(self.snapshot_fixture(root), before)
+
+    def test_generated_lint_shares_the_checked_index_rules(self) -> None:
+        for case, (rows, message) in self.rejected_checked_index_rows().items():
+            with self.subTest(rejected=case):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    scripts = self.build_generated_index_fixture(
+                        root, self.ACTIVE_INDEX_POPULATED
+                    )
+                    index = self.build_checked_index_fixture(root)
+                    index.write_text(self.CHECKED_INDEX_HEADER + rows, encoding="utf-8")
+                    before = self.snapshot_fixture(root)
+                    module = self.load_generated_plan_module(
+                        root, scripts, "lint-plan-docs.py", f"gen_checked_{case.replace(' ', '_')}"
+                    )
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        with self.assertRaises(SystemExit):
+                            module.lint_checked_index()
+                    self.assertIn(message, stderr.getvalue())
+                    self.assertEqual(self.snapshot_fixture(root), before)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts = self.build_generated_index_fixture(root, self.ACTIVE_INDEX_POPULATED)
+            index = self.build_checked_index_fixture(root)
+            index.write_text(
+                self.CHECKED_INDEX_HEADER + self.CHECKED_ARCHIVE_ROW, encoding="utf-8"
+            )
+            before = self.snapshot_fixture(root)
+            module = self.load_generated_plan_module(
+                root, scripts, "lint-plan-docs.py", "gen_checked_accepted"
+            )
+            module.lint_checked_index()
+            self.assertEqual(self.snapshot_fixture(root), before)
+
+    def test_the_shared_check_reads_an_archive_older_than_todays_manifest(self) -> None:
+        """The index relationship is judged; archive vintage is not re-linted."""
+
+        module = load_module(PLANLIB, "shared_checked_index_vintage")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index = self.build_checked_index_fixture(root)
+            index.write_text(
+                self.CHECKED_INDEX_HEADER + self.CHECKED_ARCHIVE_ROW, encoding="utf-8"
+            )
+            record = root / "docs/plan/checked/2026/07/01-15/001-example.md"
+            self.assertNotIn("status:", record.read_text(encoding="utf-8"))
+            before = self.snapshot_fixture(root)
+            self.assertEqual(
+                module.validate_checked_index(root),
+                [("001", "docs/plan/checked/2026/07/01-15/001-example.md")],
+            )
+            self.assertEqual(self.snapshot_fixture(root), before)
+
+    def test_the_repository_checked_index_resolves_every_archived_plan(self) -> None:
+        module = load_module(PLANLIB, "repository_checked_index")
+        rows = module.validate_checked_index(ROOT)
+        self.assertGreater(len(rows), 0)
+        for plan_id, path in rows:
+            self.assertTrue(path.startswith("docs/plan/checked/"), path)
+            self.assertTrue(Path(path).name.startswith(f"{plan_id}-"), path)
+
+    def test_the_root_policy_run_carries_the_checked_index_call(self) -> None:
+        """The call must stay an unconditional statement on the ordinary path."""
+
+        tree = ast.parse(self.ROOT_POLICY.read_text(encoding="utf-8"))
+        main = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        called = [
+            node.value.func.id
+            for node in main.body
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+        ]
+        self.assertIn("check_checked_index", called)
+        self.assertLess(called.index("check_active_plans"), called.index("check_checked_index"))
+
+    def test_a_relocated_archive_directory_is_refused(self) -> None:
+        """A symlink at docs, docs/plan or checked/ moves the whole archive."""
+
+        module = load_module(PLANLIB, "relocated_checked_archive")
+        for relocated in ("docs", "docs/plan", "docs/plan/checked"):
+            with self.subTest(relocated=relocated):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    real = root / "elsewhere"
+                    (real / "docs/plan/checked/2026/07/01-15").mkdir(parents=True)
+                    (root / relocated).parent.mkdir(parents=True, exist_ok=True)
+                    (root / relocated).symlink_to(real / relocated)
+                    record = root / "docs/plan/checked/2026/07/01-15/001-example.md"
+                    record.write_text(self.LEGACY_ARCHIVE_RECORD, encoding="utf-8")
+                    index = root / "docs/plan/checked.md"
+                    index.parent.mkdir(parents=True, exist_ok=True)
+                    index.write_text(
+                        self.CHECKED_INDEX_HEADER + self.CHECKED_ARCHIVE_ROW, encoding="utf-8"
+                    )
+                    with self.assertRaises(module.CheckedIndexError):
+                        module.validate_checked_index(root)
+
+
+class PlanOverviewTest(unittest.TestCase):
+    """Behavioral tests for the read-only plan overview entrypoints."""
+
+    ROOT_ENTRYPOINT = ROOT / "scripts/render-plan-overview.py"
+    GENERATED_ENTRYPOINT = ROOT / "template/.project-agent-workflow/scripts/render-plan-overview.py"
+    PLAN_MANIFEST = "status: {status}\nprimary_invariant: example\n"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.repository = Path(self.temp.name)
+        for relative in ("docs/plan/active", "docs/plan/backlog", "docs/plan/checked/2026/01/01-15"):
+            (self.repository / relative).mkdir(parents=True)
+        self.planlib = load_module(PLANLIB, "plan_overview_reference_planlib")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def write(self, relative: str, content: str) -> Path:
+        path = self.repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def write_plan(self, relative: str, *, status: str, title: str = "Example plan") -> Path:
+        return self.write(relative, f"# {title}\n\n" + self.PLAN_MANIFEST.format(status=status))
+
+    def write_index(self, text: str) -> Path:
+        path = self.repository / "docs/plan/plan.md"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def run_overview(self, *arguments: str, entrypoint: Path | None = None):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(self.ROOT_ENTRYPOINT if entrypoint is None else entrypoint),
+                "--root",
+                str(self.repository),
+                *arguments,
+            ],
+            check=False,
+            text=True,
+            cwd=tempfile.gettempdir(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def snapshot(self) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(self.repository)): path.read_bytes()
+            for path in sorted(self.repository.rglob("*"))
+            if path.is_file()
+        }
+
+    def planlib_accepts(self, text: str) -> bool:
+        try:
+            self.planlib.parse_active_index(text)
+        except self.planlib.ActiveIndexError:
+            return False
+        return True
+
+    def assert_refused(self, *arguments: str) -> None:
+        """Require both entrypoints to refuse without output or a rewrite."""
+
+        before = self.snapshot()
+        for entrypoint in (self.ROOT_ENTRYPOINT, self.GENERATED_ENTRYPOINT):
+            with self.subTest(entrypoint=entrypoint.name):
+                result = self.run_overview(*arguments, entrypoint=entrypoint)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("plan overview failed", result.stderr)
+                self.assertEqual(result.stdout, "")
+        self.assertEqual(self.snapshot(), before)
+
+    def assert_accepted(self, *arguments: str) -> str:
+        before = self.snapshot()
+        outputs = set()
+        for entrypoint in (self.ROOT_ENTRYPOINT, self.GENERATED_ENTRYPOINT):
+            with self.subTest(entrypoint=entrypoint.name):
+                result = self.run_overview(*arguments, entrypoint=entrypoint)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                outputs.add(result.stdout)
+        self.assertEqual(len(outputs), 1)
+        self.assertEqual(self.snapshot(), before)
+        return outputs.pop()
+
+    def populated_index(self) -> str:
+        self.write_plan("docs/plan/active/281-example.md", status="in_progress")
+        return "# Active Plan\n\nid\tpath\tstatus\n281\tdocs/plan/active/281-example.md\tin_progress\n"
+
+    def test_blank_active_index_is_refused(self) -> None:
+        self.write_index("")
+        self.assertFalse(self.planlib_accepts(""))
+        self.assert_refused("--json")
+
+    def test_empty_marker_with_trailing_content_is_refused(self) -> None:
+        text = "# Active Plan\n\nNo active development items.\nstray trailing content\n"
+        self.write_index(text)
+        self.assertFalse(self.planlib_accepts(text))
+        self.assert_refused("--json")
+
+    def test_missing_active_index_still_reports_no_active_rows(self) -> None:
+        self.write_plan("docs/plan/backlog/290-waiting.md", status="backlog")
+        self.assertFalse((self.repository / "docs/plan/plan.md").exists())
+        rows = json.loads(self.assert_accepted("--json"))
+        self.assertEqual([row["id"] for row in rows], ["290"])
+
+    def test_canonical_documents_agree_with_the_shared_parser(self) -> None:
+        accepted = {
+            "empty": "# Active Plan\n\nNo active development items.\n",
+            "populated": self.populated_index(),
+        }
+        for label, text in accepted.items():
+            with self.subTest(document=label):
+                self.write_index(text)
+                self.assertTrue(self.planlib_accepts(text))
+                self.assert_accepted("--json")
+
+    def test_malformed_documents_agree_with_the_shared_parser(self) -> None:
+        self.write_plan("docs/plan/active/281-example.md", status="in_progress")
+        row = "281\tdocs/plan/active/281-example.md\tin_progress"
+        rejected = {
+            "crlf": "# Active Plan\r\n\r\nNo active development items.\r\n",
+            "missing final newline": "# Active Plan\n\nNo active development items.",
+            "double final newline": "# Active Plan\n\nNo active development items.\n\n",
+            "header only": f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n",
+            "missing blank line": f"# Active Plan\n{self.planlib.ACTIVE_INDEX_HEADER}\n{row}\n",
+            "duplicate id": f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n{row}\n{row}\n",
+            "wrong id": (
+                f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n"
+                "282\tdocs/plan/active/281-example.md\tin_progress\n"
+            ),
+            "invalid status": (
+                f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n"
+                "281\tdocs/plan/active/281-example.md\tbacklog\n"
+            ),
+            "literal backslash-t": (
+                "# Active Plan\n\nid\\tpath\\tstatus\n"
+                "281\\tdocs/plan/active/281-example.md\\tin_progress\n"
+            ),
+            "unadopted prose": "Plans we are working on right now.\n",
+            "trailing row content": (
+                f"# Active Plan\n\n{self.planlib.ACTIVE_INDEX_HEADER}\n{row}\nstray note\n"
+            ),
+        }
+        for label, text in rejected.items():
+            with self.subTest(document=label):
+                self.write_index(text)
+                self.assertFalse(self.planlib_accepts(text), label)
+                self.assert_refused("--json")
+
+    def test_index_status_disagreement_is_refused(self) -> None:
+        self.write_plan("docs/plan/active/281-example.md", status="deferred")
+        self.write_index(
+            "# Active Plan\n\nid\tpath\tstatus\n281\tdocs/plan/active/281-example.md\tin_progress\n"
+        )
+        self.assert_refused("--json")
+
+    def test_index_row_without_its_plan_file_is_refused(self) -> None:
+        self.write_index(
+            "# Active Plan\n\nid\tpath\tstatus\n281\tdocs/plan/active/281-example.md\tin_progress\n"
+        )
+        self.assert_refused("--json")
+
+    def test_missing_requested_id_is_refused(self) -> None:
+        self.write_index("# Active Plan\n\nNo active development items.\n")
+        self.assert_refused("--json", "299")
+
+    def test_duplicate_lifecycle_files_for_one_id_are_refused(self) -> None:
+        self.write_index("# Active Plan\n\nNo active development items.\n")
+        self.write_plan("docs/plan/backlog/290-waiting.md", status="backlog")
+        self.write_plan("docs/plan/checked/2026/01/01-15/290-waiting.md", status="checked")
+        self.assert_refused("--json", "290")
+
+    def test_archived_and_shelved_ids_resolve(self) -> None:
+        self.write_index("# Active Plan\n\nNo active development items.\n")
+        self.write_plan("docs/plan/checked/2026/01/01-15/291-done.md", status="checked")
+        self.write_plan("docs/plan/replanned/2026/01/01-15/292-replaced.md", status="replanned")
+        self.write_plan("docs/plan/shelved/293-shelved.md", status="shelved")
+        rows = json.loads(self.assert_accepted("--json", "291", "292", "293"))
+        self.assertEqual(
+            [(row["id"], row["status"]) for row in rows],
+            [("291", "checked"), ("292", "replanned"), ("293", "shelved")],
+        )
+
+    def test_empty_backlog_renders_an_empty_table(self) -> None:
+        self.write_index("# Active Plan\n\nNo active development items.\n")
+        rendered = self.assert_accepted("--relative-to", "docs/plan/backlog/README.md")
+        self.assertEqual(rendered, "| id | status | title | path |\n| --- | --- | --- | --- |\n")
+
+    def test_markdown_links_stay_relative_to_the_report_path(self) -> None:
+        self.write_index(self.populated_index())
+        self.write_plan("docs/plan/backlog/290-waiting.md", status="backlog", title="Waiting plan")
+        rendered = self.assert_accepted("--relative-to", "docs/plan/backlog/README.md")
+        self.assertIn("[290](290-waiting.md)", rendered)
+        rendered_from_root = self.assert_accepted("--relative-to", "README.md")
+        self.assertIn("[290](docs/plan/backlog/290-waiting.md)", rendered_from_root)
+
+    def test_active_row_is_resolved_for_a_requested_id(self) -> None:
+        self.write_index(self.populated_index())
+        rows = json.loads(self.assert_accepted("--json", "281"))
+        self.assertEqual(
+            [(row["id"], row["status"], row["path"]) for row in rows],
+            [("281", "in_progress", "docs/plan/active/281-example.md")],
+        )
+
+    def test_the_overview_no_longer_carries_its_own_index_grammar(self) -> None:
+        source = (ROOT / "template/.project-agent-workflow/scripts/plan_overview.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("No active development items.", source)
+        self.assertIn("planlib", source)
 
 
 if __name__ == "__main__":

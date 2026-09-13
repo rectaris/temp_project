@@ -30,6 +30,17 @@ from .support import (
 )
 
 
+def run_stop_reminder(hook: Path, repo: Path, payload: dict | None = None) -> str:
+    """Assert the conversation can end and return its read-only diagnostic."""
+    result = subprocess.run(
+        ["python3", str(hook)], input=json.dumps(payload or {}), cwd=repo,
+        text=True, capture_output=True, timeout=20, check=False,
+    )
+    if result.returncode != 0 or result.stdout != "{}\n":
+        raise AssertionError(f"Stop must allow the first turn: {result}")
+    return result.stderr
+
+
 class RecognizedInvocationCases:
     """A lifecycle file name is only a write when something actually runs it."""
 
@@ -430,19 +441,18 @@ class TaskWorktreeGateTest(unittest.TestCase):
     def test_root_and_template_pre_commit_hooks_are_identical(self) -> None:
         self.assertEqual(PRE_COMMIT.read_bytes(), TEMPLATE_PRE_COMMIT.read_bytes())
 
-    def test_stop_gate_withholds_success_while_a_task_worktree_remains(self) -> None:
+    def test_stop_gate_allows_conversation_while_a_task_worktree_remains(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
             worktree, records = bind_direct_task_worktree(repo, base / "managed")
             try:
-                output = run_hook(ROOT_STOP_REVIEW, {}, cwd=worktree)
+                output = run_stop_reminder(ROOT_STOP_REVIEW, worktree)
             finally:
                 for record in records:
                     record.unlink(missing_ok=True)
-        self.assertEqual(output["decision"], "block")
-        self.assertIn(str(worktree), output["reason"])
-        self.assertIn("publish", output["reason"])
+        self.assertIn(str(worktree), output)
+        self.assertIn("publish", output)
 
     def test_lifecycle_commands_refuse_a_governed_run_outside_a_task_worktree(self) -> None:
         commands = {
@@ -470,38 +480,30 @@ class TaskWorktreeGateTest(unittest.TestCase):
                     self.assertIn(action, result.stderr)
                     self.assertIn("pre-existing checkout", result.stderr)
 
-    def test_stop_gate_blocks_from_the_pre_existing_checkout(self) -> None:
-        """Retained state belongs to the repository, not to the current directory.
-
-        A session usually ends in the pre-existing checkout. A completion check
-        that asked only about that directory reported no binding and allowed a
-        success response while the task worktree and its temporary branch were
-        both still present.
-        """
+    def test_stop_gate_reminds_from_the_pre_existing_checkout(self) -> None:
+        """Another session's retained task must not prevent a conversational reply."""
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
             worktree, records = bind_direct_task_worktree(repo, base / "managed")
             try:
-                output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
+                output = run_stop_reminder(ROOT_STOP_REVIEW, repo)
             finally:
                 for record in records:
                     record.unlink(missing_ok=True)
-        self.assertEqual(output["decision"], "block")
-        self.assertIn(str(worktree), output["reason"])
-        self.assertIn("publish", output["reason"])
+        self.assertIn(str(worktree), output)
+        self.assertIn("publish", output)
 
-    def test_stop_gate_blocks_when_the_shipped_guard_cannot_answer(self) -> None:
+    def test_stop_gate_allows_when_the_shipped_guard_cannot_answer(self) -> None:
         """An unknown answer is not evidence that the task was retired."""
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = init_guarded_repository(Path(tmp))
             guard = repo / "scripts/project_workflow/worktree_guard.py"
             guard.write_text("raise SystemExit(3)\n", encoding="utf-8")
-            output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
-        self.assertEqual(output["decision"], "block")
-        self.assertIn("retained state", output["reason"])
+            output = run_stop_reminder(ROOT_STOP_REVIEW, repo)
+        self.assertIn("retained state", output)
 
     def test_pre_tool_gate_blocks_when_a_shipped_guard_cannot_load(self) -> None:
         """A shipped guard that fails to import is a broken boundary, not an absent one."""
@@ -559,13 +561,12 @@ class TaskWorktreeGateTest(unittest.TestCase):
             worktree, records = bind_direct_task_worktree(repo, base / "managed")
             try:
                 shutil.rmtree(worktree)
-                output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
+                output = run_stop_reminder(ROOT_STOP_REVIEW, repo)
             finally:
                 for record in records:
                     record.unlink(missing_ok=True)
-        self.assertEqual(output["decision"], "block")
-        self.assertIn("retire", output["reason"])
-        self.assertNotIn("publish", output["reason"])
+        self.assertIn("retire", output)
+        self.assertNotIn("publish", output)
 
     def test_stop_gate_allows_success_once_no_task_worktree_is_bound(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -573,180 +574,114 @@ class TaskWorktreeGateTest(unittest.TestCase):
             output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
         self.assertEqual(output, {})
 
-    def test_stop_gate_bounds_identical_blocks_across_linked_worktrees(self) -> None:
+    def test_stop_allows_first_and_repeated_turns_across_sessions_and_worktrees(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
             worktree, records = bind_direct_task_worktree(repo, base / "managed")
+            other, other_records = bind_direct_task_worktree(repo, base / "managed", "author-plan")
+            records += other_records
             snapshots = {path: path.read_bytes() for path in records if path.is_file()}
             try:
-                outputs = [
-                    run_hook(hook, {}, cwd=cwd)
-                    for hook, cwd in (
-                        (ROOT_STOP_REVIEW, repo),
-                        (STOP_REVIEW, worktree),
-                        (ROOT_STOP_REVIEW, worktree),
-                        (STOP_REVIEW, repo),
-                        (ROOT_STOP_REVIEW, repo),
-                    )
-                ]
-                for output in outputs[:3]:
-                    self.assertEqual(output["decision"], "block")
-                    self.assertEqual(output["reason"], outputs[0]["reason"])
-                self.assertEqual(outputs[3:], [{}, {}])
-                self.assertTrue(worktree.is_dir())
+                for hook in (ROOT_STOP_REVIEW, STOP_REVIEW):
+                    for cwd in (repo, worktree, other):
+                        for session in (None, "implementation", "conversation", "authoring"):
+                            with self.subTest(hook=hook, cwd=cwd, session=session):
+                                payload = {"session_id": session} if session else {}
+                                reminder = run_stop_reminder(hook, cwd, payload)
+                                self.assertIn("advisory only", reminder)
+                                self.assertIn("publish", reminder)
                 for path, content in snapshots.items():
                     self.assertEqual(path.read_bytes(), content)
-                self.assertEqual(
-                    subprocess.run(
-                        ["git", "show-ref", "--verify", "refs/heads/task/gate-task"],
-                        cwd=repo, stdout=subprocess.DEVNULL, check=False,
-                    ).returncode,
-                    0,
-                )
-                state = repo / ".git/project-agent-workflow-stop-repetition.json"
-                self.assertEqual(state.stat().st_mode & 0o777, 0o600)
-                self.assertNotIn(str(worktree), state.read_text(encoding="utf-8"))
+                for cwd in (worktree, other):
+                    self.assertTrue(cwd.is_dir())
+                    self.assertEqual(subprocess.run(
+                        ["git", "status", "--porcelain"], cwd=cwd, capture_output=True,
+                        text=True, check=True,
+                    ).stdout, "")
+                self.assertFalse((repo / ".git/project-agent-workflow-stop-repetition.json").exists())
+                # Existing unrelated work does not grant writes in the source
+                # checkout or prevent writes in another properly bound task.
+                for cwd in (worktree, other):
+                    self.assertEqual(run_hook(ROOT_PRE_TOOL, {"cmd": "git add intended.txt"}, cwd=cwd), {})
+                self.assertEqual(run_hook(ROOT_PRE_TOOL, {"cmd": "git add intended.txt"}, cwd=repo)["decision"], "block")
             finally:
                 for record in records:
                     record.unlink(missing_ok=True)
 
-    def test_stop_gate_releases_the_report_for_an_already_gone_worktree(self) -> None:
+    def test_repeated_turns_preserve_an_already_gone_worktree_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             repo = init_guarded_repository(base / "repository")
             worktree, records = bind_direct_task_worktree(repo, base / "managed")
             try:
                 shutil.rmtree(worktree)
-                for _ in range(3):
-                    output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
-                    self.assertEqual(output["decision"], "block")
-                    self.assertIn("already gone", output["reason"])
-                self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=repo), {})
+                snapshots = {p: p.read_bytes() for p in records if p.is_file()}
+                for _ in range(5):
+                    self.assertIn("already gone", run_stop_reminder(ROOT_STOP_REVIEW, repo))
+                for path, content in snapshots.items():
+                    self.assertEqual(path.read_bytes(), content)
             finally:
                 for record in records:
                     record.unlink(missing_ok=True)
 
-    def test_stop_gate_resets_on_changed_or_cleared_report(self) -> None:
+    def test_changed_or_cleared_reports_need_no_counter(self) -> None:
         for hook in (ROOT_STOP_REVIEW, STOP_REVIEW):
             with self.subTest(hook=hook), tempfile.TemporaryDirectory() as tmp:
                 repo = init_guarded_repository(Path(tmp))
                 guard = repo / "scripts/project_workflow/worktree_guard.py"
-                first = {"task": "first", "worktree_path": "/fixture/first"}
-                second = {"task": "second", "worktree_path": "/fixture/second"}
-                for entries, blocked in (
-                    ([first], (True, True, True, False)),
-                    ([second], (True, True, True, False)),
-                    ([], (False,)),
-                    ([second], (True,)),
-                    ([first], (True,)),
-                    ([second], (True,)),
-                    ([first], (True,)),
-                    ([second], (True,)),
-                ):
-                    guard.write_text(
-                        "print(" + repr(json.dumps({"outstanding": entries})) + ")\n",
-                        encoding="utf-8",
-                    )
-                    for expected in blocked:
-                        output = run_hook(hook, {}, cwd=repo)
-                        self.assertEqual(output.get("decision") == "block", expected)
-                guard.write_text('print(\'{"outstanding": []}\')\n', encoding="utf-8")
-                self.assertEqual(run_hook(hook, {}, cwd=repo), {})
-                state = json.loads(
-                    (repo / ".git/project-agent-workflow-stop-repetition.json").read_text()
-                )
-                self.assertEqual(state, {"reason_digest": None, "count": 0})
+                for task in ("first", "second", None, "second", "first"):
+                    entries = [{"task": task, "worktree_path": "/fixture/" + task}] if task else []
+                    guard.write_text("print(" + repr(json.dumps({"outstanding": entries})) + ")\n")
+                    reminder = run_stop_reminder(hook, repo)
+                    if task:
+                        self.assertIn(task, reminder)
+                    else:
+                        self.assertEqual(reminder, "")
+                self.assertFalse((repo / ".git/project-agent-workflow-stop-repetition.json").exists())
 
-    def test_stop_gate_does_not_share_counts_between_repositories(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            first = init_guarded_repository(Path(tmp) / "first")
-            second = init_guarded_repository(Path(tmp) / "second")
-            for repo in (first, second):
-                (repo / "scripts/project_workflow/worktree_guard.py").write_text(
-                    "raise SystemExit(3)\n", encoding="utf-8",
-                )
-            for _ in range(3):
-                self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=first)["decision"], "block")
-            self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=first), {})
-            self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=second)["decision"], "block")
-
-    def test_completion_failures_never_consume_or_reuse_the_retained_bound(self) -> None:
+    def test_gate_failure_reports_without_consuming_shared_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = init_guarded_repository(Path(tmp))
-            (repo / "scripts/project_workflow/worktree_guard.py").write_text(
-                "raise SystemExit(3)\n", encoding="utf-8",
-            )
             gate = repo / "scripts/check-agent-completion.sh"
-            for failed_gate in (None, "#!/bin/sh\necho 'active plan remains' >&2\nexit 1\n"):
-                for _ in range(3):
-                    self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)["decision"], "block")
-                self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=repo), {})
-                if failed_gate is None:
+            for body in (None, "#!/bin/sh\necho 'active plan remains' >&2\nexit 1\n"):
+                if body is None:
                     gate.unlink()
                 else:
-                    gate.write_text(failed_gate, encoding="utf-8")
+                    gate.write_text(body)
                 for _ in range(5):
-                    self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)["decision"], "block")
-                gate.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)["decision"], "block")
+                    self.assertIn("advisory only", run_stop_reminder(ROOT_STOP_REVIEW, repo))
+                self.assertFalse((repo / ".git/project-agent-workflow-stop-repetition.json").exists())
 
-    def test_stop_gate_refuses_invalid_or_unsafe_counter_without_touching_it(self) -> None:
+    def test_obsolete_counter_is_never_read_or_modified(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = init_guarded_repository(Path(tmp) / "repository")
-            (repo / "scripts/project_workflow/worktree_guard.py").write_text(
-                "raise SystemExit(3)\n", encoding="utf-8",
-            )
+            (repo / "scripts/project_workflow/worktree_guard.py").write_text("raise SystemExit(3)\n")
             state = repo / ".git/project-agent-workflow-stop-repetition.json"
-            for raw in (
-                b"not-json", b"[]", b"\xff", b" " * 513,
-                b'{"reason_digest": null, "count": true}',
-                b'{"reason_digest": null, "count": 3}',
-                b'{"reason_digest": "invalid", "count": 1}',
-                b'{"reason_digest": null, "count": 0, "extra": true}',
-            ):
-                with self.subTest(raw=raw[:80]):
-                    state.write_bytes(raw)
-                    state.chmod(0o600)
-                    output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
-                    self.assertEqual(output["decision"], "block")
-                    self.assertIn("counter is unavailable", output["reason"])
-                    self.assertEqual(state.read_bytes(), raw)
-            state.unlink()
-            sentinel = Path(tmp) / "sentinel"
-            sentinel.write_text("preserve this\n", encoding="utf-8")
-            sentinel.chmod(0o600)
-            for kind in ("symlink", "hardlink", "fifo"):
-                with self.subTest(kind=kind):
-                    if kind == "symlink":
-                        state.symlink_to(sentinel)
-                    elif kind == "hardlink":
-                        os.link(sentinel, state)
-                    else:
-                        os.mkfifo(state, 0o600)
-                    output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
-                    self.assertEqual(output["decision"], "block")
-                    self.assertIn("counter is unavailable", output["reason"])
-                    self.assertEqual(sentinel.read_text(), "preserve this\n")
-                    state.unlink()
-
-    def test_stop_gate_reports_counter_lock_contention_without_waiting(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = init_guarded_repository(Path(tmp))
-            (repo / "scripts/project_workflow/worktree_guard.py").write_text(
-                "raise SystemExit(3)\n", encoding="utf-8",
-            )
-            self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)["decision"], "block")
-            state = repo / ".git/project-agent-workflow-stop-repetition.json"
+            for raw in (b"not-json", b"[]", b"\xff", b" " * 513,
+                        b'{"reason_digest": null, "count": true}'):
+                state.write_bytes(raw)
+                state.chmod(0o600)
+                self.assertIn("retained state", run_stop_reminder(ROOT_STOP_REVIEW, repo))
+                self.assertEqual(state.read_bytes(), raw)
             before = state.read_bytes()
             with state.open("r+") as lock:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-                output = run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)
-                self.assertEqual(output["decision"], "block")
-                self.assertIn("counter is unavailable", output["reason"])
+                self.assertIn("retained state", run_stop_reminder(ROOT_STOP_REVIEW, repo))
                 self.assertEqual(state.read_bytes(), before)
-            self.assertEqual(run_hook(ROOT_STOP_REVIEW, {}, cwd=repo)["decision"], "block")
-            self.assertEqual(json.loads(state.read_text())["count"], 2)
+            state.unlink()
+            sentinel = Path(tmp) / "sentinel"
+            sentinel.write_text("preserve this\n")
+            for kind in ("symlink", "hardlink", "fifo"):
+                if kind == "symlink":
+                    state.symlink_to(sentinel)
+                elif kind == "hardlink":
+                    os.link(sentinel, state)
+                else:
+                    os.mkfifo(state, 0o600)
+                self.assertIn("retained state", run_stop_reminder(ROOT_STOP_REVIEW, repo))
+                self.assertEqual(sentinel.read_text(), "preserve this\n")
+                state.unlink()
 
 
 
@@ -755,9 +690,8 @@ class StopReviewGateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             init_gate_repository(repo, "#!/bin/sh\necho 'active plan remains' >&2\nexit 1\n")
-            output = run_hook(LEGACY_STOP_BRIDGE, {"last_assistant_message": "brief"}, cwd=repo)
-        self.assertEqual(output["decision"], "block")
-        self.assertEqual(output["reason"], "active plan remains")
+            output = run_stop_reminder(LEGACY_STOP_BRIDGE, repo, {"last_assistant_message": "brief"})
+        self.assertIn("active plan remains", output)
 
     def test_allows_when_message_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -815,13 +749,12 @@ class StopReviewGateTest(unittest.TestCase):
             )
         self.assertEqual(output, {})
 
-    def test_blocks_failed_completion_preflight(self) -> None:
+    def test_reminds_failed_completion_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             init_gate_repository(repo, "#!/bin/sh\necho 'active plan remains' >&2\nexit 1\n")
-            output = run_hook(STOP_REVIEW, {}, cwd=repo)
-        self.assertEqual(output["decision"], "block")
-        self.assertEqual(output["reason"], "active plan remains")
+            output = run_stop_reminder(STOP_REVIEW, repo)
+        self.assertIn("active plan remains", output)
 
     def test_allows_when_stop_hook_already_active(self) -> None:
         output = run_hook(
@@ -836,22 +769,20 @@ class StopReviewGateTest(unittest.TestCase):
         )
         self.assertEqual(output, {})
 
-    def test_blocks_when_no_completion_gate_is_shipped(self) -> None:
+    def test_reminds_when_no_completion_gate_is_shipped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             init_gate_repository(repo, None)
-            output = run_hook(STOP_REVIEW, {}, cwd=repo)
-        self.assertEqual(output["decision"], "block")
-        self.assertIn("ships no plan completion gate", output["reason"])
+            output = run_stop_reminder(STOP_REVIEW, repo)
+        self.assertIn("ships no plan completion gate", output)
 
-    def test_blocks_with_a_useful_reason_when_the_gate_is_silent(self) -> None:
+    def test_reminds_with_a_useful_reason_when_the_gate_is_silent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             init_gate_repository(repo, "#!/bin/sh\nexit 1\n")
-            output = run_hook(STOP_REVIEW, {}, cwd=repo)
-        self.assertEqual(output["decision"], "block")
-        self.assertIn("--plans-only", output["reason"])
-        self.assertNotEqual(output["reason"].strip(), "")
+            output = run_stop_reminder(STOP_REVIEW, repo)
+        self.assertIn("--plans-only", output)
+        self.assertNotEqual(output.strip(), "")
 
     def test_prefers_the_managed_gate_over_the_root_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -862,8 +793,8 @@ class StopReviewGateTest(unittest.TestCase):
             (managed / "check-agent-completion.sh").write_text(
                 "#!/bin/sh\necho 'managed gate' >&2\nexit 1\n", encoding="utf-8"
             )
-            output = run_hook(STOP_REVIEW, {}, cwd=repo)
-        self.assertEqual(output["reason"], "managed gate")
+            output = run_stop_reminder(STOP_REVIEW, repo)
+        self.assertIn("managed gate", output)
 
     def test_does_not_block_again_when_a_continuation_is_already_forced(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -871,6 +802,42 @@ class StopReviewGateTest(unittest.TestCase):
             init_gate_repository(repo, "#!/bin/sh\necho 'active plan remains' >&2\nexit 1\n")
             output = run_hook(STOP_REVIEW, {"stop_hook_active": True}, cwd=repo)
         self.assertEqual(output, {})
+
+    def test_malformed_payloads_cannot_block_conversation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_gate_repository(Path(tmp), "#!/bin/sh\nexit 1\n")
+            for raw in ("not-json", "[]", "null", "true", "42"):
+                result = subprocess.run(
+                    ["python3", str(STOP_REVIEW)], input=raw, cwd=repo,
+                    text=True, capture_output=True, check=False, timeout=20,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "{}\n")
+                self.assertIn("advisory only", result.stderr)
+
+    def test_unexpected_guard_report_cannot_block_conversation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            guard = repo / "scripts/project_workflow/worktree_guard.py"
+            for raw in ("not-json", "null", '{"outstanding": [null]}'):
+                guard.write_text("print(" + repr(raw) + ")\n")
+                self.assertTrue(run_stop_reminder(STOP_REVIEW, repo))
+
+    def test_diagnostic_timeouts_allow_the_turn(self) -> None:
+        for target in ("gate", "guard"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                repo = init_guarded_repository(Path(tmp))
+                if target == "gate":
+                    (repo / "scripts/check-agent-completion.sh").write_text(
+                        "#!/bin/sh\nexec python3 -c 'import time; time.sleep(30)'\n"
+                    )
+                else:
+                    (repo / "scripts/project_workflow/worktree_guard.py").write_text(
+                        "import time; time.sleep(30)\n"
+                    )
+                reminder = run_stop_reminder(STOP_REVIEW, repo)
+                self.assertIn("Stop reminder unavailable", reminder)
+                self.assertIn("timed out", reminder)
 
     def test_root_and_generated_stop_adapters_are_identical(self) -> None:
         self.assertEqual(ROOT_STOP_REVIEW.read_bytes(), STOP_REVIEW.read_bytes())

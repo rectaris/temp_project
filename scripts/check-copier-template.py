@@ -701,6 +701,321 @@ def require_referent_first_alignment() -> None:
             fail(f"referent-first root/template files differ: {root_path} != {template_path}")
 
 
+def require_harness_evaluation_alignment() -> None:
+    """Keep the harness comparison command, policy, and routing aligned."""
+
+    root_spec = "docs/agent/SPEC_HARNESS_EVALUATION.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"harness evaluation root/template specifications differ: {root_spec} != {template_spec}")
+
+    command = "template/.project-agent-workflow/scripts/compare-harness-runs.py"
+    if command not in SOURCE_REQUIRED:
+        fail("the harness comparison command must ship in the Copier template")
+    if ".project-agent-workflow/scripts/compare-harness-runs.py" not in GENERATED_REQUIRED:
+        fail("the harness comparison command must reach every generated project")
+    if ".project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md" not in GENERATED_REQUIRED:
+        fail("the harness evaluation specification must reach every generated project")
+
+    wrapper = read("scripts/compare-harness-runs.py")
+    if "compare-harness-runs.py" not in wrapper or "template" not in wrapper:
+        fail("the root harness comparison wrapper must delegate to the template implementation")
+
+    implementation = read(command)
+    for marker in (
+        "old_model_current_instructions",
+        "new_model_candidate_instructions",
+        "uncontrolled runtime inputs",
+        "blocked_critical_failure",
+        "insufficient_evidence",
+        "independently_reviewed_link_verified",
+        "cannot authenticate the real-world truth",
+    ):
+        if marker not in implementation:
+            fail(f"harness comparison command missing required marker: {marker}")
+
+    # The new route must stay narrow: exactly one task type in each index may
+    # require the harness specification.
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        (
+            "template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja",
+            ".project-agent-workflow/",
+        ),
+    ):
+        index = read(index_path)
+        if "  harness_evaluation:" not in index:
+            fail(f"{index_path} is missing the harness evaluation route")
+        if index.count(f"{prefix}docs/agent/SPEC_HARNESS_EVALUATION.md") != 1:
+            fail(f"{index_path} must route the harness evaluation specification exactly once")
+
+    lint = read("scripts/lint-project-workflow.sh")
+    for marker in (
+        'python3 "$root/tests/test-harness-comparison.py"',
+        'python3 "$root/tests/test-harness-comparison.py" --generated',
+    ):
+        if marker not in lint:
+            fail(f"required lint does not register the harness comparison check: {marker}")
+
+
+def copier_exclude_entries() -> list[str]:
+    """Return the parsed `_exclude` patterns, so a comment cannot satisfy a check."""
+
+    configuration = yaml.safe_load(read("copier.yml"))
+    entries = configuration.get("_exclude") if isinstance(configuration, dict) else None
+    if not isinstance(entries, list) or not all(isinstance(entry, str) for entry in entries):
+        fail("copier.yml must declare a list of _exclude patterns")
+    return entries
+
+
+def require_harness_profile_alignment() -> None:
+    """Keep optional profile policy, command, routing, and copy boundary aligned."""
+
+    root_spec = "docs/agent/SPEC_HARNESS_PROFILES.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_HARNESS_PROFILES.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"harness profile root/template specifications differ: {root_spec} != {template_spec}")
+    for path in (
+        "scripts/check-harness-profile.py",
+        "template/.project-agent-workflow/scripts/check-harness-profile.py",
+        "docs/agent/harness-instructions.json",
+        "template/.project-agent-workflow/docs/agent/harness-instructions.json",
+        "docs/agent/harness-profile.json",
+        "template/docs/agent/harness-profile.json.jinja",
+        "tests/test-harness-profiles.py",
+    ):
+        if path not in SOURCE_REQUIRED:
+            fail(f"harness profile source is not inventoried: {path}")
+    for path in (
+        ".project-agent-workflow/scripts/check-harness-profile.py",
+        ".project-agent-workflow/docs/agent/SPEC_HARNESS_PROFILES.md",
+        ".project-agent-workflow/docs/agent/harness-instructions.json",
+        "docs/agent/harness-profile.json",
+    ):
+        if path not in GENERATED_REQUIRED:
+            fail(f"harness profile output is not inventoried: {path}")
+    if not any(
+        "_copier_operation != 'copy'" in entry and "docs/agent/harness-profile.json" in entry
+        for entry in copier_exclude_entries()
+    ):
+        fail("harness profile selection must be excluded from Copier updates")
+    if "check-harness-profile.py" not in read("scripts/check-harness-profile.py"):
+        fail("root harness profile wrapper must delegate to the template implementation")
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
+    ):
+        index = read(index_path)
+        if "  harness_profiles:" not in index or index.count(f"{prefix}docs/agent/SPEC_HARNESS_PROFILES.md") != 1:
+            fail(f"{index_path} must contain one harness profile route")
+    if 'python3 "$root/tests/test-harness-profiles.py"' not in read("scripts/lint-project-workflow.sh"):
+        fail("required lint does not register harness profile tests")
+
+
+def spec_index_route(index_path: str, name: str) -> dict:
+    """Return one named routing entry so a check reads the route, not the file.
+
+    Another route may legitimately cite the same specification as a
+    conditional read, so counting whole-file occurrences would misreport it.
+    """
+
+    index = yaml.safe_load(read(index_path))
+    routes = index.get("task_types") if isinstance(index, dict) else None
+    if not isinstance(routes, dict) or not isinstance(routes.get(name), dict):
+        fail(f"{index_path} must contain the {name} route")
+    return routes[name]
+
+def require_template_feedback_alignment() -> None:
+    """Keep improvement-record policy, command, routing, and data ownership aligned."""
+
+    root_spec = "docs/agent/SPEC_TEMPLATE_FEEDBACK.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_TEMPLATE_FEEDBACK.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"template feedback root/template specifications differ: {root_spec} != {template_spec}")
+    for path in (
+        "scripts/template-feedback.py",
+        "template/.project-agent-workflow/scripts/template-feedback.py",
+        root_spec,
+        template_spec,
+        "docs/agent/template-feedback.json",
+        "template/docs/agent/template-feedback.json.jinja",
+        "tests/test-template-feedback.py",
+    ):
+        if path not in SOURCE_REQUIRED:
+            fail(f"template feedback source is not inventoried: {path}")
+    for path in (
+        ".project-agent-workflow/scripts/template-feedback.py",
+        ".project-agent-workflow/docs/agent/SPEC_TEMPLATE_FEEDBACK.md",
+        "docs/agent/template-feedback.json",
+    ):
+        if path not in GENERATED_REQUIRED:
+            fail(f"template feedback output is not inventoried: {path}")
+    # Improvement records are project-owned runtime data. Shipping one as a
+    # Copier payload would seed every generated project with another project's
+    # observations.
+    for inventory, label in ((SOURCE_REQUIRED, "source"), (GENERATED_REQUIRED, "generated")):
+        for path in inventory:
+            if path.startswith("docs/template-feedback/") or "/docs/template-feedback/" in path:
+                fail(f"actual improvement records must stay out of the {label} inventory: {path}")
+    shipped = ROOT / "template/docs/template-feedback"
+    if shipped.exists():
+        fail("actual improvement records must not ship in the Copier template")
+    if "template-feedback.py" not in read("scripts/template-feedback.py"):
+        fail("root template feedback wrapper must delegate to the template implementation")
+    configuration = yaml.safe_load(read("copier.yml"))
+    question = configuration.get("template_feedback_mode") if isinstance(configuration, dict) else None
+    if not isinstance(question, dict) or set(question.get("choices", {}).values()) != {
+        "disabled",
+        "agent_select_local",
+    }:
+        fail("copier.yml must offer the disabled and agent_select_local improvement record modes")
+    if question.get("default") != "agent_select_local":
+        fail("copier.yml must default improvement record preparation to agent_select_local")
+    # The generated configuration copies project_slug into project_alias, so the
+    # slug domain Copier accepts must stay inside the domain the command accepts.
+    slug = configuration.get("project_slug") if isinstance(configuration, dict) else None
+    validator = slug.get("validator", "") if isinstance(slug, dict) else ""
+    if "^[a-z0-9][a-z0-9-]*$" not in validator or "project_slug | length > 64" not in validator:
+        fail("copier.yml must bound project_slug to the alias domain the improvement record command accepts")
+    if 'ALIAS_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")' not in read(
+        "template/.project-agent-workflow/scripts/template-feedback.py"
+    ):
+        fail("the improvement record command must accept every project_slug Copier admits")
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
+    ):
+        route = spec_index_route(index_path, "template_feedback")
+        if route.get("required") != [f"{prefix}docs/agent/SPEC_TEMPLATE_FEEDBACK.md"]:
+            fail(f"{index_path} must route template feedback to its own specification")
+    for policy_path, command in (
+        ("AGENTS.md", "scripts/template-feedback.py"),
+        ("template/.project-agent-workflow/AGENTS.md.jinja", ".project-agent-workflow/scripts/template-feedback.py"),
+    ):
+        policy = read(policy_path)
+        if command not in policy or "docs/agent/template-feedback.json" not in policy:
+            fail(f"{policy_path} must route improvement record preparation to its command and mode")
+    if 'python3 "$root/tests/test-template-feedback.py"' not in read("scripts/lint-project-workflow.sh"):
+        fail("required lint does not register template feedback tests")
+
+def require_template_requirements_alignment() -> None:
+    """Keep collection policy, command, routing, and data ownership aligned."""
+
+    root_spec = "docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"template requirement root/template specifications differ: {root_spec} != {template_spec}")
+    for path in (
+        "scripts/collect-template-feedback.py",
+        "template/.project-agent-workflow/scripts/collect-template-feedback.py",
+        root_spec,
+        template_spec,
+        "tests/test-template-feedback-collection.py",
+    ):
+        if path not in SOURCE_REQUIRED:
+            fail(f"template requirement source is not inventoried: {path}")
+    for path in (
+        ".project-agent-workflow/scripts/collect-template-feedback.py",
+        ".project-agent-workflow/docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md",
+    ):
+        if path not in GENERATED_REQUIRED:
+            fail(f"template requirement output is not inventoried: {path}")
+    # Imported reports and derived requirement candidates are project-owned
+    # runtime data. Shipping one would seed every generated project with
+    # another project's observations and proposals.
+    for inventory, label in ((SOURCE_REQUIRED, "source"), (GENERATED_REQUIRED, "generated")):
+        for path in inventory:
+            if path.startswith("docs/improvements/") or "/docs/improvements/" in path:
+                fail(f"actual improvement data must stay out of the {label} inventory: {path}")
+    for shipped in ("template/docs/improvements", "template/.project-agent-workflow/docs/improvements"):
+        if (ROOT / shipped).exists():
+            fail(f"actual improvement data must not ship in the Copier template: {shipped}")
+    if "collect-template-feedback.py" not in read("scripts/collect-template-feedback.py"):
+        fail("root collection wrapper must delegate to the template implementation")
+    # The collector reuses the checked record validator that ships beside it,
+    # so both layouts apply one record shape and one evidence policy.
+    command = read("template/.project-agent-workflow/scripts/collect-template-feedback.py")
+    if 'Path(__file__).resolve().parent / "template-feedback.py"' not in command:
+        fail("the collection command must reuse the shipped improvement record validator")
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
+    ):
+        route = spec_index_route(index_path, "template_requirements")
+        if route.get("required") != [f"{prefix}docs/agent/SPEC_TEMPLATE_REQUIREMENTS.md"]:
+            fail(f"{index_path} must route template requirements to its own specification")
+    if 'python3 "$root/tests/test-template-feedback-collection.py"' not in read("scripts/lint-project-workflow.sh"):
+        fail("required lint does not register template requirement tests")
+
+def require_development_direction_alignment() -> None:
+    """Keep direction policy, command, routing, and data ownership aligned."""
+
+    root_spec = "docs/agent/SPEC_DEVELOPMENT_DIRECTION.md"
+    template_spec = "template/.project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_DIRECTION.md"
+    if read(root_spec) != normalized_template_core(template_spec):
+        fail(f"development direction root/template specifications differ: {root_spec} != {template_spec}")
+    for path in (
+        "scripts/development-direction.py",
+        "template/.project-agent-workflow/scripts/development-direction.py",
+        root_spec,
+        template_spec,
+        "tests/test-development-direction.py",
+        "tests/test-template-feedback-pipeline.py",
+    ):
+        if path not in SOURCE_REQUIRED:
+            fail(f"development direction source is not inventoried: {path}")
+    for path in (
+        ".project-agent-workflow/scripts/development-direction.py",
+        ".project-agent-workflow/docs/agent/SPEC_DEVELOPMENT_DIRECTION.md",
+    ):
+        if path not in GENERATED_REQUIRED:
+            fail(f"development direction output is not inventoried: {path}")
+    # Owner decisions and a rendered direction are project-owned runtime
+    # records. Shipping one would hand every generated project a decision its
+    # owner never made.
+    for inventory, label in ((SOURCE_REQUIRED, "source"), (GENERATED_REQUIRED, "generated")):
+        for path in inventory:
+            if "docs/improvements/decisions" in path or path.endswith("docs/development-direction.md"):
+                fail(f"actual decision records must stay out of the {label} inventory: {path}")
+    for shipped in (
+        "template/docs/improvements",
+        "template/.project-agent-workflow/docs/improvements",
+        "template/docs/development-direction.md",
+        "template/.project-agent-workflow/docs/development-direction.md",
+    ):
+        if (ROOT / shipped).exists():
+            fail(f"actual decision or improvement data must not ship in the Copier template: {shipped}")
+    wrapper = read("scripts/development-direction.py")
+    if (
+        '"template"' not in wrapper
+        or '".project-agent-workflow"' not in wrapper
+        or "spec.loader.exec_module(module)" not in wrapper
+        or "module.main()" not in wrapper
+    ):
+        fail("root direction wrapper must delegate to the template implementation")
+    # The direction command reuses the checked collection command, so one
+    # candidate shape and one storage layout govern both layouts.
+    command = read("template/.project-agent-workflow/scripts/development-direction.py")
+    if 'Path(__file__).resolve().parent / "collect-template-feedback.py"' not in command:
+        fail("the direction command must reuse the shipped improvement collection command")
+    if "require_task_binding" not in command:
+        fail("the direction command must guard its repository effects")
+    for index_path, prefix in (
+        ("docs/agent/spec-index.yaml", ""),
+        ("template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja", ".project-agent-workflow/"),
+    ):
+        route = spec_index_route(index_path, "development_direction")
+        if route.get("required") != [f"{prefix}docs/agent/SPEC_DEVELOPMENT_DIRECTION.md"]:
+            fail(f"{index_path} must route the development direction to its own specification")
+    lint = read("scripts/lint-project-workflow.sh")
+    for suite in ("tests/test-development-direction.py", "tests/test-template-feedback-pipeline.py"):
+        if f'python3 "$root/{suite}"' not in lint:
+            fail(f"required lint does not register {suite}")
+    # The round-trip witness asserts nothing when Copier is missing, so required
+    # lint has to demand it rather than accept a silent skip.
+    if 'REQUIRE_COPIER=1 python3 "$root/tests/test-template-feedback-pipeline.py"' not in lint:
+        fail("required lint must demand a real Copier round trip")
+
 def load_root_policy_module():
     spec = importlib.util.spec_from_file_location(
         "decision_reuse_root_policy", ROOT / "scripts/check-root-agent-policy.py"
@@ -3268,13 +3583,18 @@ def require_completion_gate_distribution() -> None:
     adapter = read(".project-agent-workflow/hooks/stop_review_gate.py")
     for marker in (
         'payload.get("stop_hook_active")',
-        '"decision": "block"',
+        'print("{}")',
+        'timeout=5',
+        'advisory only',
         "MISSING_GATE_REASON",
         "FALLBACK_REASON",
         "--plans-only",
     ):
         if marker not in adapter:
             fail(f"shared Stop adapter missing completion-gate marker: {marker}")
+
+    if '"decision": "block"' in adapter or "REPETITION_STATE" in adapter:
+        fail("shared Stop adapter must neither block turns nor maintain repetition state")
 
     detector = read("scripts/lint-project-workflow.sh")
     for marker in (
@@ -3323,6 +3643,8 @@ def require_completion_gate_distribution() -> None:
     generated_spec = read("template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md")
     for marker in (
         "## Completion Gate Boundaries",
+        "## Separate Sessions",
+        "Ending a conversation turn is not a completion claim",
         "git config core.hooksPath .githooks",
         "git commit --no-verify",
         "`.github/hooks/plan-lifecycle.json`",
@@ -3401,6 +3723,11 @@ def main() -> int:
     require_fast_scoped_worker()
     require_evidence_synthesizer()
     require_referent_first_alignment()
+    require_harness_evaluation_alignment()
+    require_harness_profile_alignment()
+    require_template_feedback_alignment()
+    require_template_requirements_alignment()
+    require_development_direction_alignment()
     require_decision_reuse_alignment()
     require_user_communication_alignment()
     require_git_retirement_alignment()

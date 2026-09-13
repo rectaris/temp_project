@@ -12,7 +12,9 @@ Copier may replace content under that directory during an update, so project-spe
 
 `docs/agent/`, `docs/plan/`, root `AGENTS.md`, root `README.md`, `.gitignore`, `.codex/config.toml`, and `.codex/hooks.json` are project-owned after their initial creation.
 
-Those paths are listed in `_skip_if_exists`, so later updates create a missing seed but do not overwrite an existing file.
+Those paths are listed in `_skip_if_exists`, so later updates create a missing seed but do not overwrite an existing file, except for `docs/agent/harness-profile.json`.
+
+That optional-instruction selection is seeded only during the initial copy and excluded from updates, so an existing selection is preserved and an intentionally missing selection is not recreated.
 
 `.codex/agents/*.toml` files are project-owned after their initial creation because mature repositories may specialize helper-agent instructions.
 

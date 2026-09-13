@@ -82,7 +82,9 @@ Apply this review through repository instructions and the operational skill befo
 
 The Stop hook must not infer missing communication review from message length, selected words, bullet count, or another property of the proposed text.
 
-When Codex hooks are enabled, Stop blocking is reserved for deterministic repository lifecycle failures.
+When Codex hooks are enabled, Stop provides read-only lifecycle reminders and never blocks a conversation turn.
+Ending a turn does not claim task completion or transfer another session's work.
+Completion remains subject to the existing validation, commit and publication boundaries.
 
 Deterministic validation checks policy routing, Skill parity, Hook wiring, and fixed evaluation scenarios.
 

@@ -18,7 +18,6 @@ import plan_validation_commands
 
 ROOT = planlib.ROOT
 PLAN = planlib.PLAN
-CHECKED = planlib.CHECKED
 REPLANNED = planlib.REPLANNED
 HUMAN_DESIGN_VALUES = {"yes", "no"}
 IMPLEMENTATION_TIER_VALUES = {"0", "1", "2"}
@@ -103,32 +102,10 @@ def lint_plan_index() -> None:
 
 
 def lint_checked_index() -> None:
-    if not CHECKED.is_file():
-        fail("missing docs/plan/checked.md")
-    text = CHECKED.read_text(encoding="utf-8")
-    if not text.startswith("# Checked Plan Index\n"):
-        fail("docs/plan/checked.md must start with '# Checked Plan Index'")
-    if "id\tpath" not in text:
-        fail("checked index must contain TSV header: id path")
-    seen_ids: set[str] = set()
-    seen_paths: set[str] = set()
-    for line in text.splitlines():
-        if re.match(r"^\d{3}\t", line):
-            parts = line.split("\t")
-            if len(parts) != 2:
-                fail(f"bad checked index row: {line}")
-            if parts[0] in seen_ids:
-                fail(f"duplicate checked index id: {parts[0]}")
-            if parts[1] in seen_paths:
-                fail(f"duplicate checked index path: {parts[1]}")
-            seen_ids.add(parts[0])
-            seen_paths.add(parts[1])
-            if not Path(parts[1]).name.startswith(parts[0] + "-"):
-                fail(f"checked index id does not match filename: {line}")
-            if not (ROOT / parts[1]).is_file():
-                fail(f"checked index points to missing file: {parts[1]}")
-            if planlib.CHECKED_DIR not in (ROOT / parts[1]).parents:
-                fail(f"checked index path is outside checked archive: {parts[1]}")
+    try:
+        planlib.validate_checked_index(ROOT)
+    except planlib.CheckedIndexError as exc:
+        fail(str(exc))
 
 
 def lint_replanned_index() -> None:

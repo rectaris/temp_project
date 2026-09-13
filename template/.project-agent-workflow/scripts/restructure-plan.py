@@ -559,6 +559,54 @@ def items(values: dict[str, str | list[str]], key: str) -> list[str]:
     return value if isinstance(value, list) else []
 
 
+CLOSED_ARCHIVE_STATUS_VALUES = {"checked", "completed", "ready_to_archive"} - ACTIVE_PLAN_STATUSES
+CHECKED_ARCHIVE_PREFIX = "docs/plan/checked/"
+ARCHIVE_MANIFEST_SECTION_RE = re.compile(r"^## Manifest$(.*?)(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+ARCHIVE_BULLET_STATUS_RE = re.compile(r"^- `status`: `([^`]*)`", re.MULTILINE)
+ARCHIVE_STATUS_LINE_RE = re.compile(r"^status:", re.MULTILINE)
+
+
+def archived_closed_status(text: str, archive_path: str) -> str:
+    """Return the status one already archived record states, including old vintages.
+
+    Three vintages state the same fact in different shapes. A current record
+    declares a manifest field, an older record declares the same field as a
+    manifest bullet under its own heading, and the earliest record declares
+    nothing and states its completion only through its location under the
+    checked archive. Reading only the first shape reports the other two as stale.
+
+    A record that declares a status anywhere keeps it, blank included, so
+    declaring a field and leaving it empty stays a defect rather than an old
+    vintage. An empty file and a record outside the checked archive are never
+    read as closed.
+    """
+
+    values = parse_manifest(text)
+    status = scalar(values, "status").strip()
+    if status:
+        return status
+    if "status" in values:
+        return ""
+    section = ARCHIVE_MANIFEST_SECTION_RE.search(text)
+    if section is not None:
+        bullet = ARCHIVE_BULLET_STATUS_RE.search(section.group(1))
+        if bullet is not None:
+            return bullet.group(1).strip()
+    if (
+        archive_path.startswith(CHECKED_ARCHIVE_PREFIX)
+        and text.strip()
+        and ARCHIVE_STATUS_LINE_RE.search(text) is None
+    ):
+        return "checked"
+    return ""
+
+
+def archive_is_closed(text: str, archive_path: str) -> bool:
+    """Report whether one already archived record declares a completed run."""
+
+    return archived_closed_status(text, archive_path) in CLOSED_ARCHIVE_STATUS_VALUES
+
+
 def admission_placeholder(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
@@ -1450,7 +1498,9 @@ def validate_active_predecessors(
             checked_file = ROOT / predecessor
             if not checked_file.is_file():
                 raise RestructureError(f"{path} checked predecessor is missing: {predecessor}")
-            if scalar(parse_manifest(checked_file.read_text(encoding="utf-8")), "status") != "checked":
+            if not archive_is_closed(
+                checked_file.read_text(encoding="utf-8"), predecessor
+            ):
                 raise RestructureError(f"{path} predecessor is not checked: {predecessor}")
         if unresolved and status != "deferred":
             raise RestructureError(
@@ -2863,7 +2913,7 @@ def checked_commit_produced_path(checked_path: str, product_path: str) -> bool:
     manifest = parse_manifest(archived.decode("utf-8"))
     if (
         archived != current
-        or scalar(manifest, "status") != "checked"
+        or not archive_is_closed(archived.decode("utf-8"), checked_path)
         or not scope_covers(items(manifest, "write_scope"), product_path)
         or not git_path_is_clean(product_path)
     ):
@@ -3455,10 +3505,9 @@ def activation_checked_pairs() -> dict[str, str]:
                 f"activation reference has multiple checked archives: {active_path}"
             )
         target = ROOT / checked_path
-        if not target.is_file() or scalar(
-            parse_manifest(target.read_text(encoding="utf-8")),
-            "status",
-        ) != "checked":
+        if not target.is_file() or not archive_is_closed(
+            target.read_text(encoding="utf-8"), checked_path
+        ):
             raise RestructureError(
                 f"activation checked archive is missing or stale: {checked_path}"
             )
@@ -7031,9 +7080,7 @@ def load_pre_boundary_reconciliations() -> dict[str, dict[str, str]]:
         archive_bytes = read_regular_file(archive_file, archive_path)
         if sha256(archive_bytes) != entry["archive_digest"]:
             raise RestructureError(f"{label} archive bytes changed")
-        if scalar(
-            parse_manifest(archive_bytes.decode("utf-8")), "status"
-        ) != "checked":
+        if not archive_is_closed(archive_bytes.decode("utf-8"), archive_path):
             raise RestructureError(f"{label} archive is not a checked completion")
         if blob_bytes_at_commit(boundary, archive_path) != archive_bytes:
             raise RestructureError(
@@ -7597,12 +7644,14 @@ def verify_prerequisite_lifecycle(
     replanned = replanned_records_for_id(plan_id, path)
     if sum((bool(active), bool(checked), bool(replanned))) != 1:
         raise RestructureError(f"prerequisite plan lifecycle is ambiguous: {path}")
+    checked_archive: str | None = None
     if active:
         target = ROOT / path
         expected_status = active[0][2]
         lifecycle = "active"
     elif checked:
         target = ROOT / checked[0]
+        checked_archive = checked[0]
         expected_status = "checked"
         lifecycle = "checked"
     else:
@@ -7614,9 +7663,14 @@ def verify_prerequisite_lifecycle(
             raise RestructureError(f"prerequisite cannot be its own contract source: {path}")
     if not target.is_file():
         raise RestructureError(f"missing prerequisite lifecycle file: {path}")
-    live = parse_manifest(target.read_text(encoding="utf-8"))
+    live_text = target.read_text(encoding="utf-8")
+    live = parse_manifest(live_text)
     base = parse_manifest(entry["content"])
-    if scalar(live, "status") != expected_status:
+    if checked_archive is not None:
+        status_matches = archive_is_closed(live_text, checked_archive)
+    else:
+        status_matches = scalar(live, "status") == expected_status
+    if not status_matches:
         raise RestructureError(f"prerequisite lifecycle status mismatch: {path}")
     protected = REBIND_PROTECTED_FIELDS - {
         "status",
@@ -7920,6 +7974,7 @@ def verify_schema_three_contract(
             (bool(active), bool(checked), bool(backlog), bool(shelved), bool(replanned))
         ) != 1:
             raise RestructureError(f"schema-3 successor lifecycle is ambiguous: {path}")
+        checked_archive: str | None = None
         if active:
             live_file = ROOT / path
             expected_status = active[0][2]
@@ -7927,6 +7982,7 @@ def verify_schema_three_contract(
             replan_original_content = None
         elif checked:
             live_file = ROOT / checked[0]
+            checked_archive = checked[0]
             expected_status = "checked"
             lifecycle = "checked"
             replan_original_content = None
@@ -7961,7 +8017,11 @@ def verify_schema_three_contract(
         if live_file is not None:
             live_content = live_file.read_text(encoding="utf-8")
         live_manifest = parse_manifest(live_content)
-        if scalar(live_manifest, "status") != expected_status:
+        if checked_archive is not None:
+            status_matches = archive_is_closed(live_content, checked_archive)
+        else:
+            status_matches = scalar(live_manifest, "status") == expected_status
+        if not status_matches:
             raise RestructureError(f"schema-3 successor lineage mismatch: {path}")
         if lifecycle != "replanned" and (
             items(live_manifest, "replan_sources") != source_paths
@@ -8416,6 +8476,7 @@ def verify_repository_contracts(
                 raise RestructureError(f"successor has multiple checked index entries: {path}")
             if active_file.is_file() and not active_records:
                 raise RestructureError(f"successor has an unindexed active file: {path}")
+            checked_archive: str | None = None
             if active_records:
                 if not active_file.is_file():
                     raise RestructureError(f"missing active successor plan: {path}")
@@ -8433,6 +8494,7 @@ def verify_repository_contracts(
                 expected_live_status = "checked"
                 lifecycle = "checked"
                 replan_original_content = None
+                checked_archive = checked_paths[0]
             elif backlog_paths:
                 reject_symlink_ancestors(backlog_paths[0], include_target=True)
                 live_successor_file = ROOT / backlog_paths[0]
@@ -8470,7 +8532,11 @@ def verify_repository_contracts(
             if live_successor_file is not None:
                 live_content = live_successor_file.read_text(encoding="utf-8")
             live_successor_manifest = parse_manifest(live_content)
-            if scalar(live_successor_manifest, "status") != expected_live_status:
+            if checked_archive is not None:
+                status_matches = archive_is_closed(live_content, checked_archive)
+            else:
+                status_matches = scalar(live_successor_manifest, "status") == expected_live_status
+            if not status_matches:
                 raise RestructureError(f"live successor status mismatch for {plan_id}: {path}")
             if items(live_successor_manifest, "inherited_acceptance_digests") != digests:
                 raise RestructureError(f"live successor lineage mismatch for {plan_id}: {path}")

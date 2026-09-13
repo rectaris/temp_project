@@ -1,6 +1,16 @@
 #!/bin/sh
 set -eu
 
+profile_preservation_only=0
+if [ "${1:-}" = "--harness-profile-preservation" ]; then
+  profile_preservation_only=1
+  shift
+fi
+if [ "$#" -ne 0 ]; then
+  echo "Usage: $0 [--harness-profile-preservation]" >&2
+  exit 2
+fi
+
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 scratch_base=${SANDBOXED_PLAN_WORKER_SCRATCH_DIR:-${TMPDIR:-/tmp}}
 tmp=$(mktemp -d "$scratch_base/project-agent-workflow-smoke.XXXXXX")
@@ -8,6 +18,9 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 . "$root/tests/lib-copier.sh"
 source_ref=${COPIER_SMOKE_REF:-}
 render_source=$root
+explicit_source_head=
+explicit_source_status=
+explicit_source_refs=
 
 create_admitted_plan() {
   .project-agent-workflow/scripts/create-plan.sh "$@" \
@@ -27,7 +40,7 @@ strip_admission_record() {
 
 run_root_python() {
   if command -v uv >/dev/null 2>&1 && [ -f "$root/pyproject.toml" ]; then
-    (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" uv run python "$@")
+    (cd "$root" && UV_CACHE_DIR="$tmp/uv-cache" UV_PROJECT_ENVIRONMENT="$tmp/root-python-venv" uv run python "$@")
   else
     python3 "$@"
   fi
@@ -49,173 +62,30 @@ if ! command -v copier >/dev/null 2>&1; then
   mkdir -p "$tmp/bin"
   cat >"$tmp/bin/copier" <<'EOF_COPIER_SHIM'
 #!/bin/sh
-exec env UV_CACHE_DIR="$COPIER_TEST_CACHE" uv run --project "$COPIER_TEST_ROOT" copier "$@"
+exec env UV_CACHE_DIR="$COPIER_TEST_CACHE" \
+  UV_PROJECT_ENVIRONMENT="$COPIER_TEST_ENVIRONMENT" \
+  uv run --project "$COPIER_TEST_ROOT" copier "$@"
 EOF_COPIER_SHIM
   chmod +x "$tmp/bin/copier"
   COPIER_TEST_CACHE="$tmp/uv-cache"
+  COPIER_TEST_ENVIRONMENT="$tmp/copier-venv"
   COPIER_TEST_ROOT="$root"
-  export COPIER_TEST_CACHE COPIER_TEST_ROOT
+  export COPIER_TEST_CACHE COPIER_TEST_ENVIRONMENT COPIER_TEST_ROOT
   PATH="$tmp/bin:$PATH"
   export PATH
 fi
 
 if [ -z "$source_ref" ]; then
   render_source="$tmp/render-source"
-  git clone -q "$root" "$render_source"
-  for candidate_path in \
-    copier.yml \
-    scripts/migrate-sequential-plan-worker.py \
-    scripts/validate-copier-update.py \
-    template/README.md.jinja \
-    template/.githooks/pre-commit \
-    template/.github/hooks/plan-lifecycle.json \
-    template/.github/workflows/project-agent-workflow.yml \
-    template/.github/workflows/codex-ci-autofix.yml.jinja \
-    template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
-    template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
-    template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
-    template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
-    template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
-    template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
-    template/.project-agent-workflow/human-report.json.jinja \
-    template/.project-agent-workflow/scripts/check-external-service-policy.py \
-    template/.project-agent-workflow/scripts/human-report.py \
-    template/.project-agent-workflow/scripts/lint-plan-docs.py \
-    template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
-    template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
-    template/.project-agent-workflow/scripts/create-plan.sh \
-    template/.project-agent-workflow/scripts/plan_authoring.py \
-    template/.project-agent-workflow/scripts/planlib.py \
-    template/.project-agent-workflow/scripts/plan_overview.py \
-    template/.project-agent-workflow/scripts/promote-plan.sh \
-    template/.project-agent-workflow/scripts/render-plan-overview.py \
-    template/.project-agent-workflow/scripts/restructure-plan.py \
-    template/.project-agent-workflow/scripts/plan-execution-state.py \
-    template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
-    template/docs/plan/replanned.md \
-    template/.project-agent-workflow/scripts/run-copier-update.sh \
-    template/.project-agent-workflow/scripts/orca-coordinator.py \
-    template/.project-agent-workflow/scripts/run-parallel-plans.py \
-    template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
-    template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
-    template/.project-agent-workflow/scripts/validate-changes.py \
-    template/.project-agent-workflow/scripts/update-from-copier.sh \
-    template/.project-agent-workflow/scripts/validate-copier-update.py \
-    template/.project-agent-workflow/scripts/worktree_guard.py \
-    template/.agents/skills/browser-ops/SKILL.md \
-    template/.agents/skills/natural-japanese/SKILL.md \
-    template/.agents/skills/verify-copier-update/SKILL.md \
-    template/AGENTS.md.jinja \
-    template/.project-agent-workflow/AGENTS.md.jinja \
-    template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
-    template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
-    template/.project-agent-workflow/ownership.yaml \
-    template/.project-agent-workflow/skills/browser-ops/SKILL.md \
-    template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-    template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-    template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
-    template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
-    template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
-    template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
-    template/.project-agent-workflow/skills/natural-japanese/SKILL.md \
-    template/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml \
-    template/.project-agent-workflow/skills/natural-japanese/references/workflow.md \
-    template/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md \
-    template/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py \
-    template/.project-agent-workflow/skills/natural-japanese/LICENSE \
-    template/.project-agent-workflow/skills/write-for-reader/SKILL.md \
-    template/.project-agent-workflow/skills/graph-memory/SKILL.md \
-    template/.project-agent-workflow/skills/linear-ops/SKILL.md \
-    template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
-    template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
-    template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
-    template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-    template/docs/agent/external-services.yaml.jinja \
-    template/docs/agent/git-retirement.yaml.jinja
-  do
-    mkdir -p "$(dirname "$render_source/$candidate_path")"
-    cp "$root/$candidate_path" "$render_source/$candidate_path"
-  done
-  git -C "$render_source" add \
-    copier.yml \
-    scripts/migrate-sequential-plan-worker.py \
-    scripts/validate-copier-update.py \
-    template/README.md.jinja \
-    template/.githooks/pre-commit \
-    template/.github/hooks/plan-lifecycle.json \
-    template/.github/workflows/project-agent-workflow.yml \
-    template/.github/workflows/codex-ci-autofix.yml.jinja \
-    template/.project-agent-workflow/docs/agent/CODEX_CI_AUTOFIX.md \
-    template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md \
-    template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md \
-    template/.project-agent-workflow/docs/agent/SPEC_HUMAN_REPORTING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md \
-    template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md \
-    template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md \
-    template/.project-agent-workflow/human-report.json.jinja \
-    template/.project-agent-workflow/scripts/check-external-service-policy.py \
-    template/.project-agent-workflow/scripts/human-report.py \
-    template/.project-agent-workflow/scripts/lint-plan-docs.py \
-    template/.project-agent-workflow/scripts/manage-plan-worktrees.py \
-    template/.project-agent-workflow/scripts/migrate-sequential-plan-worker.py \
-    template/.project-agent-workflow/scripts/create-plan.sh \
-    template/.project-agent-workflow/scripts/plan_authoring.py \
-    template/.project-agent-workflow/scripts/planlib.py \
-    template/.project-agent-workflow/scripts/plan_overview.py \
-    template/.project-agent-workflow/scripts/promote-plan.sh \
-    template/.project-agent-workflow/scripts/render-plan-overview.py \
-    template/.project-agent-workflow/scripts/restructure-plan.py \
-    template/.project-agent-workflow/scripts/plan-execution-state.py \
-    template/.project-agent-workflow/scripts/retire-merged-worktrees.py \
-    template/docs/plan/replanned.md \
-    template/.project-agent-workflow/scripts/run-copier-update.sh \
-    template/.project-agent-workflow/scripts/orca-coordinator.py \
-    template/.project-agent-workflow/scripts/run-parallel-plans.py \
-    template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py \
-    template/.project-agent-workflow/scripts/sync-plan-to-linear.sh \
-    template/.project-agent-workflow/scripts/validate-changes.py \
-    template/.project-agent-workflow/scripts/update-from-copier.sh \
-    template/.project-agent-workflow/scripts/validate-copier-update.py \
-    template/.project-agent-workflow/scripts/worktree_guard.py \
-    template/.agents/skills/browser-ops/SKILL.md \
-    template/.agents/skills/natural-japanese/SKILL.md \
-    template/.agents/skills/verify-copier-update/SKILL.md \
-    template/AGENTS.md.jinja \
-    template/.project-agent-workflow/AGENTS.md.jinja \
-    template/.project-agent-workflow/docs/agent/SPEC_JAPANESE_TECH_WRITING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_SKILL_AUTHORING.md \
-    template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja \
-    template/.project-agent-workflow/docs/agent/spec-index.yaml.jinja \
-    template/.project-agent-workflow/ownership.yaml \
-    template/.project-agent-workflow/skills/browser-ops/SKILL.md \
-    template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml \
-    template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md \
-    template/.project-agent-workflow/skills/verify-copier-update/SKILL.md \
-    template/.project-agent-workflow/skills/verify-copier-update/agents/openai.yaml \
-    template/.project-agent-workflow/skills/verify-copier-update/references/verification-contract.md \
-    template/.project-agent-workflow/skills/verify-copier-update/scripts/verify-copier-update.py \
-    template/.project-agent-workflow/skills/natural-japanese/SKILL.md \
-    template/.project-agent-workflow/skills/natural-japanese/agents/openai.yaml \
-    template/.project-agent-workflow/skills/natural-japanese/references/workflow.md \
-    template/.project-agent-workflow/skills/natural-japanese/references/upstream-adaptation.md \
-    template/.project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py \
-    template/.project-agent-workflow/skills/natural-japanese/LICENSE \
-    template/.project-agent-workflow/skills/write-for-reader/SKILL.md \
-    template/.project-agent-workflow/skills/graph-memory/SKILL.md \
-    template/.project-agent-workflow/skills/linear-ops/SKILL.md \
-    template/.project-agent-workflow/skills/mcp-ops/SKILL.md \
-    template/.project-agent-workflow/skills/mcp-ops/agents/openai.yaml \
-    template/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md \
-    template/.project-agent-workflow/skills/sequential-plan-orchestrator/SKILL.md \
-    template/docs/agent/external-services.yaml.jinja \
-    template/docs/agent/git-retirement.yaml.jinja
-  git -C "$render_source" -c user.name=CI -c user.email=ci@example.invalid \
-    commit --allow-empty -qm "Create isolated smoke candidate"
-  git -C "$render_source" tag v1.2.2
+  python3 "$root/tests/prepare-smoke-source.py" \
+    --source "$root" --destination "$render_source" --tag v1.2.2 >/dev/null
   source_ref=v1.2.2
+else
+  if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+    explicit_source_head=$(git -C "$root" rev-parse HEAD)
+    explicit_source_status=$(git -C "$root" status --porcelain=v1 --untracked-files=all)
+    explicit_source_refs=$(git -C "$root" for-each-ref --format='%(refname) %(objectname)')
+  fi
 fi
 
 render_fixture() {
@@ -237,6 +107,52 @@ render_defaults() {
   fi
   run_copier "$@" "$render_source" "$out" >/dev/null
 }
+
+run_harness_profile_preservation() {
+  profile_update_source="$tmp/profile-update-source"
+  git clone -q "$render_source" "$profile_update_source"
+  git -C "$profile_update_source" checkout -q "$source_ref"
+  git -C "$profile_update_source" -c user.name=CI -c user.email=ci@example.invalid \
+    commit --allow-empty -qm "Exercise profile-only Copier update"
+  profile_update_ref=$(git -C "$profile_update_source" rev-parse HEAD)
+
+  profile_preserve_out="$tmp/profile-preserve"
+  render_fixture "$root/tests/fixtures/typescript.answers.yml" "$profile_preserve_out"
+  git -C "$profile_preserve_out" init -b main >/dev/null
+  git -C "$profile_preserve_out" config user.name CI
+  git -C "$profile_preserve_out" config user.email ci@example.invalid
+  printf 'Local pinned supplemental instruction.\n' >"$profile_preserve_out/docs/agent/local-harness-advice.md"
+  printf '{"schema_version":1,"selections":[{"id":"local-fixture","revision":"v1","content_digest":"sha256:%064d","asset_path":"docs/agent/local-harness-advice.md"}]}\n' 0 \
+    >"$profile_preserve_out/docs/agent/harness-profile.json"
+  profile_before=$(sha256sum "$profile_preserve_out/docs/agent/harness-profile.json")
+  asset_before=$(sha256sum "$profile_preserve_out/docs/agent/local-harness-advice.md")
+  sed -i "s|^_src_path:.*|_src_path: $profile_update_source|" \
+    "$profile_preserve_out/.copier-answers.yml"
+  git -C "$profile_preserve_out" add -A
+  git -C "$profile_preserve_out" commit -qm "Customize harness profile"
+  run_copier update -q --trust --defaults --vcs-ref "$profile_update_ref" "$profile_preserve_out" >/dev/null
+  test "$(sha256sum "$profile_preserve_out/docs/agent/harness-profile.json")" = "$profile_before"
+  test "$(sha256sum "$profile_preserve_out/docs/agent/local-harness-advice.md")" = "$asset_before"
+
+  profile_absent_out="$tmp/profile-absent"
+  render_fixture "$root/tests/fixtures/docs.answers.yml" "$profile_absent_out"
+  git -C "$profile_absent_out" init -b main >/dev/null
+  git -C "$profile_absent_out" config user.name CI
+  git -C "$profile_absent_out" config user.email ci@example.invalid
+  rm "$profile_absent_out/docs/agent/harness-profile.json"
+  sed -i "s|^_src_path:.*|_src_path: $profile_update_source|" \
+    "$profile_absent_out/.copier-answers.yml"
+  git -C "$profile_absent_out" add -A
+  git -C "$profile_absent_out" commit -qm "Remove local harness profile"
+  run_copier update -q --trust --defaults --vcs-ref "$profile_update_ref" "$profile_absent_out" >/dev/null
+  test ! -e "$profile_absent_out/docs/agent/harness-profile.json"
+}
+
+if [ "$profile_preservation_only" = "1" ]; then
+  run_harness_profile_preservation
+  echo "harness profile Copier preservation passed"
+  exit 0
+fi
 
 assert_generated_inventory() {
   out=$1
@@ -272,6 +188,19 @@ assert_generated_hook_surfaces() {
     echo "generation selected core.hooksPath in the generated project: $out" >&2
     exit 1
   fi
+}
+
+assert_harness_profile() {
+  out=$1
+  test -f "$out/docs/agent/harness-profile.json"
+  (cd "$out" && python3 .project-agent-workflow/scripts/check-harness-profile.py \
+    check \
+    --catalog .project-agent-workflow/docs/agent/harness-instructions.json \
+    --profile docs/agent/harness-profile.json >/dev/null)
+  (cd "$out" && python3 .project-agent-workflow/scripts/check-harness-profile.py \
+    render \
+    --catalog .project-agent-workflow/docs/agent/harness-instructions.json \
+    --profile docs/agent/harness-profile.json) | grep -q '"runtime_activation": "not_observed"'
 }
 
 assert_managed_orchestration_reports() {
@@ -978,6 +907,130 @@ PY
   rm "$out/$input"
 }
 
+run_template_feedback_smoke() {
+  out=$1
+  input=template-feedback-smoke.json
+  (cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py example) >"$out/$input"
+  # The generated project owns its alias, so bind the reviewed record to it.
+  python3 -c 'import json,sys; record=json.loads(open(sys.argv[1],encoding="utf-8").read()); record["project_alias"]=json.loads(open(sys.argv[2],encoding="utf-8").read())["project_alias"]; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(record,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$input" "$out/docs/agent/template-feedback.json"
+
+  # The generated default prepares a local draft and leaves the tracked tree alone.
+  checked=$(cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py check --record "$input")
+  printf '%s' "$checked" | grep -q '"decision": "record"'
+  drafted=$(cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py draft --record "$input" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["draft_path"])')
+  test -f "$out/$drafted"
+  git -C "$out" check-ignore "$drafted" >/dev/null
+  test ! -e "$out/docs/template-feedback"
+
+  digest=$(printf '%s' "$checked" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  written=$(cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py record --record "$input" --checked-digest "$digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["record_path"])')
+  test -f "$out/$written"
+  if git -C "$out" check-ignore "$written" >/dev/null 2>&1; then
+    echo "recorded improvement evidence must stay tracked: $written" >&2
+    exit 1
+  fi
+  # A repeat of the same reviewed bytes is the same record, not a second one.
+  (cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py record --record "$input" --checked-digest "$digest") \
+    | grep -q '"outcome": "unchanged"'
+  test "$(find "$out/docs/template-feedback" -name '*.json' | wc -l)" -eq 1
+
+  rm -r "$out/docs/template-feedback" "$out/.agent-artifacts/template-feedback" "$out/$input"
+}
+
+run_template_requirements_smoke() {
+  out=$1
+  input=template-requirements-smoke.json
+  candidate=template-requirements-candidate.json
+  (cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py example) >"$out/$input"
+  # The report arrives from a different project, so its alias stays its own.
+  python3 -c 'import json,sys; record=json.loads(open(sys.argv[1],encoding="utf-8").read()); record["project_alias"]="upstream-reporter"; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(record,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$input"
+
+  checked=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py check --report "$input")
+  printf '%s' "$checked" | grep -q '"outcome": "new"'
+  digest=$(printf '%s' "$checked" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  stored=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py import --report "$input" --checked-digest "$digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["written"][0])')
+  test -f "$out/$stored"
+  if git -C "$out" check-ignore "$stored" >/dev/null 2>&1; then
+    echo "imported improvement reports must stay tracked: $stored" >&2
+    exit 1
+  fi
+
+  # A candidate cites the exact held bytes, so provenance survives collection.
+  (cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py example) >"$out/$candidate"
+  python3 -c 'import hashlib,json,sys; held=open(sys.argv[2],"rb").read(); value=json.loads(open(sys.argv[1],encoding="utf-8").read()); value["sources"]=[{"project_alias":"upstream-reporter","report_id":"plan-worktree-publish-confusion","digest":"sha256:"+hashlib.sha256(held).hexdigest()}]; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$candidate" "$out/$stored"
+  assessed=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py check-candidate --candidate "$candidate")
+  printf '%s' "$assessed" | grep -q '"applicability_certainty": "unknown"'
+  candidate_digest=$(printf '%s' "$assessed" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  recorded=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py record-candidate --candidate "$candidate" --checked-digest "$candidate_digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["candidate_path"])')
+  test -f "$out/$recorded"
+  # Collection reports and questions; it admits no plan and decides nothing.
+  (cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py inspect) | grep -q 'not an owner decision'
+  test ! -d "$out/docs/plan/active" || test -z "$(find "$out/docs/plan/active" -name '*.md' -newer "$out/$input")"
+
+  rm -r "$out/docs/improvements" "$out/$input" "$out/$candidate"
+}
+
+run_development_direction_smoke() {
+  out=$1
+  report=development-direction-report.json
+  candidate=development-direction-candidate.json
+  decision=development-direction-decision.json
+  (cd "$out" && python3 .project-agent-workflow/scripts/template-feedback.py example) >"$out/$report"
+  python3 -c 'import json,sys; record=json.loads(open(sys.argv[1],encoding="utf-8").read()); record["project_alias"]="upstream-reporter"; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(record,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$report"
+  report_digest=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py check --report "$report" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  stored=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py import --report "$report" --checked-digest "$report_digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["written"][0])')
+
+  (cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py example) >"$out/$candidate"
+  python3 -c 'import hashlib,json,sys; held=open(sys.argv[2],"rb").read(); value=json.loads(open(sys.argv[1],encoding="utf-8").read()); value["sources"]=[{"project_alias":"upstream-reporter","report_id":"plan-worktree-publish-confusion","digest":"sha256:"+hashlib.sha256(held).hexdigest()}]; open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$candidate" "$out/$stored"
+  candidate_digest=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py check-candidate --candidate "$candidate" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  held_candidate=$(cd "$out" && python3 .project-agent-workflow/scripts/collect-template-feedback.py record-candidate --candidate "$candidate" --checked-digest "$candidate_digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["candidate_path"])')
+
+  # An undecided candidate is a suggestion; it never reaches the adopted list.
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py render) >/dev/null
+  grep -q 'no decision recorded' "$out/docs/development-direction.md"
+  grep -q 'None adopted yet.' "$out/docs/development-direction.md"
+
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py example) >"$out/$decision"
+  python3 -c 'import hashlib,json,sys; held=open(sys.argv[2],"rb").read(); value=json.loads(open(sys.argv[1],encoding="utf-8").read()); value["candidate_digest"]="sha256:"+hashlib.sha256(held).hexdigest(); open(sys.argv[1],"w",encoding="utf-8").write(json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+"\n")' \
+    "$out/$decision" "$out/$held_candidate"
+  decision_digest=$(cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py check-decision --decision "$decision" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["checked_digest"])')
+  written=$(cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py record-decision --decision "$decision" --checked-digest "$decision_digest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["decision_path"])')
+  test -f "$out/$written"
+  if git -C "$out" check-ignore "$written" >/dev/null 2>&1; then
+    echo "recorded owner decisions must stay tracked: $written" >&2
+    exit 1
+  fi
+
+  # Manual prose outside the generated section survives a re-render.
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py render) >/dev/null
+  printf 'A local note the generator must not touch.\n' >>"$out/docs/development-direction.md"
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py render) >/dev/null
+  grep -q 'A local note the generator must not touch.' "$out/docs/development-direction.md"
+  grep -q 'Adopted, in order' "$out/docs/development-direction.md"
+
+  # Adoption is not admission: no numbered plan appears.
+  (cd "$out" && python3 .project-agent-workflow/scripts/development-direction.py plan-input) | grep -q 'not an admitted plan'
+  test -z "$(find "$out/docs/plan/active" -name '[0-9]*.md')"
+
+  rm -r "$out/docs/improvements" "$out/docs/development-direction.md" \
+    "$out/$report" "$out/$candidate" "$out/$decision"
+}
+
 run_shared_human_report_smoke() {
   out=$1
   shared="$out-shared"
@@ -1224,6 +1277,7 @@ for fixture in "$root"/tests/fixtures/*.answers.yml; do
   out="$tmp/$name"
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
+  assert_harness_profile "$out"
   assert_managed_orchestration_reports "$out"
   assert_generated_whitespace_range "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
@@ -1263,6 +1317,7 @@ while IFS="$tab" read -r case_name primary_language human_report_mode human_repo
   } >"$fixture"
   render_fixture "$fixture" "$out"
   assert_generated_inventory "$out" "$fixture"
+  assert_harness_profile "$out"
   assert_managed_orchestration_reports "$out"
   assert_generated_hook_surfaces "$out"
   run_root_python "$root/tests/assert-generated-semantics.py" "$out"
@@ -1270,8 +1325,16 @@ while IFS="$tab" read -r case_name primary_language human_report_mode human_repo
   REQUIRE_ACTIONLINT=${REQUIRE_ACTIONLINT:-0} "$root/scripts/lint-github-actions.sh" "$out"
 done <"$root/tests/fixtures/copier-pairwise.tsv"
 
+run_harness_profile_preservation
+if [ -n "$explicit_source_head" ]; then
+  test "$(git -C "$root" rev-parse HEAD)" = "$explicit_source_head"
+  test "$(git -C "$root" status --porcelain=v1 --untracked-files=all)" = "$explicit_source_status"
+  test "$(git -C "$root" for-each-ref --format='%(refname) %(objectname)')" = "$explicit_source_refs"
+fi
+
 default_out="$tmp/defaults"
 render_defaults "$default_out"
+assert_harness_profile "$default_out"
 assert_managed_orchestration_reports "$default_out"
 assert_generated_hook_surfaces "$default_out"
 run_root_python "$root/tests/assert-generated-semantics.py" "$default_out"
@@ -1304,16 +1367,18 @@ assert_rejected_input() {
   label=$1
   question=$2
   value=$3
-  if run_copier copy -f --trust --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data "$question=$value" "$root" "$tmp/invalid-$label" >/dev/null 2>&1; then
+  set -- copy -f --trust --data-file "$root/tests/fixtures/docs.answers.yml" --data "$question=$value"
+  if [ -n "$source_ref" ]; then
+    set -- "$@" --vcs-ref "$source_ref"
+  fi
+  set -- "$@" "$render_source" "$tmp/invalid-$label"
+  if run_copier "$@" >/dev/null 2>&1; then
     echo "copier accepted invalid input: $label" >&2
     exit 1
   fi
 }
 
-if run_copier copy -f --trust --vcs-ref HEAD --data-file "$root/tests/fixtures/docs.answers.yml" --data project_slug='invalid slug' "$root" "$tmp/invalid-slug" >/dev/null 2>&1; then
-  echo "copier accepted an invalid project slug" >&2
-  exit 1
-fi
+assert_rejected_input invalid-slug project_slug 'invalid slug'
 assert_rejected_input empty-name project_name ''
 assert_rejected_input whitespace-name project_name '   '
 assert_rejected_input empty-purpose project_purpose ''
@@ -1331,6 +1396,9 @@ run_pre_v1_plan_compatibility_smoke "$tmp/typescript"
 run_plan_fail_closed_smoke "$tmp/typescript"
 run_referent_contract_smoke "$tmp/typescript"
 run_human_report_smoke "$tmp/typescript"
+run_template_feedback_smoke "$tmp/typescript"
+run_template_requirements_smoke "$tmp/typescript"
+run_development_direction_smoke "$tmp/typescript"
 run_shared_human_report_smoke "$tmp/typescript"
 run_external_policy_smoke "$tmp/typescript"
 
@@ -1716,6 +1784,157 @@ if grep -R 'supportcard-status' "$tmp/typescript/.project-agent-workflow/skills"
   exit 1
 fi
 grep -q 'decision_audit:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
+grep -q 'harness_evaluation:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
+grep -q 'SPEC_HARNESS_EVALUATION.md' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
+grep -q 'Harness Evaluation' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md"
+grep -q 'never authorizes adopting a configuration by itself' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md"
+test -x "$tmp/typescript/.project-agent-workflow/scripts/compare-harness-runs.py"
+cmp "$root/template/.project-agent-workflow/scripts/compare-harness-runs.py" \
+  "$tmp/typescript/.project-agent-workflow/scripts/compare-harness-runs.py"
+harness_dir="$tmp/typescript-harness"
+mkdir -p "$harness_dir"
+python3 - "$harness_dir" <<'HARNESS_FIXTURE_EOF'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+rule = "One intervention is one human message that changes the task after it starts."
+
+
+def sha(tag: str) -> str:
+    return "sha256:" + hashlib.sha256(tag.encode("utf-8")).hexdigest()
+
+
+runtime = {"cli_version": "1.4.5", "tool_versions": {"git": "2.43.0"}}
+slots = {
+    "old_model_current_instructions": "model-old",
+    "new_model_current_instructions": "model-new",
+}
+protocol = {
+    "schema_version": 1,
+    "protocol_id": "generated-smoke",
+    "repository_baseline": sha("baseline"),
+    "invariant_digest": sha("invariant"),
+    "authority_digest": sha("authority"),
+    "configurations": {
+        slot: {
+            "slot": slot,
+            "declared_model": model,
+            "reasoning_settings": {"supported": True, "effort": "medium"},
+            "instruction_asset_digests": {"AGENTS.md": sha("instructions")},
+            "runtime": runtime,
+            "configuration_digest": sha("configuration:" + slot),
+        }
+        for slot, model in slots.items()
+    },
+    "cases": [
+        {
+            "case_id": "small-fix",
+            "task_digest": sha("task:small-fix"),
+            "acceptance_digest": sha("acceptance:small-fix"),
+            "rubric_digest": sha("rubric:small-fix"),
+            "fixture_kind": "synthetic",
+        }
+    ],
+    "repetitions": 2,
+    "budget": {"max_total_runs": 16, "max_elapsed_seconds": 3600.0},
+    "metric_boundaries": {
+        "elapsed_seconds": "task_start_to_terminal_outcome",
+        "billed_cost": "directly_recorded_billed_amount",
+        "human_interventions": rule,
+    },
+    "decision_limits": {
+        "require_all_critical_pass": True,
+        "min_quality_pass_delta": 0.0,
+        "max_elapsed_ratio": 1.5,
+        "max_cost_ratio": 1.5,
+        "max_additional_interventions": 0,
+    },
+    "freeze": {
+        "declared_frozen_at": "2026-09-01T00:00:00Z",
+        "holdout_status": "withheld",
+        "ordering_evidence": None,
+    },
+}
+(root / "protocol.json").write_text(json.dumps(protocol, indent=2) + "\n", encoding="utf-8")
+
+names = []
+for slot, model in slots.items():
+    for repetition in (1, 2):
+        cell = slot + "/small-fix#" + str(repetition)
+        record = {
+            "schema_version": 1,
+            "protocol_id": "generated-smoke",
+            "slot": slot,
+            "case_id": "small-fix",
+            "repetition": repetition,
+            "task_digest": sha("task:small-fix"),
+            "acceptance_digest": sha("acceptance:small-fix"),
+            "repository_baseline": sha("baseline"),
+            "invariant_digest": sha("invariant"),
+            "authority_digest": sha("authority"),
+            "configuration_digest": sha("configuration:" + slot),
+            "fixture_kind": "synthetic",
+            "observed_model": {"status": "observed", "identity": model, "resolved_snapshot": None},
+            "observed_reasoning_settings": {"status": "observed", "supported": True, "effort": "medium"},
+            "observed_runtime": {
+                "status": "observed",
+                "cli_version": runtime["cli_version"],
+                "tool_versions": runtime["tool_versions"],
+            },
+            "instruction_loading": {
+                "status": "observed",
+                "effective_instruction_digests": {"AGENTS.md": sha("instructions")},
+                "host_instructions": "known",
+            },
+            "outcome": "completed",
+            "quality": {
+                "status": "observed",
+                "acceptance_result": "pass",
+                "judgment": {
+                    "kind": "deterministic_test",
+                    "identity": "smoke-check",
+                    "source_evidence_digest": sha("judgment:" + cell),
+                    "reviewer_provenance": "smoke fixture",
+                    "acceptance_item_digest": sha("acceptance:small-fix"),
+                    "rubric_digest": sha("rubric:small-fix"),
+                },
+            },
+            "critical_violation": False,
+            "elapsed_seconds": {"status": "observed", "value": 10.0},
+            "billed_cost": {"status": "observed", "amount": 1.0, "currency": "USD"},
+            "human_interventions": {
+                "status": "observed",
+                "count": 0,
+                "counting_rule_digest": sha(rule),
+            },
+            "evidence_digests": {"external_transcript": sha("transcript:" + cell)},
+        }
+        name = "observation-" + slot + "-" + str(repetition) + ".json"
+        (root / name).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        names.append(name)
+(root / "observations.txt").write_text("\n".join(names) + "\n", encoding="utf-8")
+HARNESS_FIXTURE_EOF
+harness_args=""
+while IFS= read -r observation; do
+  [ -n "$observation" ] || continue
+  harness_args="$harness_args --observation $harness_dir/$observation"
+done <"$harness_dir/observations.txt"
+# shellcheck disable=SC2086
+(cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/compare-harness-runs.py \
+  --protocol "$harness_dir/protocol.json" $harness_args --format json \
+  >"$harness_dir/report.json")
+grep -q '"recommendation": "insufficient_evidence"' "$harness_dir/report.json"
+grep -q '"synthetic_fixture"' "$harness_dir/report.json"
+grep -q '"ordering_evidence_not_independently_reviewed"' "$harness_dir/report.json"
+if (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/compare-harness-runs.py \
+    --protocol "$harness_dir/protocol.json" >/dev/null 2>"$harness_dir/empty.err"); then
+  echo "generated harness comparison accepted a report without run observations" >&2
+  exit 1
+fi
+grep -q 'at least one run observation is required' "$harness_dir/empty.err"
 grep -q 'skill_authoring:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'referent_first:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"
 grep -q 'user_communication:' "$tmp/typescript/.project-agent-workflow/docs/agent/spec-index.yaml"

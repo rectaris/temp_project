@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "project_alias": "project-agent-workflow",
+  "mode": "agent_select_local"
+}

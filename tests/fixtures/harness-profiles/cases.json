@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "cases": {
+    "empty-selection": "test_repository_defaults_check_and_render_empty_selection",
+    "active-selection": "test_exact_selection_renders_only_selected_asset",
+    "retired-selection": "test_retired_selection_remains_reproducible",
+    "unknown-revision": "test_unknown_revision_and_digest_drift_fail_without_fallback",
+    "digest-drift": "test_unknown_revision_and_digest_drift_fail_without_fallback",
+    "unsafe-asset": "test_unsafe_asset_path_is_rejected",
+    "governing-source-selection": "test_governing_source_id_selection_is_rejected",
+    "governing-source-path-selection": "test_governing_source_path_selection_is_rejected",
+    "measured-adoption": "test_measured_adoption_is_accepted_and_changes_no_repository_state",
+    "retired-adoption": "test_retired_revision_cannot_be_newly_adopted",
+    "forged-adoption-record": "test_adoption_record_that_misstates_its_comparison_is_rejected",
+    "unmeasured-revision": "test_unmeasured_revision_cannot_be_adopted",
+    "rollback-reassessment": "test_rollback_reports_governing_reassessment"
+  }
+}
