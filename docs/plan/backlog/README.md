@@ -24,7 +24,6 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [318](318-preserve-model-evidence-in-agent-logs.md) | backlog | Preserve execution-scoped model evidence through log capture and import | docs/plan/backlog/318-preserve-model-evidence-in-agent-logs.md |
 | [321](321-report-model-evidence-without-usage-reattribution.md) | backlog | Report verified model evidence and gaps without reattributing usage | docs/plan/backlog/321-report-model-evidence-without-usage-reattribution.md |
 
 ## ハーネスのモデル更新への対応
@@ -35,6 +34,7 @@
 
 ## モデル情報の記録と確認
 
-[318：取得・保存](318-preserve-model-evidence-in-agent-logs.md)で、モデルと推論設定を出典付きで保存する。
+[318：取得・保存](../active/318-preserve-model-evidence-in-agent-logs.md)で、モデルと推論設定を出典付きで保存する。
 その完了後に[321：確認・集計](321-report-model-evidence-without-usage-reattribution.md)で、取得できた情報、未観測、不一致を表示する。
-両プランは未着手であり、既存ログの自動書き換え、モデル別のトークン配分、実モデルの比較実行は含まない。
+318は実装中であり、321は未着手である。
+どちらにも、既存ログの自動書き換え、モデル別のトークン配分、実モデルの比較実行は含まない。

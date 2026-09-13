@@ -1,6 +1,7 @@
 # Preserve execution-scoped model evidence through log capture and import
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Captured model statements retain their source meaning and observable execution scope without turning requested settings, missing identities or legacy aggregate usage into observed model execution.
 task_types:
   - template_workflow
