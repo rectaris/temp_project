@@ -255,3 +255,4 @@ id	path
 322	docs/plan/checked/2026/09/01-15/322-record-downstream-template-improvements.md
 323	docs/plan/checked/2026/09/01-15/323-collect-template-improvement-requirements.md
 324	docs/plan/checked/2026/09/01-15/324-derive-development-direction-from-accepted-requirements.md
+329	docs/plan/checked/2026/09/01-15/329-release-v147-for-downstream-improvement-flow.md
