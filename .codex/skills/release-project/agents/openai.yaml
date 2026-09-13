@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Project"
+  short_description: "Prepare and publish a release of this template"
+  default_prompt: "Use $release-project to prepare or publish one exact stable release of this Copier template repository, keeping preparation and publication separately authorized."

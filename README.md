@@ -157,10 +157,16 @@ copier update --trust --vcs-ref v1.4.9
 
 判断に迷う場合は、`git diff <latest-tag>..HEAD -- copier.yml template scripts tests docs references README.md` で生成契約と運用手順への影響を確認します。
 
+公開は、公開ブランチの push とタグの push を別々の操作として、対象 ref を明示して行います。
+
 ```sh
-git tag vX.Y.Z
-git push origin main --tags
+git push origin refs/heads/main
+git tag -a vX.Y.Z -m "Release vX.Y.Z" <公開コミット>
+git push origin refs/tags/vX.Y.Z
 ```
+
+リリース作業の手順全体は [.codex/skills/release-project/references/workflow.md](.codex/skills/release-project/references/workflow.md) に記載しています。
+準備と公開は別の段階として扱い、公開に当たる操作はそれぞれ個別に承認を必要とします。
 
 ## 検証
 

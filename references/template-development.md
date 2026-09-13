@@ -59,6 +59,8 @@ Before any Copier v1.4.5 before-update or after-update migration step, read the 
 
 ## Release Flow
 
+Follow [../.codex/skills/release-project/references/workflow.md](../.codex/skills/release-project/references/workflow.md) for the full runbook, including version selection, downstream verification, per-effect authorization, and recovery from an interrupted release. The steps below are its outline.
+
 1. Change `copier.yml`, `template/`, references, or tests.
 2. Run `UV_CACHE_DIR=.uv-cache uv sync`.
 3. Run `UV_CACHE_DIR=.uv-cache uv run copier --version`.

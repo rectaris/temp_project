@@ -1102,6 +1102,11 @@ def require_decision_reuse_alignment() -> None:
             if forbidden in body:
                 fail(f"{relative} introduces disallowed authority: {forbidden}")
 
+    # A skill that a generated project would never run stays root-only, but it
+    # stays named here so that placement is a decision rather than an omission.
+    # Every other root skill still needs its generated counterpart, because
+    # parity is what keeps a reusable skill from quietly becoming root-only.
+    root_only_skills = {"release-project"}
     root_skills = {
         entry.name for entry in (ROOT / ".codex/skills").iterdir() if entry.is_dir()
     }
@@ -1110,10 +1115,16 @@ def require_decision_reuse_alignment() -> None:
         for entry in (ROOT / "template/.project-agent-workflow/skills").iterdir()
         if entry.is_dir()
     }
-    if root_skills != template_skills:
+    missing_root_only = sorted(root_only_skills - root_skills)
+    if missing_root_only:
+        fail(f"root-only skill inventory names a missing skill: {missing_root_only}")
+    stale_root_only = sorted(root_only_skills & template_skills)
+    if stale_root_only:
+        fail(f"root-only skill also has a generated counterpart: {stale_root_only}")
+    if root_skills - root_only_skills != template_skills:
         fail(
             "root and generated managed skill inventories differ: "
-            f"{sorted(root_skills ^ template_skills)}"
+            f"{sorted((root_skills - root_only_skills) ^ template_skills)}"
         )
 
     for relative, ceiling in (
