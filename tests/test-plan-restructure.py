@@ -6887,6 +6887,221 @@ class PlanRestructureTest(unittest.TestCase):
             )
         self.assertIn("does not describe the live archive", str(relocated.exception))
 
+    CONTRACT_SOURCE_PATH = "docs/plan/replanned/contracts/001-source.json"
+
+    def unstop_contract_source(self, label: str) -> tuple[object, str, str]:
+        """Commit an archived contract whose recorded source was never stopped."""
+        self.assertEqual(self.run_command().returncode, 0)
+        module = self.load_restructure_module(label)
+        self.unstop_recorded_source(module, self.CONTRACT_SOURCE_PATH)
+        archive_path = module.replanned_rows(
+            (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+        )[0][1]
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "record an unstopped archived contract source")
+        return module, self.CONTRACT_SOURCE_PATH, archive_path
+
+    def unstop_recorded_source(self, module, contract_path: str) -> None:
+        """Rewrite one archived contract so its recorded source was never stopped."""
+        contract_file = self.repo / contract_path
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        kept: list[str] = []
+        dropping = False
+        for line in contract["source"]["content"].split("\n"):
+            if line == "replan_reason_codes:":
+                dropping = True
+                continue
+            if dropping:
+                if line.startswith("  - "):
+                    continue
+                dropping = False
+            kept.append("status: in_progress" if line == "status: replan_required" else line)
+        content = "\n".join(kept)
+        contract["source"]["content"] = content
+        contract["source"]["plan_digest"] = module.sha256(content.encode())
+        contract_file.write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def write_contract_source_registry(
+        self, module, entries: list[dict[str, str]], boundary: str
+    ) -> Path:
+        path = self.repo / module.PRE_BOUNDARY_CONTRACT_SOURCE_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "boundary_commit": boundary,
+                    "reconciliations": entries,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def contract_source_entry(self, contract_path: str, archive_path: str) -> dict[str, str]:
+        return {
+            "contract_path": contract_path,
+            "contract_digest": digest((self.repo / contract_path).read_bytes()),
+            "archive_path": archive_path,
+            "archive_digest": digest((self.repo / archive_path).read_bytes()),
+            "source_status": "in_progress",
+            "reason": "archived before canonical stopping was verified historically",
+        }
+
+    def test_unstopped_archived_contract_source_is_refused_without_the_registry(
+        self,
+    ) -> None:
+        module, _, _ = self.unstop_contract_source("contract_source_refused")
+        with self.assertRaises(module.RestructureError) as refused:
+            module.verify_repository_contracts()
+        self.assertIn("contract source status mismatch", str(refused.exception))
+
+    def test_registered_contract_source_is_admitted_at_its_recorded_status(self) -> None:
+        module, contract_path, archive_path = self.unstop_contract_source(
+            "contract_source_admitted"
+        )
+        boundary = git(self.repo, "rev-parse", "HEAD")
+        entry = self.contract_source_entry(contract_path, archive_path)
+        registry = self.write_contract_source_registry(module, [entry], boundary)
+        self.assertEqual(
+            module.load_pre_boundary_contract_sources(), {contract_path: "in_progress"}
+        )
+        module.verify_repository_contracts()
+        self.write_contract_source_registry(
+            module, [{**entry, "source_status": "replan_required"}], boundary
+        )
+        with self.assertRaises(module.RestructureError) as stopped:
+            module.load_pre_boundary_contract_sources()
+        self.assertIn("not an unstopped status", str(stopped.exception))
+        self.write_contract_source_registry(
+            module, [{**entry, "reason": "  "}], boundary
+        )
+        with self.assertRaises(module.RestructureError) as unreasoned:
+            module.load_pre_boundary_contract_sources()
+        self.assertIn("records no reason", str(unreasoned.exception))
+        self.write_contract_source_registry(
+            module, [{**entry, "contract_digest": digest(b"other")}], boundary
+        )
+        with self.assertRaises(module.RestructureError) as drifted:
+            module.load_pre_boundary_contract_sources()
+        self.assertIn("bytes changed", str(drifted.exception))
+        self.write_contract_source_registry(
+            module, [entry], git(self.repo, "rev-parse", "HEAD~1")
+        )
+        with self.assertRaises(module.RestructureError) as early:
+            module.load_pre_boundary_contract_sources()
+        self.assertIn("not committed before the boundary", str(early.exception))
+        self.write_contract_source_registry(module, [entry], boundary)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "record the contract source registry")
+        registry.write_text(
+            registry.read_text(encoding="utf-8").replace(
+                "historically", "historically ", 1
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(module.RestructureError) as rewritten:
+            module.load_pre_boundary_contract_sources()
+        self.assertIn("not write-once", str(rewritten.exception))
+
+    def test_registered_nested_contract_source_is_admitted_through_its_referrer(
+        self,
+    ) -> None:
+        """Cover the successor route, where a referrer contract resolves the record."""
+        self.assertEqual(self.run_command().returncode, 0)
+        nested = self.run_nested_restructure("docs/plan/active/002-data.md")
+        self.assertEqual(nested.returncode, 0, nested.stderr)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "restructure the nested successor")
+        module = self.load_restructure_module("nested_contract_source")
+        contract_path = "docs/plan/replanned/contracts/002-nested.json"
+        archive_path = next(
+            row[1]
+            for row in module.replanned_rows(
+                (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+            )
+            if row[2] == contract_path
+        )
+        self.unstop_recorded_source(module, contract_path)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "record an unstopped nested contract source")
+        with self.assertRaises(module.RestructureError) as refused:
+            module.verify_repository_contracts()
+        self.assertIn("must already be canonically stopped", str(refused.exception))
+        self.write_contract_source_registry(
+            module,
+            [self.contract_source_entry(contract_path, archive_path)],
+            git(self.repo, "rev-parse", "HEAD"),
+        )
+        module.verify_repository_contracts()
+
+    def assert_non_canonical_stop_marker_is_refused(
+        self, label: str, injected: str, expected: str
+    ) -> None:
+        """Register a recorded source whose stop marker uses a non-scalar shape."""
+        module, contract_path, archive_path = self.unstop_contract_source(label)
+        contract_file = self.repo / contract_path
+        contract = json.loads(contract_file.read_text(encoding="utf-8"))
+        content = contract["source"]["content"].replace(
+            "status: in_progress\n", "status: in_progress\n" + injected, 1
+        )
+        self.assertNotEqual(content, contract["source"]["content"])
+        contract["source"]["content"] = content
+        contract["source"]["plan_digest"] = module.sha256(content.encode())
+        contract_file.write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "record a non-canonical stop marker")
+        self.write_contract_source_registry(
+            module,
+            [self.contract_source_entry(contract_path, archive_path)],
+            git(self.repo, "rev-parse", "HEAD"),
+        )
+        with self.assertRaises(module.RestructureError) as refused:
+            module.load_pre_boundary_contract_sources()
+        self.assertIn(expected, str(refused.exception))
+
+    def test_registry_refuses_an_inline_list_shaped_replan_reason_code(self) -> None:
+        """An inline reason code is a stop marker even though items() cannot read it."""
+        self.assert_non_canonical_stop_marker_is_refused(
+            "inline_reason_shape",
+            "replan_reason_codes: scope_drift\n",
+            "already stopped",
+        )
+
+    def test_registry_refuses_a_block_shaped_completion_deferred_reason(self) -> None:
+        """A block-shaped carryover is stale even though scalar() reads it as empty."""
+        self.assert_non_canonical_stop_marker_is_refused(
+            "block_reason_shape",
+            "completion_deferred_reason:\n  - stale carryover\n",
+            "stale completion_deferred_reason",
+        )
+
+    def test_registry_refuses_a_source_that_was_already_canonically_stopped(self) -> None:
+        self.assertEqual(self.run_command().returncode, 0)
+        module = self.load_restructure_module("contract_source_already_stopped")
+        archive_path = module.replanned_rows(
+            (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+        )[0][1]
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "record the canonical restructuring")
+        entry = self.contract_source_entry(self.CONTRACT_SOURCE_PATH, archive_path)
+        self.write_contract_source_registry(
+            module, [entry], git(self.repo, "rev-parse", "HEAD")
+        )
+        with self.assertRaises(module.RestructureError) as mismatched:
+            module.load_pre_boundary_contract_sources()
+        self.assertIn("recorded source status mismatch", str(mismatched.exception))
+
     def test_lineage_rebinding_admits_only_checked_successors_of_that_source(
         self,
     ) -> None:

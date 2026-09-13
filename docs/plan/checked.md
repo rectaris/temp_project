@@ -260,3 +260,5 @@ id	path
 331	docs/plan/checked/2026/09/01-15/331-clean-up-test-owned-worktree-records.md
 332	docs/plan/checked/2026/09/01-15/332-retire-unreachable-worktree-records.md
 334	docs/plan/checked/2026/09/01-15/334-release-v148-for-ownership-record-retirement.md
+337	docs/plan/checked/2026/09/01-15/337-admit-pre-boundary-contract-sources.md
+338	docs/plan/checked/2026/09/01-15/338-release-v149-for-pre-boundary-contract-sources.md
