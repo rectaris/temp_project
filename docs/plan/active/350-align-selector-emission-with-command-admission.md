@@ -1,14 +1,13 @@
 # Align the change-aware selector's emission with the commands it is allowed to run
 
-status: deferred
-completion_deferred_reason: This plan proves both sides of the source acceptance together, so it starts only after plan 349 lands the widened admission and is archived.
+status: in_progress
 implementation_mode: parent_direct
 primary_invariant: The change-aware selector validates its own selection as structured argv and emits only compile targets that resolve inside the repository, so every command it emits for a changed file is both admitted and actually run as a check.
 replan_sources:
   - docs/plan/active/343-admit-project-source-compile-checks.md
 replan_contract: docs/plan/replanned/contracts/343-admit-project-source-compile-checks.json
 predecessor_plans:
-  - docs/plan/active/349-complete-root-agnostic-compile-admission.md
+  - docs/plan/checked/2026/09/01-15/349-complete-root-agnostic-compile-admission.md
 integration_gates:
   - This plan proves the widened admission from plan 349 and the selector-side agreement together against every source acceptance item.
 successor_plans:
