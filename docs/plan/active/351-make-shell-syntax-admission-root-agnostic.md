@@ -1,6 +1,7 @@
 # Make the shell syntax check admission root-agnostic and end a refused selection with a reason
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: The command allowlist admits a contained repository-relative shell path as a syntax check regardless of which source root holds it, still refuses an absolute path, a parent-directory escape, and a non-.sh argument, and a refused selection ends change-aware validation with a stated reason rather than an unhandled traceback.
 task_types:
   - template_workflow
