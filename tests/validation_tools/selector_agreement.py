@@ -523,4 +523,3 @@ class SelectorAgreementTest(unittest.TestCase):
             self.assertNotEqual(0, result.returncode, result.stdout)
             report = json.loads(result.stdout)
             self.assertEqual("failed", report["status"], report)
-
