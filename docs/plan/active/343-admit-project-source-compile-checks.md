@@ -1,6 +1,7 @@
 # Admit the compile checks the change-aware selector emits for a generated project's own source roots
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Every py_compile command the change-aware selector emits for a changed repository file is a command the validation allowlist admits.
 task_types:
   - template_workflow

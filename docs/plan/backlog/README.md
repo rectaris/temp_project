@@ -21,10 +21,10 @@
 ## 現在のbacklog一覧
 
 次の一覧は`python3 scripts/render-plan-overview.py --relative-to docs/plan/backlog/README.md`で生成した。
+341と343をactiveへ昇格したため、現在backlogに残っているプランはない。
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [343](343-admit-project-source-compile-checks.md) | backlog | Admit the compile checks the change-aware selector emits for a generated project's own source roots | docs/plan/backlog/343-admit-project-source-compile-checks.md |
 
 ## ハーネスのモデル更新への対応
 
