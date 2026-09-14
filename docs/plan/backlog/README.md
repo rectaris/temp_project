@@ -20,7 +20,12 @@
 
 ## 現在のbacklog一覧
 
-347と348をactiveへ昇格したため、現在backlogに残っているプランはない。
+次の一覧は`python3 scripts/render-plan-overview.py`が生成する。
+347と348はactiveへ昇格して完了し、いま未着手なのは351だけである。
+
+| id | status | title | path |
+| --- | --- | --- | --- |
+| [351](351-make-shell-syntax-admission-root-agnostic.md) | backlog | Make the shell syntax check admission root-agnostic and end a refused selection with a reason | docs/plan/backlog/351-make-shell-syntax-admission-root-agnostic.md |
 
 ## ハーネスのモデル更新への対応
 
