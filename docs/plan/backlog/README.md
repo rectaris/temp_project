@@ -24,7 +24,6 @@
 
 | id | status | title | path |
 | --- | --- | --- | --- |
-| [341](341-restore-shelved-manifest-fields.md) | backlog | Restore shelved_reason and shelved_at to the manifest parser the plan lint reads | docs/plan/backlog/341-restore-shelved-manifest-fields.md |
 | [343](343-admit-project-source-compile-checks.md) | backlog | Admit the compile checks the change-aware selector emits for a generated project's own source roots | docs/plan/backlog/343-admit-project-source-compile-checks.md |
 
 ## ハーネスのモデル更新への対応

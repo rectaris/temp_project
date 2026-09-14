@@ -1,6 +1,7 @@
 # Restore shelved_reason and shelved_at to the manifest parser the plan lint reads
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Every manifest field the plan lint reads through planlib is a field planlib preserves.
 task_types:
   - template_workflow
