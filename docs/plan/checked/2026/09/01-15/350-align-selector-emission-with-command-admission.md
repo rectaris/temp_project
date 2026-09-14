@@ -1,6 +1,6 @@
 # Align the change-aware selector's emission with the commands it is allowed to run
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: The change-aware selector validates its own selection as structured argv and emits only compile targets that resolve inside the repository, so every command it emits for a changed file is both admitted and actually run as a check.
 replan_sources:
@@ -91,12 +91,84 @@ checked_summary_ja: 変更対応検証のコマンド選択と許可判定を一
 
 ## Tasks
 
-- [ ] Replace the shlex.join round trip in validate_selected_commands with structured argv validation through plan_validation_commands.validate_argv, keeping the raw command text only for reporting.
-- [ ] Emit compile targets in a form py_compile treats as filenames, so a root-level name beginning with a hyphen is checked rather than parsed as an option.
-- [ ] Drop a compile target whose resolved location falls outside the repository, and record why lexical containment alone does not decide this.
-- [ ] Add tests/validation_tools/selector_agreement.py with a guard that derives the selector's compile emission and fails on any reassignment, filter, or iterable substitution that removes a changed Python file from it.
-- [ ] Cover a changed file name containing a space, a dollar sign, a leading hyphen at the repository root, and a symlink that escapes the repository.
-- [ ] Register the new test module in tests/test-validation-tools.py.
-- [ ] Run the declared validation commands and confirm both sides of the source acceptance together.
+- [x] Replace the shlex.join round trip in validate_selected_commands with structured argv validation through plan_validation_commands.validate_argv, keeping the raw command text only for reporting.
+- [x] Emit compile targets in a form py_compile treats as filenames, so a root-level name beginning with a hyphen is checked rather than parsed as an option.
+- [x] Drop a compile target whose resolved location falls outside the repository, and record why lexical containment alone does not decide this.
+- [x] Add tests/validation_tools/selector_agreement.py with a guard that derives the selector's compile emission and fails on any reassignment, filter, or iterable substitution that removes a changed Python file from it.
+- [x] Cover a changed file name containing a space, a dollar sign, a leading hyphen at the repository root, and a symlink that escapes the repository.
+- [x] Register the new test module in tests/test-validation-tools.py.
+- [x] Run the declared validation commands and confirm both sides of the source acceptance together.
 
 ## Validation Notes
+
+Implementation mode was parent_direct. Every write target sits inside the validation-authority scope
+that `scripts/run-sandboxed-plan-worker.py` refuses to hand to a writable worker, so no sandboxed
+worker attempt and no worker receipt exist for this plan.
+
+Predecessor plan 349 shipped an AST drift guard in `tests/validation_tools/changes.py` that pins the
+exact statement shape of the compile emission. That file is not in this plan's write scope, and it
+could not be added: it is also listed in this plan's read-only `context_files`, and the restructuring
+tool refuses a write scope that overlaps context files, while removing a context entry is reachable
+only inside a full reconstruction. The owner authorized widening the scope, the route turned out to
+be mechanically closed, and the work was then fitted into the places that guard does not pin: the
+containment decision into `existing`, the filename normalization into a rebinding of `paths` at the
+top of the selector, and the argv validation into `validate_selected_commands`. That AST guard still
+passes unchanged.
+
+Two independent reviews ran in this execution epoch, which is the whole epoch budget.
+
+Round 1 confirmed the three named defects and their fixes end to end, refuted the concern that a
+symlinked repository root could drop legitimate files, and confirmed that replacing the shell round
+trip weakens no boundary: the commands never reach a shell, the structural allowlist is unchanged,
+and the one new indexing path is closed by the added empty-command guard. It reported three findings.
+One High: the guard called itself derived but compared the emission against a listed corpus, so a
+narrowing written inside `existing`, whose body no guard pins, dropped a changed file with the entire
+suite green. Two Medium: broadening `existing` silently removed non-compile checks for a legitimately
+symlinked path, and the shell-side disagreement remained while the test corpus avoided it.
+
+The Medium findings were remediated by recording every containment drop in
+`SKIPPED_OUTSIDE_REPOSITORY`, reporting it on stderr and in both JSON outputs, and by asserting the
+remaining `sh -n` disagreement explicitly instead of choosing a corpus that hides it.
+
+Round 2 confirmed those two remediations, confirmed acceptance items 1 to 3 end to end, confirmed the
+set comparison is sound in the other direction, and confirmed the diagnostic state is not a
+correctness hazard. It reported that the High finding was not closed: the enlarged corpus moved the
+blind spot rather than removing it. Twenty-two mutations were run and twelve survived, including one
+that restores a repository-root allowlist inside `existing` and leaves a changed `backend/api.py`
+uncompiled while the run reports success. It also reported that the awkward-name corpus asserted a
+property the shipped entry point does not have, because the tests bypassed `changed_files` and Git
+C-quotes a path holding a quote or a non-ASCII byte.
+
+Both round 2 findings were remediated after the epoch review budget was spent, so that remediation
+carries no independent review. The owner accepted it explicitly on 2026-09-14 rather than stopping
+the plan.
+
+The listed corpus was replaced with a generated one. `shape_corpus` varies root name, directory
+depth, digits, underscores, capitalization, dotted directory names and name length across 111 paths,
+and `expected_compile_targets` states the rule the selector is supposed to follow without naming any
+root. A separate test compares `existing` and `inside_repository` against the same independent
+containment rule over the same shapes, so neither helper can carry a policy of its own.
+
+Twenty mutations were applied to a copy and reverted, covering all twelve round 2 survivors: a
+repository-root allowlist, an underscore filter, a digit filter, a depth filter, a length filter, a
+second-level allowlist, prefix filters in `existing` and in `inside_repository`, two filters on the
+rebound `paths`, a filter inside `add_command`, a pairwise conditional drop, a call counter, a
+basename allowlist, a substitution inside `checkable_name`, truncation, a comprehension filter, a
+blanket prefix, and removal of containment. All twenty fail the guard now and the unmodified selector
+passes.
+
+The Git report itself was the remaining silent drop. `git` now requests the NUL-separated form, which
+carries the path rather than its quoted rendering, and two tests drive the shipped entry point over a
+real repository: one asserts that every awkward name, including one holding a quote and one holding
+non-ASCII characters, reaches the compile emission, and one asserts that a selected check actually
+fails on a broken file. Restoring the line-based reading fails the first of those.
+
+The shell-side disagreement is unchanged and deliberate. The selector emits `sh -n` for any changed
+shell script while the allowlist admits four enumerated roots, so a shell script elsewhere still
+aborts the run. Widening that rule is separately authorized work that a successor may not absorb,
+because a successor may not add an acceptance item its source plan never carried. The disagreement is
+asserted rather than hidden, and that test states it must be rewritten when the gap closes.
+
+Focused validation: `python3 tests/test-validation-tools.py` reported 333 tests OK.
+Static preflight: `python3 scripts/check-copier-template.py` passed, and the shipped
+`plan_validation_commands.py --self-test` exited 0.

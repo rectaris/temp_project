@@ -24,8 +24,14 @@ class GitQueryError(RuntimeError):
 
 
 def git(args: list[str]) -> list[str]:
+    # In its default line output Git C-quotes any path holding a quote, a
+    # backslash, or a non-ASCII byte, and the quoted text is not the path. Such
+    # a name would fail the suffix test and leave the selection silently, which
+    # is the same failure as emitting a check that never runs. The
+    # NUL-separated form carries the path itself, and it also keeps a name
+    # whose own characters include surrounding whitespace intact.
     result = subprocess.run(
-        ["git", *args],
+        ["git", *args, "-z"],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -34,7 +40,7 @@ def git(args: list[str]) -> list[str]:
     )
     if result.returncode != 0:
         raise GitQueryError(f"Git query failed ({result.returncode}): {shlex.join(['git', *args])}")
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return [entry for entry in result.stdout.split("\0") if entry]
 
 
 def changed_files(mode: str) -> tuple[list[str], str]:
@@ -57,8 +63,40 @@ def filter_changed_files(paths: list[str] | set[str]) -> list[str]:
     )
 
 
+def inside_repository(path: str) -> bool:
+    root = ROOT.resolve()
+    try:
+        resolved = (ROOT / path).resolve()
+    except OSError:
+        return False
+    return resolved == root or root in resolved.parents
+
+
+SKIPPED_OUTSIDE_REPOSITORY: list[str] = []
+
+
 def existing(path: str) -> bool:
-    return (ROOT / path).exists()
+    # Lexical containment cannot see a symlink, so a changed path may name a
+    # file that resolves outside this repository. A check is only meaningful on
+    # a file this repository owns, so resolution decides membership here.
+    if not (ROOT / path).exists():
+        return False
+    if inside_repository(path):
+        return True
+    # Every caller of this helper drops the check it was gating, so a silent
+    # drop would turn a check that used to run into a run that reports success.
+    # The path is reported instead, which is the only place the difference
+    # between lexical and resolved containment becomes visible to a reader.
+    if path not in SKIPPED_OUTSIDE_REPOSITORY:
+        SKIPPED_OUTSIDE_REPOSITORY.append(path)
+    return False
+
+
+def checkable_name(path: str) -> str:
+    # A repository-root name beginning with a hyphen reaches a checker's own
+    # argument parser as an option, so py_compile exits without compiling it.
+    # The ./ form names the same file and is read as a filename.
+    return f"./{path}" if path.startswith("-") else path
 
 
 # --- active plan index grammar: keep byte-identical across enforcing commands ---
@@ -216,6 +254,10 @@ def add_command(commands: list[list[str]], command: list[str]) -> None:
 
 
 def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
+    # Normalize before selection so every emitted command names its target as a
+    # filename. Only a repository-root name beginning with a hyphen changes, and
+    # such a name matches no directory prefix this selector reads.
+    paths = [checkable_name(path) for path in paths]
     commands: list[list[str]] = []
     if diff_mode == "staged":
         add_command(commands, ["git", "diff", "--cached", "--check"])
@@ -259,8 +301,18 @@ def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
 
 
 def validate_selected_commands(commands: list[list[str]]) -> None:
-    raw_commands = [shlex.join(command) for command in commands]
-    plan_validation_commands.parse_validation_commands(raw_commands)
+    # These commands are executed without a shell. Rebuilding each one into a
+    # shell string and revalidating that string applies restrictions written for
+    # hand-authored plan commands, so a valid Git path such as "src/a b.py" or
+    # "src/a$HOME.py" aborts the run although nothing ever reaches a shell. The
+    # selection is already structured, so it is validated as structured argv and
+    # the joined text is kept for reporting only.
+    for command in commands:
+        if not command:
+            raise plan_validation_commands.ValidationCommandError(
+                "validation command must not be empty"
+            )
+        plan_validation_commands.validate_argv(tuple(command), shlex.join(command))
 
 
 def command_records(commands: list[list[str]]) -> list[dict[str, object]]:
@@ -314,12 +366,20 @@ def main(argv: list[str]) -> int:
 
     commands = select_commands(paths, diff_mode)
     validate_selected_commands(commands)
+    skipped = list(SKIPPED_OUTSIDE_REPOSITORY)
+    if skipped and not args.json:
+        for path in skipped:
+            print(
+                f"validate-changes: skipped {path}: resolves outside this repository",
+                file=sys.stderr,
+            )
     if args.json and args.print_only:
         print_json(
             {
                 "changed_files": paths,
                 "commands": command_records(commands),
                 "diff_mode": diff_mode,
+                "skipped_outside_repository": skipped,
                 "status": "selected",
             }
         )
@@ -357,6 +417,7 @@ def main(argv: list[str]) -> int:
                 "commands": command_records(commands),
                 "diff_mode": diff_mode,
                 "results": results,
+                "skipped_outside_repository": skipped,
                 "status": status,
             }
         )

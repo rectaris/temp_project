@@ -19,6 +19,7 @@ from validation_tools.release_skill import (
     ReleaseSkillDetectionTest,
     ReleaseSkillStructureTest,
 )
+from validation_tools.selector_agreement import SelectorAgreementTest
 from validation_tools.smoke_source import SmokeCopySelectionTest, SmokeSourceTest
 from validation_tools.worktrees import (
     ManagedPlanWorktreesTest,
