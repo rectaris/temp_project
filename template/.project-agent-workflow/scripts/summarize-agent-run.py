@@ -18,7 +18,14 @@ import os
 import re
 import stat
 import sys
+import tempfile
+import unicodedata
+from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import agent_log_manifest  # noqa: E402
 
 
 MAX_INPUT_FILES = 32
@@ -44,6 +51,47 @@ RESOURCE_METRICS = (
     "tool_call_count",
 )
 EVIDENCE_SOURCES = ("external_transcript", "codex_hooks")
+# The model contract is owned by agent_log_manifest, which produces every
+# summary this command reports. Sourcing the constants and the source scan from
+# there is what lets the report verify a summary by recomputing it, instead of
+# maintaining a second table that could drift into accepting evidence the
+# producer would have refused.
+MODEL_OBSERVATION_SCHEMA_VERSION = agent_log_manifest.MODEL_OBSERVATION_SCHEMA_VERSION
+MODEL_ATTRIBUTES = agent_log_manifest.MODEL_ATTRIBUTES
+MODEL_EVIDENCE_CLASSES = agent_log_manifest.MODEL_EVIDENCE_CLASSES
+MODEL_SOURCE_KINDS = agent_log_manifest.MODEL_SOURCE_KINDS
+MODEL_SOURCE_CAPABILITIES = agent_log_manifest.MODEL_SOURCE_CAPABILITIES
+MODEL_PROVIDER_CONTEXT_FIELDS = agent_log_manifest.MODEL_PROVIDER_CONTEXT_FIELDS
+MODEL_COVERAGE_STATUSES = ("present", "missing", "unreadable")
+MODEL_DIAGNOSTIC_CODES = agent_log_manifest.MODEL_DIAGNOSTIC_CODES
+# Each source file stores its observation under one container key, exactly as
+# the producer wrote it.
+MODEL_SOURCE_CONTAINERS = {"external_transcript": "metadata", "codex_hooks": "payload"}
+# The manifest field each source is declared under, as the producer reads it.
+MODEL_SOURCE_MANIFEST_KEYS = {
+    "external_transcript": "transcript_log",
+    "codex_hooks": "hook_event_log",
+}
+# A session identity alone does not separate two executions: one hook log
+# reports many turns under one session. Only a shape that names a turn can
+# establish a scope two statements may be compared within.
+MODEL_TURN_SCOPED_KINDS = tuple(
+    kind
+    for kind in MODEL_SOURCE_KINDS
+    if "turn_id" in MODEL_SOURCE_CAPABILITIES[kind]["execution_scope"]
+)
+MAX_MODEL_VALUE_LENGTH = agent_log_manifest.MAX_MODEL_VALUE_LENGTH
+MAX_MODEL_STATEMENTS = agent_log_manifest.MAX_MODEL_STATEMENTS
+MAX_MODEL_PROVIDER_VALUES = agent_log_manifest.MAX_MODEL_PROVIDER_VALUES
+MAX_MODEL_DIAGNOSTICS = len(MODEL_DIAGNOSTIC_CODES)
+# A model statement says which model a scope reported. It never says how many
+# tokens that model consumed, so the report names the unavailable attribution
+# instead of dividing a run total by a model name.
+MODEL_ATTRIBUTION_UNAVAILABLE = (
+    "per_model_token_totals",
+    "per_model_billed_cost",
+    "per_model_completed_task_counts",
+)
 DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 CURRENCY_PATTERN = re.compile(r"^[A-Z]{3}$")
 
@@ -157,7 +205,7 @@ def load_json_object(path: str) -> dict[str, Any]:
     data = read_bounded_regular_file(path, "input record")
     try:
         value = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise SummaryError(f"input record is not valid UTF-8 JSON: {path}") from exc
     if not isinstance(value, dict):
         raise SummaryError(f"input record must contain a JSON object: {path}")
@@ -181,16 +229,36 @@ def require_bounded_counter(value: Any, label: str) -> int:
 def require_duration(value: Any, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise SummaryError(f"{label} must be numeric seconds")
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise SummaryError(f"{label} is outside the supported duration bound") from exc
     if not math.isfinite(number) or not 0 <= number <= TELEMETRY_MAX_DURATION_SECONDS:
         raise SummaryError(f"{label} is outside the supported duration bound")
     return number
 
 
+def reject_unrenderable_text(value: str, label: str) -> str:
+    """Refuse text that would corrupt or spoof the rendered report.
+
+    The text report is line oriented, so an embedded newline would let a record
+    identifier forge a report line, and a Unicode format character such as a
+    bidirectional override would let a value reorder what a reader sees. Neither
+    is a legitimate identifier, so both reject rather than being rewritten.
+    """
+
+    for character in value:
+        if unicodedata.category(character) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp"):
+            raise SummaryError(
+                f"{label} contains a control or formatting character that cannot be reported"
+            )
+    return value
+
+
 def require_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise SummaryError(f"{label} must be a nonempty string")
-    return value
+    return reject_unrenderable_text(value, label)
 
 
 def classify(payload: dict[str, Any], path: str) -> str:
@@ -222,13 +290,263 @@ def parse_billed_cost(value: Any) -> dict[str, Any]:
     amount = value["amount"]
     if isinstance(amount, bool) or not isinstance(amount, (int, float)):
         raise SummaryError("observed billed_cost requires a numeric amount")
-    amount = float(amount)
+    try:
+        amount = float(amount)
+    except OverflowError as exc:
+        raise SummaryError(
+            "observed billed_cost amount is outside the supported bound"
+        ) from exc
     if not math.isfinite(amount) or amount < 0:
         raise SummaryError("observed billed_cost amount is outside the supported bound")
     currency = value["currency"]
     if not isinstance(currency, str) or not CURRENCY_PATTERN.match(currency):
         raise SummaryError("observed billed_cost requires an explicit ISO currency code")
     return {"status": "observed", "amount": amount, "currency": currency}
+
+
+def require_model_value_slot(slot: Any, label: str) -> dict[str, Any]:
+    if not isinstance(slot, dict) or set(slot) != {"status", "value"}:
+        raise SummaryError(f"{label} has an invalid exact field shape")
+    if slot["status"] == "not_observed":
+        if slot["value"] is not None:
+            raise SummaryError(f"unavailable {label} must remain not_observed")
+        return {"status": "not_observed", "value": None}
+    if slot["status"] != "observed":
+        raise SummaryError(f"{label} has an unsupported status: {slot['status']}")
+    value = slot["value"]
+    if not isinstance(value, str) or not value or len(value) > MAX_MODEL_VALUE_LENGTH:
+        raise SummaryError(f"observed {label} requires a bounded non-empty string")
+    return {"status": "observed", "value": value}
+
+
+def parse_model_statement(value: Any, path: str) -> dict[str, Any]:
+    expected = {
+        "source",
+        "record_line",
+        "source_line",
+        "source_kind",
+        "attribute",
+        "evidence_class",
+        "value",
+        "session_digest",
+        "turn_id",
+        "root_turn_id",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise SummaryError(f"model statement has an invalid exact field shape: {path}")
+    if value["source"] not in EVIDENCE_SOURCES:
+        raise SummaryError(f"model statement names an unsupported source: {value['source']}")
+    if value["source_kind"] not in MODEL_SOURCE_KINDS:
+        raise SummaryError(f"model statement names an unsupported source kind: {path}")
+    if (
+        MODEL_SOURCE_CAPABILITIES[value["source_kind"]]["container"]
+        != MODEL_SOURCE_CONTAINERS[value["source"]]
+    ):
+        # The producer can only read this shape out of the other file, so the
+        # pairing names a record that could never have existed.
+        raise SummaryError(
+            "model statement pairs a source kind with a source that cannot hold it: "
+            f"{value['source_kind']}/{value['source']}"
+        )
+    if value["attribute"] not in MODEL_ATTRIBUTES:
+        raise SummaryError(f"model statement names an unsupported attribute: {path}")
+    if value["evidence_class"] not in MODEL_EVIDENCE_CLASSES:
+        raise SummaryError(f"model statement names an unsupported evidence class: {path}")
+    capability = MODEL_SOURCE_CAPABILITIES[value["source_kind"]]
+    if value["evidence_class"] not in capability["evidence_classes"]:
+        # Reporting a class its source never observes would let a runtime
+        # context statement arrive as though a provider had confirmed it.
+        raise SummaryError(
+            "model statement claims an evidence class its source kind cannot observe: "
+            f"{value['source_kind']}/{value['evidence_class']}"
+        )
+    record_line = value["record_line"]
+    if isinstance(record_line, bool) or not isinstance(record_line, int) or record_line < 1:
+        raise SummaryError(f"model statement requires a positive record line: {path}")
+    source_line = value["source_line"]
+    if source_line is not None and (
+        isinstance(source_line, bool) or not isinstance(source_line, int) or source_line < 1
+    ):
+        raise SummaryError(f"model statement source line must be positive or absent: {path}")
+    text = value["value"]
+    if isinstance(text, str):
+        reject_unrenderable_text(text, "model statement value")
+    if not agent_log_manifest.canonical_model_value(text):
+        # The producer refuses a secret, a redaction marker, a control
+        # character, a padded identifier, and an overlong value. Repeating
+        # those refusals on read stops a hand-edited manifest from presenting
+        # any of them as an observed model identifier.
+        raise SummaryError(f"model statement requires a bounded non-empty value: {path}")
+    allowed_scope = capability["execution_scope"]
+    for field in ("turn_id", "root_turn_id"):
+        scope = value[field]
+        if scope is None:
+            continue
+        if field not in allowed_scope:
+            raise SummaryError(
+                f"model statement claims a {field} its source kind cannot establish: {path}"
+            )
+        if isinstance(scope, str):
+            reject_unrenderable_text(scope, f"model statement {field}")
+        if not agent_log_manifest.canonical_model_value(scope):
+            raise SummaryError(f"model statement {field} must be a bounded string or absent: {path}")
+    return {
+        "source": value["source"],
+        "record_line": record_line,
+        "source_line": source_line,
+        "source_kind": value["source_kind"],
+        "attribute": value["attribute"],
+        "evidence_class": value["evidence_class"],
+        "value": text,
+        "session_digest": require_digest_or_none(value["session_digest"], "model session digest"),
+        "turn_id": value["turn_id"],
+        "root_turn_id": value["root_turn_id"],
+    }
+
+
+def parse_model_observations(payload: Any, path: str) -> dict[str, Any] | None:
+    """Read the optional model observation summary a run manifest may carry.
+
+    A manifest written before the contract existed carries nothing here, and
+    that absence is valid legacy input rather than an error.
+    """
+
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise SummaryError(f"run manifest model_observations must be an object: {path}")
+    if payload.get("schema_version") != MODEL_OBSERVATION_SCHEMA_VERSION:
+        raise SummaryError(
+            "run manifest has an unsupported model observation schema version: "
+            f"{payload.get('schema_version')}"
+        )
+    expected = {
+        "schema_version",
+        "evidence_digests",
+        "coverage",
+        "statements",
+        "provider_context",
+        "identity_counts",
+        "diagnostics",
+        "truncated",
+    }
+    if set(payload) != expected:
+        raise SummaryError(f"run manifest model_observations has an unsupported field set: {path}")
+
+    raw_digests = payload["evidence_digests"]
+    if not isinstance(raw_digests, dict) or set(raw_digests) != set(EVIDENCE_SOURCES):
+        raise SummaryError("model evidence_digests has an invalid exact field shape")
+    digests = {
+        source: require_digest_or_none(raw_digests[source], f"model {source} evidence digest")
+        for source in EVIDENCE_SOURCES
+    }
+
+    raw_coverage = payload["coverage"]
+    if not isinstance(raw_coverage, dict) or set(raw_coverage) != set(EVIDENCE_SOURCES):
+        raise SummaryError("model coverage has an invalid exact field shape")
+    coverage: dict[str, Any] = {}
+    for source in EVIDENCE_SOURCES:
+        entry = raw_coverage[source]
+        if not isinstance(entry, dict) or set(entry) != {
+            "status",
+            "records_scanned",
+            "records_with_model_observation",
+        }:
+            raise SummaryError(f"model coverage for {source} has an invalid exact field shape")
+        if entry["status"] not in MODEL_COVERAGE_STATUSES:
+            raise SummaryError(f"model coverage for {source} has an unsupported status")
+        coverage[source] = {
+            "status": entry["status"],
+            "records_scanned": require_bounded_counter(
+                entry["records_scanned"], f"model coverage records_scanned for {source}"
+            ),
+            "records_with_model_observation": require_bounded_counter(
+                entry["records_with_model_observation"],
+                f"model coverage records_with_model_observation for {source}",
+            ),
+        }
+
+    raw_statements = payload["statements"]
+    if not isinstance(raw_statements, list) or len(raw_statements) > MAX_MODEL_STATEMENTS:
+        raise SummaryError(f"model statements must be a bounded list: {path}")
+    statements = [parse_model_statement(item, path) for item in raw_statements]
+    for statement in statements:
+        if digests[statement["source"]] is None:
+            # A statement without its source digest cannot be bound to any
+            # bytes, so it could never be verified or refuted.
+            raise SummaryError(
+                f"model statement names a source with no evidence digest: {statement['source']}"
+            )
+
+    raw_provider = payload["provider_context"]
+    if not isinstance(raw_provider, dict) or set(raw_provider) != set(
+        MODEL_PROVIDER_CONTEXT_FIELDS
+    ):
+        raise SummaryError("model provider_context has an invalid exact field shape")
+    provider_context: dict[str, Any] = {}
+    for field in MODEL_PROVIDER_CONTEXT_FIELDS:
+        entry = raw_provider[field]
+        if not isinstance(entry, dict) or set(entry) != {"status", "values"}:
+            raise SummaryError(f"model provider_context {field} has an invalid exact field shape")
+        values = entry["values"]
+        if not isinstance(values, list) or len(values) > MAX_MODEL_PROVIDER_VALUES:
+            raise SummaryError(f"model provider_context {field} must be a bounded list")
+        for item in values:
+            if isinstance(item, str):
+                reject_unrenderable_text(item, f"model provider_context {field}")
+            if not agent_log_manifest.canonical_model_value(item):
+                raise SummaryError(
+                    f"model provider_context {field} requires bounded non-empty strings"
+                )
+        if entry["status"] == "observed":
+            if not values:
+                raise SummaryError(f"observed model provider_context {field} requires a value")
+        elif entry["status"] != "not_observed" or values:
+            raise SummaryError(f"unavailable model provider_context {field} must stay not_observed")
+        provider_context[field] = {"status": entry["status"], "values": list(values)}
+
+    raw_counts = payload["identity_counts"]
+    if not isinstance(raw_counts, dict) or set(raw_counts) != {"session_digests", "turn_ids"}:
+        raise SummaryError("model identity_counts has an invalid exact field shape")
+    identity_counts = {
+        name: require_bounded_counter(raw_counts[name], f"model identity count {name}")
+        for name in ("session_digests", "turn_ids")
+    }
+
+    diagnostics = payload["diagnostics"]
+    if not isinstance(diagnostics, list) or len(diagnostics) > MAX_MODEL_DIAGNOSTICS:
+        raise SummaryError(f"model diagnostics must be a bounded list: {path}")
+    if any(code not in MODEL_DIAGNOSTIC_CODES for code in diagnostics):
+        raise SummaryError(f"model diagnostics name an unsupported code: {path}")
+    if not isinstance(payload["truncated"], bool):
+        raise SummaryError(f"model truncated must be a boolean: {path}")
+
+    return {
+        "evidence_digests": digests,
+        "coverage": coverage,
+        "statements": statements,
+        "provider_context": provider_context,
+        "identity_counts": identity_counts,
+        "diagnostics": list(diagnostics),
+        "truncated": payload["truncated"],
+    }
+
+
+def declared_model_sources(payload: dict[str, Any]) -> dict[str, str]:
+    """Name the evidence sources the manifest itself says the run has.
+
+    The producer derives a summary from every source the manifest declares, so
+    the declaration, not the summary, is what says how many sources a rebuild
+    needs. Reading the source set back out of the summary would let a summary
+    that silently dropped a declared source look complete.
+    """
+
+    declared: dict[str, str] = {}
+    for source, key in MODEL_SOURCE_MANIFEST_KEYS.items():
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            declared[source] = value
+    return declared
 
 
 def parse_run_manifest(payload: dict[str, Any], path: str, source_digest: str) -> dict[str, Any]:
@@ -302,6 +620,9 @@ def parse_run_manifest(payload: dict[str, Any], path: str, source_digest: str) -
         "evidence_digests": evidence,
         "metrics": metrics,
         "billed_cost": parse_billed_cost(observations.get("billed_cost")),
+        "model_observations": parse_model_observations(payload.get("model_observations"), path),
+        "model_observations_declared": payload.get("model_observations"),
+        "declared_model_sources": declared_model_sources(payload),
     }
 
 
@@ -450,7 +771,9 @@ def load_records(paths: list[str]) -> tuple[list[dict[str, Any]], list[dict[str,
     return records, inventory
 
 
-def verify_evidence(records: list[dict[str, Any]], evidence_paths: list[str]) -> list[dict[str, Any]]:
+def verify_evidence(
+    records: list[dict[str, Any]], evidence_paths: list[str]
+) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
     """Hash explicitly supplied raw evidence and bind it to declared digests."""
 
     declared: dict[str, list[dict[str, str]]] = {}
@@ -459,11 +782,22 @@ def verify_evidence(records: list[dict[str, Any]], evidence_paths: list[str]) ->
             continue
         for source in EVIDENCE_SOURCES:
             digest = record["evidence_digests"][source]
-            if digest is None:
+            if digest is not None:
+                declared.setdefault(digest, []).append(
+                    {"run_id": record["identity"], "source": source}
+                )
+            observations = record["model_observations"]
+            if observations is None:
                 continue
-            declared.setdefault(digest, []).append({"run_id": record["identity"], "source": source})
+            model_digest = observations["evidence_digests"][source]
+            if model_digest is not None:
+                # Model statements bind to their own scanned bytes, which may
+                # differ from the resource evidence for the same source.
+                declared.setdefault(model_digest, []).append(
+                    {"run_id": record["identity"], "source": source}
+                )
 
-    verified: set[str] = set()
+    verified: dict[str, bytes] = {}
     for path in evidence_paths:
         data = read_bounded_regular_file(path, "evidence file")
         digest = digest_bytes(data)
@@ -471,7 +805,7 @@ def verify_evidence(records: list[dict[str, Any]], evidence_paths: list[str]) ->
             raise SummaryError(
                 f"supplied evidence file matches no declared evidence digest: {path}"
             )
-        verified.add(digest)
+        verified[digest] = data
 
     report: list[dict[str, Any]] = []
     for record in records:
@@ -491,7 +825,7 @@ def verify_evidence(records: list[dict[str, Any]], evidence_paths: list[str]) ->
                     ),
                 }
             )
-    return report
+    return report, verified
 
 
 def summarize_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -597,10 +931,375 @@ def summarize_billed_cost(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def exact_json_equal(left: Any, right: Any) -> bool:
+    """Compare two decoded JSON values by type as well as by value.
+
+    Python equates ``True`` with ``1`` and ``1.0`` with ``1``, so plain equality
+    would accept a stored value the producer could never have written. An exact
+    match has to mean exactly that.
+    """
+
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return set(left) == set(right) and all(
+            exact_json_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            exact_json_equal(item, other) for item, other in zip(left, right)
+        )
+    return left == right
+
+
+def verify_model_observations(
+    records: list[dict[str, Any]], supplied: dict[str, bytes]
+) -> set[str]:
+    """Recompute each whole summary from its verified bytes and require a match.
+
+    A matching file digest proves only that the bytes are unchanged. It cannot
+    detect a forged statement, a fabricated provider value, an inflated count,
+    a forged diagnostic, or a summary that omits evidence the sources hold.
+    Rebuilding the entire object with the producer that wrote it is what makes
+    the report say exactly what the sources say, and it keeps the producer's
+    own ordering, deduplication, truncation, and identity counting authoritative
+    instead of reimplementing them here.
+
+    The rebuild runs against a private snapshot of the bytes whose digest was
+    already verified, never against the supplied path. Rereading the path would
+    let a file that changed between the digest check and the rescan bind one
+    version's statements to another version's digest.
+
+    Verification is all or nothing per manifest. A summary is derived from every
+    declared source together, so one missing source leaves nothing to check the
+    remainder against, and the manifest stays an unverified claim.
+    """
+
+    recomputed: set[str] = set()
+    for record in records:
+        if record["kind"] != "run_manifest" or record["model_observations"] is None:
+            continue
+        declared = record["model_observations_declared"]
+        digests = declared["evidence_digests"]
+        sources = {
+            source: digests[source] for source in EVIDENCE_SOURCES if digests[source] is not None
+        }
+        # A source the manifest declares but the summary carries no digest for
+        # was never rebuilt into that summary, and this reader holds no bytes
+        # the producer did not already read. Either way the manifest stays an
+        # unverified claim rather than a rejected one.
+        paths = record["declared_model_sources"]
+        if set(paths) != set(sources):
+            continue
+        if not sources or not all(digest in supplied for digest in sources.values()):
+            continue
+        # Two source kinds naming one path are one file, so the producer read
+        # one set of bytes for both. Declaring different digests for that one
+        # path describes a run that could not have happened, so it is not
+        # verifiable. Distinct paths holding identical bytes stay verifiable.
+        if len(set(paths.values())) != len(paths) and len(set(sources.values())) != 1:
+            continue
+        with tempfile.TemporaryDirectory() as snapshot:
+            root = Path(snapshot)
+            manifest: dict[str, Any] = {}
+            names: dict[str, str] = {}
+            for source, digest in sources.items():
+                name = names.setdefault(paths[source], f"{source}.jsonl")
+                target = root / name
+                # The snapshot is written from the bytes this process already
+                # read and hashed, so the rescan cannot observe different bytes
+                # and cannot exceed the bound those bytes already satisfied.
+                target.write_bytes(supplied[digest])
+                target.chmod(0o600)
+                manifest[MODEL_SOURCE_MANIFEST_KEYS[source]] = name
+            try:
+                rebuilt = agent_log_manifest.compute_model_observations(root, manifest)
+            except (OSError, ValueError, RecursionError, MemoryError) as exc:
+                raise SummaryError(
+                    f"supplied model evidence could not be rescanned: {exc}"
+                ) from exc
+        if not exact_json_equal(rebuilt, declared):
+            raise SummaryError(
+                "recomputing model observations from the supplied evidence does not "
+                f"reproduce the summary in {record['path']}"
+            )
+        recomputed.add(record["identity"])
+    return recomputed
+
+
+def statement_scope(statement: dict[str, Any]) -> tuple[bool, tuple[str | None, str | None]]:
+    """Return whether a statement names a comparable scope, and that scope.
+
+    Two statements may only be called incompatible when both name the same
+    confirmed execution scope. An unconfirmed scope is reported as such rather
+    than silently compared against an unrelated turn or session.
+    """
+
+    turn_scoped = statement["source_kind"] in MODEL_TURN_SCOPED_KINDS
+    turn_id = statement["turn_id"] if turn_scoped else None
+    confirmed = turn_scoped and statement["session_digest"] is not None and turn_id is not None
+    return confirmed, (statement["session_digest"], turn_id)
+
+
+def summarize_model_evidence(
+    records: list[dict[str, Any]], recomputed: set[str]
+) -> dict[str, Any]:
+    """Report model statements as observations, never as usage attribution."""
+
+    manifests = [record for record in records if record["kind"] == "run_manifest"]
+    with_observations = [record for record in manifests if record["model_observations"] is not None]
+
+    coverage: list[dict[str, Any]] = []
+    provider_context: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
+    identity_counts: list[dict[str, Any]] = []
+    deduplicated: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+    for record in with_observations:
+        observations = record["model_observations"]
+        run_id = record["identity"]
+        manifest_verification = "recomputed" if run_id in recomputed else "declared_only"
+        for source in EVIDENCE_SOURCES:
+            digest = observations["evidence_digests"][source]
+            entry = observations["coverage"][source]
+            coverage.append(
+                {
+                    "run_id": run_id,
+                    "source": source,
+                    "status": entry["status"],
+                    "records_scanned": entry["records_scanned"],
+                    "records_with_model_observation": entry["records_with_model_observation"],
+                    "digest": digest,
+                    "verification": manifest_verification,
+                }
+            )
+        for field in MODEL_PROVIDER_CONTEXT_FIELDS:
+            entry = observations["provider_context"][field]
+            provider_context.append(
+                {
+                    "run_id": run_id,
+                    "field": field,
+                    "status": entry["status"],
+                    "values": list(entry["values"]),
+                    "verification": manifest_verification,
+                }
+            )
+        diagnostics.append(
+            {
+                "run_id": run_id,
+                "codes": list(observations["diagnostics"]),
+                "truncated": observations["truncated"],
+                "verification": manifest_verification,
+            }
+        )
+        identity_counts.append(
+            {
+                "run_id": run_id,
+                "session_digests": observations["identity_counts"]["session_digests"],
+                "turn_ids": observations["identity_counts"]["turn_ids"],
+                "verification": manifest_verification,
+            }
+        )
+
+        for statement in observations["statements"]:
+            source_digest = observations["evidence_digests"][statement["source"]]
+            key = (
+                source_digest,
+                statement["source"],
+                statement["record_line"],
+                statement["source_line"],
+                statement["source_kind"],
+                statement["attribute"],
+                statement["evidence_class"],
+                statement["value"],
+                statement["session_digest"],
+                statement["turn_id"],
+                statement["root_turn_id"],
+            )
+            existing = deduplicated.get(key)
+            if existing is None:
+                confirmed, scope = statement_scope(statement)
+                deduplicated[key] = {
+                    "attribute": statement["attribute"],
+                    "evidence_class": statement["evidence_class"],
+                    "value": statement["value"],
+                    "source": statement["source"],
+                    "source_kind": statement["source_kind"],
+                    "source_digest": source_digest,
+                    "record_line": statement["record_line"],
+                    "source_line": statement["source_line"],
+                    "session_digest": statement["session_digest"],
+                    "turn_id": statement["turn_id"],
+                    "root_turn_id": statement["root_turn_id"],
+                    "scope_confirmed": confirmed,
+                    "scope": scope,
+                    "runs": {run_id},
+                }
+                continue
+            existing["runs"].add(run_id)
+
+    for entry in deduplicated.values():
+        runs = sorted(entry.pop("runs"))
+        entry["runs"] = [
+            {
+                "run_id": run_id,
+                "verification": "recomputed" if run_id in recomputed else "declared_only",
+            }
+            for run_id in runs
+        ]
+        entry["run_ids"] = runs
+        # The claim itself is verified once any manifest reproduced it from the
+        # bytes it names. Each manifest still carries its own state, so a
+        # partially supplied one is never presented as recomputed.
+        entry["verification"] = (
+            "recomputed"
+            if any(item["verification"] == "recomputed" for item in entry["runs"])
+            else "declared_only"
+        )
+
+    statements = sorted(
+        deduplicated.values(),
+        key=lambda item: (
+            item["evidence_class"],
+            item["attribute"],
+            item["source"],
+            item["source_digest"] or "",
+            item["record_line"],
+            item["source_line"] or 0,
+            item["value"],
+        ),
+    )
+
+    conflicts: list[dict[str, Any]] = []
+    positions: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    scopes: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for statement in statements:
+        positions.setdefault(
+            (
+                statement["source_digest"],
+                statement["source"],
+                statement["record_line"],
+                statement["attribute"],
+                statement["evidence_class"],
+            ),
+            [],
+        ).append(statement)
+        if statement["scope_confirmed"]:
+            scopes.setdefault(
+                (
+                    statement["attribute"],
+                    statement["evidence_class"],
+                    statement["scope"][0],
+                    statement["scope"][1],
+                ),
+                [],
+            ).append(statement)
+
+    def conflict_entry(kind: str, group: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "kind": kind,
+            "attribute": group[0]["attribute"],
+            "evidence_class": group[0]["evidence_class"],
+            "session_digest": group[0]["session_digest"],
+            "turn_id": group[0]["turn_id"],
+            "values": sorted({item["value"] for item in group}),
+            "records": sorted(
+                {
+                    (item["source"], item["source_digest"] or "", item["record_line"])
+                    for item in group
+                }
+            ),
+        }
+
+    for group in positions.values():
+        claims = {
+            (
+                item["value"],
+                item["source_kind"],
+                item["source_line"],
+                item["session_digest"],
+                item["turn_id"],
+                item["root_turn_id"],
+            )
+            for item in group
+        }
+        if len(claims) > 1:
+            # One record position in one set of bytes reported one claim. Two
+            # differing claims mean at least one of them was not read from
+            # those bytes, whichever scope each one names.
+            conflicts.append(conflict_entry("record_position", group))
+    for group in scopes.values():
+        if len({item["value"] for item in group}) > 1:
+            conflicts.append(conflict_entry("execution_scope", group))
+    conflicts.sort(
+        key=lambda item: (item["kind"], item["attribute"], item["evidence_class"], item["values"])
+    )
+
+    by_class: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for evidence_class in MODEL_EVIDENCE_CLASSES:
+        attributes: dict[str, list[dict[str, Any]]] = {}
+        for attribute in MODEL_ATTRIBUTES:
+            selected = [
+                item
+                for item in statements
+                if item["evidence_class"] == evidence_class and item["attribute"] == attribute
+            ]
+            values: dict[str, dict[str, Any]] = {}
+            for item in selected:
+                bucket = values.setdefault(
+                    item["value"],
+                    {
+                        "value": item["value"],
+                        "statement_count": 0,
+                        "recomputed_statement_count": 0,
+                        "source_kinds": [],
+                        "scope_confirmed_count": 0,
+                    },
+                )
+                bucket["statement_count"] += 1
+                if item["verification"] == "recomputed":
+                    bucket["recomputed_statement_count"] += 1
+                if item["scope_confirmed"]:
+                    bucket["scope_confirmed_count"] += 1
+                if item["source_kind"] not in bucket["source_kinds"]:
+                    bucket["source_kinds"].append(item["source_kind"])
+            for bucket in values.values():
+                bucket["source_kinds"].sort()
+            if values:
+                attributes[attribute] = sorted(values.values(), key=lambda item: item["value"])
+        if attributes:
+            by_class[evidence_class] = attributes
+
+    return {
+        "manifests_with_observations": len(with_observations),
+        "manifests_without_observations": len(manifests) - len(with_observations),
+        "coverage": coverage,
+        "identity_counts": identity_counts,
+        "provider_context": provider_context,
+        "diagnostics": diagnostics,
+        "statements": [
+            {
+                key: value
+                for key, value in statement.items()
+                if key not in ("scope", "scope_confirmed")
+            }
+            | {"scope_confirmed": statement["scope_confirmed"]}
+            for statement in statements
+        ],
+        "values_by_evidence_class": by_class,
+        "conflicts": conflicts,
+        "unconfirmed_scope_statements": sum(
+            1 for statement in statements if not statement["scope_confirmed"]
+        ),
+        "attribution_unavailable": list(MODEL_ATTRIBUTION_UNAVAILABLE),
+    }
+
+
 def build_report(
     records: list[dict[str, Any]],
     inventory: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
+    recomputed: set[str],
 ) -> dict[str, Any]:
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -620,6 +1319,7 @@ def build_report(
             if record["kind"] == "run_manifest"
         ],
         "evidence": evidence,
+        "model_evidence": summarize_model_evidence(records, recomputed),
         "metrics": summarize_metrics(records),
         "durations": summarize_durations(records),
         "billed_cost": summarize_billed_cost(records),
@@ -685,6 +1385,91 @@ def render_text(report: dict[str, Any]) -> str:
             f"- {session['run_id']} root_session_identity: {identity['status']} "
             f"digest={identity['digest'] or 'not_observed'}"
         )
+    lines.append("")
+
+    lines.append("## Model evidence")
+    model = report["model_evidence"]
+    lines.append(
+        f"manifests: {model['manifests_with_observations']} with model observations, "
+        f"{model['manifests_without_observations']} without"
+    )
+    if not model["coverage"]:
+        lines.append("- no supplied run manifest carries model observations")
+    for entry in model["coverage"]:
+        lines.append(
+            f"- {entry['run_id']} {entry['source']} coverage: {entry['status']} "
+            f"{entry['records_with_model_observation']}/{entry['records_scanned']} records "
+            f"({entry['verification']})"
+        )
+    for evidence_class in MODEL_EVIDENCE_CLASSES:
+        attributes = model["values_by_evidence_class"].get(evidence_class)
+        if not attributes:
+            continue
+        lines.append(f"- {evidence_class}:")
+        for attribute in MODEL_ATTRIBUTES:
+            for bucket in attributes.get(attribute, []):
+                lines.append(
+                    f"  - {attribute}={bucket['value']}: "
+                    f"{bucket['statement_count']} statements, "
+                    f"{bucket['recomputed_statement_count']} recomputed, "
+                    f"{bucket['scope_confirmed_count']} scope confirmed "
+                    f"[{' '.join(bucket['source_kinds'])}]"
+                )
+    # The aggregate above says what was observed; a reader also has to be able
+    # to go back to the record that said it, in the default format and not only
+    # in JSON.
+    for statement in model["statements"]:
+        runs = " ".join(
+            f"{run['run_id']}:{run['verification']}" for run in statement["runs"]
+        )
+        scope = (
+            f"{statement['session_digest']}/{statement['turn_id']}"
+            if statement["scope_confirmed"]
+            else "unconfirmed"
+        )
+        source_line = statement["source_line"]
+        lines.append(
+            f"- {statement['evidence_class']} {statement['attribute']}="
+            f"{statement['value']} from {statement['source_kind']} in "
+            f"{statement['source']} {statement['source_digest']} "
+            f"record {statement['record_line']} "
+            f"source_line={source_line if source_line is not None else 'not_observed'} "
+            f"scope={scope} runs={runs}"
+        )
+    for entry in model["provider_context"]:
+        if entry["status"] != "observed":
+            continue
+        lines.append(
+            f"- {entry['run_id']} {entry['field']}: {' '.join(entry['values'])} "
+            f"({entry['verification']})"
+        )
+    for entry in model["identity_counts"]:
+        lines.append(
+            f"- {entry['run_id']} identities: {entry['session_digests']} sessions, "
+            f"{entry['turn_ids']} turns ({entry['verification']})"
+        )
+    if model["unconfirmed_scope_statements"]:
+        lines.append(
+            f"- {model['unconfirmed_scope_statements']} statements name no confirmed "
+            "execution scope and are not compared"
+        )
+    for conflict in model["conflicts"]:
+        lines.append(
+            f"- conflict ({conflict['kind']}) {conflict['evidence_class']} "
+            f"{conflict['attribute']}: {' vs '.join(conflict['values'])}"
+        )
+    for entry in model["diagnostics"]:
+        if not entry["codes"] and not entry["truncated"]:
+            continue
+        codes = " ".join(entry["codes"]) or "none"
+        lines.append(
+            f"- {entry['run_id']} diagnostics: {codes} truncated={entry['truncated']} "
+            f"({entry['verification']})"
+        )
+    lines.append("")
+    lines.append("A model statement names an observed model, never its resource usage.")
+    for name in model["attribution_unavailable"]:
+        lines.append(f"- {name}: not attributable from these records")
     lines.append("")
 
     lines.append("## Metrics")
@@ -797,13 +1582,20 @@ def main(argv: list[str] | None = None) -> int:
                 f"{len(supplied)} were supplied"
             )
         records, inventory = load_records(list(args.inputs))
-        evidence = verify_evidence(records, list(args.evidence))
-        report = build_report(records, inventory, evidence)
-        if args.format == "json":
-            rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        else:
-            rendered = render_text(report)
-        encoded = rendered.encode("utf-8")
+        evidence, supplied = verify_evidence(records, list(args.evidence))
+        recomputed = verify_model_observations(records, supplied)
+        report = build_report(records, inventory, evidence, recomputed)
+        try:
+            if args.format == "json":
+                rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            else:
+                rendered = render_text(report)
+        except (ValueError, OverflowError, RecursionError, MemoryError) as exc:
+            raise SummaryError(f"report could not be rendered: {exc}") from exc
+        try:
+            encoded = rendered.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise SummaryError(f"report contains text that cannot be encoded: {exc}") from exc
         if len(encoded) > MAX_OUTPUT_BYTES:
             raise SummaryError(
                 f"report exceeds the {MAX_OUTPUT_BYTES}-byte output bound; "
@@ -812,7 +1604,15 @@ def main(argv: list[str] | None = None) -> int:
     except SummaryError as exc:
         print(f"summarize-agent-run failed: {exc}", file=sys.stderr)
         return 1
-    sys.stdout.write(rendered)
+    # The encoded bytes were already checked, so writing them avoids failing
+    # on whatever encoding the surrounding environment configured for stdout.
+    stream = getattr(sys.stdout, "buffer", None)
+    if stream is None:
+        sys.stdout.write(rendered)
+    else:
+        sys.stdout.flush()
+        stream.write(encoded)
+        stream.flush()
     return 0
 
 

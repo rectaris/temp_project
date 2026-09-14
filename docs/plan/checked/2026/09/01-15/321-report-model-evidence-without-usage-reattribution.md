@@ -1,6 +1,6 @@
 # Report verified model evidence and gaps without reattributing usage
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Model reporting exposes only source-bound execution facts and their coverage without treating mixed or unknown usage, unverified records or runtime settings as stronger execution evidence.
 task_types:
@@ -88,10 +88,10 @@ checked_summary_ja: モデル情報の取得状況と不一致を表示し、既
 
 ## Tasks
 
-- [ ] Extend the existing summary parser and renderer to consume the accepted optional model evidence contract with exact evidence verification.
-- [ ] Add execution-scope, missing/unverified coverage and disagreement reporting without changing usage arithmetic or Plan 319 acceptance.
-- [ ] Extend existing summary fixtures and tests for negative, mixed, legacy and root/generated behavior; independently review the same-source deduplication and attribution boundaries.
-- [ ] Run parent-owned focused checks, then the unchanged authoritative suite, and finish through the ordinary reviewed commit/publication lifecycle.
+- [x] Extend the existing summary parser and renderer to consume the accepted optional model evidence contract with exact evidence verification.
+- [x] Add execution-scope, missing/unverified coverage and disagreement reporting without changing usage arithmetic or Plan 319 acceptance.
+- [x] Extend existing summary fixtures and tests for negative, mixed, legacy and root/generated behavior; independently review the same-source deduplication and attribution boundaries.
+- [x] Run parent-owned focused checks, then the unchanged authoritative suite, and finish through the ordinary reviewed commit/publication lifecycle.
 
 ## Validation Notes
 
@@ -99,3 +99,13 @@ checked_summary_ja: モデル情報の取得状況と不一致を表示し、既
 - Tier 2: this work changes the accepted logging metadata contract and security-sensitive allowlist, with multiple acceptance clauses. It preserves external-effect and validation authority. Use bounded parent implementation with the existing execution ledger and independent review because specification, hook and validation-helper paths are protected runner inputs; do not grant them to a writable delegated worker.
 - Pre-admission evidence was gathered read-only. The exact local source for an existing imported session was inspected for metadata only: CLI 0.154.0 session_meta included model_provider and cli_version; turn_context included model, effort, turn_id and root_turn_id. This establishes runtime-reported context fields, not provider-resolved execution or snapshot identity. Raw sources and session identifiers are not part of this plan.
 - Provider-resolved identity, exact snapshot and some execution links may be unavailable; explicit unknowns are valid outcomes, not missing implementation work. No provider call, home-directory discovery, automatic historical migration or new runtime capture backend is authorized.
+- Implementation: parent-direct in the task-bound worktree for plan 321. The command now consumes the optional `model_observations` contract, reports requested, runtime-reported and provider-reported statements with their source kind, execution identity, coverage and record position, and reports `per_model_token_totals`, `per_model_billed_cost` and `per_model_completed_task_counts` as unavailable. `resource_observations` version 1 behaviour is unchanged.
+- Verification method: a declared summary is confirmed by rebuilding the whole object with `agent_log_manifest.compute_model_observations`, all or nothing per manifest, from a private snapshot of the exact bytes whose digest was verified. The producer stays authoritative for ordering, deduplication, truncation and identity counting; `agent_log_manifest.py` was consumed unchanged and stayed outside the write scope.
+- Focused validation: `python3 tests/test-hooks.py ResourceSummaryTest` — 68 tests, OK. Supporting parent checks: `python3 tests/test-hooks.py` — 199 tests, OK; `python3 scripts/check-copier-template.py` — passed.
+- Authoritative validation ran once after the accepted review state: `scripts/lint-project-workflow.sh` exit 0, `tests/smoke.sh` exit 0.
+- Adversarial preflight: a parent-owned 36-case harness covering forged summaries over intact bytes, tampered and hostile evidence bytes, partial evidence, omitted and unreadable declared sources, aliased source paths, scope confirmation, conflict detection, producer truncation, rendered-text injection and unrenderable output. All 36 passed. Ledger events `preflight-1` through `preflight-7` bind each state to its review target; the ledger admits at most 32 case entries, so the five earliest cases are recorded as one entry whose digest binds the exact bytes of all five results.
+- Independent review: six adversarial rounds by read-only `code-review` helpers. Helper role was review only, with no write scope and no repository effect; every finding was judged and remediated in the main session, which retained acceptance authority. Round 1 and 2 findings led to replacing per-source comparison with whole-summary recomputation. Round 3 fixed a time-of-check to time-of-use gap between digest verification and rescanning, missing verification labels, input-order-dependent statement verification, rendered-text injection and type-blind equality. Round 4 raised one High finding: a summary omitting a source the manifest declares could still be reported as recomputed. Round 5 and 6 raised Medium and Low findings only. No High finding has been raised since round 4.
+- Owner decisions: epoch 1 was authorized by the owner instruction 続きの作業をせよ. Epoch 2 was authorized explicitly after the round 4 remediation, beyond the one continuation epoch and cumulative four-review maximum that `AGENTS.md` codifies; that override was recorded rather than obtained by creating a successor plan. After round 6 the parent stopped again and the owner chose to accept the remediation without a seventh review and to complete the plan.
+- Unreviewed at acceptance, by owner decision: preserving aliased declared source paths in the verification snapshot, the bounded error for an aggregate that cannot be rendered, writing the report as the already checked UTF-8 bytes, and rendering per-statement provenance in the default text format. Each is covered by a regression test and a preflight case.
+- Residual limitation: the producer's value refusal recognizes known credential shapes rather than every secret, so a refused value bounds what a stored value may look like and never certifies that a reported value carries no sensitive content. The specification records this rather than claiming secret rejection.
+- Review receipts were not recorded in the execution ledger. A receipt requires a runtime-proven reviewer-session digest, which cannot be faithfully attested for a sub-agent reviewer from this session. The review rounds and their outcomes are recorded here instead.

@@ -336,6 +336,100 @@ def write_model_evidence_codex_transcript(path: Path) -> None:
     )
 
 
+def build_model_observations(run_dir: Path, *, transcript: str | None = None,
+                             hook_log: str | None = None) -> dict:
+    """Produce a model observation summary with the shipped producer.
+
+    Downstream reporting tests must read what the contract actually writes, so
+    the fixture is computed rather than hand-written.
+    """
+
+    helper = load_manifest_helper()
+    manifest: dict[str, object] = {}
+    if transcript is not None:
+        manifest["transcript_log"] = transcript
+    if hook_log is not None:
+        manifest["hook_event_log"] = hook_log
+    observations = helper.compute_model_observations(run_dir, manifest)
+    if observations is None:
+        raise AssertionError("fixture declares no readable model evidence source")
+    return observations
+
+
+def write_model_evidence_imported_log(path: Path) -> None:
+    """Write an imported transcript log carrying producer-built observations."""
+
+    helper = load_manifest_helper()
+    records = []
+    for source_type, source_line, kwargs in (
+        (
+            "session_meta",
+            1,
+            {
+                "model_provider": "example-provider",
+                "cli_version": "0.154.0",
+                "session_id": "session-parent",
+            },
+        ),
+        (
+            "turn_context",
+            2,
+            {
+                "runtime_model": "example-model-a",
+                "runtime_effort": "medium",
+                "session_id": "session-parent",
+                "turn_id": "turn-1",
+                "root_turn_id": "turn-1",
+            },
+        ),
+        (
+            "turn_context",
+            4,
+            {
+                "runtime_model": "example-model-b",
+                "runtime_effort": "high",
+                "session_id": "session-parent",
+                "turn_id": "turn-2",
+                "root_turn_id": "turn-1",
+            },
+        ),
+    ):
+        source_kind = (
+            "transcript_session_meta" if source_type == "session_meta" else "transcript_turn_context"
+        )
+        observation = helper.build_model_observation(source_kind, **kwargs)
+        records.append(
+            {
+                "kind": "transcript",
+                "metadata": {
+                    "source_type": source_type,
+                    "source_line": source_line,
+                    "model_observation": observation,
+                },
+            }
+        )
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+
+
+def write_model_evidence_hook_log(path: Path) -> None:
+    """Write a hook event log carrying producer-built model observations."""
+
+    helper = load_manifest_helper()
+    events = []
+    for event, model in (("session_start", "example-model-a"), ("turn_end", "example-model-a")):
+        observation = helper.build_model_observation(
+            "hook_event_metadata", runtime_model=model, session_id="hook-session"
+        )
+        events.append(
+            {
+                "schema_version": 1,
+                "event": event,
+                "payload": {"model_observation": observation},
+            }
+        )
+    path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+
 def write_sample_codex_transcript(path: Path) -> None:
     path.write_text(
         "\n".join(
