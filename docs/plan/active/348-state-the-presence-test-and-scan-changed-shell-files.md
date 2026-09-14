@@ -1,6 +1,7 @@
 # Name the one safe credential presence test in the security specification, and make change-aware validation scan changed shell files, and CI scan the same files, for the enumerated unsafe forms.
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: A changed shell file carrying an enumerated direct-display form of a credential-named variable fails validation, both locally and in continuous integration.
 task_types:
   - template_workflow
