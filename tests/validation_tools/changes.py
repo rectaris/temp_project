@@ -1,5 +1,6 @@
 """Change-selection tests."""
 
+import ast
 import io
 import json
 import os
@@ -69,6 +70,213 @@ class ValidateChangesTest(unittest.TestCase):
                     module.select_commands(["README.md"], "staged")[:1],
                     [["git", "diff", "--cached", "--check"]],
                 )
+
+    GENERATED_PROJECT_SOURCE_CHANGES = (
+        ("src/build/lookup.py",),
+        ("app/api/routes.py",),
+        ("lib/pkg/helper.py",),
+        ("packages/core/src/index.py",),
+        ("scripts/tool.py", "tests/test_thing.py"),
+        ("src/build/lookup.py", "app/api/routes.py"),
+        (".project-agent-workflow/scripts/planlib.py",),
+        ("domain/model.py",),
+        (".project-agent-workflow/skills/release/scripts/check.py",),
+    )
+
+    def test_every_compile_the_template_selector_emits_for_a_source_change_is_admitted(
+        self,
+    ) -> None:
+        """The shipped selector may not emit a py_compile the shipped allowlist refuses.
+
+        This covers the compile emission only, which is the invariant this guard
+        is scoped to. The selector's `sh -n` emission has the same unresolved
+        defect for a shell script under a root the template does not enumerate;
+        it is recorded in the plan rather than silently covered here.
+
+        The root selector keeps its own narrower allowlist, so this guard binds
+        the shipped pair a generated project actually runs.
+        """
+
+        dependency = load_module(PLAN_COMMAND_MODULES[1], "plan_validation_commands")
+        sys.modules["plan_validation_commands"] = dependency
+        module = load_module(VALIDATE_CHANGE_MODULES[1], "template_validate_changes_compile")
+        module.existing = lambda path: True
+        for paths in self.GENERATED_PROJECT_SOURCE_CHANGES:
+            for mode in ("staged", "all"):
+                with self.subTest(changed=paths, mode=mode):
+                    commands = module.select_commands(list(paths), mode)
+                    compiles = [
+                        command
+                        for command in commands
+                        if command[:3] == ["python3", "-m", "py_compile"]
+                    ]
+                    self.assertEqual(
+                        [["python3", "-m", "py_compile", *paths]],
+                        compiles,
+                        "the selector no longer emits one compile command per change",
+                    )
+                    # The command validates its own selection before running it,
+                    # so this is the exact gate a generated project hits.
+                    module.validate_selected_commands(commands)
+
+    def test_the_template_selector_restricts_its_compile_emission_to_the_suffix(self) -> None:
+        """The corpus above is representative only while no root narrows emission.
+
+        Derive that condition from the selector's own source: if a future
+        selector filters compile paths by repository root, this guard fails and
+        the admission corpus must be rebuilt rather than silently narrowed.
+        """
+
+        source = VALIDATE_CHANGE_MODULES[1].read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        definitions = [
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "select_commands"
+        ]
+        self.assertEqual(
+            1,
+            len(definitions),
+            "the module defines the selector more than once",
+        )
+        selector = definitions[0]
+        # A decorator or a rebinding filters the result without touching any
+        # statement this guard reads, so the definition itself is pinned too.
+        self.assertEqual([], selector.decorator_list, "the selector is decorated")
+        helpers = [
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "add_command"
+        ]
+        self.assertEqual(1, len(helpers), "the module defines add_command more than once")
+        self.assertEqual([], helpers[0].decorator_list, "add_command is decorated")
+        rebound = [
+            ast.unparse(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id in {"add_command", "select_commands"}
+                for target in node.targets
+            )
+        ]
+        self.assertEqual([], rebound, "the selector or its emitter is rebound")
+        emitted: list[str] = []
+        for node in ast.walk(selector):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id != "add_command" or len(node.args) != 2:
+                continue
+            argument = node.args[1]
+            if not isinstance(argument, ast.List):
+                continue
+            literals = [
+                item.value
+                for item in argument.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            ]
+            if literals[:3] != ["python3", "-m", "py_compile"]:
+                continue
+            starred = [item for item in argument.elts if isinstance(item, ast.Starred)]
+            self.assertEqual(1, len(starred), ast.dump(node))
+            self.assertIsInstance(starred[0].value, ast.Name)
+            emitted.append(starred[0].value.id)
+        self.assertEqual(1, len(emitted), "the selector no longer emits exactly one compile")
+
+        # Checking individual write forms loses to the next one nobody listed,
+        # so pin the statement sequence instead: the comprehension binds the
+        # name, and the very next statement is the guarded emission. Anything
+        # between them, and any other mention of the name anywhere else in the
+        # function, fails here and forces a deliberate rewrite of this guard.
+        statements = [
+            index
+            for index, statement in enumerate(selector.body)
+            if isinstance(statement, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == emitted[0]
+                for target in statement.targets
+            )
+        ]
+        self.assertEqual(
+            1,
+            len(statements),
+            "the compile path list is not bound by exactly one top-level statement",
+        )
+        index = statements[0]
+        assignment = selector.body[index]
+        self.assertEqual(
+            [emitted[0]],
+            [
+                target.id
+                for target in assignment.targets
+                if isinstance(target, ast.Name)
+            ],
+            "the compile path list is bound together with another name",
+        )
+        self.assertLess(
+            index + 1,
+            len(selector.body),
+            "the compile path list is no longer followed by its emission",
+        )
+        emission = selector.body[index + 1]
+        self.assertIsInstance(emission, ast.If)
+        self.assertIsInstance(emission.test, ast.Name)
+        self.assertEqual(emitted[0], emission.test.id)
+        self.assertEqual([], emission.orelse)
+        # Exempting the guarded block would let the narrowing move inside it,
+        # so the emission is pinned to exactly one direct call.
+        self.assertEqual(
+            1,
+            len(emission.body),
+            "the guarded block carries more than the emission",
+        )
+        statement = emission.body[0]
+        self.assertIsInstance(statement, ast.Expr)
+        self.assertEqual(
+            f"add_command(commands, ['python3', '-m', 'py_compile', *{emitted[0]}])",
+            ast.unparse(statement.value),
+        )
+        elsewhere = [
+            position
+            for position, statement in enumerate(selector.body)
+            if position not in {index, index + 1}
+            and any(
+                isinstance(node, ast.Name) and node.id == emitted[0]
+                for node in ast.walk(statement)
+            )
+        ]
+        self.assertEqual(
+            [],
+            elsewhere,
+            "the compile path list is touched outside its binding and emission",
+        )
+        self.assertIsInstance(assignment.value, ast.ListComp)
+        self.assertEqual(
+            1,
+            len(assignment.value.generators),
+            "the compile comprehension gained a generator this guard does not read",
+        )
+        generator = assignment.value.generators[0]
+        # Mapping the element to another path narrows emission without changing
+        # any condition, so the element must be the generator target itself.
+        self.assertIsInstance(generator.target, ast.Name)
+        self.assertIsInstance(assignment.value.elt, ast.Name)
+        self.assertEqual(generator.target.id, assignment.value.elt.id)
+        # Narrowing through the iterable leaves the conditions untouched, so the
+        # source of the paths is part of what this guard must pin.
+        self.assertIsInstance(generator.iter, ast.Name)
+        self.assertEqual("paths", generator.iter.id)
+        conditions: set[str] = set()
+        pending = list(generator.ifs)
+        while pending:
+            condition = pending.pop()
+            if isinstance(condition, ast.BoolOp) and isinstance(condition.op, ast.And):
+                pending.extend(condition.values)
+                continue
+            conditions.add(ast.unparse(condition))
+        self.assertEqual({"path.endswith('.py')", "existing(path)"}, conditions)
 
     def test_changed_files_exclude_migration_backup(self) -> None:
         for index, (plan_path, validate_path) in enumerate(

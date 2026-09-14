@@ -49,18 +49,6 @@ DIRECT_SCRIPT_ARGUMENTS = {
 }
 NPM_VALIDATION_SCRIPTS = frozenset({"build", "test", "test:unit", "lint", "typecheck", "verify"})
 PYTEST_PREFIXES = (("pytest",), ("python3", "-m", "pytest"), ("uv", "run", "pytest"))
-GENERATED_PYTHON_COMPILE_FILES = frozenset(
-    {
-        ".project-agent-workflow/skills/natural-japanese/"
-        "scripts/check-japanese-prose.py",
-        ".project-agent-workflow/skills/verify-copier-update/"
-        "scripts/verify-copier-update.py",
-        ".project-agent-workflow/skills/verify-copier-update/"
-        "scripts/triage-copier-update.py",
-        ".project-agent-workflow/skills/verify-copier-update/"
-        "scripts/check-triage-coverage.py",
-    }
-)
 
 # These are the bridgeable v0.5.0 managed CLI aliases that can remain in an open plan
 # after pre-v1 adoption. They are accepted by plan lint only when the root
@@ -237,18 +225,10 @@ def is_python_compile(argv: tuple[str, ...]) -> bool:
         return False
     for raw_path in argv[3:]:
         path = Path(raw_path)
+        # py_compile does not import the named module, so containment is the
+        # whole boundary. Which repository root a contained path sits under
+        # would only encode one project's layout.
         if path.is_absolute() or ".." in path.parts or path.suffix != ".py":
-            return False
-        if raw_path in GENERATED_PYTHON_COMPILE_FILES:
-            continue
-        if (
-            path.parts[0] not in {"scripts", "tests", ".codex"}
-            and path.parts[:2] != ("template", "scripts")
-            and path.parts[:2] not in {
-                (".project-agent-workflow", "scripts"),
-                (".project-agent-workflow", "hooks"),
-            }
-        ):
             return False
     return True
 
@@ -434,7 +414,9 @@ def self_test() -> None:
         "python3 - <<EOF",
         "npm run prepublish",
         "python3 -m pytest -q",
-        "python3 -m py_compile .project-agent-workflow/skills/unknown/scripts/check.py",
+        "python3 -m py_compile /etc/passwd.py",
+        "python3 -m py_compile ../outside/check.py",
+        "python3 -m py_compile .project-agent-workflow/skills/unknown/scripts/check",
     ):
         try:
             parse_validation_command(bad)

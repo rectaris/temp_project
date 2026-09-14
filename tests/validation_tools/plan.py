@@ -228,6 +228,52 @@ class PlanValidationCommandsTest(unittest.TestCase):
                     with self.assertRaises(module.ValidationCommandError):
                         module.parse_validation_command(command + suffix)
 
+    GENERATED_COMPILE_ADMITTED = (
+        "src/build/lookup.py",
+        "app/api/routes.py",
+        "lib/pkg/helper.py",
+        "packages/core/src/index.py",
+        "scripts/tool.py",
+        "tests/test_thing.py",
+        ".project-agent-workflow/scripts/planlib.py",
+        ".project-agent-workflow/skills/natural-japanese/scripts/check-japanese-prose.py",
+    )
+    GENERATED_COMPILE_REFUSED = (
+        "/etc/passwd.py",
+        "/src/build/lookup.py",
+        "../outside.py",
+        "src/../../outside.py",
+        "src/build/lookup.txt",
+        "src/build/lookup",
+    )
+
+    def test_generated_compile_admission_covers_any_contained_source_root(self) -> None:
+        """A generated project keeps its sources wherever its own layout puts them."""
+
+        module = load_module(PLAN_COMMAND_MODULES[1], "generated_compile_admission")
+        for path in self.GENERATED_COMPILE_ADMITTED:
+            with self.subTest(admitted=path):
+                module.parse_validation_command(f"python3 -m py_compile {path}")
+        module.parse_validation_command(
+            "python3 -m py_compile src/build/lookup.py app/api/routes.py"
+        )
+
+    def test_generated_compile_admission_keeps_its_containment_refusals(self) -> None:
+        """Widening the root set must not widen what a compile argument may be."""
+
+        module = load_module(PLAN_COMMAND_MODULES[1], "generated_compile_containment")
+        for path in self.GENERATED_COMPILE_REFUSED:
+            with self.subTest(refused=path):
+                with self.assertRaises(module.ValidationCommandError):
+                    module.parse_validation_command(f"python3 -m py_compile {path}")
+            with self.subTest(refused=path, position="second argument"):
+                with self.assertRaises(module.ValidationCommandError):
+                    module.parse_validation_command(
+                        f"python3 -m py_compile src/build/lookup.py {path}"
+                    )
+        with self.assertRaises(module.ValidationCommandError):
+            module.parse_validation_command("python3 -m py_compile")
+
     TIER_ZERO_SPECS = (
         "docs/agent/SPEC_PLAN_WORKFLOW.md",
         "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
@@ -3446,7 +3492,15 @@ class PlanValidationCommandsTest(unittest.TestCase):
             "python3 .project-agent-workflow/scripts/security-static-check.py --managed"
         )
 
-    def test_template_compiles_only_the_exact_generated_copier_verification_helper(self) -> None:
+    def test_template_compiles_a_generated_copier_verification_helper_anywhere(self) -> None:
+        """A generated project names its own skill directories, so only containment bounds them.
+
+        This replaces an earlier assertion that admitted exactly one enumerated
+        helper path. py_compile does not import what it compiles, so a literal
+        skill-path list only encoded the template repository's own layout while
+        refusing the same helper in a project that names its skills differently.
+        """
+
         template_module = load_module(PLAN_COMMAND_MODULES[1], "template_copier_helper_compile")
         helper = (
             ".project-agent-workflow/skills/verify-copier-update/"
@@ -3459,9 +3513,14 @@ class PlanValidationCommandsTest(unittest.TestCase):
             ".project-agent-workflow/skills/other/scripts/verify-copier-update.py",
             ".project-agent-workflow/skills/verify-copier-update/scripts/other.py",
         ):
-            with self.subTest(path=path):
-                with self.assertRaises(template_module.ValidationCommandError):
-                    template_module.parse_validation_command(f"python3 -m py_compile {path}")
+            with self.subTest(admitted=path):
+                template_module.parse_validation_command(f"python3 -m py_compile {path}")
+            with self.subTest(refused=path):
+                for refused in (f"/{path}", f"../{path}", path.removesuffix(".py")):
+                    with self.assertRaises(template_module.ValidationCommandError):
+                        template_module.parse_validation_command(
+                            f"python3 -m py_compile {refused}"
+                        )
 
     def test_root_accepts_namespaced_template_shell_syntax_check(self) -> None:
         root_module = load_module(PLAN_COMMAND_MODULES[0], "root_namespaced_shell")

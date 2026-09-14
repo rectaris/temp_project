@@ -1,6 +1,6 @@
 # Complete the root-agnostic compile admission in the generated command allowlist
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: The generated command allowlist admits a contained repository-relative Python path as a compile check regardless of which source root holds it, and still refuses an absolute path, a parent-directory escape, and a non-.py argument.
 replan_sources:
@@ -83,11 +83,63 @@ checked_summary_ja: 生成先の許可一覧が、ソース配置に依らず収
 
 ## Tasks
 
-- [ ] Widen is_python_compile in the shipped plan_validation_commands so a contained repository-relative Python path is admitted regardless of its root, and remove the literal generated-path set it replaces.
-- [ ] Update the shipped module's own self-test so its negative cases exercise the surviving containment boundary and --self-test exits 0 inside the generated fixture.
-- [ ] Add a test that a changed Python file under a source root the template does not enumerate is admitted as a compile check.
-- [ ] Add a test that the containment refusals still hold for an absolute path, a parent-directory escape, and a non-.py argument.
-- [ ] Repair the drift guard so a reassignment or filter applied to the emitted path list after its comprehension fails the guard.
-- [ ] Run the declared validation commands.
+- [x] Widen is_python_compile in the shipped plan_validation_commands so a contained repository-relative Python path is admitted regardless of its root, and remove the literal generated-path set it replaces.
+- [x] Update the shipped module's own self-test so its negative cases exercise the surviving containment boundary and --self-test exits 0 inside the generated fixture.
+- [x] Add a test that a changed Python file under a source root the template does not enumerate is admitted as a compile check.
+- [x] Add a test that the containment refusals still hold for an absolute path, a parent-directory escape, and a non-.py argument.
+- [x] Repair the drift guard so a reassignment or filter applied to the emitted path list after its comprehension fails the guard.
+- [x] Run the declared validation commands.
 
 ## Validation Notes
+
+Implementation mode was parent_direct. Every write target sits inside the validation-authority scope
+that `scripts/run-sandboxed-plan-worker.py` refuses to hand to a writable worker, so no sandboxed
+worker attempt and no worker receipt exist for this plan.
+
+This plan inherited its candidate from the stopped source plan 343 through dirty-path promotion, so
+the admission change and its first tests were already written when the plan was created.
+
+Two independent reviews ran in this execution epoch, which is the whole epoch budget.
+
+Round 1 confirmed the production change directly. It verified the containment probes, including
+redundant-separator and normalized parent-directory forms, and confirmed that against the pre-change
+module all three regression witnesses fail: the selector-admission test, the root-agnostic admission
+test, and the rewritten neighbouring-Skill test. It confirmed both new corpus entries are exercised
+and were refused before the change, that no executable reference to the removed
+`GENERATED_PYTHON_COMPILE_FILES` remains, and that the shipped `--self-test` passes. It reported one
+Medium finding: the drift guard read individual write forms, so `py_files[:] = [...]` narrowed the
+selector's compile emission without failing.
+
+Round 2 reviewed the rewritten guard, confirmed that specific bypass closed, and reported one further
+Medium finding: pinning the statement sequence still left the guarded block, the comprehension
+element, the definition itself, and the emitter open.
+
+The round 2 finding was remediated after the epoch review budget was spent, so that remediation
+carries no independent review. The owner accepted it explicitly on 2026-09-14 rather than stopping
+the plan. The remediation requires exactly one undecorated top-level selector definition, exactly one
+undecorated `add_command` definition, no rebinding of either name, a comprehension element equal to
+its generator target, and a guarded block holding exactly the one expected emission call.
+
+Each reported bypass was reproduced against a copy of the selector and re-checked against the
+pristine file. All five fail the guard now and the unmodified selector passes: a slice filter inside
+the guarded block, a conditional expression in the comprehension element, a second `select_commands`
+definition, a decorated selector, and a rebound `add_command`. The three earlier forms stay detected:
+reassignment, method mutation, and deletion.
+
+The guard is deliberately sensitive to harmless structural refactoring of the selector. A refactor
+must update the guard rather than pass it silently, which is the behaviour a drift guard is for.
+
+This plan revokes the path-exact compilation boundary that plan 125 established. The owner authorized
+that revocation explicitly on 2026-09-14 after being shown the conflict. `py_compile` does not import
+the named file, no caller in this repository treats an admitted command as import-safe, and shell
+metacharacters are refused before the path check, so no exploitable regression was identified. What
+is given up is an approved authority policy, not a demonstrated defense.
+
+Lexical containment is not filesystem containment: an admitted relative path may be a symlink that
+leaves the repository. That hole is not a regression, because it existed identically for a symlink
+placed under an already enumerated root, and it belongs to successor plan 350 together with the rest
+of the selector-side agreement work.
+
+Focused validation: `python3 tests/test-validation-tools.py` reported 323 tests OK.
+Static preflight: `python3 scripts/check-copier-template.py` passed, and the shipped
+`plan_validation_commands.py --self-test` exited 0.
