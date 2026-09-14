@@ -1,4 +1,5 @@
 # Active Plan
 
 id	path	status
-343	docs/plan/active/343-admit-project-source-compile-checks.md	replan_required
+349	docs/plan/active/349-complete-root-agnostic-compile-admission.md	in_progress
+350	docs/plan/active/350-align-selector-emission-with-command-admission.md	deferred

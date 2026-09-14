@@ -1,11 +1,7 @@
 # Admit the compile checks the change-aware selector emits for a generated project's own source roots
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
-  - scope_drift
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: Every py_compile command the change-aware selector emits for a changed repository file is a command the validation allowlist admits.
 task_types:
   - template_workflow
   - security
@@ -59,6 +55,20 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:92d5637655ae0098dee5a5dad78e5682a4138ef71a1844d2df4f4c8f362e755c","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:a33ea5beb12d40b6d46ead159126d5582281fc8050b27e49f9c79c95db63e729","authoritative_only_reason":"Change-aware validation runs against a generated project tree that only the Copier fixture builds.","stage":"authoritative","witness":"tests/smoke.sh"}
   - {"acceptance_sha256":"sha256:91947e124e4cd4ce4c2b2e9fd9aa104cad27d14f65660f97e087e9579ea0e697","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/343-admit-project-source-compile-checks.md
+replan_contract: docs/plan/replanned/contracts/343-admit-project-source-compile-checks.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/349-complete-root-agnostic-compile-admission.md
+  - docs/plan/active/350-align-selector-emission-with-command-admission.md
+inherited_acceptance_digests:
+  - sha256:80a7adb7b64fe34b829634b347e9f95384c660702c7d670b166c0885c4e19c43
+  - sha256:92d5637655ae0098dee5a5dad78e5682a4138ef71a1844d2df4f4c8f362e755c
+  - sha256:a33ea5beb12d40b6d46ead159126d5582281fc8050b27e49f9c79c95db63e729
+  - sha256:91947e124e4cd4ce4c2b2e9fd9aa104cad27d14f65660f97e087e9579ea0e697
 checked_summary_ja: 変更対応検証が選ぶコンパイル確認を、生成先プロジェクト自身のソース配置でも許可する。
 
 ## Decisions
