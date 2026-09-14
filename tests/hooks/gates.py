@@ -195,6 +195,251 @@ class RecognizedInvocationCases:
             self.assertIn("task worktree", output["reason"])
 
 
+class CredentialDisplayCases:
+    """Each enumerated display form is decided before the command runs.
+
+    The incident variable is API_TOKEN: an agent meant to test for presence and
+    wrote the default operator instead, which expands the value whenever the
+    variable is set.
+    """
+
+    # Assembled at run time rather than written out, because a
+    # credential-bearing header literal is exactly the text a transcript
+    # scrubber rewrites, and a rewritten literal would silently stop
+    # testing that the expansion is allowed.
+    SCHEME = "Bea" "rer"
+    OUTBOUND_HEADER = (
+        'curl -sS -H "Authorization: ' + SCHEME + ' $API_TOKEN"'
+        ' https://api.example.invalid/v1'
+    )
+
+    REFUSED = (
+        '2> /dev/null env',
+        '<<< "$API_TOKEN" cat',
+        'DUMMY+=x env',
+        'stdbuf -o L env',
+        'exec -a fake env',
+        'env --ignore-signal printenv API_TOKEN',
+        "env -S 'printenv PATH' API_TOKEN",
+        'printenv -0',
+        'printenv --',
+        'if true; then env; fi',
+        'while read line; do echo $API_TOKEN; done',
+        'e\\\nnv',
+        'cat <<EOF\n$API_TOKEN\nEOF',
+        'echo "${OTHER:+${API_TOKEN}}" # trailing',
+        'echo "${API_TOKEN:-missing}"',
+        'echo "${API_TOKEN-missing}"',
+        'echo $API_TOKEN',
+        'printf "%s\\\\n" "${API_TOKEN}"',
+        'echo "${API_TOKEN:?required}"',
+        'printf "%s" "${API_TOKEN:0:4}"',
+        'echo "${API_TOKEN#pre}"',
+        'echo ${#API_TOKEN}',
+        'echo "${API_TOKEN:+$API_TOKEN}"',
+        'echo "${API_TOKEN:+$(printf x)}"',
+        'echo "${API_TOKEN+`printf x`}"',
+        'echo "${OTHER:-${API_TOKEN}}"',
+        'echo "${OTHER:+${API_TOKEN}}"',
+        'cat <<< "$API_TOKEN"',
+        'head -c 8 <<< "$API_TOKEN"',
+        'tail -c 8 <<< "$API_TOKEN"',
+        'less <<< "$API_TOKEN"',
+        'more <<< "$API_TOKEN"',
+        'logger "$API_TOKEN"',
+        'tee /dev/stderr <<< "$API_TOKEN"',
+        '\'echo\' "$API_TOKEN"',
+        '"echo" "$API_TOKEN"',
+        '/bin/echo $API_TOKEN',
+        'DUMMY="two words" echo "$API_TOKEN"',
+        'command -p echo "$API_TOKEN"',
+        'env -u DUMMY echo "$API_TOKEN"',
+        'env -i echo "$API_TOKEN"',
+        "env -S 'echo $API_TOKEN'",
+        "env --split-string='echo $API_TOKEN'",
+        'printenv API_TOKEN',
+        "printenv 'API_TOKEN'",
+        'env | grep API_TOKEN',
+        'env',
+        'env -i',
+        'env -u DUMMY',
+        'printenv',
+        'printenv </dev/null',
+        'set',
+        'set 2>/dev/null',
+        'export -p',
+        'declare -p API_TOKEN',
+        "declare '-p' API_TOKEN",
+        'readonly -p',
+        'typeset -p',
+        'echo $CLIENT_SECRET',
+        'echo $DATABASE_PASSWORD',
+        'echo $API_KEY',
+        'echo $AWS_SECRET_ACCESS_KEY',
+        'git status --short && echo $API_TOKEN',
+    )
+
+    ALLOWED = (
+        'declare -fp',
+        'export -p PATH',
+        'command -v env',
+        'env --help',
+        'env --version',
+        'echo "${!API_TOKEN}"',
+        'echo done # $API_TOKEN',
+        "cat <<'EOF'\n$API_TOKEN\nEOF",
+        'stdbuf -o L python3 app.py',
+        'nohup python3 app.py',
+        'time -o timing.txt python3 app.py',
+        "env --split-string='python3 app.py'",
+        '[ -n "${API_TOKEN:+set}" ] && echo present',
+        'test -n "${API_TOKEN:+1}"',
+        'if [ -z "${API_TOKEN:+set}" ]; then echo absent; fi',
+        OUTBOUND_HEADER,
+        'API_TOKEN="$API_TOKEN" python3 app.py',
+        'env API_TOKEN="$API_TOKEN" python3 app.py',
+        'env -u DUMMY python3 app.py',
+        "env --split-string='python3 app.py'",
+        'export API_TOKEN=value',
+        'set -euo pipefail',
+        'env python3 app.py',
+        'echo $SORT_KEY',
+        'echo $PRIMARY_KEY',
+        'echo ${CACHE_KEY}',
+        "echo '$API_TOKEN'",
+        'echo "${API_TOKEN:+fixed}"',
+        'echo "${API_TOKEN:+fixed\\\\literal}"',
+        'git status --short',
+        'printenv PATH',
+        'echo done 2>&1',
+        'declare -A table',
+        'export PATH=/usr/bin',
+    )
+
+    def assert_refused(self, command: str) -> None:
+        for hook in (PRE_TOOL, ROOT_PRE_TOOL):
+            output = run_hook(hook, {"cmd": command})
+            self.assertEqual(output.get("decision"), "block", (hook.name, command, output))
+
+    def assert_allowed(self, command: str) -> None:
+        for hook in (PRE_TOOL, ROOT_PRE_TOOL):
+            output = run_hook(hook, {"cmd": command})
+            self.assertEqual(output, {}, (hook.name, command))
+
+    def test_every_enumerated_disclosing_form_is_refused(self) -> None:
+        for command in self.REFUSED:
+            with self.subTest(command=command):
+                self.assert_refused(command)
+
+    def test_every_enumerated_allowed_form_still_runs(self) -> None:
+        for command in self.ALLOWED:
+            with self.subTest(command=command):
+                self.assert_allowed(command)
+
+    def test_a_pathological_nesting_reaches_a_decision(self) -> None:
+        """A command the scanner cannot decide is refused, never crashed on."""
+        command = 'echo "' + "${X:-" * 2000 + "$API_TOKEN" + "}" * 2000 + '"'
+        for hook in (PRE_TOOL, ROOT_PRE_TOOL):
+            output = run_hook(hook, {"cmd": command})
+            self.assertEqual(output.get("decision"), "block", hook.name)
+            self.assertIn("decide", output["reason"])
+
+    def test_the_outbound_header_case_still_carries_a_live_expansion(self) -> None:
+        """Guard the assembled header against a scrubber that would defang it."""
+        self.assertIn("$" + "API_TOKEN", self.OUTBOUND_HEADER)
+        self.assertIn("Bearer", self.OUTBOUND_HEADER)
+
+    def test_the_incident_default_operator_form_names_the_variable(self) -> None:
+        output = run_hook(PRE_TOOL, {"cmd": 'echo "${API_TOKEN:-missing}"'})
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("API_TOKEN", output["reason"])
+
+    def test_a_bare_key_segment_is_not_credential_named(self) -> None:
+        """SORT_KEY stays ordinary while API_TOKEN does not, by segment."""
+        self.assert_allowed("echo $SORT_KEY")
+        self.assert_refused("echo $API_TOKEN")
+
+    def installed_project(self, tmp: str, policy: str | None) -> Path:
+        """Lay out a generated project that carries only what the gate loads."""
+        root = Path(tmp) / "project"
+        hooks = root / ".project-agent-workflow/hooks"
+        scripts = root / ".project-agent-workflow/scripts"
+        hooks.mkdir(parents=True)
+        scripts.mkdir(parents=True)
+        shutil.copy2(PRE_TOOL, hooks / PRE_TOOL.name)
+        source = ROOT / "template/.project-agent-workflow/scripts"
+        for name in (
+            "security_rules.py",
+            "tool_command_context.py",
+            "check-external-service-policy.py",
+        ):
+            shutil.copy2(source / name, scripts / name)
+        if policy is not None:
+            agent_docs = root / "docs/agent"
+            agent_docs.mkdir(parents=True)
+            (agent_docs / "external-services.yaml").write_text(policy, encoding="utf-8")
+        return root
+
+    V1_POLICY = """version: 1
+
+external_services:
+  pipeline:
+    state: configured_read_only
+    connection: https://pipeline.example.invalid
+    authentication: environment
+    credential_reference: PIPELINE_HANDLE
+    allowed_reads:
+      - read_status
+    allowed_writes: []
+    write_authorization_rule: ""
+    dry_run_or_local_validation: ""
+    unavailable_fallback: "Read the local checkout."
+"""
+
+    def test_a_policy_named_variable_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.installed_project(tmp, self.V1_POLICY)
+            gate = root / ".project-agent-workflow/hooks" / PRE_TOOL.name
+            output = run_hook(gate, {"cmd": "echo $PIPELINE_HANDLE"})
+            self.assertEqual(output.get("decision"), "block", output)
+            self.assertIn("PIPELINE_HANDLE", output["reason"])
+
+    def test_an_absent_policy_refuses_no_unrelated_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.installed_project(tmp, None)
+            gate = root / ".project-agent-workflow/hooks" / PRE_TOOL.name
+            self.assertEqual(run_hook(gate, {"cmd": "echo $PIPELINE_HANDLE"}), {})
+            self.assertEqual(run_hook(gate, {"cmd": "git status --short"}), {})
+            self.assertEqual(
+                run_hook(gate, {"cmd": "echo $API_TOKEN"}).get("decision"), "block"
+            )
+
+    def test_a_malformed_policy_refuses_no_unrelated_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.installed_project(tmp, "not: a policy\n  - broken\n")
+            gate = root / ".project-agent-workflow/hooks" / PRE_TOOL.name
+            self.assertEqual(run_hook(gate, {"cmd": "echo $PIPELINE_HANDLE"}), {})
+            self.assertEqual(run_hook(gate, {"cmd": "git status --short"}), {})
+            self.assertEqual(
+                run_hook(gate, {"cmd": "echo $API_TOKEN"}).get("decision"), "block"
+            )
+
+    def test_a_version_two_policy_declares_no_credential_variable(self) -> None:
+        """The repository's own policy is version 2, which names no variable."""
+        root_policy = (ROOT / "docs/agent/external-services.yaml").read_text(encoding="utf-8")
+        self.assertTrue(root_policy.startswith("version: 2"))
+        self.assert_allowed("echo $PIPELINE_HANDLE")
+
+    def test_the_refusal_reaches_every_payload_shape(self) -> None:
+        for payload in (
+            {"command": "echo $API_TOKEN"},
+            {"arguments": {"shell_command": "echo $API_TOKEN"}},
+            {"tool_name": "exec_command", "tool_input": {"cmd": "echo $API_TOKEN"}},
+        ):
+            with self.subTest(payload=sorted(payload)):
+                self.assertEqual(run_hook(PRE_TOOL, payload).get("decision"), "block")
+
+
 class ExecutionDirectoryCases:
     """The gate judges a write against the directory the command runs in."""
 
@@ -336,7 +581,10 @@ class ExecutionDirectoryCases:
 
 
 class PreToolHardeningGateTest(
-    RecognizedInvocationCases, ExecutionDirectoryCases, unittest.TestCase
+    RecognizedInvocationCases,
+    CredentialDisplayCases,
+    ExecutionDirectoryCases,
+    unittest.TestCase,
 ):
     def test_root_gate_blocks_nested_tool_input(self) -> None:
         output = run_hook(

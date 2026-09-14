@@ -29,6 +29,13 @@ RULES = (
     (re.compile(r"\b(cat|less|more|head|tail|grep|rg|awk|sed)\b.*(\.env|id_rsa|id_ed25519|\.pem|\.key)", re.I), "secret-bearing file read"),
 )
 
+# Credential variable names this repository's service policy declares. The
+# policy sits at a fixed place inside the repository that installed this hook,
+# so the names do not depend on the directory a command happens to run in.
+DECLARED_CREDENTIAL_NAMES = security_rules.DeclaredCredentialNames(
+    Path(__file__).resolve().parents[2]
+)
+
 # Commands whose first repository effect is a write. The authoritative
 # fail-closed surfaces are the lifecycle commands and the pre-commit hook; this
 # gate reports the required worktree action before the effect happens rather
@@ -201,6 +208,13 @@ def main() -> int:
                 json.dump({"decision": "block", "reason": reason}, sys.stdout)
                 sys.stdout.write("\n")
                 return 0
+        reason = security_rules.credential_display_refusal(
+            command, DECLARED_CREDENTIAL_NAMES
+        )
+        if reason is not None:
+            json.dump({"decision": "block", "reason": reason}, sys.stdout)
+            sys.stdout.write("\n")
+            return 0
     try:
         workdir = tool_command_context.payload_workdir(payload)
         context_error = None
