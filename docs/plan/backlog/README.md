@@ -21,10 +21,11 @@
 ## 現在のbacklog一覧
 
 次の一覧は`python3 scripts/render-plan-overview.py --relative-to docs/plan/backlog/README.md`で生成した。
-341と343をactiveへ昇格したため、現在backlogに残っているプランはない。
+347をactiveへ昇格したため、現在backlogに残っているのは348である。
 
 | id | status | title | path |
 | --- | --- | --- | --- |
+| [348](348-state-the-presence-test-and-scan-changed-shell-files.md) | backlog | Name the one safe credential presence test in the security specification, and make change-aware validation scan changed shell files, and CI scan the same files, for the enumerated unsafe forms. | docs/plan/backlog/348-state-the-presence-test-and-scan-changed-shell-files.md |
 
 ## ハーネスのモデル更新への対応
 

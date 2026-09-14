@@ -1,6 +1,7 @@
 # Refuse the direct credential display forms an agent reaches for by mistake
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Each shell-command form this plan enumerates is refused before it runs when it would disclose a credential-named variable, and each form this plan enumerates as allowed still runs.
 task_types:
   - template_workflow
