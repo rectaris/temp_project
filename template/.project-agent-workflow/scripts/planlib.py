@@ -69,6 +69,8 @@ SCALAR_KEYS = {
     "expected_output",
     "checked_summary_ja",
     "completion_deferred_reason",
+    "shelved_reason",
+    "shelved_at",
     "primary_invariant",
     "execution_group",
     "replan_source",

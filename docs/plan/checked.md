@@ -267,3 +267,4 @@ id	path
 315	docs/plan/checked/2026/09/01-15/315-repair-release-runbook-execution-steps.md
 318	docs/plan/checked/2026/09/01-15/318-preserve-model-evidence-in-agent-logs.md
 321	docs/plan/checked/2026/09/01-15/321-report-model-evidence-without-usage-reattribution.md
+341	docs/plan/checked/2026/09/01-15/341-restore-shelved-manifest-fields.md

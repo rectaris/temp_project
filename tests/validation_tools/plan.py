@@ -2544,6 +2544,215 @@ class PlanValidationCommandsTest(unittest.TestCase):
             )
             module.lint_plan_index()
 
+    SHELVE_SPEC_INDEX = (
+        "version: 1\n"
+        "\n"
+        "default_reads:\n"
+        "  - docs/agent/PROJECT_POLICY.md\n"
+        "\n"
+        "task_types:\n"
+        "  planning_docs:\n"
+        "    required:\n"
+        "      - docs/agent/PROJECT_POLICY.md\n"
+    )
+    SHELVE_BACKLOG_PLAN = (
+        "# Example backlog plan\n"
+        "\n"
+        "status: backlog\n"
+        "task_types:\n"
+        "  - planning_docs\n"
+        "review_class: B\n"
+        "human_design_required: no\n"
+        "human_approval_status: not_required\n"
+        "write_scope:\n"
+        "  - docs/agent/PROJECT_POLICY.md\n"
+        "context_files:\n"
+        "  - AGENTS.md\n"
+        "required_specs:\n"
+        "  - docs/agent/PROJECT_POLICY.md\n"
+        "validation:\n"
+        "  - git diff --check\n"
+        "acceptance:\n"
+        "  - The generated lint accepts this plan after it is shelved.\n"
+        "checked_summary_ja: 見送り記録の例。\n"
+        "\n## Tasks\n\n- [ ] work\n"
+    )
+
+    def build_generated_shelve_fixture(self, root: Path) -> Path:
+        """Install the generated shelve command and lint beside one backlog plan."""
+
+        scripts = self.build_generated_index_fixture(root, self.ACTIVE_INDEX_POPULATED)
+        shelve = scripts / "shelve-plan.sh"
+        shelve.write_bytes(
+            (ROOT / "template/.project-agent-workflow/scripts/shelve-plan.sh").read_bytes()
+        )
+        shelve.chmod(0o755)
+        specs = root / ".project-agent-workflow/docs/agent"
+        specs.mkdir(parents=True)
+        (specs / "spec-index.yaml").write_text(self.SHELVE_SPEC_INDEX, encoding="utf-8")
+        (root / "docs/agent").mkdir(parents=True)
+        (root / "docs/agent/PROJECT_POLICY.md").write_text("policy\n", encoding="utf-8")
+        (root / "AGENTS.md").write_text("agents\n", encoding="utf-8")
+        (root / "docs/plan/backlog").mkdir(parents=True)
+        (root / "docs/plan/backlog/282-shelf.md").write_text(
+            self.SHELVE_BACKLOG_PLAN, encoding="utf-8"
+        )
+        return scripts
+
+    def test_generated_lint_accepts_a_plan_the_generated_shelve_command_wrote(self) -> None:
+        """The shelve command writes the exact fields the lint requires it to write."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts = self.build_generated_shelve_fixture(root)
+            completed = subprocess.run(
+                [
+                    "sh",
+                    str(scripts / "shelve-plan.sh"),
+                    "docs/plan/backlog/282-shelf.md",
+                    "superseded by another approach",
+                ],
+                cwd=root,
+                env={
+                    key: value
+                    for key, value in os.environ.items()
+                    if key not in {"GIT_DIR", "GIT_WORK_TREE"}
+                }
+                | {"GIT_CEILING_DIRECTORIES": str(root.parent)},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            shelved = root / "docs/plan/shelved/282-shelf.md"
+            self.assertTrue(shelved.is_file())
+            module = self.load_generated_plan_module(
+                root, scripts, "lint-plan-docs.py", "shelved_plan_lint"
+            )
+            module.lint_manifest(shelved)
+
+    LINT_MANIFEST_READERS = {
+        "manifest_scalar": "scalar",
+        "manifest_joined": "scalar",
+        "manifest_list": "list",
+    }
+
+    LINT_MANIFEST_PARSERS = frozenset(
+        {"require_manifest_fields", "parse_manifest", "parse_manifest_text"}
+    )
+
+    def generated_lint_manifest_reads(self) -> dict[str, set[str]]:
+        """Derive the manifest fields the generated lint reads through planlib."""
+
+        source = (
+            ROOT / "template/.project-agent-workflow/scripts/lint-plan-docs.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        reads: dict[str, set[str]] = {"scalar": set(), "list": set()}
+
+        def planlib_call_name(node: ast.Call) -> str | None:
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                owner = func.value
+                if isinstance(owner, ast.Name) and owner.id == "planlib":
+                    return func.attr
+                return None
+            if isinstance(func, ast.Name):
+                return func.id
+            return None
+
+        def parsed_names(scope: ast.AST) -> set[str]:
+            """Names bound to a parsed manifest inside one function body."""
+
+            names: set[str] = set()
+            for node in ast.walk(scope):
+                if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+                    continue
+                if planlib_call_name(node.value) not in self.LINT_MANIFEST_PARSERS:
+                    continue
+                names.update(
+                    target.id for target in node.targets if isinstance(target, ast.Name)
+                )
+            return names
+
+        scopes = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        # A parsed manifest is passed on by name, so a helper that receives one
+        # binds it through its parameters rather than through an assignment.
+        manifest_names = {name for scope in scopes for name in parsed_names(scope)}
+        self.assertTrue(manifest_names, "the generated lint parses no manifest through planlib")
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            kind = self.LINT_MANIFEST_READERS.get(planlib_call_name(node) or "")
+            if kind is None:
+                continue
+            self.assertEqual(2, len(node.args), ast.dump(node))
+            key = node.args[1]
+            self.assertIsInstance(key, ast.Constant, ast.dump(node))
+            self.assertIsInstance(key.value, str, ast.dump(node))
+            reads[kind].add(key.value)
+
+        for scope in scopes:
+            local = parsed_names(scope) | {
+                argument.arg
+                for argument in (
+                    *scope.args.posonlyargs,
+                    *scope.args.args,
+                    *scope.args.kwonlyargs,
+                )
+                if argument.arg in manifest_names
+            }
+            if not local:
+                continue
+            for node in ast.walk(scope):
+                # A direct subscript of the parsed manifest reads a field the
+                # parser must always initialize, so it is a list read.
+                if not isinstance(node, ast.Subscript) or not isinstance(node.value, ast.Name):
+                    continue
+                if node.value.id not in local or not isinstance(node.slice, ast.Constant):
+                    continue
+                if isinstance(node.slice.value, str):
+                    reads["list"].add(node.slice.value)
+        for kind, derived in reads.items():
+            self.assertTrue(derived, f"derived no {kind} manifest read from the generated lint")
+        return reads
+
+    def test_generated_parser_preserves_every_field_the_generated_lint_reads(self) -> None:
+        """A field the lint reads through planlib but planlib drops reads as absent."""
+
+        module = load_module(PLANLIB, "manifest_read_coverage_planlib")
+        reads = self.generated_lint_manifest_reads()
+        self.assertLessEqual({"shelved_reason", "shelved_at"}, reads["scalar"])
+        text = "# Example\n\n" + "".join(
+            f"{key}: value-{key}\n" for key in sorted(reads["scalar"])
+        )
+        text += "".join(
+            f"{key}:\n  - value-{key}\n" for key in sorted(reads["list"])
+        )
+        values = module.parse_manifest_text(text + "\n## Tasks\n\n- [ ] work\n")
+        for key in sorted(reads["scalar"]):
+            with self.subTest(scalar=key):
+                self.assertEqual(f"value-{key}", module.manifest_scalar(values, key))
+        for key in sorted(reads["list"]):
+            with self.subTest(list=key):
+                self.assertEqual([f"value-{key}"], module.manifest_list(values, key))
+
+    def test_generated_parser_classifies_every_field_the_generated_lint_reads(self) -> None:
+        """Each read is preserved as the shape its reader expects, not as any value."""
+
+        module = load_module(PLANLIB, "manifest_read_shape_planlib")
+        reads = self.generated_lint_manifest_reads()
+        for key in sorted(reads["scalar"]):
+            with self.subTest(scalar=key):
+                self.assertIn(key, module.SCALAR_KEYS)
+        for key in sorted(reads["list"]):
+            with self.subTest(list=key):
+                self.assertIn(key, module.LIST_KEYS)
+
     PRE_VINTAGE_ARCHIVE = (
         "task_type: tooling\n"
         "target_files:\n"
