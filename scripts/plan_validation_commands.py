@@ -255,13 +255,11 @@ def is_script_syntax_check(argv: tuple[str, ...]) -> bool:
     if len(argv) != 3 or argv[:2] not in {("sh", "-n"), ("bash", "-n")}:
         return False
     script = Path(argv[2])
-    if script.is_absolute() or ".." in script.parts or script.suffix != ".sh":
-        return False
-    return (
-        script.parts[0] in {"scripts", "tests"}
-        or script.parts[:2] == ("template", "scripts")
-        or script.parts[:3] == ("template", ".project-agent-workflow", "scripts")
-    )
+    # A syntax check parses the named file and never runs it, so containment is
+    # the whole boundary. Which repository root a contained path sits under
+    # would only encode one project's layout. The suffix restriction stays
+    # because the change-aware selector emits this check for a .sh path only.
+    return not (script.is_absolute() or ".." in script.parts or script.suffix != ".sh")
 
 
 def is_python_compile(argv: tuple[str, ...]) -> bool:

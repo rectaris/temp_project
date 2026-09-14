@@ -3531,6 +3531,43 @@ class PlanValidationCommandsTest(unittest.TestCase):
             "python3 -m py_compile .project-agent-workflow/hooks/stop_review_gate.py"
         )
 
+    def test_both_allowlists_admit_a_contained_shell_path_under_any_root(self) -> None:
+        """A syntax check reads a file, so the holding root is not a boundary.
+
+        The enumerated-root form admitted `scripts/x.sh` and refused
+        `tools/deploy.sh`, which the change-aware selector emits for the same
+        change. Reverting the widening fails here rather than surfacing as an
+        aborted run in a project whose layout the template never listed.
+        """
+
+        admitted = (
+            "tools/deploy.sh",
+            "build.sh",
+            "src/entry.sh",
+            "ci/pipeline/deploy.sh",
+            "Backend/scripts/run.sh",
+            "a_very_long_directory_name_nobody_enumerates/x.sh",
+            "scripts/lint-project-workflow.sh",
+            "template/scripts/check.sh",
+        )
+        refused = (
+            "/etc/deploy.sh",
+            "../deploy.sh",
+            "src/../../deploy.sh",
+            "tools/deploy.bash",
+            "tools/deploy",
+        )
+        for index, source in enumerate(PLAN_COMMAND_MODULES):
+            module = load_module(source, f"shell_syntax_admission_{index}")
+            for head in ("sh", "bash"):
+                for path in admitted:
+                    with self.subTest(source=source.name, head=head, admitted=path):
+                        module.parse_validation_command(f"{head} -n {path}")
+                for path in refused:
+                    with self.subTest(source=source.name, head=head, refused=path):
+                        with self.assertRaises(module.ValidationCommandError):
+                            module.parse_validation_command(f"{head} -n {path}")
+
     def test_template_lint_compatibility_uses_exact_v050_bridged_aliases(self) -> None:
         module = load_module(PLAN_COMMAND_MODULES[1], "template_legacy_plan_commands")
         commands = (

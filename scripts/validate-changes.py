@@ -291,7 +291,22 @@ def main(argv: list[str]) -> int:
         return 0
 
     commands = select_commands(paths, diff_mode)
-    validate_selected_commands(commands)
+    try:
+        validate_selected_commands(commands)
+    except plan_validation_commands.ValidationCommandError as error:
+        if args.json:
+            print_json(
+                {
+                    "changed_files": paths,
+                    "commands": command_records(commands),
+                    "diff_mode": diff_mode,
+                    "error": str(error),
+                    "status": "refused_command",
+                }
+            )
+        else:
+            print(f"validate-changes: refused selected command: {error}", file=sys.stderr)
+        return 1
     if args.json and args.print_only:
         print_json(
             {

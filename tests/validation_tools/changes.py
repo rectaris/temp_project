@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -89,9 +89,9 @@ class ValidateChangesTest(unittest.TestCase):
         """The shipped selector may not emit a py_compile the shipped allowlist refuses.
 
         This covers the compile emission only, which is the invariant this guard
-        is scoped to. The selector's `sh -n` emission has the same unresolved
-        defect for a shell script under a root the template does not enumerate;
-        it is recorded in the plan rather than silently covered here.
+        is scoped to. The selector's `sh -n` emission is measured against the
+        same allowlist in the selector-agreement module, which asserts the
+        agreement directly.
 
         The root selector keeps its own narrower allowlist, so this guard binds
         the shipped pair a generated project actually runs.
@@ -118,6 +118,46 @@ class ValidateChangesTest(unittest.TestCase):
                     # The command validates its own selection before running it,
                     # so this is the exact gate a generated project hits.
                     module.validate_selected_commands(commands)
+
+    def test_a_refused_selection_ends_with_a_stated_reason_in_both_modes(self) -> None:
+        """A command the allowlist refuses may not leave as a traceback.
+
+        Widening the shell admission removes the common way to reach this
+        refusal, so the remaining paths to it are driven directly. Both shipped
+        copies are checked, and both output modes, because the plain mode and
+        the JSON mode return through different branches of the same function.
+        """
+
+        refused = ["sh", "-n", "../escape.sh"]
+        for index, source in enumerate(VALIDATE_CHANGE_MODULES):
+            dependency = load_module(PLAN_COMMAND_MODULES[index], "plan_validation_commands")
+            sys.modules["plan_validation_commands"] = dependency
+
+            def forbidden_run(*args: object, **kwargs: object) -> None:
+                raise AssertionError("no command may run after the selection is refused")
+
+            for json_mode in (False, True):
+                with self.subTest(source=source.name, json=json_mode):
+                    module = load_module(source, f"refused_selection_{index}_{json_mode}")
+                    module.active_plan_index_fault = lambda: None
+                    module.changed_files = lambda mode: (["../escape.sh"], "all")
+                    module.select_commands = lambda paths, diff_mode: [list(refused)]
+                    module.subprocess = SimpleNamespace(run=forbidden_run)
+                    out = io.StringIO()
+                    err = io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        status = module.main(["--all", "--json"] if json_mode else ["--all"])
+                    self.assertEqual(status, 1, "a refused selection reported success")
+                    if json_mode:
+                        payload = json.loads(out.getvalue())
+                        self.assertEqual(payload["status"], "refused_command")
+                        self.assertTrue(payload["error"], "the refusal carries no reason")
+                        self.assertEqual(
+                            [record["argv"] for record in payload["commands"]], [refused]
+                        )
+                    else:
+                        self.assertIn("refused selected command", err.getvalue())
+                        self.assertEqual(out.getvalue(), "")
 
     def test_the_template_selector_restricts_its_compile_emission_to_the_suffix(self) -> None:
         """The corpus above is representative only while no root narrows emission.

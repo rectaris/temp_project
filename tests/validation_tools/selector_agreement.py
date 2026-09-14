@@ -113,6 +113,10 @@ def shape_corpus() -> tuple[str, ...]:
 
 SHAPE_CORPUS = shape_corpus()
 
+# The same generated shapes as shell scripts, so the shell side is measured
+# across the properties a narrowing filter could key on rather than a list.
+SHELL_SHAPE_CORPUS = tuple(f"{name.removesuffix('.py')}.sh" for name in SHAPE_CORPUS)
+
 
 def resolves_inside(root: Path, name: str) -> bool:
     """Decide containment here, independently of the selector's own helper."""
@@ -383,44 +387,61 @@ class SelectorAgreementTest(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-    def test_a_shell_script_outside_the_enumerated_roots_still_disagrees(self) -> None:
-        """Record the one disagreement this plan does not close.
+    def test_a_shell_script_outside_the_enumerated_roots_now_agrees(self) -> None:
+        """The disagreement this test used to record is closed.
 
-        The selector emits `sh -n` for any changed shell script, but the
-        allowlist admits only four enumerated roots, so a shell script anywhere
-        else aborts the whole run. Widening that rule is separately authorized
-        work and is not admitted here, so the remaining gap is asserted rather
-        than left to a corpus that happens to avoid it. This test fails once the
-        gap is closed, which is the point at which it must be rewritten.
+        It previously asserted the gap: the selector emitted `sh -n` for any
+        changed shell script while the allowlist admitted four enumerated
+        roots, so a shell script anywhere else aborted the whole run. The
+        widened admission closes that gap, so the same shapes now assert the
+        agreement instead of the gap. Keeping the test rather than deleting it
+        keeps the evidence that the gap was closed on purpose, and the corpus
+        is generated across path shapes so a re-narrowing by root, depth or
+        name fails here rather than surviving a list that avoids it.
         """
 
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()
-            for name in ("build.sh", "src/entry.sh", "ci/deploy.sh"):
-                target = root / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text("true\n", encoding="utf-8")
-            (root / "scripts/inside.sh").parent.mkdir(parents=True, exist_ok=True)
-            (root / "scripts/inside.sh").write_text("true\n", encoding="utf-8")
+            self.build(root, SHELL_SHAPE_CORPUS)
             previous = Path.cwd()
             os.chdir(root)
             try:
                 module = self.selector_in(root)
-                # The selector reloads its dependency under the same module
-                # name, so the exception class must come from the instance the
-                # selector actually raises through.
-                dependency = module.plan_validation_commands
-                module.validate_selected_commands(
-                    module.select_commands(["scripts/inside.sh"], "all")
-                )
-                for name in ("build.sh", "src/entry.sh", "ci/deploy.sh"):
+                for name in SHELL_SHAPE_CORPUS:
                     with self.subTest(changed=name):
                         commands = module.select_commands([name], "all")
-                        self.assertIn(["sh", "-n", name], commands)
-                        with self.assertRaises(dependency.ValidationCommandError):
-                            module.validate_selected_commands(commands)
+                        self.assertIn(
+                            ["sh", "-n", name],
+                            commands,
+                            "the selector stopped emitting a syntax check",
+                        )
+                        module.validate_selected_commands(commands)
             finally:
                 os.chdir(previous)
+
+    def test_the_shell_admission_still_refuses_an_uncontained_target(self) -> None:
+        """Widening the root is not widening the containment or the suffix.
+
+        The selector cannot emit these shapes, so they are driven against the
+        allowlist directly. Without them, the widened rule would pass its own
+        agreement test even if it admitted everything.
+        """
+
+        dependency = load_module(TEMPLATE_PLAN_COMMANDS, "shell_admission_refusals")
+        for head in ("sh", "bash"):
+            for argument in (
+                "/etc/deploy.sh",
+                "../deploy.sh",
+                "src/../../deploy.sh",
+                "tools/deploy.bash",
+                "tools/deploy",
+                "tools/deploy.sh.py",
+            ):
+                with self.subTest(head=head, refused=argument):
+                    self.assertFalse(
+                        dependency.is_script_syntax_check((head, "-n", argument)),
+                        "the widened rule admits an uncontained or wrong-suffix target",
+                    )
 
     def test_a_target_dropped_for_containment_is_reported(self) -> None:
         """A dropped check must not look like a check that passed."""

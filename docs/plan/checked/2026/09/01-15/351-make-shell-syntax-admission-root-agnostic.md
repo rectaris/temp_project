@@ -1,6 +1,6 @@
 # Make the shell syntax check admission root-agnostic and end a refused selection with a reason
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: The command allowlist admits a contained repository-relative shell path as a syntax check regardless of which source root holds it, still refuses an absolute path, a parent-directory escape, and a non-.sh argument, and a refused selection ends change-aware validation with a stated reason rather than an unhandled traceback.
 task_types:
@@ -76,15 +76,20 @@ checked_summary_ja: シェル構文検査の許可判定からディレクトリ
 
 ## Tasks
 
-- [ ] Record the baseline: run the suite unchanged, and record which shapes the selector emits that the allowlist refuses today.
-- [ ] Widen `is_script_syntax_check` in the root allowlist to admit any contained repository-relative path with the `.sh` suffix, keeping the absolute, parent-directory and suffix refusals, and mirror the same change into the generated copy.
-- [ ] Extend the allowlist tests so reverting the widening fails, and so an absolute path, a parent-directory escape and a non-.sh argument stay refused for both `sh -n` and `bash -n`.
-- [ ] Rewrite `test_a_shell_script_outside_the_enumerated_roots_still_disagrees` to assert the agreement it previously recorded as a gap, and confirm the rule comparison in the same module still detects a narrowing of either side.
-- [ ] End a refused selection in `main()` with a stated reason and exit status 1 in both the plain and the JSON output mode, in the root and generated copies, and add a test that drives that path.
-- [ ] Run the whole selection corpus through the allowlist again and record any remaining disagreement instead of leaving it to a corpus that avoids it.
+- [x] Record the baseline: run the suite unchanged, and record which shapes the selector emits that the allowlist refuses today.
+- [x] Widen `is_script_syntax_check` in the root allowlist to admit any contained repository-relative path with the `.sh` suffix, keeping the absolute, parent-directory and suffix refusals, and mirror the same change into the generated copy.
+- [x] Extend the allowlist tests so reverting the widening fails, and so an absolute path, a parent-directory escape and a non-.sh argument stay refused for both `sh -n` and `bash -n`.
+- [x] Rewrite `test_a_shell_script_outside_the_enumerated_roots_still_disagrees` to assert the agreement it previously recorded as a gap, and confirm the rule comparison in the same module still detects a narrowing of either side.
+- [x] End a refused selection in `main()` with a stated reason and exit status 1 in both the plain and the JSON output mode, in the root and generated copies, and add a test that drives that path.
+- [x] Run the whole selection corpus through the allowlist again and record any remaining disagreement instead of leaving it to a corpus that avoids it.
 
 ## Validation Notes
 
 - Baseline to record before implementation: the shipped allowlist refuses `sh -n tools/deploy.sh`, which the shipped selector emits for a changed `tools/deploy.sh`, and the refusal leaves `main()` through an unhandled `ValidationCommandError`.
 - Ordering: this plan follows the compile-side work, which settled the same question for `python3 -m py_compile`. The shell rule is the last enumerated-root restriction in the admission surface.
 - Boundary: this plan changes which contained paths are admitted. It does not widen the accepted command heads, the accepted suffix, or the containment checks.
+
+- Baseline recorded before implementation: the suite passed with 349 tests, and both allowlist copies refused `sh -n tools/deploy.sh`, `sh -n build.sh`, `sh -n /etc/x.sh`, `sh -n ../x.sh` and `sh -n scripts/x.bash` while admitting `sh -n scripts/x.sh`. The shipped selector emits `sh -n tools/deploy.sh` for a changed `tools/deploy.sh`, so that refusal aborted the run.
+- After implementation the suite passes with 352 tests. Three separate reversions were measured rather than assumed: restoring the enumerated-root form fails with 128 errors across `test_both_allowlists_admit_a_contained_shell_path_under_any_root`, `test_a_shell_script_outside_the_enumerated_roots_now_agrees` and `test_root_accepts_namespaced_template_shell_syntax_check`; making admission unconditional fails with 23 failures and 1 error, including `test_the_shell_admission_still_refuses_an_uncontained_target`; removing the refusal handler from both `main()` copies fails with 4 errors in `test_a_refused_selection_ends_with_a_stated_reason_in_both_modes`.
+- One independent review round was run against the whole change set and reported no defect. Its safety claims about leading-dash paths were reproduced here rather than accepted: `sh -n -c.sh`, `bash -n -c.sh`, `sh -n -n.sh`, `bash -n -n.sh`, `sh -n -O.sh` and `bash -n -O.sh` all exit non-zero with an option error and execute nothing, confirmed with a marker file that was never written. The mandatory `.` in the `.sh` suffix is an illegal option in any leading-dash bundle, and `-n` is always present in the emitted argv, so a parsed target cannot run.
+- Residual recorded rather than fixed: the root selector's `existing` has no containment check, so a tracked symbolic link named `*.sh` that resolves outside the repository can be handed to `sh -n` in this repository's own copy. The widening enlarges the set of holding directories for that pre-existing exposure without adding a new capability, because `sh -n` parses and never executes, and the shipped copy already drops an uncontained target through `SKIPPED_OUTSIDE_REPOSITORY`. Narrowing the root selector's containment is outside this plan's stated boundary, which excludes changing the containment checks, so it is left as separate work.

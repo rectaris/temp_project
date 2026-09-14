@@ -272,3 +272,4 @@ id	path
 350	docs/plan/checked/2026/09/01-15/350-align-selector-emission-with-command-admission.md
 347	docs/plan/checked/2026/09/01-15/347-refuse-direct-credential-display-commands.md
 348	docs/plan/checked/2026/09/01-15/348-state-the-presence-test-and-scan-changed-shell-files.md
+351	docs/plan/checked/2026/09/01-15/351-make-shell-syntax-admission-root-agnostic.md
