@@ -10,9 +10,11 @@ from pathlib import Path
 
 from .support import (
     LEGACY_MIGRATOR,
+    PLAN_COMMAND_MODULES,
     ROOT,
     SECURITY_CHECK_MODULE,
     SECURITY_RULE_MODULE,
+    VALIDATE_CHANGE_MODULES,
     load_module,
 )
 
@@ -484,7 +486,234 @@ class GeneratedCiTest(unittest.TestCase):
         )
 
 
-class SecurityStaticCheckTest(unittest.TestCase):
+UNSAFE_DISPLAY = 'echo "${API_TOKEN:-unset}"\n'
+SAFE_PRESENCE = 'if [ -n "${API_TOKEN:+set}" ]; then echo "configured"; fi\n'
+
+
+class CredentialDisplayCases:
+    """Cases for the scan that reads committed shell files.
+
+    It is defence in depth. It reads bytes that reached the repository and
+    cannot see the throwaway command that caused the incident; the pre-tool
+    gate owns that boundary.
+    """
+
+    def check_module(self):
+        rules = load_module(SECURITY_RULE_MODULE, "security_rules")
+        sys.modules["security_rules"] = rules
+        return load_module(SECURITY_CHECK_MODULE, "security_static_check")
+
+    def test_the_shared_credential_name_classifier_is_the_one_this_scan_uses(self) -> None:
+        rules = load_module(SECURITY_RULE_MODULE, "security_rules")
+        self.assertTrue(callable(getattr(rules, "is_credential_name", None)))
+        source = SECURITY_CHECK_MODULE.read_text(encoding="utf-8")
+        self.assertIn("security_rules.is_credential_name(", source)
+
+    def test_an_unsafe_display_form_is_reported_and_the_safe_presence_form_is_not(self) -> None:
+        module = self.check_module()
+        self.assertTrue(module.credential_display_findings(UNSAFE_DISPLAY))
+        self.assertEqual([], module.credential_display_findings(SAFE_PRESENCE))
+
+    def test_the_reported_forms_stay_the_enumerated_ones(self) -> None:
+        module = self.check_module()
+        reported = (
+            'echo "$API_TOKEN"',
+            'printf %s "${GITHUB_TOKEN}"',
+            'DUMMY=1 echo "$API_TOKEN"',
+            'if true; then echo "$DB_PASSWORD"; fi',
+            'cat /etc/hosts && logger "${AWS_SECRET_ACCESS_KEY}"',
+            'echo "${API_TOKEN:+$OTHER}"',
+        )
+        for line in reported:
+            with self.subTest(line=line):
+                self.assertTrue(module.credential_display_findings(line + "\n"), line)
+        allowed = (
+            'echo "the token is configured"',
+            "echo '$API_TOKEN'",
+            'echo "$SORT_KEY"',
+            'echo "${#API_TOKEN}"',
+            '# echo "$API_TOKEN"',
+            'curl -H "x-token: $API_TOKEN" https://api.example.invalid',
+            'echo "$PATH" # $API_TOKEN',
+        )
+        for line in allowed:
+            with self.subTest(line=line):
+                self.assertEqual([], module.credential_display_findings(line + "\n"), line)
+
+    def test_a_declared_exemption_clears_the_same_unsafe_line(self) -> None:
+        module = self.check_module()
+        marker = f"# {module.CREDENTIAL_DISPLAY_EXEMPTION}\n"
+        self.assertEqual([], module.credential_display_findings(marker + UNSAFE_DISPLAY))
+        self.assertTrue(module.credential_display_findings(UNSAFE_DISPLAY))
+
+    def test_an_exemption_does_not_clear_a_later_line_in_the_same_file(self) -> None:
+        module = self.check_module()
+        marker = f"# {module.CREDENTIAL_DISPLAY_EXEMPTION}\n"
+        text = marker + UNSAFE_DISPLAY + "echo ok\n" + UNSAFE_DISPLAY
+        findings = module.credential_display_findings(text)
+        self.assertEqual(1, len(findings), findings)
+        self.assertIn("line 4", findings[0])
+
+    def test_an_expanded_here_document_body_is_read_as_what_the_command_shows(self) -> None:
+        module = self.check_module()
+        expanded = "cat <<EOF\n$API_TOKEN\nEOF\n"
+        self.assertTrue(module.credential_display_findings(expanded))
+        self.assertIn("line 1", module.credential_display_findings(expanded)[0])
+        quoted = "cat <<'EOF'\n$API_TOKEN\nEOF\n"
+        self.assertEqual([], module.credential_display_findings(quoted))
+
+    def test_a_quoted_here_document_delimiter_keeps_its_literal_body_literal(self) -> None:
+        module = self.check_module()
+        # Reproduced under bash with a sentinel: each of these prints the text
+        # rather than the value, so reporting them would break real scripts.
+        for text in (
+            "cat <<'EOF'\necho \"$API_TOKEN\"\nEOF\n",
+            'cat <<"EOF"\necho "$API_TOKEN"\nEOF\n',
+            'cat <<\\EOF\necho "$API_TOKEN"\nEOF\n',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual([], module.credential_display_findings(text))
+
+    def test_an_escaped_expansion_character_prints_the_name_not_the_value(self) -> None:
+        module = self.check_module()
+        self.assertEqual(
+            [],
+            module.credential_display_findings(
+                'echo "Please export \\$API_TOKEN before running"\n'
+            ),
+        )
+        self.assertEqual(
+            [],
+            module.credential_display_findings("cat <<EOF\nexport \\$API_TOKEN\nEOF\n"),
+        )
+
+    def test_a_here_document_does_not_shift_the_lines_reported_after_it(self) -> None:
+        module = self.check_module()
+        findings = module.credential_display_findings(
+            'cat <<EOF\na\nb\nEOF\necho "$API_TOKEN"\n'
+        )
+        self.assertEqual(1, len(findings), findings)
+        self.assertIn("line 5", findings[0])
+        # An unterminated here-document must still reach the end of the file.
+        self.assertTrue(module.credential_display_findings("cat <<EOF\n$API_TOKEN\n"))
+
+    def test_quoting_state_decides_what_the_shell_will_not_expand(self) -> None:
+        module = self.check_module()
+        # An apostrophe and a `#` inside double quotes are ordinary characters,
+        # so neither hides the expansion that follows it.
+        for line in ('echo "can\'t show $API_TOKEN" \'x\'', 'echo "pre #$API_TOKEN"'):
+            with self.subTest(line=line):
+                self.assertTrue(module.credential_display_findings(line + "\n"), line)
+
+    def test_a_scanned_shell_file_fails_and_an_exempt_one_with_the_same_line_passes(self) -> None:
+        module = self.check_module()
+        for exempt in (False, True):
+            with self.subTest(exempt=exempt), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                script = repo / "tools/deploy.sh"
+                script.parent.mkdir(parents=True)
+                prefix = f"# {module.CREDENTIAL_DISPLAY_EXEMPTION}\n" if exempt else ""
+                script.write_text(f"#!/bin/sh\n{prefix}{UNSAFE_DISPLAY}", encoding="utf-8")
+                module.ROOT = repo
+                result = module.main([])
+                self.assertEqual(0 if exempt else 1, result)
+
+    def test_a_python_file_that_reads_a_credential_is_not_scanned_by_this_rule(self) -> None:
+        module = self.check_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            source = repo / "app/client.py"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "import os\n\n"
+                'TOKEN = os.environ["API_TOKEN"]\n'
+                'print(f"using {TOKEN}")\n',
+                encoding="utf-8",
+            )
+            module.ROOT = repo
+            self.assertEqual(0, module.main([]))
+
+    def test_a_changed_shell_file_outside_the_workflow_directories_selects_the_scan(self) -> None:
+        dependency = load_module(PLAN_COMMAND_MODULES[1], "plan_validation_commands")
+        sys.modules["plan_validation_commands"] = dependency
+        module = load_module(VALIDATE_CHANGE_MODULES[1], "template_validate_changes_security")
+        module.existing = lambda path: True
+        expected = [
+            "python3",
+            ".project-agent-workflow/scripts/security-static-check.py",
+            "--changed",
+        ]
+        for path in ("tools/deploy.sh", "scripts/release.sh", "bin/run.bash"):
+            for mode in ("staged", "all"):
+                with self.subTest(path=path, mode=mode):
+                    # The selection is asserted, not executed. The shipped
+                    # allowlist still refuses `sh -n` for a shell path outside
+                    # the roots it enumerates, which is a separate defect this
+                    # plan does not own.
+                    self.assertIn(expected, module.select_commands([path], mode))
+        self.assertNotIn(expected, module.select_commands(["README.md"], "all"))
+
+    def test_the_generated_workflow_scans_changed_files_against_the_merge_base(self) -> None:
+        workflow = (ROOT / "template/.github/workflows/project-agent-workflow.yml").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+            'CHECK=.project-agent-workflow/scripts/security-static-check.py',
+            'python3 "$CHECK" --base "$BASE_SHA"',
+            'python3 "$CHECK" --base "$BEFORE_SHA"',
+        ):
+            self.assertIn(marker, workflow)
+
+    def test_the_base_scope_reads_the_range_rather_than_the_working_tree(self) -> None:
+        module = self.check_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+            commit = [
+                "git",
+                "-c",
+                "user.name=Validation Test",
+                "-c",
+                "user.email=validation@example.invalid",
+                "commit",
+                "-qm",
+            ]
+            (repo / "start.sh").write_text("#!/bin/sh\necho start\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run([*commit, "initial"], cwd=repo, check=True)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+            script = repo / "tools/deploy.sh"
+            script.parent.mkdir(parents=True)
+            script.write_text(f"#!/bin/sh\n{UNSAFE_DISPLAY}", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run([*commit, "add deploy"], cwd=repo, check=True)
+            module.ROOT = repo
+
+            self.assertEqual([script], module.iter_files("changed", base))
+            # Nothing is staged or unstaged, so the local scope sees nothing.
+            self.assertEqual([], module.iter_files("changed"))
+            self.assertEqual(1, module.main(["--base", base]))
+            self.assertEqual(0, module.main(["--changed"]))
+
+    def test_both_security_specifications_name_the_safe_presence_form(self) -> None:
+        for path in (
+            ROOT / "docs/agent/SPEC_SECURITY.md",
+            ROOT / "template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md",
+        ):
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn('${API_TOKEN:+set}', text)
+                self.assertIn("default operator", text)
+
+
+class SecurityStaticCheckTest(CredentialDisplayCases, unittest.TestCase):
     def test_changed_scope_fails_when_git_query_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)

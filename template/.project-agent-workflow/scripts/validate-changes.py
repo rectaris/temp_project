@@ -283,7 +283,16 @@ def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
     if managed_plan_format and any(path.startswith("docs/plan/") for path in paths) and existing(".project-agent-workflow/scripts/format-plan-docs.py"):
         add_command(commands, ["python3", ".project-agent-workflow/scripts/format-plan-docs.py", "--check"])
 
-    if any(path.startswith(".github/") or path.startswith(".project-agent-workflow/scripts/") for path in paths) and existing(".project-agent-workflow/scripts/security-static-check.py"):
+    if (
+        any(
+            path.startswith(".github/")
+            or path.startswith(".project-agent-workflow/scripts/")
+            or path.endswith(".sh")
+            or path.endswith(".bash")
+            for path in paths
+        )
+        and existing(".project-agent-workflow/scripts/security-static-check.py")
+    ):
         add_command(commands, ["python3", ".project-agent-workflow/scripts/security-static-check.py", "--changed"])
 
     external_service_paths = {

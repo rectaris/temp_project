@@ -69,6 +69,24 @@ jobs:
             git diff --check "$EMPTY_TREE" "$HEAD_SHA"
           fi
 
+      - name: Scan changed files for static security patterns
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -eu
+          CHECK=.project-agent-workflow/scripts/security-static-check.py
+          if [ "$EVENT_NAME" = pull_request ]; then
+            python3 "$CHECK" --base "$BASE_SHA"
+          elif [ "$EVENT_NAME" = push ] &&
+            [ "$BEFORE_SHA" != 0000000000000000000000000000000000000000 ] &&
+            git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            python3 "$CHECK" --base "$BEFORE_SHA"
+          else
+            python3 "$CHECK" --managed
+          fi
+
       - name: Validate project agent workflow
         run: |
           set -eu

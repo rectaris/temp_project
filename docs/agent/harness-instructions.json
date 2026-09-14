@@ -12,7 +12,7 @@
       "id": "security-policy",
       "revision": "v1",
       "path": "docs/agent/SPEC_SECURITY.md",
-      "content_digest": "sha256:e340b1dd8d42a2f5675b7370e96401d7a480d95a2ad3e1a759dbf62d425f76ae",
+      "content_digest": "sha256:e5887c6b89b92e6a4cb69cc34af8fc50bcc045979cbbc6ddb2ad781d1c621747",
       "rationale": "This policy governs security boundaries and remains outside optional supplemental selection."
     }
   ],

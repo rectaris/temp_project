@@ -12,7 +12,7 @@
       "id": "security-policy",
       "revision": "v1",
       "path": ".project-agent-workflow/docs/agent/SPEC_SECURITY.md",
-      "content_digest": "sha256:74f782eb8a67654255832a37d670aefaf95dfcb74e98cd65c783c589d56819a4",
+      "content_digest": "sha256:005cf225ef9bbe8827faa487ebf4cf558599884ae4b73bffddd7c2f5dd644eda",
       "rationale": "This policy governs security boundaries and remains outside optional supplemental selection."
     }
   ],

@@ -5,6 +5,8 @@ This repository keeps security controls explicit and fail-closed at write bounda
 ## Secrets And Private Data
 
 - Do not commit, print, or persist credentials, tokens, private keys, `.env` contents, or deployment secrets.
+- Test whether a credential is configured with the alternate operator and a fixed literal, as in `[ -n "${API_TOKEN:+set}" ]`. The shell substitutes the literal, so the test answers whether the variable is set without ever placing the credential into a command's arguments.
+- Do not test with the default operator, as in `echo "${API_TOKEN:-unset}"`. It substitutes the credential itself whenever the variable is set, so the one case the test exists to report is the case that prints the value.
 - Treat automatic redaction as pending review unless a deterministic check establishes that the stored data class is safe.
 - Prefer allowlisted log fields over recording complete external or hook payloads.
 
