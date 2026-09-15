@@ -110,7 +110,7 @@ validation_witness_map:
 integration_gates:
   - Start only after docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md is checked; resolve it to the exact checked archive before promotion.
   - Start only after docs/plan/backlog/372-bind-parallel-plans-to-separate-session-owners.md is checked; resolve it to the exact checked archive before promotion.
-  - Start only after both preceding ownership and execution plans are checked and resolve to exact archives. Implement this integration serially.
+  - Implement this integration serially.
   - Demonstration plans change bounded product files, not the governing controls; candidate-only or mock sessions cannot substitute for independent parent-direct sessions.
   - Live evidence is additional acceptance, not a replacement for focused/authoritative/Copy update checks. Bind its report path/digest before focused verification and completion.
 checked_summary_ja: 別セッションの変更を順番に取り込み、実セッションで完了と後片付けを確認する。

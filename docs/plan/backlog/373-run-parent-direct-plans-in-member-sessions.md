@@ -81,7 +81,6 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:d3984292ad76f289cf0acda9e4f69697f868e7730a8cf096723bcb5fc701e164","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 integration_gates:
   - Start only after docs/plan/backlog/372-bind-parallel-plans-to-separate-session-owners.md is checked; resolve it to the exact checked archive before promotion.
-  - Start only after the session-ownership predecessor is checked and its exact archive reference is resolved.
   - Implement this execution-control change through the existing serial parent-direct workflow.
 checked_summary_ja: 各セッションで実装と修正を進め、実行記録を保って取り込み担当へ渡す。
 
