@@ -70,6 +70,8 @@ required_specs:
   - docs/agent/SPEC_EXTERNAL_SERVICES.md
   - docs/agent/SPEC_AGENT_LOGGING.md
   - docs/agent/SPEC_SKILL_AUTHORING.md
+  - docs/agent/SPEC_USER_COMMUNICATION.md
+  - docs/agent/SPEC_JAPANESE_TECH_WRITING.md
 focused_validation:
   - python3 tests/test-sandboxed-plan-worker.py
   - tests/copier-update.sh --require-copier
