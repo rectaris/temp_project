@@ -1,6 +1,7 @@
 # Refuse a staged review whose runtime evidence observes no reviewer tool call
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: A staged review is admitted only when the runtime evidence already bound to it observes at least one tool call in the reviewer session.
 task_types:
   - validation_tools
@@ -89,3 +90,4 @@ checked_summary_ja: レビューアのツール呼び出しが観測されない
 
 - This plan is independent of the packet-start producer plan. It can be checked with the existing test fixtures, which already build run manifests, and it does not need a real reviewer session.
 - Ordering still matters in practice: until the packet-start producer exists, no staged review reaches this condition, so the gate is latent rather than active on the day it is checked.
+- Plan 333 is checked and its producer is published. Use bounded parent-direct implementation for this high-risk validation-authority change, with the exact declared scope and a normal staged independent review; the plan-333 bootstrap exception does not apply here.
