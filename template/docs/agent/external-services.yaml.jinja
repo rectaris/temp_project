@@ -45,6 +45,8 @@ external_services:
     unavailable_fallback: "Use repository files, checked plans, validation output, and Git history as the source of truth."
   browser_run:
     unavailable_fallback: "Use ordinary HTTP retrieval when sufficient; otherwise report that no configured browser backend is available."
+  opencode_go:
+    unavailable_fallback: "Answer from local repository files, plans, validation output, and Git history, and report that no authorized OpenCode Go inference route is available."
 [% else %]
 # restricted means that schema version 1 requires service states, connection metadata, per-operation allowlists, and write-authorization rules.
 version: 1
@@ -96,4 +98,14 @@ external_services:
     write_authorization_rule: ""
     dry_run_or_local_validation: ""
     unavailable_fallback: "Use ordinary HTTP retrieval when sufficient; otherwise report that no authorized browser backend is available."
+  opencode_go:
+    state: disabled
+    connection: ""
+    authentication: none
+    credential_reference: ""
+    allowed_reads: []
+    allowed_writes: []
+    write_authorization_rule: ""
+    dry_run_or_local_validation: ""
+    unavailable_fallback: "Answer from local repository files, plans, validation output, and Git history, and report that no authorized OpenCode Go inference route is available."
 [% endif %]

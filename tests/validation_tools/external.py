@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from .support import ROOT, ROOT_EXTERNAL_SERVICE_CHECK
 
@@ -282,6 +283,102 @@ class RootExternalServicePolicyTest(unittest.TestCase):
             with self.subTest(prefix=prefix_length):
                 self.assert_rejected(*base, "--policy"[:prefix_length], "other-policy.yaml")
 
+
+
+    def test_opencode_go_inference_reads_require_exact_runtime_facts_and_ordinary_effect(self) -> None:
+        policy_text = (ROOT / "docs/agent/external-services.yaml").read_text(encoding="utf-8")
+        self.assertIn("  opencode_go:", policy_text)
+        for model in ("glm-5.3", "qwen3-coder"):
+            target = f"https://opencode.ai/zen/go/v1/chat/completions#model={model}"
+            with self.subTest(model=model):
+                self.assertEqual(
+                    self.authorize(
+                        service="opencode_go",
+                        access="read",
+                        operation="inference.chat_completions",
+                        target=target,
+                    ).returncode,
+                    0,
+                )
+        target = "https://opencode.ai/zen/go/v1/chat/completions#model=glm-5.3"
+
+        def inference(**overrides: object) -> subprocess.CompletedProcess[str]:
+            arguments: dict[str, object] = {
+                "service": "opencode_go",
+                "access": "read",
+                "operation": "inference.chat_completions",
+                "target": target,
+            }
+            arguments.update(overrides)
+            return self.authorize(**arguments)
+
+        rejected = {
+            "provider not configured": {"provider_configured": False},
+            "task does not require the call": {"task_authorized": False},
+            "missing target": {"target": ""},
+            "credential material transfer": {"effects": ("credential_material_transfer",)},
+            "secret persistence": {"effects": ("secret_persistence",)},
+            "write credentials to untrusted code": {
+                "effects": ("write_credentials_to_untrusted_code",)
+            },
+            "read with a non-ordinary effect": {"effects": ("public_communication",)},
+            "read with a combined effect": {"effects": ("ordinary", "public_communication")},
+        }
+        for label, overrides in rejected.items():
+            with self.subTest(label=label):
+                result = inference(**overrides)
+                self.assertNotEqual(
+                    result.returncode, 0, msg=result.stdout + result.stderr
+                )
+
+    def test_opencode_go_is_seeded_disabled_in_a_version_1_policy(self) -> None:
+        maintained_check = ROOT / "template/.project-agent-workflow/scripts/check-external-service-policy.py"
+        policy_text = """version: 1
+
+states:
+  disabled: Policy exists, but service reads and writes are not authorized.
+
+external_services:
+  opencode_go:
+    state: disabled
+    connection: ""
+    authentication: none
+    credential_reference: ""
+    allowed_reads: []
+    allowed_writes: []
+    write_authorization_rule: ""
+    dry_run_or_local_validation: ""
+    unavailable_fallback: "Answer from local repository files."
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "external-services.yaml"
+            policy.write_text(policy_text, encoding="utf-8")
+            base = [
+                sys.executable,
+                "-B",
+                str(maintained_check),
+                "--policy",
+                str(policy),
+            ]
+            check = subprocess.run(
+                [*base, "check"],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(check.returncode, 0, msg=check.stdout + check.stderr)
+            denied = subprocess.run(
+                [*base, "authorize", "opencode_go", "read", "inference.chat_completions"],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("does not authorize reads", denied.stderr)
 
 
 if __name__ == "__main__":

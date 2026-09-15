@@ -1,7 +1,7 @@
 # Root External Services
 
 The active root policy is `docs/agent/external-services.yaml`.
-It uses schema version 2 with `access_profile: task_scoped_default_allow` and currently declares GitHub as the configured-provider record.
+It uses schema version 2 with `access_profile: task_scoped_default_allow` and declares GitHub and OpenCode Go as its configured-provider records.
 
 Provider configuration and authorization are separate facts.
 The provider-call execution context is the provider, command execution boundary, and credential source used for one exact external call.
@@ -68,7 +68,23 @@ Branch and tag components are validated with the local Git `check-ref-format` im
 Both pull-request endpoints use `git check-ref-format --branch`; tag targets use the `refs/tags/<tag>` form.
 The caller cannot replace the fixed root policy with an alternate `--policy` argument, and help or unknown options are parsing failures rather than authorization results.
 
-## Fallback and payload boundary
+## OpenCode Go inference
+
+Service `opencode_go` covers delegated inference through the OpenCode Go plan at `https://opencode.ai/zen/go/v1/chat/completions`.
+Its only operation is `inference.chat_completions`, its only access class is `read`, and its only admissible effect is `ordinary`.
+
+The plan credential is a denied payload, not a task input.
+Never place it in a prompt, a delegated task description, a sandbox environment, a repository file, a plan, a log, or a provider payload, and never hand it to delegated code that the current session does not control.
+`scripts/project_workflow/opencode_go_transport.py` is the only route that satisfies this boundary: the parent process keeps the credential in memory, serves a Unix-domain socket that the sandbox mounts, attaches the credential itself, and lets the delegated process see only a loopback address and a placeholder key.
+
+The transport enforces the boundary rather than trusting the caller.
+It refuses a destination other than the fixed upstream, discards downstream authentication headers, refuses routing and forwarding headers, rejects a request body that names a destination, credential, provider, or protocol, and stops the relay on a redirect, an authentication failure, an authorization failure, a rate limit, an upstream server error, an exhausted request or byte budget, a passed deadline, a cancellation, and a truncated response.
+
+Authorize each relayed request separately before it reaches the provider.
+The target is the exact upstream URL with the exact requested model, so a model the request did not declare is a different target and a different authorization.
+A failed, ambiguous, or erroring authorization denies the request.
+
+
 
 When GitHub is unavailable, continue with local repository files, plans, validation output, and Git history, and report the deferral when it changes scope, confidence, validation, or completion.
 Never place credentials, tokens, private keys, secret values, or private configuration in a policy, target, confirmation, or provider payload.

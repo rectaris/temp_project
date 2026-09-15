@@ -1756,6 +1756,7 @@ def check_external_service_policy() -> None:
         "unclassified_write_effect: require_confirmation",
         "external_services:",
         "  github:",
+        "  opencode_go:",
         "unavailable_fallback:",
     )
     for marker in policy_markers:
@@ -1776,6 +1777,8 @@ def check_external_service_policy() -> None:
         "release.publish",
         "rectaris/temp_project",
         "git check-ref-format --branch",
+        "inference.chat_completions",
+        "scripts/project_workflow/opencode_go_transport.py",
     )
     for marker in specification_markers:
         if marker not in specification:

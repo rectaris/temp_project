@@ -701,6 +701,43 @@ def require_referent_first_alignment() -> None:
             fail(f"referent-first root/template files differ: {root_path} != {template_path}")
 
 
+def require_opencode_go_transport_alignment() -> None:
+    """Keep the bounded Go inference transport identical in both layouts.
+
+    The module is the credential boundary for delegated inference. A generated
+    project that ran a different copy would enforce a different boundary than
+    the one this repository tests, so the bytes and the mode must match.
+    """
+
+    root_module = ROOT / "scripts/project_workflow/opencode_go_transport.py"
+    template_module = ROOT / "template/.project-agent-workflow/scripts/opencode_go_transport.py"
+    if root_module.read_bytes() != template_module.read_bytes():
+        fail("root and generated OpenCode Go transports differ")
+    if (root_module.stat().st_mode & 0o777) != (template_module.stat().st_mode & 0o777):
+        fail("root and generated OpenCode Go transport modes differ")
+    module_text = read("scripts/project_workflow/opencode_go_transport.py")
+    for marker in (
+        'UPSTREAM_URL = f"{UPSTREAM_SCHEME}://{UPSTREAM_HOST}{UPSTREAM_PATH}"',
+        'UPSTREAM_PATH = "/zen/go/v1/chat/completions"',
+        "STRIPPED_REQUEST_HEADERS",
+        "DENIED_REQUEST_BODY_KEYS",
+        "def validate_socket_path",
+        "PLACEHOLDER_API_KEY",
+        "STATUS_REDIRECT_REFUSED",
+    ):
+        if marker not in module_text:
+            fail(f"OpenCode Go transport missing boundary marker: {marker}")
+    for forbidden in ("auth.json", "OPENCODE_API_KEY"):
+        if forbidden in module_text:
+            fail(f"OpenCode Go transport must not name a credential store: {forbidden}")
+    for policy_path in (
+        "docs/agent/external-services.yaml",
+        "template/docs/agent/external-services.yaml.jinja",
+    ):
+        if "opencode_go:" not in read(policy_path):
+            fail(f"external-service policy does not register opencode_go: {policy_path}")
+
+
 def require_harness_evaluation_alignment() -> None:
     """Keep the harness comparison command, policy, and routing aligned."""
 
@@ -3744,6 +3781,7 @@ def main() -> int:
     require_fast_scoped_worker()
     require_evidence_synthesizer()
     require_referent_first_alignment()
+    require_opencode_go_transport_alignment()
     require_harness_evaluation_alignment()
     require_harness_profile_alignment()
     require_template_feedback_alignment()

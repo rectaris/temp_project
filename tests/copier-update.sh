@@ -322,6 +322,13 @@ if grep -q '^  browser_run:$' "$browser_legacy_out/docs/agent/external-services.
   exit 1
 fi
 (cd "$browser_legacy_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
+test -f "$browser_legacy_out/.project-agent-workflow/scripts/opencode_go_transport.py"
+cmp "$root/template/.project-agent-workflow/scripts/opencode_go_transport.py" \
+  "$browser_legacy_out/.project-agent-workflow/scripts/opencode_go_transport.py"
+if grep -q '^  opencode_go:$' "$browser_legacy_out/docs/agent/external-services.yaml"; then
+  echo "Copier update registered opencode_go in a project-owned older external-service policy" >&2
+  exit 1
+fi
 test -f "$browser_legacy_out/.agents/skills/browser-ops/SKILL.md"
 test -f "$browser_legacy_out/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md"
 test -f "$browser_legacy_out/.project-agent-workflow/skills/mcp-ops/references/provider-call-execution-context.md"
@@ -1096,6 +1103,9 @@ validate_common_lane() {
     [ -n "$path" ] || continue
     test -f "$out/$path"
   done
+  cmp "$root/template/.project-agent-workflow/scripts/opencode_go_transport.py" \
+    "$out/.project-agent-workflow/scripts/opencode_go_transport.py"
+  grep -q 'OpenCode Go Inference' "$out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
   if [ ! -x "$out/.githooks/pre-commit" ]; then
     echo "updated project is missing an executable pre-commit hook: $out" >&2
     exit 1
@@ -1760,6 +1770,35 @@ for plan_dir in active backlog checked handoffs; do
 done
 grep -q '^_commit: v1.2.1$' "$v111_out/.copier-answers.yml"
 fixture_git "$v111_out" diff --check
+
+opencode_go_out="$tmp/opencode-go-fresh-copy"
+run_copier copy -q -f --trust --defaults --vcs-ref "$target_ref" \
+  --data-file "$root/tests/fixtures/broad.answers.yml" "$update_source" "$opencode_go_out" >/dev/null
+test -f "$opencode_go_out/.project-agent-workflow/scripts/opencode_go_transport.py"
+cmp "$root/template/.project-agent-workflow/scripts/opencode_go_transport.py" \
+  "$opencode_go_out/.project-agent-workflow/scripts/opencode_go_transport.py"
+grep -q '^  opencode_go:$' "$opencode_go_out/docs/agent/external-services.yaml"
+grep -q 'OpenCode Go Inference' "$opencode_go_out/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md"
+(cd "$opencode_go_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
+if (cd "$opencode_go_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py \
+    authorize opencode_go read inference.chat_completions --task-authorized \
+    --target 'https://opencode.ai/zen/go/v1/chat/completions#model=glm-5.3' \
+    --effect ordinary >/dev/null 2>&1); then
+  echo "generated version 2 policy authorized opencode_go without a configured provider" >&2
+  exit 1
+fi
+
+opencode_go_v1_out="$tmp/opencode-go-fresh-copy-v1"
+run_copier copy -q -f --trust --defaults --vcs-ref "$target_ref" \
+  --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$opencode_go_v1_out" >/dev/null
+grep -q '^version: 1$' "$opencode_go_v1_out/docs/agent/external-services.yaml"
+grep -q '^  opencode_go:$' "$opencode_go_v1_out/docs/agent/external-services.yaml"
+(cd "$opencode_go_v1_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py check >/dev/null)
+if (cd "$opencode_go_v1_out" && python3 .project-agent-workflow/scripts/check-external-service-policy.py \
+    authorize opencode_go read inference.chat_completions >/dev/null 2>&1); then
+  echo "generated version 1 policy authorized a disabled opencode_go read" >&2
+  exit 1
+fi
 
 future_source="$update_source"
 future_out="$tmp/future-project"

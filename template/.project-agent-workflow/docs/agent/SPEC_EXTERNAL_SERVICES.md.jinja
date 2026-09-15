@@ -140,6 +140,14 @@ Do not reuse authentication evidence between connectors, command-line providers,
 - Classify form submission, publication, purchase, upload, and account mutation as writes before selecting a backend.
 - Under version 2, public communication and financial commitment require exact confirmation, while any write whose effect remains unclassified also requires exact confirmation.
 
+### OpenCode Go Inference
+
+- `opencode_go` covers delegated inference through the OpenCode Go plan; its only operation is `inference.chat_completions`, its only access class is `read`, and its only admissible effect is `ordinary`.
+- The plan credential is a denied payload: never place it in a prompt, delegated task description, sandbox environment, repository file, plan, log, or provider payload.
+- Route every call through `.project-agent-workflow/scripts/opencode_go_transport.py`, which keeps the credential in the parent process, serves a mounted Unix-domain socket, attaches the credential itself, and exposes only a loopback address and a placeholder key to the delegated process.
+- The transport refuses another destination, discards downstream authentication headers, refuses routing and forwarding headers, and rejects a request body that names a destination, credential, provider, or protocol.
+- Authorize each relayed request separately against the exact upstream URL and the exact requested model; a different model is a different target, and a failed or erroring authorization denies the request.
+
 ## Integration Checklist
 
 1. Read `docs/agent/external-services.yaml` and run `python3 .project-agent-workflow/scripts/check-external-service-policy.py check`.

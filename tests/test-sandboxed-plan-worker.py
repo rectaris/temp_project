@@ -6854,5 +6854,24 @@ def load_adapter_module():
     return module
 
 
+# The OpenCode Go transport is the credential boundary for delegated inference,
+# so its cases belong to the same sandboxed-execution entrypoint as the worker's.
+# Importing the classes here runs them under this file's `unittest.main()`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from opencode_go_transport import (  # noqa: E402
+    AuthorizationGateTests,
+    BoundaryConfigurationTests,
+    BudgetTests,
+    CredentialBoundaryTests,
+    OrdinaryInferencePathTests,
+    ProcessLifetimeTests,
+    RequestAdmissionTests,
+    RootAndGeneratedTransportIdentityTests,
+    SandboxedCredentialIsolationTests,
+    UpstreamOutcomeTests,
+)
+
+
 if __name__ == "__main__":
     unittest.main()
