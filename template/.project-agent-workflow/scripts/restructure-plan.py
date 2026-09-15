@@ -115,6 +115,10 @@ PLAN_PATH_RE = re.compile(r"docs/plan/active/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md
 ARCHIVE_PATH_RE = re.compile(
     r"docs/plan/replanned/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/([0-9]{3}-[a-z0-9][a-z0-9-]*\.md)"
 )
+REPLANNED_REFERENCE_RE = re.compile(
+    r"docs/plan/replanned/[0-9]{4}/[0-9]{2}/(?:01-15|16-31)/"
+    r"[0-9]{3}-[a-z0-9][a-z0-9-]*\.md"
+)
 CONTRACT_PATH_RE = re.compile(r"docs/plan/replanned/contracts/[0-9]{3}-[a-z0-9][a-z0-9-]*\.json")
 COMPANION_PATH = "docs/plan/replanned/baselines/live-validation-successors-v1.json"
 REBIND_BASELINE_PATH = "docs/plan/replanned/baselines/live-successor-rebinds-v1.json"
@@ -132,6 +136,9 @@ CHECKED_PATH_RE = re.compile(
 )
 SHELVED_PATH_RE = re.compile(
     r"docs/plan/shelved/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
+)
+LIVE_PLAN_PATH_RE = re.compile(
+    r"docs/plan/(?:active|backlog|shelved)/([0-9]{3})-([a-z0-9][a-z0-9-]*)\.md"
 )
 JOURNAL_SCHEMA_VERSION = 3
 SUPPORTED_JOURNAL_SCHEMA_VERSIONS = {2, 3}
@@ -3508,7 +3515,18 @@ def validate_rebind_reference_transition(
             )
 
 
-def activation_checked_pairs() -> dict[str, str]:
+def activation_checked_pairs(*, strict: bool = True) -> dict[str, str]:
+    """Map each activated plan's former active path to its checked archive.
+
+    The strict form is the activation rule: every indexed archive must exist and
+    be closed. Lineage resolution asks a weaker question, whether one particular
+    reference resolves, and a repository finalizing some unrelated plan is
+    legitimately holding that plan's archive open. Reading the index leniently
+    there drops the open row instead of failing, so an unrelated finalization
+    cannot freeze verification, and a reference whose own archive is still open
+    simply does not resolve.
+    """
+
     pairs: dict[str, str] = {}
     for plan_id, checked_path in checked_rows():
         match = CHECKED_PATH_RE.fullmatch(checked_path)
@@ -3523,6 +3541,8 @@ def activation_checked_pairs() -> dict[str, str]:
         if not target.is_file() or not archive_is_closed(
             target.read_text(encoding="utf-8"), checked_path
         ):
+            if not strict:
+                continue
             raise RestructureError(
                 f"activation checked archive is missing or stale: {checked_path}"
             )
@@ -3559,23 +3579,75 @@ def shelved_reference_pairs() -> dict[str, str]:
     return pairs
 
 
-def replan_lineage_pairs() -> dict[str, set[str]]:
-    """Map each replanned source's former active path to its checked successors.
+def contract_integration_successor(
+    contract: dict[str, Any], source_id: str, ordered: list[str]
+) -> list[str]:
+    """Name the one successor that carries a source's whole acceptance list.
+
+    A reconstruction splits one source across several successors, so the set of
+    successors alone cannot say which plan carries that source's work forward.
+    Exactly one successor inherits every acceptance item of a source, and only
+    that plan can stand for the source in a later reference. Schema 3 and later
+    mark it with integration_source_ids. Earlier contracts place it last, which
+    is the same entry validate_plan_entry required to inherit the whole ordered
+    acceptance list, so reading position there reads a recorded fact rather than
+    guessing one.
+    """
+
+    successors = contract["successors"]
+    marked = [
+        successor["path"]
+        for successor in successors
+        if isinstance(successor, dict)
+        and isinstance(successor.get("path"), str)
+        and isinstance(successor.get("integration_source_ids"), list)
+        and source_id in successor["integration_source_ids"]
+    ]
+    if marked:
+        return marked
+    if any(
+        isinstance(successor, dict)
+        and isinstance(successor.get("integration_source_ids"), list)
+        for successor in successors
+    ):
+        return []
+    return ordered[-1:]
+
+
+def replan_lineage_resolution() -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Resolve each replanned source's former active path to checked successors.
 
     A plan that names a predecessor which was later replanned can never be
     activated, because activation resolves an active path only to the checked
     archive carrying the same plan id and a replanned source has no checked
-    archive. The replan contract already records which successors replaced that
-    source, so a reference may move to one of those successors once it is checked.
+    archive. The replan contract records which successors replaced that source,
+    so a reference may move to one of those successors once it is checked.
+
+    A successor may itself be replanned, which leaves the source's work in a plan
+    no single contract names. Following each generation's integration successor
+    walks that chain to the one checked plan that still carries the source's whole
+    acceptance list, so a multi-generation reconstruction strands nothing. The walk
+    reports why it stopped instead of resolving, because a chain that is ambiguous,
+    unfinished or cyclic must refuse for a reason the reader can act on rather than
+    look like a source that was never replanned at all.
+
+    Each resolution is keyed by the source's former active path and by its archive
+    path, because a plan may name either one and both point at the generation whose
+    work moved on.
     """
-    checked = activation_checked_pairs()
+
+    checked = activation_checked_pairs(strict=False)
     pairs: dict[str, set[str]] = {}
+    integration: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    archive_for_source: dict[str, str] = {}
     if not REPLANNED_INDEX.is_file():
-        return pairs
-    for _, archive_path, contract_path in replanned_rows(
+        return pairs, {}
+    for source_id, archive_path, contract_path in replanned_rows(
         REPLANNED_INDEX.read_text(encoding="utf-8")
     ):
         source_active = f"docs/plan/active/{Path(archive_path).name}"
+        archive_for_source[source_active] = archive_path
         try:
             contract = json.loads(
                 read_regular_file(ROOT / contract_path, contract_path)
@@ -3589,16 +3661,68 @@ def replan_lineage_pairs() -> dict[str, set[str]]:
             raise RestructureError(
                 f"contract has no successor list: {contract_path}"
             )
+        ordered: list[str] = []
         for successor in successors:
             if not isinstance(successor, dict):
                 continue
             successor_path = successor.get("path")
             if not isinstance(successor_path, str):
                 continue
+            ordered.append(successor_path)
             checked_path = checked.get(successor_path)
             if checked_path is not None:
                 pairs.setdefault(source_active, set()).add(checked_path)
-    return pairs
+        marked = contract_integration_successor(contract, source_id, ordered)
+        if len(marked) == 1:
+            integration[source_active] = marked[0]
+        else:
+            ambiguous.add(source_active)
+
+    def walk(source: str) -> tuple[str | None, str]:
+        seen: set[str] = set()
+        node = source
+        while True:
+            if node in seen:
+                return None, "cyclic"
+            seen.add(node)
+            if node in ambiguous:
+                return None, "ambiguous"
+            successor = integration.get(node)
+            if successor is None:
+                return None, "unfinished"
+            archive = checked.get(successor)
+            if archive is not None:
+                return archive, "resolved"
+            node = successor
+
+    blocked: dict[str, str] = {}
+    for source_active in sorted(set(integration) | ambiguous):
+        leaf, reason = walk(source_active)
+        if leaf is not None:
+            pairs.setdefault(source_active, set()).add(leaf)
+        elif source_active not in pairs:
+            blocked[source_active] = reason
+    for source_active, archive_path in archive_for_source.items():
+        if source_active in pairs:
+            pairs[archive_path] = set(pairs[source_active])
+        elif source_active in blocked:
+            blocked[archive_path] = blocked[source_active]
+    return pairs, blocked
+
+
+def replan_lineage_pairs() -> dict[str, set[str]]:
+    """Map each replanned source's former active path to its checked successors.
+
+    Archive keys stay out of this view, because it answers the narrower question
+    of where a former active path went, which is the contract its callers rely on.
+    """
+
+    pairs, _ = replan_lineage_resolution()
+    return {
+        source: targets
+        for source, targets in pairs.items()
+        if source.startswith("docs/plan/active/")
+    }
 
 
 def restate_checked_reference(
@@ -3644,19 +3768,23 @@ def validate_lineage_reference_transition(
 ) -> None:
     """Admit only a reference this repository can still resolve, restated exactly.
 
-    Three replacement classes are admitted. A reference naming a replanned source
+    Four replacement classes are admitted. A reference naming a replanned source
     moves to one checked successor the consuming contract records, because the
-    source itself has no checked archive. A reference naming a plan that was
-    archived as checked moves to that archive, which is the same resolution the
-    activation route performs and which a backlog successor cannot reach through
-    an activation record, because backlog deferral removes the stopped reason
-    that record requires. A reference naming a shelved plan moves to where that
-    plan now lives, because a shelved plan has no checked archive and stranding
-    every referring plan would turn shelving into a way to stop unrelated work.
-    Everything else rejects, and no class may change plan identity or status.
+    source itself has no checked archive. A reference naming the archive of a
+    replanned plan moves to the same successor, because that archive is a stopped
+    plan whose accepted decisions and validation record were carried forward, so a
+    later implementer reading it as context would read the abandoned generation.
+    A reference naming a plan that was archived as checked moves to that archive,
+    which is the same resolution the activation route performs and which a backlog
+    successor cannot reach through an activation record, because backlog deferral
+    removes the stopped reason that record requires. A reference naming a shelved
+    plan moves to where that plan now lives, because a shelved plan has no checked
+    archive and stranding every referring plan would turn shelving into a way to
+    stop unrelated work. Everything else rejects, and no class may change plan
+    identity or status.
     """
 
-    pairs = replan_lineage_pairs()
+    pairs, blocked = replan_lineage_resolution()
     checked_pairs = activation_checked_pairs()
     shelved_pairs = shelved_reference_pairs()
     id_pairs = {
@@ -3668,6 +3796,8 @@ def validate_lineage_reference_transition(
         old = replacement["old"]
         new = replacement["new"]
         references = list(dict.fromkeys(ACTIVE_REFERENCE_RE.findall(old)))
+        if not references:
+            references = list(dict.fromkeys(REPLANNED_REFERENCE_RE.findall(old)))
         if references:
             if len(references) != 1:
                 raise RestructureError(
@@ -3714,6 +3844,12 @@ def validate_lineage_reference_transition(
                     )
                 continue
             if not candidates:
+                reason = blocked.get(reference)
+                if reason is not None:
+                    raise RestructureError(
+                        f"{label} replacement {index} names a replanned source whose"
+                        f" reconstruction chain is {reason}"
+                    )
                 raise RestructureError(
                     f"{label} replacement {index} names no checked archive, no shelved plan, and no replanned source with a checked successor"
                 )
@@ -3849,7 +3985,7 @@ def validate_rebinding_specs(
             )
         plan_path = normalized_path(
             spec["plan_path"],
-            PLAN_PATH_RE,
+            LIVE_PLAN_PATH_RE if kind == "lineage_rebind" else PLAN_PATH_RE,
             f"rebindings[{index}].plan_path",
         )
         if plan_path in seen_paths:
@@ -6947,7 +7083,9 @@ def load_rebind_baseline() -> list[dict[str, Any]]:
             raise RestructureError("rebind baseline authorizing commit is invalid")
         normalized_path(
             record["plan_path"],
-            PLAN_PATH_RE,
+            LIVE_PLAN_PATH_RE
+            if record["kind"] == "lineage_rebind"
+            else PLAN_PATH_RE,
             f"rebind baseline record {index} plan path",
         )
         normalized_path(
@@ -7529,6 +7667,155 @@ def validate_reservation_authorization(
             f"{label} authorizing commit does not carry the reservation change"
         )
     return field
+
+
+def stranded_plan_lifecycle(path: str) -> str:
+    return PurePosixPath(path).parts[2]
+
+
+def locate_stranded_plan(recorded_path: str) -> str | None:
+    """Find where a plan named by an existing rebind record lives today.
+
+    A record is keyed by the path the plan held when it was rebound, and the
+    records are append-only, so the key can never be rewritten. An ordinary
+    promotion, shelving or completion moves the plan, and a lookup by path alone
+    would then lose it and strand its own record. Resolving the plan by identity
+    keeps the record verifiable across those moves.
+
+    Identity must be single-valued to mean anything. A plan that appears in more
+    than one lifecycle location gives the record no one set of bytes to bind, so
+    that is refused with the locations named rather than resolved by whichever
+    copy is found first.
+    """
+
+    name = PurePosixPath(recorded_path).name
+    found = {
+        path
+        for _plan_id, path, _manifest in live_plan_records()
+        if PurePosixPath(path).name == name
+    }
+    if (ROOT / recorded_path).is_file():
+        found.add(recorded_path)
+    found.update(checked_paths_for_successor(name[:3], recorded_path))
+    if len(found) > 1:
+        raise RestructureError(
+            "rebind record names a plan in more than one location: "
+            f"{recorded_path} -> " + ", ".join(sorted(found))
+        )
+    return found.pop() if found else None
+
+
+def register_stranded_reference_plans(
+    records: list[dict[str, Any]],
+    live_successors: dict[str, dict[str, Any]],
+    contract_digests: dict[str, str],
+) -> None:
+    """Reach an unstarted plan that a reconstruction stranded but no contract owns.
+
+    A plan authored straight into the backlog is named by no reconstruction
+    contract, so the successor map cannot address it. When the plan it depends on
+    is replanned, that dependency stops resolving and the plan can never start,
+    yet the one operation allowed to restate such a reference could reach only
+    plans a contract already owned. Registering the plan against the contract
+    whose chain made its reference unresolvable keeps the resulting record bound
+    to that immutable chain instead of floating free of it.
+
+    Membership cannot depend on the reference still being unresolved, because a
+    successful rebinding resolves it. An already recorded rebinding therefore
+    registers its own target from the record, and resolves that plan by identity
+    wherever it has since moved, so promotion, shelving, or completion never
+    strands a record the repository still has to verify. A plan already
+    registered under its historical key owns its live file, so its current path
+    is never registered a second time: two chains over one file would each
+    reject the other's bytes.
+    """
+
+    contract_for_source: dict[str, str] = {}
+    if REPLANNED_INDEX.is_file():
+        for _, archive_path, contract_path in replanned_rows(
+            REPLANNED_INDEX.read_text(encoding="utf-8")
+        ):
+            contract_for_source[
+                f"docs/plan/active/{Path(archive_path).name}"
+            ] = contract_path
+            contract_for_source[archive_path] = contract_path
+    recorded = {
+        record["plan_path"]: record["owning_contract_path"]
+        for record in records
+        if record["kind"] == "lineage_rebind"
+    }
+    resolvable: dict[str, set[str]] | None = None
+
+    def is_resolvable(reference: str) -> bool:
+        """Ask whether a reference still resolves, without forcing the map early.
+
+        Building the resolution map reads the whole activation archive, which a
+        repository mid-finalization has every right to be holding open. Only a
+        plan that actually names a replanned source needs the answer, so the map
+        is built on first demand and verification of an unrelated repository
+        never depends on it.
+        """
+
+        nonlocal resolvable
+        if resolvable is None:
+            resolvable, _ = replan_lineage_resolution()
+        return reference in resolvable
+
+    def register(key: str, live_path: str, owner: str) -> None:
+        if owner not in contract_digests:
+            raise RestructureError(
+                f"stranded reference plan names an unknown contract: {key}"
+            )
+        content = read_regular_file(ROOT / live_path, live_path).decode("utf-8")
+        manifest = parse_manifest(content)
+        live_successors[key] = {
+            "contract_path": owner,
+            "contract_digest": contract_digests[owner],
+            "base_manifest": manifest,
+            "base_content": content,
+            "base_projection": validation_projection(
+                manifest,
+                f"stranded reference plan {key}",
+                require_witness=scalar(manifest, "validation_witness_schema") == "1",
+                enforce_witness_semantics=False,
+            ),
+            "expected_preservation": None,
+            "live_manifest": manifest,
+            "live_content": content,
+            "live_path": live_path,
+            "lifecycle": stranded_plan_lifecycle(live_path),
+            "replan_original_content": None,
+            "enforce_projection_semantics": False,
+            "role": "stranded_reference",
+        }
+
+    for key, owner in recorded.items():
+        if key in live_successors:
+            continue
+        located = locate_stranded_plan(key)
+        if located is None:
+            continue
+        register(key, located, owner)
+    for _plan_id, path, _manifest in live_plan_records():
+        if path in live_successors or not contract_for_source:
+            continue
+        if any(
+            (state.get("live_path") or key) == path
+            for key, state in live_successors.items()
+        ):
+            continue
+        content = read_regular_file(ROOT / path, path).decode("utf-8")
+        references = ACTIVE_REFERENCE_RE.findall(content) + REPLANNED_REFERENCE_RE.findall(
+            content
+        )
+        implicated = {
+            contract_for_source[reference]
+            for reference in references
+            if reference in contract_for_source and is_resolvable(reference)
+        }
+        if len(implicated) != 1:
+            continue
+        register(path, path, implicated.pop())
 
 
 def verify_rebind_records(
@@ -8829,6 +9116,11 @@ def verify_repository_contracts(
             "direct active source is also a contract successor: "
             f"{claimed_direct_sources[0]}"
         )
+    register_stranded_reference_plans(
+        rebind_records,
+        live_successors,
+        contract_digests,
+    )
     effective_projections = verify_rebind_records(
         rebind_records,
         live_successors,

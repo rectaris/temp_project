@@ -274,3 +274,4 @@ id	path
 348	docs/plan/checked/2026/09/01-15/348-state-the-presence-test-and-scan-changed-shell-files.md
 351	docs/plan/checked/2026/09/01-15/351-make-shell-syntax-admission-root-agnostic.md
 359	docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
+360	docs/plan/checked/2026/09/01-15/360-resolve-multigeneration-lineage-rebinding.md

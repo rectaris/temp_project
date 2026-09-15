@@ -1,6 +1,6 @@
 # Let the sanctioned rebind reach an unstarted plan stranded by more than one reconstruction
 
-status: in_progress
+status: checked
 primary_invariant: A reference that a contract chain resolves to exactly one checked successor can be restated only through rebind_lineage, and an ambiguous or unfinished chain still refuses.
 task_types:
   - validation_tools
@@ -85,16 +85,24 @@ checked_summary_ja: 複数世代の再構築で座礁した未着手プランを
 
 ## Tasks
 
-- [ ] Before edits, confirm the exact write scope and the current required specifications, and record the unchanged baseline. Sweep every live plan for an unresolvable active reference and confirm the affected set.
-- [ ] Make replan_lineage_pairs walk the reconstruction chain to its checked leaves, refusing an ambiguous chain, an unfinished branch and a repeated plan with a message that names which one applied.
-- [ ] Let a rebinding name an unstarted plan that owns no reconstruction contract, addressed where that plan lives, and bind its record to the contract whose chain made the reference unresolvable.
-- [ ] Add tests for the multi-generation resolution, the new reach, the ambiguity and unfinished-branch refusals, and every refusal that must stay unchanged. Mutation-test each new test on its own.
-- [ ] Rebind plans 356 and 357 to the checked archive of plan 359 with the rebind_lineage operation, and verify the record chain with the existing verification path.
-- [ ] Update the plan workflow specification in both layouts to state the multi-generation resolution, the refusals and the contract binding for a plan that owns no contract.
-- [ ] Obtain independent review against the exact changed files, resolve findings within the existing budget, then run focused validation and the unchanged authoritative suites. Publish through manage-plan-worktrees.py; do not push.
+- [x] Before edits, confirm the exact write scope and the current required specifications, and record the unchanged baseline. Sweep every live plan for an unresolvable active reference and confirm the affected set.
+- [x] Make replan_lineage_pairs walk the reconstruction chain to its checked leaves, refusing an ambiguous chain, an unfinished branch and a repeated plan with a message that names which one applied.
+- [x] Let a rebinding name an unstarted plan that owns no reconstruction contract, addressed where that plan lives, and bind its record to the contract whose chain made the reference unresolvable.
+- [x] Add tests for the multi-generation resolution, the new reach, the ambiguity and unfinished-branch refusals, and every refusal that must stay unchanged. Mutation-test each new test on its own.
+- [x] Rebind plans 356 and 357 to the checked archive of plan 359 with the rebind_lineage operation, and verify the record chain with the existing verification path.
+- [x] Update the plan workflow specification in both layouts to state the multi-generation resolution, the refusals and the contract binding for a plan that owns no contract.
+- [x] Obtain independent review against the exact changed files, resolve findings within the existing budget, then run focused validation and the unchanged authoritative suites. Publish through manage-plan-worktrees.py; do not push.
 
 ## Validation Notes
 
 - Plan 355 was reconstructed into 358 and 358 into 359. Plans 356 and 357 still name docs/plan/active/355, which no longer exists, so neither can be activated.
 - Commit e3ebbfa repaired that by hand and was reverted in b1c909a, because a gate is written history and only rebind_lineage may rewrite it. This plan restores the sanctioned path instead.
 - Both refusals were observed by running the command rather than by reading it, and both messages are quoted in the feasibility evidence.
+- Measurement retracted an early alarm. Every reconstruction marks exactly one integration successor, the successor that inherits the source's whole acceptance list, so a chain is single-valued even though a contract has several successors. All 65 replanned sources have exactly one, none is degenerate, 54 resolve to a checked leaf, 11 are unfinished, and 9 chains span more than one generation. The acceptance was therefore implementable as written, as a pure widening.
+- The operation writes docs/plan/replanned/baselines/live-successor-rebinds-v1.json, which this plan's write_scope does not name. That file is a plan-lifecycle record the sanctioned operation appends to, in the same sense as the active index every completion touches, so it was treated as lifecycle rather than product scope. The adversarial preflight asserts the change set stays inside write_scope plus exactly that one record.
+- Commit b344e96 was required before any rebinding. validate_current_plan_rules runs on the updated plan, and plans 356 and 357 predated two default reads in docs/agent/spec-index.yaml, so the operation refused them. enforce_projection_semantics is False for a plan no contract owns, which forces live bytes to equal committed bytes, so the required_specs correction had to be committed first. It changes conformance only, not requirements.
+- Independent review ran four rounds and reported one High and four Medium findings. All were reproduced before being accepted, and each fix carries a test that was mutation-checked to fail when its production line is reverted.
+- Authoritative validation caught a defect the focused suite could not. tests/smoke.sh failed because register_stranded_reference_plans built the resolution map unconditionally, which made plain verification demand that every indexed checked archive be closed, and a repository finalizing a plan legitimately holds one open. The map is now built lazily, and lineage resolution reads the checked index leniently. Because the candidate was corrected, the authoritative suites ran more than once; the recorded results are those of the final candidate.
+- Known gap, accepted by the owner. A plan that was rebound and is later reconstructed leaves its record keyed at a path that no longer resolves, and verification then refuses it as an unknown live successor. A fix was attempted and withdrawn on review evidence that it verified the archive wrapper rather than the reconstruction contract's stopped source. Reaching that state needs promotion, stopping and reconstruction of a rebound plan, so it is latent; it belongs to a follow-up plan, not to this one.
+- This runtime cannot record parent_review, focused_validation or check --operation completion in the plan execution ledger, because those require a Codex ReviewPacketStart manifest that is never emitted here. Epoch and budget accounting for this run is therefore reported rather than ledger-proven.
+- Focused validation on the final candidate: python3 tests/test-plan-restructure.py (199 tests), tests/root-plan-lifecycle.sh, python3 scripts/check-copier-template.py, python3 scripts/restructure-plan.py --verify. Authoritative validation: scripts/lint-project-workflow.sh and tests/smoke.sh. A nine-case adversarial preflight passed, including that every resolution the previous rule admitted still resolves.

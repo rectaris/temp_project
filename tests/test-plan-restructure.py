@@ -7102,6 +7102,408 @@ class PlanRestructureTest(unittest.TestCase):
             module.load_pre_boundary_contract_sources()
         self.assertIn("recorded source status mismatch", str(mismatched.exception))
 
+    def record_further_reconstruction(
+        self,
+        source_path: str,
+        successor_paths: list[str],
+        *,
+        integration: list[str] | None = None,
+    ) -> str:
+        """Record that an already replanned successor was itself reconstructed.
+
+        The chain this builds is the one a real repository reaches after two
+        reconstructions, where the plan carrying the original work is named by no
+        single contract.
+        """
+
+        plan_id = Path(source_path).name[:3]
+        today = date.today()
+        half = "01-15" if today.day <= 15 else "16-31"
+        archive_path = (
+            f"docs/plan/replanned/{today.year:04d}/{today.month:02d}/{half}/"
+            f"{Path(source_path).name}"
+        )
+        contract_path = (
+            f"docs/plan/replanned/contracts/{Path(source_path).stem}.json"
+        )
+        archive = self.repo / archive_path
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        source = self.repo / source_path
+        archive.write_text(
+            source.read_text(encoding="utf-8").replace(
+                "status: in_progress", "status: replanned", 1
+            )
+            if source.is_file()
+            else "status: replanned\n",
+            encoding="utf-8",
+        )
+        if source.is_file():
+            source.unlink()
+        marked = successor_paths if integration is None else integration
+        for path in successor_paths:
+            successor_file = self.repo / path
+            if successor_file.is_file() or not path.startswith("docs/plan/active/"):
+                continue
+            successor_file.parent.mkdir(parents=True, exist_ok=True)
+            successor_file.write_text(
+                self.plan_content(path, [digest(self.acceptance[0])], integration=False),
+                encoding="utf-8",
+            )
+        contract = self.repo / contract_path
+        contract.parent.mkdir(parents=True, exist_ok=True)
+        contract.write_text(
+            json.dumps(
+                {
+                    "schema_version": 4,
+                    "successors": [
+                        {
+                            "path": path,
+                            "integration_source_ids": (
+                                [plan_id] if path in marked else []
+                            ),
+                        }
+                        for path in successor_paths
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        index = self.repo / "docs/plan/replanned.md"
+        index.write_text(
+            index.read_text(encoding="utf-8")
+            + f"{plan_id}\t{archive_path}\t{contract_path}\n",
+            encoding="utf-8",
+        )
+        return archive_path
+
+    def test_lineage_resolution_follows_a_multi_generation_chain(self) -> None:
+        """The plan carrying a twice-reconstructed source's work stays reachable."""
+        self.assertEqual(self.run_command().returncode, 0)
+        self.record_further_reconstruction(
+            "docs/plan/active/003-integration.md",
+            ["docs/plan/active/004-second.md"],
+        )
+        checked_leaf = self.check_successor("docs/plan/active/004-second.md")
+        module = self.load_restructure_module("multi_generation_chain")
+        self.assertEqual(
+            module.replan_lineage_pairs()[self.source_path], {checked_leaf}
+        )
+
+    def test_lineage_resolution_reports_why_a_chain_did_not_resolve(self) -> None:
+        """Each degenerate chain refuses for a reason naming what went wrong."""
+        for label, successors, integration, reason in (
+            ("unfinished", ["docs/plan/active/004-second.md"], None, "unfinished"),
+            (
+                "ambiguous",
+                ["docs/plan/active/004-second.md", "docs/plan/active/005-other.md"],
+                ["docs/plan/active/004-second.md", "docs/plan/active/005-other.md"],
+                "ambiguous",
+            ),
+            ("cyclic", [self.source_path], None, "cyclic"),
+        ):
+            with self.subTest(label):
+                self.setUp()
+                self.assertEqual(self.run_command().returncode, 0)
+                self.record_further_reconstruction(
+                    "docs/plan/active/003-integration.md",
+                    successors,
+                    integration=integration,
+                )
+                module = self.load_restructure_module(f"chain_{label}")
+                pairs, blocked = module.replan_lineage_resolution()
+                self.assertNotIn(self.source_path, pairs)
+                self.assertEqual(blocked[self.source_path], reason)
+                before = {
+                    "status": "backlog",
+                    "predecessor_plans": [self.source_path],
+                    "write_scope": ["docs/agent/spec-index.yaml"],
+                }
+                after = {
+                    **before,
+                    "predecessor_plans": ["docs/plan/checked/2026/09/01-15/004-second.md"],
+                }
+                with self.assertRaises(module.RestructureError) as refused:
+                    module.validate_lineage_reference_transition(
+                        before,
+                        after,
+                        [
+                            {
+                                "scope": "manifest",
+                                "field": "predecessor_plans",
+                                "old": f"  - {self.source_path}\n",
+                                "new": "  - docs/plan/checked/2026/09/01-15/004-second.md\n",
+                                "count": 1,
+                            }
+                        ],
+                        "lineage",
+                    )
+                self.assertIn(
+                    f"reconstruction chain is {reason}", str(refused.exception)
+                )
+
+    def test_lineage_rebinding_restates_a_replanned_archive_reference(self) -> None:
+        """A context file naming the abandoned generation moves to the checked plan."""
+        module, _, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("archive_reference")
+        )
+        archive_path = module.replanned_rows(
+            (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+        )[0][1]
+        before = {
+            "status": "backlog",
+            "context_files": [archive_path],
+            "write_scope": ["docs/agent/spec-index.yaml"],
+        }
+        after = {**before, "context_files": [checked_path]}
+        accepted = [
+            {
+                "scope": "manifest",
+                "field": "context_files",
+                "old": f"  - {archive_path}\n",
+                "new": f"  - {checked_path}\n",
+                "count": 1,
+            }
+        ]
+        module.validate_lineage_reference_transition(
+            before, after, accepted, "lineage"
+        )
+        wrong = copy.deepcopy(accepted)
+        wrong[0]["new"] = "  - docs/plan/checked/2020/01/01-15/099-other.md\n"
+        with self.assertRaises(module.RestructureError) as refused:
+            module.validate_lineage_reference_transition(
+                before, after, wrong, "lineage"
+            )
+        self.assertIn(
+            "does not resolve to a checked successor", str(refused.exception)
+        )
+
+    def test_lineage_rebinding_reaches_a_plan_no_contract_owns(self) -> None:
+        """A backlog plan stranded by a reconstruction is addressable where it lives."""
+        module, _, _ = self.prepare_replanned_source_with_checked_successor(
+            "stranded_reach"
+        )
+        stranded = "docs/plan/backlog/050-stranded.md"
+        target = self.repo / stranded
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            self.plan_content(
+                "docs/plan/active/002-data.md",
+                [digest(self.acceptance[0])],
+                integration=False,
+            )
+            .replace("status: in_progress", "status: backlog", 1)
+            .replace(
+                "context_files:\n  - none\n",
+                f"context_files:\n  - {self.source_path}\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        contract_path = module.replanned_rows(
+            (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+        )[0][2]
+        live: dict[str, dict[str, object]] = {}
+        module.register_stranded_reference_plans(
+            [], live, {contract_path: digest(b"contract")}
+        )
+        self.assertEqual(live[stranded]["role"], "stranded_reference")
+        self.assertEqual(live[stranded]["contract_path"], contract_path)
+        self.assertEqual(live[stranded]["lifecycle"], "backlog")
+        self.assertIs(live[stranded]["enforce_projection_semantics"], False)
+
+    def test_a_recorded_rebinding_survives_its_plan_being_promoted(self) -> None:
+        """An append-only record stays verifiable after its plan moves."""
+        module, _, _ = self.prepare_replanned_source_with_checked_successor(
+            "stranded_move"
+        )
+        recorded = "docs/plan/backlog/050-stranded.md"
+        promoted = "docs/plan/active/050-stranded.md"
+        target = self.repo / promoted
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            self.plan_content(
+                "docs/plan/active/002-data.md",
+                [digest(self.acceptance[0])],
+                integration=False,
+            ),
+            encoding="utf-8",
+        )
+        index = self.repo / "docs/plan/plan.md"
+        index.write_text(
+            index.read_text(encoding="utf-8") + f"050\t{promoted}\tin_progress\n",
+            encoding="utf-8",
+        )
+        contract_path = module.replanned_rows(
+            (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+        )[0][2]
+        live: dict[str, dict[str, object]] = {}
+        module.register_stranded_reference_plans(
+            [
+                {
+                    "kind": "lineage_rebind",
+                    "plan_path": recorded,
+                    "owning_contract_path": contract_path,
+                }
+            ],
+            live,
+            {contract_path: digest(b"contract")},
+        )
+        self.assertIn(recorded, live)
+        self.assertEqual(live[recorded]["live_path"], promoted)
+        self.assertEqual(live[recorded]["lifecycle"], "active")
+
+    def test_lineage_rebinding_reaches_a_plan_naming_only_the_archive(self) -> None:
+        """A stale reference written as the archive path is addressable too."""
+        module, _, _ = self.prepare_replanned_source_with_checked_successor(
+            "stranded_archive"
+        )
+        _, archive_path, contract_path = module.replanned_rows(
+            (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+        )[0]
+        stranded = "docs/plan/backlog/051-archive-stranded.md"
+        target = self.repo / stranded
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            self.plan_content(
+                "docs/plan/active/002-data.md",
+                [digest(self.acceptance[0])],
+                integration=False,
+            )
+            .replace("status: in_progress", "status: backlog", 1)
+            .replace(f"replan_source: {self.source_path}\n", "", 1)
+            .replace(
+                "context_files:\n  - none\n",
+                f"context_files:\n  - {archive_path}\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertNotIn(
+            self.source_path, target.read_text(encoding="utf-8")
+        )
+        live: dict[str, dict[str, object]] = {}
+        module.register_stranded_reference_plans(
+            [], live, {contract_path: digest(b"contract")}
+        )
+        self.assertEqual(live[stranded]["contract_path"], contract_path)
+        self.assertEqual(live[stranded]["lifecycle"], "backlog")
+
+    def test_registration_does_not_force_the_activation_map(self) -> None:
+        """A repository with no reconstruction never reads the checked archive.
+
+        Building the resolution map requires every checked archive to be closed,
+        which a repository finalizing a plan is legitimately not. Verification of
+        a repository that has no reconstruction at all must not depend on it.
+        """
+        module, _, _ = self.prepare_replanned_source_with_checked_successor(
+            "stranded_lazy"
+        )
+        (self.repo / "docs/plan/replanned.md").write_text(
+            "# Replanned Plan Index\n\nid\tpath\tcontract\n", encoding="utf-8"
+        )
+
+        def explode() -> None:
+            raise AssertionError("resolution map built without a reconstruction")
+
+        live: dict[str, dict[str, object]] = {}
+        with mock.patch.object(module, "replan_lineage_resolution", explode):
+            module.register_stranded_reference_plans([], live, {})
+        self.assertEqual(live, {})
+
+    def test_a_moved_plan_is_not_registered_a_second_time(self) -> None:
+        """One live file never carries two rebind chains.
+
+        A record keyed by the plan's historical path already owns the file the
+        plan moved to. Registering the current path as well would admit a second
+        chain over the same bytes, and each chain would then reject the other.
+        """
+        module, _, _ = self.prepare_replanned_source_with_checked_successor(
+            "stranded_alias"
+        )
+        recorded = "docs/plan/backlog/050-stranded.md"
+        moved = "docs/plan/shelved/050-stranded.md"
+        target = self.repo / moved
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            self.plan_content(
+                "docs/plan/active/002-data.md",
+                [digest(self.acceptance[0])],
+                integration=False,
+            )
+            .replace("status: in_progress", "status: shelved", 1)
+            .replace(
+                "context_files:\n  - none\n",
+                f"context_files:\n  - {self.source_path}\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        contract_path = module.replanned_rows(
+            (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+        )[0][2]
+        live: dict[str, dict[str, object]] = {}
+        module.register_stranded_reference_plans(
+            [
+                {
+                    "kind": "lineage_rebind",
+                    "plan_path": recorded,
+                    "owning_contract_path": contract_path,
+                }
+            ],
+            live,
+            {contract_path: digest(b"contract")},
+        )
+        self.assertNotIn(moved, live)
+        self.assertEqual(live[recorded]["live_path"], moved)
+
+    def test_a_plan_in_two_locations_refuses_to_resolve(self) -> None:
+        """Ambiguous plan identity is reported, not resolved by search order."""
+        module, _, _ = self.prepare_replanned_source_with_checked_successor(
+            "stranded_double"
+        )
+        recorded = "docs/plan/backlog/060-duplicate.md"
+        body = self.plan_content(
+            "docs/plan/active/002-data.md",
+            [digest(self.acceptance[0])],
+            integration=False,
+        ).replace("status: in_progress", "status: backlog", 1)
+        for location in (recorded, "docs/plan/shelved/060-duplicate.md"):
+            target = self.repo / location
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body, encoding="utf-8")
+        with self.assertRaises(module.RestructureError) as raised:
+            module.locate_stranded_plan(recorded)
+        self.assertIn("more than one location", str(raised.exception))
+        self.assertIn("docs/plan/shelved/060-duplicate.md", str(raised.exception))
+
+    def test_resolution_ignores_an_unrelated_open_archive(self) -> None:
+        """Finalizing one plan never freezes resolution of an unrelated chain."""
+        module, _, checked_path = (
+            self.prepare_replanned_source_with_checked_successor("stranded_open")
+        )
+        open_archive = "docs/plan/checked/2020/01/01-15/070-unrelated.md"
+        target = self.repo / open_archive
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            (self.repo / checked_path)
+            .read_text(encoding="utf-8")
+            .replace("status: checked", "status: ready_to_archive", 1),
+            encoding="utf-8",
+        )
+        index = self.repo / "docs/plan/checked.md"
+        index.write_text(
+            index.read_text(encoding="utf-8") + f"070\t{open_archive}\n",
+            encoding="utf-8",
+        )
+        pairs, _ = module.replan_lineage_resolution()
+        self.assertEqual(pairs.get(self.source_path), {checked_path})
+        with self.assertRaises(module.RestructureError):
+            module.activation_checked_pairs()
+
     def test_lineage_rebinding_admits_only_checked_successors_of_that_source(
         self,
     ) -> None:
@@ -7224,8 +7626,8 @@ class PlanRestructureTest(unittest.TestCase):
 
         with mock.patch.object(
             module,
-            "replan_lineage_pairs",
-            return_value={successor_path: {checked_path}},
+            "replan_lineage_resolution",
+            return_value=({successor_path: {checked_path}}, {}),
         ):
             with self.assertRaises(module.RestructureError) as both:
                 module.validate_lineage_reference_transition(
