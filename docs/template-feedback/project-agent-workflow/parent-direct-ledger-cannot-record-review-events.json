@@ -1,0 +1,36 @@
+{
+  "attribution": {
+    "certainty": "unknown",
+    "reason": "The blocking requirement lives in the shipped plan-execution-state command, but this checkout also runs a non-Codex agent runtime, and the two causes were not separated."
+  },
+  "desired_behavior": "A parent_direct run should be able to record its own review, focused validation and completion evidence from a parent-owned artifact, so the continuation decision rests on recorded events rather than on prose in the plan.",
+  "evidence": [
+    {
+      "kind": "agent_paraphrase",
+      "reference": "scripts/plan-execution-state.py",
+      "summary": "record --event-type parent_review requires review_turn_zero_from_manifest, which needs a Codex ReviewPacketStart JSONL bound to an observed root_session_identity; this runtime emits none, so parent_review, focused_validation and check --operation completion could not be recorded at all."
+    },
+    {
+      "kind": "agent_paraphrase",
+      "reference": "scripts/plan-execution-state.py",
+      "summary": "continue refused with 'continuation requires a closed parent-review budget exhaustion' because state == descope_pending and descope_pending_reason_codes are both derived from parent_review events that could not be written, so an owner-authorized continuation had to proceed outside the ledger."
+    },
+    {
+      "kind": "change_reference",
+      "reference": "docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md",
+      "summary": "The plan records its reviews, preflights and validation results as parent-owned artifacts and states the limitation explicitly, because the ledger could not hold them."
+    }
+  ],
+  "expected_behavior": "The parent-owned execution ledger holds every budget-bearing event for the implementation modes it admits, and continue reads its decision from those events.",
+  "impact": "One plan was reconstructed twice and its owner-authorized continuation ran under documented degraded governance, because the budget the runner enforces could not be recorded by the runtime that was doing the work.",
+  "observed_behavior": "In parent_direct mode the ledger accepts execution_epoch_started and adversarial_preflight but rejects parent_review, focused_validation and completion, so budget exhaustion cannot be closed and continue cannot be used.",
+  "project_alias": "project-agent-workflow",
+  "report_id": "parent-direct-ledger-cannot-record-review-events",
+  "schema_version": 1,
+  "supersedes": "none",
+  "template_source": {
+    "alias": "project-agent-workflow",
+    "revision": "unknown"
+  },
+  "workaround": "Reviews, preflight results and validation outcomes were kept as parent-owned files under the plan-execution directory and summarized in the plan's Validation Notes, and the continuation proceeded on the owner's explicit instruction instead of a ledger transition."
+}
