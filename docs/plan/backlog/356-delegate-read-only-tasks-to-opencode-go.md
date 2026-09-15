@@ -63,7 +63,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - scripts/run-sandboxed-plan-worker.py
-  - docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
+  - docs/plan/replanned/2026/09/01-15/355-isolate-opencode-go-inference-credentials.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
@@ -91,7 +91,7 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb","stage":"focused","witness":"tests/copier-update.sh --require-copier"}
   - {"acceptance_sha256":"sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 integration_gates:
-  - docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
+  - docs/plan/active/355-isolate-opencode-go-inference-credentials.md
 checked_summary_ja: 親のオーケストレーターから OpenCode Go に読み取り専用の調査を委任する。
 
 ## Decisions
@@ -127,4 +127,3 @@ checked_summary_ja: 親のオーケストレーターから OpenCode Go に読�
 - Pre-admission local evidence: OpenCode 1.18.30 with a temporary empty HOME/config, denied tools and a synthetic loopback provider exited 0; two streamed POST /v1/chat/completions requests selected glm-5.3 and emitted step_start, text and step_finish events. No Go API or real credential was used.
 - Requested settings, runtime reports and provider execution are distinct evidence classes. Live entitlement and answer quality remain unverified; deterministic fixture success establishes only the stated implementation conditions.
 - Implementation has not started. Focused and authoritative commands in this manifest are required future witnesses, not results of this plan-authoring task.
-- The credential-isolation prerequisite recorded as Plan 355 was replanned through 358 and completed as Plan 359. The gate and context references now resolve to that checked archive; the earlier stopped 355 bytes remain readable under docs/plan/replanned/.
