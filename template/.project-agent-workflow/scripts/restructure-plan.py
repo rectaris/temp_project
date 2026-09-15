@@ -6766,6 +6766,40 @@ def validate_live_plan_archived_context_references() -> None:
                 )
 
 
+LIVE_PLAN_REFERENCE_FIELDS = ("context_files", "integration_gates")
+
+
+def validate_live_plan_reference_targets() -> None:
+    """Refuse a plan still to be executed when it names a plan path with no file behind it.
+
+    Only `context_files` and `integration_gates` are scanned. A path a plan
+    declares it will write, and a path quoted inside evidence prose, name work
+    that does not exist yet by design. `predecessor_plans` is left to the active
+    predecessor rules, which already resolve an active predecessor against
+    `docs/plan/plan.md` and the checked index and would contradict a plain
+    file-existence test.
+
+    An archive under checked, replanned or shelved records the paths that were
+    true when it was written, so it is excluded. A plan in active or backlog is
+    still going to be executed, and a reference it carries has to resolve before
+    that execution can start.
+    """
+
+    for _plan_id, path, manifest in live_plan_records():
+        if path.startswith("docs/plan/shelved/"):
+            continue
+        for field in LIVE_PLAN_REFERENCE_FIELDS:
+            for entry in items(manifest, field):
+                if not entry.startswith("docs/plan/") or not entry.endswith(".md"):
+                    continue
+                if (ROOT / entry).is_file():
+                    continue
+                raise RestructureError(
+                    f"live plan {path} {field} names a plan path that does not "
+                    f"exist: {entry}"
+                )
+
+
 def rewrite_context_file_entries(
     content: str,
     replacements: dict[str, str],
@@ -8710,6 +8744,7 @@ def verify_repository_contracts(
     validate_repository_shelved_plans()
     validate_active_plan_context_files()
     validate_live_plan_archived_context_references()
+    validate_live_plan_reference_targets()
     if not REPLANNED_INDEX.is_file():
         raise RestructureError("missing docs/plan/replanned.md")
     rows = replanned_rows(REPLANNED_INDEX.read_text(encoding="utf-8"))

@@ -257,6 +257,99 @@ class PlanRestructureTest(unittest.TestCase):
         )
         self.assertEqual(self.run_verify().returncode, 0)
 
+    def reference_referrer(self, field: str, entry: str) -> Path:
+        fields = {"context_files": ["none"]}
+        fields[field] = [entry]
+        lines = [
+            "# Reference referrer",
+            "",
+            "status: backlog",
+            "write_scope:",
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md",
+        ]
+        for key in ("context_files", "integration_gates"):
+            if key not in fields:
+                continue
+            lines.append(f"{key}:")
+            lines.extend(f"  - {value}" for value in fields[key])
+        plan = self.repo / "docs/plan/backlog/182-reference-referrer.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return plan
+
+    def test_a_live_plan_may_not_name_a_plan_path_that_does_not_exist(self) -> None:
+        missing = "docs/plan/checked/2026/08/16-31/099-never-written.md"
+        for field in ("context_files", "integration_gates"):
+            with self.subTest(field=field):
+                plan = self.reference_referrer(field, missing)
+                verified = self.run_verify()
+                self.assertNotEqual(verified.returncode, 0, verified.stdout)
+                self.assertIn(
+                    "live plan docs/plan/backlog/182-reference-referrer.md "
+                    f"{field} names a plan path that does not exist: {missing}",
+                    verified.stderr,
+                )
+                plan.unlink()
+                self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_a_live_plan_may_name_a_plan_path_that_exists(self) -> None:
+        for field in ("context_files", "integration_gates"):
+            with self.subTest(field=field):
+                plan = self.reference_referrer(field, self.source_path)
+                verified = self.run_verify()
+                self.assertEqual(verified.returncode, 0, verified.stderr)
+                plan.unlink()
+
+    def test_a_live_plan_may_name_a_plan_path_it_will_write(self) -> None:
+        plan = self.repo / "docs/plan/backlog/183-plan-writer.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# Plan writer\n\n"
+            "status: backlog\n"
+            "write_scope:\n"
+            "  - docs/plan/backlog/184-not-yet-written.md\n"
+            "context_files:\n"
+            "  - none\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_an_archived_plan_may_name_a_plan_path_that_does_not_exist(self) -> None:
+        missing = "docs/plan/active/098-moved-away.md"
+        checked_relative = "docs/plan/checked/2026/08/16-31/098-archived-referrer.md"
+        checked_file = self.repo / checked_relative
+        checked_file.parent.mkdir(parents=True, exist_ok=True)
+        checked_file.write_text(
+            "# Archived referrer\n\nstatus: checked\nwrite_scope:\n  - docs/plan/\n"
+            f"context_files:\n  - {missing}\n"
+            f"integration_gates:\n  - {missing}\n",
+            encoding="utf-8",
+        )
+        (self.repo / "docs/plan/checked.md").write_text(
+            f"# Checked Plan Index\n\nid\tpath\n098\t{checked_relative}\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
+    def test_a_shelved_plan_may_name_a_plan_path_that_does_not_exist(self) -> None:
+        missing = "docs/plan/active/097-moved-away.md"
+        plan = self.repo / "docs/plan/shelved/097-shelved-referrer.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# Shelved referrer\n\n"
+            "status: shelved\n"
+            "shelved_reason: The owner stopped pursuing this work.\n"
+            "shelved_at: 2026-08-20\n"
+            "write_scope:\n"
+            "  - docs/agent/SPEC_PLAN_WORKFLOW.md\n"
+            f"context_files:\n  - {missing}\n",
+            encoding="utf-8",
+        )
+        verified = self.run_verify()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+
     def test_a_transaction_may_archive_a_referenced_context_plan(self) -> None:
         self.set_context_files(self.publisher_plan(), [self.source_path])
         self.assertEqual(self.run_verify().returncode, 0)
@@ -599,7 +692,7 @@ class PlanRestructureTest(unittest.TestCase):
         backlog.parent.mkdir(parents=True, exist_ok=True)
         backlog.write_text(
             "# Later\n\nstatus: backlog\nwrite_scope:\n  - docs/plan/\n"
-            "context_files:\n  - docs/plan/active/197-absent.md\n",
+            "context_files:\n  - docs/agent/SPEC_ABSENT.md\n",
             encoding="utf-8",
         )
         verified = self.run_verify()

@@ -145,6 +145,10 @@ Serial execution stays the default. An explicitly admitted execution group is th
 - Apply the same rules to every active plan file a restructuring transaction writes, before the transaction mutates the repository, and treat the paths that transaction writes as present. Enforcing a created plan's context only after the commit point would leave a mutated repository that neither verification nor recovery can clear.
 - Apply both rules to `context_files` entries only, never to body prose. A plan body may name a plan that its own transaction will create.
 - Repair a stale `context_files` entry by rebinding it to the current location of the same plan file. Leave `predecessor_plans` to the active predecessor rules.
+- Reject a plan under `docs/plan/active` or `docs/plan/backlog` whose `context_files` or `integration_gates` names a `docs/plan` path ending in `.md` with no file behind it. A plan still to be executed must be able to reach every predecessor it names, and a reference that resolves to nothing hides which plan the reader was sent to.
+- Apply that rule to those two reference fields only. `write_scope` and `successor_plans` name a plan file the work will create, and `feasibility_evidence` quotes paths that were never meant to exist, so demanding that they resolve would reject correct plans.
+- Leave `predecessor_plans` to the active predecessor rules. Those rules resolve an active predecessor through `docs/plan/plan.md` and the checked index rather than through the file system, so a plain existence test would contradict them.
+- Keep archived and shelved plans outside the rule. An archive records what a past plan named at the time, and a shelved plan is no longer required, so requiring them to resolve would force editing records nobody will execute.
 - Keep raw log bodies outside `docs/plan`; reference local run manifests instead.
 - Keep active plans executable. Use `## Decisions` for final accepted decisions, not full decision-audit output.
 - Keep active-plan operational prose in English by default.

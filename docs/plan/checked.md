@@ -275,3 +275,4 @@ id	path
 351	docs/plan/checked/2026/09/01-15/351-make-shell-syntax-admission-root-agnostic.md
 359	docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
 360	docs/plan/checked/2026/09/01-15/360-resolve-multigeneration-lineage-rebinding.md
+377	docs/plan/checked/2026/09/01-15/377-resolve-plan-predecessor-references.md

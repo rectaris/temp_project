@@ -1,6 +1,6 @@
 # Refuse a live plan that names a plan path which does not exist, so a predecessor reference cannot silently point at nothing.
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Every docs/plan path a plan in active or backlog names must resolve to a file that exists in the repository.
 task_types:
@@ -80,15 +80,27 @@ checked_summary_ja: 実在しないプランのパスを書いた未完了プラ
 
 ## Tasks
 
-- [ ] Confirm the write scope and the current required specifications, and record the exact evidence bytes that show a dangling reference passing today.
-- [ ] Collect the docs/plan paths that each live plan names, and refuse a plan whose named path has no file behind it.
-- [ ] Keep archives outside the rule, and add a test that a completed plan naming a moved path is still admitted.
-- [ ] Add tests for the refusal, for the admitted cases, and for the exact message, and confirm each one fails when its production line is reverted.
-- [ ] Mirror the module into the template byte-for-byte and record the rule in both copies of the plan workflow specification.
-- [ ] Run the focused validation, then run the authoritative suite once on the final candidate.
+- [x] Confirm the write scope and the current required specifications, and record the exact evidence bytes that show a dangling reference passing today.
+- [x] Collect the docs/plan paths that each live plan names, and refuse a plan whose named path has no file behind it.
+- [x] Keep archives outside the rule, and add a test that a completed plan naming a moved path is still admitted.
+- [x] Add tests for the refusal, for the admitted cases, and for the exact message, and confirm each one fails when its production line is reverted.
+- [x] Mirror the module into the template byte-for-byte and record the rule in both copies of the plan workflow specification.
+- [x] Run the focused validation, then run the authoritative suite once on the final candidate.
 
 ## Validation Notes
 
 - The gap was measured on the published dev state at commit bcb646a. Rewriting the first integration gate of docs/plan/backlog/372 to docs/plan/checked/2026/09/01-15/999-a-plan-that-does-not-exist.md left --verify, lint-project-workflow.sh and tests/smoke.sh all passing.
 - The same tamper on docs/plan/backlog/356 was refused, because plan 360 wrote a lineage_rebind record for it and the rebind baseline protects context_files. That protection covers only a plan that already carries a record, so it is not a substitute for this rule.
 - Plan 360 repaired the sanctioned rebinding path. It did not add a check that a reference resolves, and this plan does not change any behaviour plan 360 introduced.
+
+- The rule scans `context_files` and `integration_gates` only. The first draft scanned the three fields a lineage rebinding rewrites. Adding `predecessor_plans` failed 19 existing tests in tests/test-plan-restructure.py, because an active predecessor resolves through docs/plan/plan.md and docs/plan/checked.md rather than through the file system. Removing that one field took the suite from 21 failures to 2, and SPEC_PLAN_WORKFLOW.md already assigns the field to the active predecessor rules.
+- Two other fields were surveyed and deliberately left out. docs/plan/shelved/247 names docs/plan/backlog/184-... in write_scope, which is a file that plan would create, and docs/plan/backlog/376 quotes docs/plan/backlog/050-stranded.md inside feasibility_evidence as a fixture path that was never meant to exist. Scanning either field would refuse a correct plan.
+- Excluding docs/plan/shelved is load-bearing. Shelved plans currently hold five unresolved context_files entries and five unresolved integration gate entries, so including them would require editing plans that acceptance forbids editing. scripts/promote-plan.sh still accepts promotion from docs/plan/shelved, so a promoted shelved plan can carry a dangling reference into a live location. Verification then refuses it, which is the intended outcome: the reference is rebound before the plan is executed, not after.
+- tests/test-plan-restructure.py test_context_resolution_ignores_body_references_and_backlog_plans previously asserted that a backlog plan naming docs/plan/active/197-absent.md is admitted, which is exactly the gap this plan closes. Its fixture now names docs/agent/SPEC_ABSENT.md instead, so the test still shows that a backlog plan stays outside the active context-resolution rule without asserting the behaviour this plan removes.
+- Five mutations were applied one at a time and each was caught: deleting the call site, deleting the shelved exclusion, widening the field set to write_scope, forcing the existence test true, and dropping integration_gates from the field set.
+- The primary invariant sentence says every docs/plan path a live plan names must resolve. It is implemented as every docs/plan path a live plan names as a reference, because write_scope and evidence prose name paths that do not exist yet by design. The plan title, summary, every Decisions bullet and the backlog README entry all describe a reference, so the narrower reading is the one the plan was written to express.
+- The feasibility evidence was measured on published dev at bcb646a. Only docs/plan files changed between bcb646a and the 2b54206 baseline this run started from, so the measurement transfers unchanged.
+- Focused validation on the final candidate: python3 tests/test-plan-restructure.py (204 tests, OK), tests/root-plan-lifecycle.sh (passed), python3 scripts/check-copier-template.py (passed), tests/smoke.sh (passed). The template module is byte-identical to the root module.
+- Independent review ran once in this execution epoch on the staged candidate bb28647fbfaf9740878216a53cb93ec7589022b505c1362520ec1468a11b1f95 over baseline 2b54206 and returned ACCEPT with no finding. It confirmed the field-set narrowing as faithful, the shelved exclusion as correct, and the retargeted fixture as a contract update rather than a weakened test.
+- The reviewer noted one consequence that is intended rather than a defect: archiving a predecessor that a backlog plan names through an integration gate now fails verification until that gate is rebound, because automatic rebinding covers context_files only. No current live plan trips it.
+- Authoritative suite on the final candidate: scripts/lint-project-workflow.sh passed and tests/smoke.sh passed.
