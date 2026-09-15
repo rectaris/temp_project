@@ -36,7 +36,9 @@ ALLOWED_METADATA_KEYS = {
     "tool",
     "tool_name",
 }
-OPERATIONAL_PAYLOAD_KEYS = {*ALLOWED_METADATA_KEYS, "transcript_path"}
+OPERATIONAL_PAYLOAD_KEYS = {*ALLOWED_METADATA_KEYS, "prompt", "transcript_path"}
+REVIEW_PACKET_MARKER = re.compile(r"^ReviewPacket: (sha256:[0-9a-f]{64})$", re.MULTILINE)
+MAX_REVIEW_PROMPT_BYTES = 256 * 1024
 
 
 def utc_now() -> str:
@@ -206,6 +208,51 @@ def hook_resource_observations(event_path: Path) -> dict[str, Any]:
     return observations
 
 
+def submitted_review_packet_digest(prompt: Any) -> str | None:
+    if not isinstance(prompt, str):
+        return None
+    try:
+        if len(prompt.encode("utf-8")) > MAX_REVIEW_PROMPT_BYTES:
+            return None
+        markers = list(REVIEW_PACKET_MARKER.finditer(prompt))
+        if len(markers) != 1:
+            return None
+        marker = markers[0]
+        packet = json.loads(prompt[marker.end():])
+        if not isinstance(packet, dict):
+            return None
+        canonical = json.dumps(packet, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        recomputed = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    except (ValueError, RecursionError, UnicodeError):
+        return None
+    return recomputed if recomputed == marker.group(1) else None
+
+
+def prior_prompt_count(event_path: Path, session_id: str) -> int | None:
+    if not event_path.exists():
+        return 0
+    count = 0
+    try:
+        with event_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise ValueError("invalid event record")
+                if record.get("event") != "UserPromptSubmit":
+                    continue
+                metadata = record.get("payload")
+                if not isinstance(metadata, dict) or not metadata.get("session_id"):
+                    raise ValueError("prompt record has no session identity")
+                if metadata["session_id"] == session_id:
+                    count += 1
+    except (OSError, ValueError, UnicodeError):
+        print("review packet observation unavailable: unreadable prompt history", file=sys.stderr)
+        return None
+    return count
+
+
 def append_event(event: str, payload: dict[str, Any]) -> None:
     root = repo_root()
     run = run_id(payload)
@@ -223,8 +270,32 @@ def append_event(event: str, payload: dict[str, Any]) -> None:
     with (run_dir / ".events.lock").open("a", encoding="utf-8") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         try:
+            packet_record = None
+            session_id = payload.get("session_id")
+            if (
+                event == "UserPromptSubmit"
+                and isinstance(session_id, str)
+                and session_id
+                and record["payload"].get("session_id") == session_id
+            ):
+                packet_digest = submitted_review_packet_digest(payload.get("prompt"))
+                if packet_digest is not None and prior_prompt_count(event_path, session_id) == 0:
+                    packet_record = {
+                        **record,
+                        "event": "ReviewPacketStart",
+                        "payload": {
+                            "hook_event_name": "ReviewPacketStart",
+                            "session_id": session_id,
+                            "review_packet_digest": packet_digest,
+                            "inherited_turns": 0,
+                        },
+                    }
             with event_path.open("a", encoding="utf-8") as handle:
+                # Record the prompt first under the same lock, so a partial append
+                # cannot let a retry claim another first prompt.
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+                if packet_record is not None:
+                    handle.write(json.dumps(packet_record, ensure_ascii=False, sort_keys=True) + "\n")
             agent_log_manifest.record_hook(
                 run_dir,
                 run,

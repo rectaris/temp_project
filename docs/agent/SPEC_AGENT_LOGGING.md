@@ -78,6 +78,15 @@ The hook records observable payloads for `SessionStart`, `UserPromptSubmit`, `Pr
 
 For staged review, a runtime may emit `ReviewPacketStart` with the reviewer session id, the canonical review packet digest, and the inherited turn count. Only this explicit runtime event, or its normalized external-transcript equivalent, may establish review turn zero. `SessionStart` alone and caller-authored receipt fields do not establish it.
 
+The reviewer's own `UserPromptSubmit` hook may produce that observation when its first submitted prompt declares the packet.
+Put any reviewer instructions before exactly one line `ReviewPacket: sha256:<64 lowercase hex digits>`, followed by the packet JSON and no trailing non-whitespace text.
+The hook recomputes the digest using sorted JSON keys, compact separators and ASCII escapes, and emits nothing for a missing, invalid, oversized (over 256 KiB UTF-8), or mismatched declaration.
+It counts prior `UserPromptSubmit` records for that same session in the run's event log under the append lock and writes `ReviewPacketStart` only at zero inherited turns.
+A later prompt, including one after a resumed `SessionStart`, cannot produce a packet-start observation; unreadable or ambiguous prompt history cannot establish turn zero.
+This is evidence from the retained run history, not proof about another run or deleted evidence.
+The hook appends the ordinary prompt metadata before the packet-start record under that same lock.
+Both records retain only allowlisted metadata, never the prompt body or packet JSON; accepting `prompt` as an operational input does not allow it into any stored hook record.
+
 Hook logs are written to:
 
 ```text

@@ -60,6 +60,190 @@ def statement_values(manifest: dict, attribute: str) -> list[tuple]:
 
 
 class AgentLogEventTest(unittest.TestCase):
+    @staticmethod
+    def review_prompt() -> tuple[str, str]:
+        packet = {
+            "plan_digest": "sha256:" + "a" * 64,
+            "review_target_digest": "sha256:" + "b" * 64,
+            "admitted_diff_digest": "sha256:" + "b" * 64,
+            "worker_receipt_digests": [],
+            "applicable_specification_digests": ["sha256:" + "c" * 64],
+        }
+        canonical = json.dumps(packet, sort_keys=True, separators=(",", ":"))
+        packet_digest = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+        prompt = (
+            "Review read-only. Private instruction: must-not-persist.\n"
+            f"ReviewPacket: {packet_digest}\n{json.dumps(packet, indent=2)}"
+        )
+        return prompt, packet_digest
+
+    def submit_review_prompt(
+        self, hook: Path, repo: Path, prompt: object, session: str = "review-session",
+        event: str = "UserPromptSubmit",
+    ) -> list[dict]:
+        self.assertEqual(
+            run_hook(
+                hook,
+                {
+                    "prompt": prompt,
+                    "session_id": session,
+                    "hook_event_name": event,
+                    "inherited_turns": 0,
+                    "review_packet_digest": "sha256:" + "f" * 64,
+                },
+                cwd=repo,
+                env={"CODEX_AGENT_LOG_RUN_ID": "review-prompt"},
+                args=["--event", event],
+            ),
+            {},
+        )
+        return [
+            json.loads(line)
+            for line in (repo / ".agent-logs/review-prompt/raw/events.jsonl")
+            .read_text(encoding="utf-8").splitlines()
+        ]
+
+    def test_first_submitted_review_packet_is_observed_without_prompt_body(self) -> None:
+        prompt, packet_digest = self.review_prompt()
+        results = []
+        for hook in (ROOT_HOOK_LOG, AGENT_LOG):
+            with self.subTest(hook=hook), tempfile.TemporaryDirectory() as tmp:
+                repo = git_repo(tmp)
+                self.submit_review_prompt(hook, repo, "startup", event="SessionStart")
+                records = self.submit_review_prompt(hook, repo, prompt)
+                self.assertEqual(
+                    [record["event"] for record in records],
+                    ["SessionStart", "UserPromptSubmit", "ReviewPacketStart"],
+                )
+                packet_record = records[-1]
+                self.assertEqual(packet_record["payload"], {
+                    "hook_event_name": "ReviewPacketStart",
+                    "session_id": "review-session",
+                    "review_packet_digest": packet_digest,
+                    "inherited_turns": 0,
+                })
+                self.assertNotIn("review_packet_digest", records[-2]["payload"])
+                for record in records:
+                    self.assertNotIn("prompt", record["payload"])
+                    self.assertNotIn("must-not-persist", json.dumps(record))
+                    self.assertNotIn("worker_receipt_digests", json.dumps(record))
+                manifest = repo / ".agent-logs/review-prompt/manifest.json"
+                checked = subprocess.run(
+                    ["python3", str(MANIFEST_CHECKER), str(manifest)],
+                    cwd=repo, text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+                results.append([
+                    {key: value for key, value in record.items()
+                     if key not in {"created_at", "cwd"}}
+                    for record in records
+                ])
+        self.assertEqual(results[0], results[1])
+
+    def test_later_or_resumed_prompt_cannot_claim_review_turn_zero(self) -> None:
+        prompt, _ = self.review_prompt()
+        for hook in (ROOT_HOOK_LOG, AGENT_LOG):
+            for first_prompt in ("ordinary first prompt", prompt):
+                with self.subTest(hook=hook, first=first_prompt), tempfile.TemporaryDirectory() as tmp:
+                    repo = git_repo(tmp)
+                    first = self.submit_review_prompt(hook, repo, first_prompt)
+                    original_starts = [r for r in first if r["event"] == "ReviewPacketStart"]
+                    self.submit_review_prompt(hook, repo, "", event="SessionStart")
+                    records = self.submit_review_prompt(hook, repo, prompt)
+                    self.assertEqual(
+                        [r for r in records if r["event"] == "ReviewPacketStart"],
+                        original_starts,
+                    )
+                    records = self.submit_review_prompt(hook, repo, prompt, session="another-session")
+                    self.assertEqual(
+                        len([r for r in records if r["event"] == "ReviewPacketStart"]),
+                        len(original_starts) + 1,
+                    )
+
+    def test_invalid_review_declaration_never_produces_packet_start(self) -> None:
+        prompt, packet_digest = self.review_prompt()
+        invalid_prompts = [
+            None,
+            {"prompt": prompt},
+            "ordinary prompt",
+            prompt.replace(packet_digest, "sha256:" + "d" * 64),
+            prompt + "\ntrailing instruction",
+            prompt + f"\nReviewPacket: {packet_digest}\n{{}}",
+            f"ReviewPacket: {packet_digest}\n[1, 2]",
+            f"ReviewPacket: {packet_digest}\n{{",
+            f"ReviewPacket: {packet_digest}\n{{\"number\": NaN}}",
+            "x" * (256 * 1024) + "\n" + prompt,
+        ]
+        for hook in (ROOT_HOOK_LOG, AGENT_LOG):
+            for index, invalid in enumerate(invalid_prompts):
+                with self.subTest(hook=hook, case=index), tempfile.TemporaryDirectory() as tmp:
+                    repo = git_repo(tmp)
+                    records = self.submit_review_prompt(hook, repo, invalid)
+                    self.assertEqual([r["event"] for r in records], ["UserPromptSubmit"])
+                    self.assertNotIn("prompt", records[0]["payload"])
+                    records = self.submit_review_prompt(hook, repo, prompt)
+                    self.assertEqual(
+                        [r["event"] for r in records],
+                        ["UserPromptSubmit", "UserPromptSubmit"],
+                    )
+
+    def test_unusable_session_or_history_cannot_establish_review_turn_zero(self) -> None:
+        prompt, _ = self.review_prompt()
+        for hook in (ROOT_HOOK_LOG, AGENT_LOG):
+            for session in ("", "s" * 513, "ghp_" + "a" * 32):
+                with self.subTest(hook=hook, session=session), tempfile.TemporaryDirectory() as tmp:
+                    repo = git_repo(tmp)
+                    records = self.submit_review_prompt(hook, repo, prompt, session=session)
+                    self.assertEqual([r["event"] for r in records], ["UserPromptSubmit"])
+            for history in ('{"event":', '{"event":"UserPromptSubmit","payload":{}}\n'):
+                with self.subTest(hook=hook, history=history), tempfile.TemporaryDirectory() as tmp:
+                    repo = git_repo(tmp)
+                    event_path = repo / ".agent-logs/review-prompt/raw/events.jsonl"
+                    event_path.parent.mkdir(parents=True)
+                    event_path.write_text(history + "\n", encoding="utf-8")
+                    run_hook(
+                        hook, {"session_id": "review-session", "prompt": prompt},
+                        cwd=repo, env={"CODEX_AGENT_LOG_RUN_ID": "review-prompt"},
+                        args=["--event", "UserPromptSubmit"],
+                    )
+                    self.assertNotIn("ReviewPacketStart", event_path.read_text(encoding="utf-8"))
+
+    def test_concurrent_prompt_submissions_produce_only_one_packet_start(self) -> None:
+        prompt, _ = self.review_prompt()
+        for hook in (ROOT_HOOK_LOG, AGENT_LOG):
+            with self.subTest(hook=hook), tempfile.TemporaryDirectory() as tmp:
+                repo = git_repo(tmp)
+                payload = json.dumps({"session_id": "review-session", "prompt": prompt})
+                processes = []
+                try:
+                    for _ in range(2):
+                        process = subprocess.Popen(
+                            ["python3", str(hook), "--event", "UserPromptSubmit"],
+                            cwd=repo, env={**os.environ, "CODEX_AGENT_LOG_RUN_ID": "review-prompt"},
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True,
+                        )
+                        processes.append(process)
+                        process.stdin.write(payload)
+                        process.stdin.close()
+                    for process in processes:
+                        self.assertEqual(process.wait(timeout=30), 0)
+                finally:
+                    for process in processes:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait()
+                        process.stdout.close()
+                        process.stderr.close()
+                records = [
+                    json.loads(line) for line in
+                    (repo / ".agent-logs/review-prompt/raw/events.jsonl").read_text().splitlines()
+                ]
+                self.assertEqual(
+                    [r["event"] for r in records],
+                    ["UserPromptSubmit", "ReviewPacketStart", "UserPromptSubmit"],
+                )
+
     def test_root_pre_tool_use_wires_logging_before_hardening_gate(self) -> None:
         hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
         entries = hooks["hooks"]["PreToolUse"][0]["hooks"]
