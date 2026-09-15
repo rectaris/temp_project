@@ -1,6 +1,7 @@
 # Resolve a lineage_rebind record whose plan was later reconstructed, through the reconstruction contract's verified source content rather than the replanned archive wrapper.
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: A lineage_rebind record still names exactly one plan after that plan is reconstructed, and the content it verifies is the contract's stopped source, not the archive wrapper.
 task_types:
   - validation_tools
