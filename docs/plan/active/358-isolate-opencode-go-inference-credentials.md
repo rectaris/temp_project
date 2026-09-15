@@ -1,6 +1,6 @@
 # Keep OpenCode Go credentials outside delegated execution
 
-status: in_progress
+status: replan_required
 implementation_mode: parent_direct
 primary_invariant: A delegated process can consume only the parent-authorized bounded inference route and cannot read or persist the upstream Go credential.
 replan_sources:
@@ -104,6 +104,8 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:8f9bd49f356ee91e4a31c3731a85d881cb1b63c98aeb573ee0f74df0d518aeed","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb","stage":"focused","witness":"tests/copier-update.sh --require-copier"}
   - {"acceptance_sha256":"sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 checked_summary_ja: OpenCode Go の認証情報を委任先から隔離して推論を中継する。
 
 ## Decisions
