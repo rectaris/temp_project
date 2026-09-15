@@ -1,6 +1,7 @@
 # Record a review packet arrival from the reviewer session's own prompt hook
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: A review packet-start record exists only when the reviewer session's own prompt hook observed that exact packet as the session's first submitted prompt, and the hook keeps the packet digest without the prompt body.
 task_types:
   - agent_logging
@@ -96,3 +97,4 @@ checked_summary_ja: レビュー包の到着を、レビューア自身のプロ
 
 - This plan supplies the producer that scripts/plan-execution-state.py already requires. Until it is checked, no staged review can be admitted in this checkout, and the plan 376 candidate stays uncommitted for that reason.
 - This plan's own independent review cannot use the record it introduces, because the producer does not exist while the plan is being implemented. Use the plain record --event-type parent_review route once, state the missing preflight binding, registry admission and epoch budget in the completion report, and treat that as a single bootstrap exception rather than a precedent.
+- Use bounded parent-direct implementation for this high-risk hook and validation-authority change. Preserve the declared scope and acceptance gates; an independent read-only review remains required under the single bootstrap exception above.
