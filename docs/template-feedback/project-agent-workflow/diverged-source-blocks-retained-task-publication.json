@@ -1,0 +1,31 @@
+{
+  "attribution": {
+    "certainty": "unknown",
+    "reason": "The conflicting ancestry is confirmed locally. Whether this is an intended stop requiring separate recovery or a missing reusable workflow remains unresolved."
+  },
+  "desired_behavior": "Define a separately authorized recovery route that preserves both histories, binds the exact integrated result, preserves review budgets, and requires valid acceptance evidence without bypassing existing guards.",
+  "evidence": [
+    {
+      "kind": "agent_paraphrase",
+      "reference": "scripts/manage-plan-worktrees.py",
+      "summary": "Read-only ancestry checks returned false both for the source tip being an ancestor of the task tip and for the task start being an ancestor of a parent already merged into the source."
+    },
+    {
+      "kind": "change_reference",
+      "reference": "scripts/manage-plan-worktrees.py",
+      "summary": "verify_history requires every new merge parent to descend from the task start. Publication separately requires a source-to-task fast-forward."
+    }
+  ],
+  "expected_behavior": "A retained task has an explicit non-destructive recovery route when its source branch advances during another session.",
+  "impact": "The existing task cannot reach ordinary publication without resolving the conflict between the source fast-forward requirement and the task history restriction.",
+  "observed_behavior": "Plan 360 retains committed changes on its task branch. The source branch is not an ancestor of that tip. A merge of the source would include a parent outside the task start ancestry, which the history guard rejects.",
+  "project_alias": "project-agent-workflow",
+  "report_id": "diverged-source-blocks-retained-task-publication",
+  "schema_version": 1,
+  "supersedes": "none",
+  "template_source": {
+    "alias": "project-agent-workflow",
+    "revision": "unknown"
+  },
+  "workaround": "No local bypass was applied. The task commits were preserved on their branch and the blocker was reported to the owner. Another session then reverted the hand edit on the source branch and replayed the two task commits onto it, after which the task branch and worktree were retired."
+}

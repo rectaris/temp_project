@@ -1,0 +1,31 @@
+{
+  "attribution": {
+    "certainty": "unknown",
+    "reason": "The execution ledger and the sanctioned restructuring operation are both template-shipped, but whether an in-plan commit is intended to end the ledger binding was not determined from the shipped specifications."
+  },
+  "desired_behavior": "Let a parent advance the recorded execution baseline to a descendant commit it authored inside the run, or record that intermediate commit as part of the run, so later ledger operations stay bound to the same plan.",
+  "evidence": [
+    {
+      "kind": "agent_paraphrase",
+      "reference": "scripts/plan-execution-state.py",
+      "summary": "After the run's own intermediate commit, the ledger-bound adversarial preflight refused with 'repository source HEAD differs from the execution baseline', so the preflight was run unbound instead."
+    },
+    {
+      "kind": "change_reference",
+      "reference": "scripts/restructure-plan.py",
+      "summary": "The rebind operation runs with projection semantics disabled, which requires the live bytes to equal the committed bytes, and requires source_head to equal current_head(). A conformance fix the operation demanded therefore had to be committed before the operation could run at all."
+    }
+  ],
+  "expected_behavior": "A plan whose sanctioned operation requires an intermediate commit keeps its execution-ledger binding for the rest of the run.",
+  "impact": "The adversarial preflight that must precede the first formal review ran unbound, so its result is not tied to the review target through the ledger, and the same gap reappears for any plan whose own operation refuses to run on uncommitted bytes.",
+  "observed_behavior": "The baseline is fixed at the start commit, so the first commit the run makes unbinds every later ledger operation for that plan.",
+  "project_alias": "project-agent-workflow",
+  "report_id": "execution-baseline-ends-at-the-run-s-own-commit",
+  "schema_version": 1,
+  "supersedes": "none",
+  "template_source": {
+    "alias": "project-agent-workflow",
+    "revision": "unknown"
+  },
+  "workaround": "Ran the preflight unbound and recorded that it was not bound to the ledger."
+}
