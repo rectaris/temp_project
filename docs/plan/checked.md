@@ -277,3 +277,4 @@ id	path
 360	docs/plan/checked/2026/09/01-15/360-resolve-multigeneration-lineage-rebinding.md
 377	docs/plan/checked/2026/09/01-15/377-resolve-plan-predecessor-references.md
 333	docs/plan/checked/2026/09/01-15/333-observe-review-packet-at-turn-zero.md
+335	docs/plan/checked/2026/09/01-15/335-require-observed-reviewer-tool-calls.md

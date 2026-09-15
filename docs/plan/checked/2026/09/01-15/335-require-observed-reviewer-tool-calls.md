@@ -1,6 +1,6 @@
 # Refuse a staged review whose runtime evidence observes no reviewer tool call
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: A staged review is admitted only when the runtime evidence already bound to it observes at least one tool call in the reviewer session.
 task_types:
@@ -79,15 +79,22 @@ checked_summary_ja: レビューアのツール呼び出しが観測されない
 
 ## Tasks
 
-- [ ] Confirm the write scope and the current required specifications, then reproduce a staged review admission with a manifest whose tool-call count is zero, using the committed test fixtures.
-- [ ] Read the bound run manifest's reviewer tool-call metric where the staged review is admitted, and refuse a count that is not observed or is zero.
-- [ ] Confirm that the plain parent review route and the existing ledgers are unaffected.
-- [ ] Add the refusal, admission and legacy cases, and confirm each fails when its production line is reverted.
-- [ ] Mirror the command into the template and record the rule in both copies of the plan workflow specification.
-- [ ] Run the focused validation, then run the authoritative suite once on the final candidate.
+- [x] Confirm the write scope and the current required specifications, then reproduce a staged review admission with a manifest whose tool-call count is zero, using the committed test fixtures.
+- [x] Read the bound run manifest's reviewer tool-call metric where the staged review is admitted, and refuse a count that is not observed or is zero.
+- [x] Confirm that the plain parent review route and the existing ledgers are unaffected.
+- [x] Add the refusal, admission and legacy cases, and confirm each fails when its production line is reverted.
+- [x] Mirror the command into the template and record the rule in both copies of the plan workflow specification.
+- [x] Run the focused validation, then run the authoritative suite once on the final candidate.
 
 ## Validation Notes
 
 - This plan is independent of the packet-start producer plan. It can be checked with the existing test fixtures, which already build run manifests, and it does not need a real reviewer session.
 - Ordering still matters in practice: until the packet-start producer exists, no staged review reaches this condition, so the gate is latent rather than active on the day it is checked.
 - Plan 333 is checked and its producer is published. Use bounded parent-direct implementation for this high-risk validation-authority change, with the exact declared scope and a normal staged independent review; the plan-333 bootstrap exception does not apply here.
+- Product commit: `7c00b77`. The complete commit diff equals the admitted review-target digest and changes exactly the five declared product paths.
+- Before the production edit, the new refusal assertions failed because both zero and not_observed counts were admitted. After the edit, those cases refuse without changing either ledger or reviewer registry, while one and three observed calls and the plain review route pass.
+- Ledger replay remains untouched. The historical fixture cases passed, and the external plan-333 and plan-335 records were read successfully without changing their byte digests.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` (166 tests) and `python3 scripts/check-copier-template.py`.
+- The reviewed candidate passed `scripts/lint-project-workflow.sh` and `tests/smoke.sh`, each invoked once as the authoritative suite.
+- A fresh read-only Codex reviewer requested as gpt-5.6-sol/high read the actual diff and normative inputs and returned no High or Medium findings. The parent accepted that result only after the ordinary `review` command verified the exact packet-start observation, positive tool-call metric, current specification digests and prior adversarial preflight, and admitted the session into its external registry.
+- Runtime evidence is `.agent-logs/plan335-review/manifest.json`; the execution run is `plan335-20260915`. This is one formal review in epoch zero, with no bootstrap exception.
