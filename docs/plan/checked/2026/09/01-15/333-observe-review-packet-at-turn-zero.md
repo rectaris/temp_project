@@ -1,6 +1,6 @@
 # Record a review packet arrival from the reviewer session's own prompt hook
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: A review packet-start record exists only when the reviewer session's own prompt hook observed that exact packet as the session's first submitted prompt, and the hook keeps the packet digest without the prompt body.
 task_types:
@@ -85,16 +85,23 @@ checked_summary_ja: レビュー包の到着を、レビューア自身のプロ
 
 ## Tasks
 
-- [ ] Confirm the write scope and the current required specifications, then record the observed payload shape of one UserPromptSubmit event before changing the hook.
-- [ ] Add the packet declaration parser to the root hook: read the marker line, recompute the canonical digest of the carried packet JSON, and refuse a mismatch without writing a record.
-- [ ] Count the prompt records this run already holds for that session id, and append the packet-start record only when that count is zero.
-- [ ] Keep the prompt body out of every stored record, and confirm that the existing redaction and allowlist behaviour is unchanged.
-- [ ] Add the hook logging cases for the accepted record, the later prompt, the digest mismatch, and the absent prompt body, and confirm each fails when its production line is reverted.
-- [ ] Mirror the change into the template hook and record the rule in both copies of the agent logging specification.
-- [ ] Run the focused validation, then run the authoritative suite once on the final candidate.
+- [x] Confirm the write scope and the current required specifications, then record the observed payload shape of one UserPromptSubmit event before changing the hook.
+- [x] Add the packet declaration parser to the root hook: read the marker line, recompute the canonical digest of the carried packet JSON, and refuse a mismatch without writing a record.
+- [x] Count the prompt records this run already holds for that session id, and append the packet-start record only when that count is zero.
+- [x] Keep the prompt body out of every stored record, and confirm that the existing redaction and allowlist behaviour is unchanged.
+- [x] Add the hook logging cases for the accepted record, the later prompt, the digest mismatch, and the absent prompt body, and confirm each fails when its production line is reverted.
+- [x] Mirror the change into the template hook and record the rule in both copies of the agent logging specification.
+- [x] Run the focused validation, then run the authoritative suite once on the final candidate.
 
 ## Validation Notes
 
 - This plan supplies the producer that scripts/plan-execution-state.py already requires. Until it is checked, no staged review can be admitted in this checkout, and the plan 376 candidate stays uncommitted for that reason.
 - This plan's own independent review cannot use the record it introduces, because the producer does not exist while the plan is being implemented. Use the plain record --event-type parent_review route once, state the missing preflight binding, registry admission and epoch budget in the completion report, and treat that as a single bootstrap exception rather than a precedent.
 - Use bounded parent-direct implementation for this high-risk hook and validation-authority change. Preserve the declared scope and acceptance gates; an independent read-only review remains required under the single bootstrap exception above.
+- Committed product patch: `d8fd0d6`. The five changed product paths are exactly the declared write scope.
+- Before implementation, Codex 0.154.0 emitted a real UserPromptSubmit observation with session_id, cwd, hook_event_name, model and transcript availability in run `plan333-runtime-probe`; its manifest is `.agent-logs/plan333-runtime-probe/manifest.json`. The metadata-only logger intentionally did not retain the submitted prompt.
+- Regression controls used isolated copies of the committed producer and three reverted safeguards. Assertions detected the missing producer, later-prompt admission, digest-mismatch admission and retained prompt body; product files were not modified by these controls.
+- Focused validation passed: `python3 tests/test-hooks.py` (215 tests) and `python3 scripts/check-copier-template.py`.
+- The final reviewed candidate passed `scripts/lint-project-workflow.sh` and `tests/smoke.sh`, each invoked once as the authoritative suite.
+- Independent reviewer: a fresh Codex session requested as gpt-5.6-sol/high, with an empty write scope, actual file-reading tool calls, and no High or Medium findings. The parent inspected the review result and retained final acceptance. Review evidence is `.agent-logs/plan333-review/manifest.json`.
+- The authorized bootstrap review was recorded once through plain `parent_review` in the external `plan333-20260915` execution ledger. It has no staged target/preflight binding and no reviewer-registry admission; the staged epoch budget does not count it. This explicit exception is used only for plan 333 and is not an acceptance route for plans 335 or 344.
