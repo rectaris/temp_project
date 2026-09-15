@@ -63,7 +63,7 @@ context_files:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - scripts/run-sandboxed-plan-worker.py
-  - docs/plan/active/355-isolate-opencode-go-inference-credentials.md
+  - docs/plan/replanned/2026/09/01-15/355-isolate-opencode-go-inference-credentials.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md

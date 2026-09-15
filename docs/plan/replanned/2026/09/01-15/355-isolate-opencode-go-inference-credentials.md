@@ -1,7 +1,6 @@
 # Keep OpenCode Go credentials outside delegated execution
 
-status: in_progress
-primary_invariant: A delegated process can consume only the parent-authorized bounded inference route and cannot read or persist the upstream Go credential.
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -83,6 +82,22 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:8f9bd49f356ee91e4a31c3731a85d881cb1b63c98aeb573ee0f74df0d518aeed","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb","stage":"focused","witness":"tests/copier-update.sh --require-copier"}
   - {"acceptance_sha256":"sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/355-isolate-opencode-go-inference-credentials.md
+replan_contract: docs/plan/replanned/contracts/355-isolate-opencode-go-inference-credentials.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/358-isolate-opencode-go-inference-credentials.md
+inherited_acceptance_digests:
+  - sha256:f93cbe951a4c4f237d6d4e522e5e47c08c6fbcdb8edb717277aff35d44ea4963
+  - sha256:5e8b5647ad3966ed9bb4a2e4e78a3314e30eb2455502834e63656afaa9577722
+  - sha256:94b888ec470ce67d2d89b3a400cefb0ff112038bf186e75f31bc80707260fec7
+  - sha256:915259801ea25997dc22d84ddcdc0c5663e6ea97a82d87471e25a9553720e5d3
+  - sha256:8f9bd49f356ee91e4a31c3731a85d881cb1b63c98aeb573ee0f74df0d518aeed
+  - sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb
+  - sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f
 checked_summary_ja: OpenCode Go の認証情報を委任先から隔離して推論を中継する。
 
 ## Decisions

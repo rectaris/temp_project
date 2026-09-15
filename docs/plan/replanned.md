@@ -64,3 +64,4 @@ id	path	contract
 327	docs/plan/replanned/2026/09/01-15/327-complete-harness-profile-remediation.md	docs/plan/replanned/contracts/327-complete-harness-profile-remediation.json
 336	docs/plan/replanned/2026/09/01-15/336-add-project-release-skill.md	docs/plan/replanned/contracts/336-add-project-release-skill.json
 343	docs/plan/replanned/2026/09/01-15/343-admit-project-source-compile-checks.md	docs/plan/replanned/contracts/343-admit-project-source-compile-checks.json
+355	docs/plan/replanned/2026/09/01-15/355-isolate-opencode-go-inference-credentials.md	docs/plan/replanned/contracts/355-isolate-opencode-go-inference-credentials.json
