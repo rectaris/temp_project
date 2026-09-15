@@ -1,6 +1,7 @@
 # Check the review evidence route before an execution run edits product files
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: An epoch-enabled execution run reaches its first writable operation only after the ledger holds one recorded review-route check whose probe evidence satisfies the same conditions a real review admission requires.
 task_types:
   - validation_tools
@@ -95,3 +96,4 @@ checked_summary_ja: 実行が製品ファイルを変更する前に、レビュ
 
 - This plan is the last of the three and is the only one that cannot be checked before its predecessors. Its probe asserts the two conditions the earlier plans introduce, so running it first would assert a route that no producer can satisfy.
 - The refusal is a precondition, not a guarantee that a later review will be admitted. A route that worked at probe time can still fail later, and this plan makes no claim about that case.
+- Plans 333 and 335 are checked and published. Use bounded parent-direct implementation for this high-risk execution-gate and validation-authority change, preserving the exact scope and all normal staged-review and validation gates.
