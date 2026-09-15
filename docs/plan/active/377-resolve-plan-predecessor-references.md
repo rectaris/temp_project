@@ -1,6 +1,7 @@
 # Refuse a live plan that names a plan path which does not exist, so a predecessor reference cannot silently point at nothing.
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Every docs/plan path a plan in active or backlog names must resolve to a file that exists in the repository.
 task_types:
   - validation_tools
