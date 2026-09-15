@@ -2213,6 +2213,61 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(parsed.review_receipt, [])
         self.assertEqual(parsed.checkpoint_review_receipt, [])
 
+    def test_staged_review_requires_at_least_one_observed_tool_call(self) -> None:
+        for count in (None, 0, 1, 3):
+            with self.subTest(count=count):
+                label = f"tool-count-{count}"
+                state, lifecycle, run_id = self.initialize_execution(label, mode="parent_direct")
+                (self.repo / "allowed.txt").write_text("review candidate\n", encoding="utf-8")
+                receipt = self.review_receipt(
+                    label, digest(self.plan.read_text()), round_value=1
+                )
+                manifest_path = self.review_manifests[receipt]
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["resource_observations"]["metrics"]["tool_call_count"] = (
+                    {"status": "not_observed", "value": None, "provenance": "not_observed"}
+                    if count is None else
+                    {"status": "observed", "value": count, "provenance": "deterministic_proxy"}
+                )
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                before = state.read_bytes()
+                registry_before = self.registry.read_bytes()
+                result = self.run_cli(
+                    "review", str(state), "--run-id", run_id,
+                    "--event-id", label, "--implementation-mode", "parent_direct",
+                    "--review-receipt", str(receipt),
+                    "--review-resource-manifest", str(manifest_path),
+                    "--invariant-digest", digest("one invariant"),
+                    "--lifecycle-state", str(lifecycle),
+                )
+                if count is None or count == 0:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("at least one observed reviewer tool call", result.stderr)
+                    self.assertEqual(state.read_bytes(), before)
+                    self.assertEqual(self.registry.read_bytes(), registry_before)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    recorded = STATE_MODULE.read_state(state)
+                    self.assertEqual(len(recorded["events"]), 1)
+                    self.assertTrue(recorded["events"][0]["review_target_digest"])
+
+    def test_plain_parent_review_still_needs_no_tool_count_manifest(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "plain-review-without-tool-metric", mode="parent_direct"
+        )
+        result = self.run_cli(
+            "record", str(state), "--run-id", run_id, "--event-id", "plain-review",
+            "--event-type", "parent_review", "--implementation-mode", "parent_direct",
+            "--invariant-digest", digest("one invariant"),
+            "--independent-review-receipt-digest", digest("plain independent review"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        before = state.read_bytes()
+        recorded = STATE_MODULE.read_state(state)
+        self.assertEqual(recorded["events"][0]["review_target_digest"], "")
+        self.assertEqual(state.read_bytes(), before)
+
     def test_review_turn_zero_requires_matching_runtime_packet_evidence(self) -> None:
         state, lifecycle, run_id = self.initialize_execution(
             "runtime-review-evidence", mode="parent_direct"

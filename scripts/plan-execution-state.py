@@ -590,6 +590,9 @@ def review_turn_zero_from_manifest(
     identity = observations["root_session_identity"]
     if identity != {"status": "observed", "digest": reviewer_session_digest}:
         raise StateError("reviewer session differs from bound runtime evidence")
+    tool_calls = observations["metrics"]["tool_call_count"]
+    if tool_calls["status"] != "observed" or tool_calls["value"] < 1:
+        raise StateError("staged review requires at least one observed reviewer tool call")
     manifest = read_bounded_json(path, "review resource manifest", outside_repository=False)
     run_dir = path.resolve().parent
     matched_source = False
