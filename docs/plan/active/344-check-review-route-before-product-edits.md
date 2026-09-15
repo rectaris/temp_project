@@ -1,6 +1,6 @@
 # Check the review evidence route before an execution run edits product files
 
-status: in_progress
+status: deferred
 implementation_mode: parent_direct
 primary_invariant: An epoch-enabled execution run reaches its first writable operation only after the ledger holds one recorded review-route check whose probe evidence satisfies the same conditions a real review admission requires.
 task_types:
