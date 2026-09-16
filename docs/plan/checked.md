@@ -279,3 +279,4 @@ id	path
 333	docs/plan/checked/2026/09/01-15/333-observe-review-packet-at-turn-zero.md
 335	docs/plan/checked/2026/09/01-15/335-require-observed-reviewer-tool-calls.md
 346	docs/plan/checked/2026/09/16-31/346-consume-the-last-review-slot-after-owner-authorized-stop.md
+344	docs/plan/checked/2026/09/16-31/344-check-review-route-before-product-edits.md

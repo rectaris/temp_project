@@ -1,6 +1,6 @@
 # Check the review evidence route before an execution run edits product files
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: An epoch-enabled execution run reaches its first writable operation only after the ledger holds one recorded review-route check whose probe evidence satisfies the same conditions a real review admission requires.
 task_types:
@@ -85,15 +85,28 @@ checked_summary_ja: 実行が製品ファイルを変更する前に、レビュ
 
 ## Tasks
 
-- [ ] Confirm the write scope and the current required specifications, then reproduce an epoch-enabled writable operation that proceeds today with no review-route evidence.
-- [ ] Record the review-route check from a probe manifest, verifying it with the same functions that admit a real review, and refuse a probe that fails either condition.
-- [ ] Refuse the first writable operation of an epoch-enabled run while no check is recorded, and leave legacy ledgers untouched.
-- [ ] Add the refusal, accepted probe, rejected probe and legacy cases, and confirm each fails when its production line is reverted.
-- [ ] Mirror the command into the template and record the rule in both copies of the plan workflow specification.
-- [ ] Run the focused validation, then run the authoritative suite once on the final candidate.
+- [x] Confirm the write scope and the current required specifications, then reproduce an epoch-enabled writable operation that proceeds today with no review-route evidence.
+- [x] Record the review-route check from a probe manifest, verifying it with the same functions that admit a real review, and refuse a probe that fails either condition.
+- [x] Refuse the first writable operation of an epoch-enabled run while no check is recorded, and leave legacy ledgers untouched.
+- [x] Add the refusal, accepted probe, rejected probe and legacy cases, and confirm each fails when its production line is reverted.
+- [x] Mirror the command into the template and record the rule in both copies of the plan workflow specification.
+- [x] Run the focused validation, then run the authoritative suite once on the final candidate.
 
 ## Validation Notes
 
 - This plan is the last of the three and is the only one that cannot be checked before its predecessors. Its probe asserts the two conditions the earlier plans introduce, so running it first would assert a route that no producer can satisfy.
 - The refusal is a precondition, not a guarantee that a later review will be admitted. A route that worked at probe time can still fail later, and this plan makes no claim about that case.
 - Plans 333 and 335 are checked and published. Use bounded parent-direct implementation for this high-risk execution-gate and validation-authority change, preserving the exact scope and all normal staged-review and validation gates.
+- Epoch zero used two formal reviews. An intervening focused run was interrupted after exposing the shared-lease/exclusive-check deadlock; the check now takes a shared lock. The second review identified missing group-authority parser arguments and stopped that epoch.
+- Ordinary continuation owner instruction: 計画344の計画、作業範囲、受入条件、検証権限を変えず、残る指摘の修正と最大2回の追加独立レビューを行う一度限りの継続を承認する。
+- The ordinary continuation corrected the parser arguments, then its review found that a pre-update writable attempt could receive a late route check. That execution stopped with three cumulative formal reviews and no authoritative validation.
+- The separately authorized policy in `docs/plan/checked/2026/09/16-31/346-consume-the-last-review-slot-after-owner-authorized-stop.md` was checked and published before this plan resumed.
+- Final continuation owner instruction: 計画344の計画、作業範囲、受入条件、検証権限を変えず、停止記録を保持したまま、計画346を含むローカルdevの後続コミットを取り込み、残る指摘の修正と1回の独立レビューを行う一度限りの最終継続を承認する。レビューは累計4回までとし、取り込み時に競合があれば停止する。
+- The parent restored the exact original executable plan, published that restoration, and adopted `c2a52b36618d15ad8c9fdb4d192629753b57811a` in the original task worktree without conflicts. The original candidate snapshot, both stopped ledgers and the immutable worktree start binding were preserved.
+- The final continuation reused the same reviewer and continuation registries and carried three prior reviews. Before correction, runtime probe `plan344-final-probe` supplied observed turn zero and one tool call; the parent recorded it and passed the execution gate. The probe did not consume a formal review.
+- Four isolated open/closed-attempt cases reproduced late recording and reader acceptance before the correction. The final candidate rejects both, including correctly hashed late events, while preserving readability of old histories without the new event.
+- All 37 related diagnostic cases passed. The four original safeguard mutation controls passed and each removed safeguard was detected. All seven historical/current execution ledgers remained readable and byte-identical during the read-only compatibility check.
+- Read-only independent review `plan344-final-review` reported no High or Medium findings in the full five-file target. The parent verified observed turn zero and 40 tool calls and admitted this fourth and final formal review without replenishing the budget.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` ran 196 tests and `python3 scripts/check-copier-template.py` exited zero. The authoritative suite then ran once on the final candidate: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` both exited zero.
+- Product commit `9a1ddabb554b7fdfe33c62cb5b4eb6af46414e62` contains only the five reviewed paths. Its complete diff from the adopted source matches review target `sha256:7c88ab351398fba9d76d7137c9fce9a37a2b00380ac50d259a75e524b65ba54f`.
+- The previously noted sandboxed-runner group-argument omission is pre-existing and unchanged; the final review found no expanded reachability from this change. Plan 376's retained worktree and dirty files were not edited. The shared-lease feedback remains a local draft, not a tracked record.
