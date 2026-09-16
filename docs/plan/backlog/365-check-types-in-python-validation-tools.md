@@ -88,7 +88,7 @@ checked_summary_ja: 検証用Pythonスクリプトの引数や戻り値の型を
 
 ## Decisions
 
-- Start only after docs/plan/active/353-enforce-bounded-python-lint.md, the owner-authorized reconstruction of the stopped plan 364, has completed and its checked archive is resolved. Keep this plan in backlog until implementation is requested; execute serially.
+- Start only after docs/plan/checked/2026/09/16-31/353-enforce-bounded-python-lint.md, the owner-authorized reconstruction of the stopped plan 364, which is checked. Keep this plan in backlog until implementation is requested; execute serially.
 - Use parent-owned implementation for validation and dependency changes, with the existing independent-review and ledger requirements. Preserve the full required validation suite.
 - Pin the official npm package pyright to 1.1.407 in paired tools/python-quality/package.json and package-lock.json files. Use npm ci during explicit setup; never use npx with automatic downloads inside a validation command.
 - Use Node 24 in root and generated CI and document it for local setup. Install only the managed tool directory; do not create or change a generated project's product package.json, lockfile or pyproject.toml.
