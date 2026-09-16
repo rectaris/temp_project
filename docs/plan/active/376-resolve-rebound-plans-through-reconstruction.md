@@ -1,7 +1,6 @@
 # Resolve a lineage_rebind record whose plan was later reconstructed, through the reconstruction contract's verified source content rather than the replanned archive wrapper.
 
-status: deferred
-completion_deferred_reason: Owner authorized pausing plan 376 while plans 333, 335 and 344 establish the review evidence route; preserve its existing uncommitted candidate and task worktree.
+status: in_progress
 implementation_mode: parent_direct
 primary_invariant: A lineage_rebind record still names exactly one plan after that plan is reconstructed, and the content it verifies is the contract's stopped source, not the archive wrapper.
 task_types:
@@ -98,3 +97,4 @@ checked_summary_ja: 付け替え記録を持つプランが後で再構築され
 - The gap is latent rather than active. Reaching it needs a rebound plan to be promoted, stopped and reconstructed, which no plan in the repository has done yet. The forty records currently held all resolve.
 - The probe used for the evidence above is not committed. It reuses the committed fixtures in tests/test-plan-restructure.py so the observation comes from the production module unchanged.
 - On 2026-09-15 the owner confirmed that the previous writer had stopped and authorized pausing this plan while plans 333, 335 and 344 proceed. Its five dirty product paths remain unchanged in the existing plan-376 task worktree; this deferral neither accepts that candidate nor resumes its execution.
+- On 2026-09-16 the owner requested implementation of the active and backlog plans after 333, 335 and 344 were checked and published. Resume this same plan in its existing task worktree, preserve the original candidate, and pass the current review-route gate before any further product edit. No prior execution ledger or admitted formal review exists for this plan; the earlier rejected helper response grants no acceptance evidence.
