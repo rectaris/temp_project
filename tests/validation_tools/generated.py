@@ -207,6 +207,11 @@ class GeneratedCiTest(unittest.TestCase):
         self.assertIn('name: Project agent workflow', workflow)
         self.assertIn('      - ".project-agent-workflow/**"', workflow)
         self.assertIn('python3 .project-agent-workflow/scripts/lint-plan-docs.py', workflow)
+        self.assertIn('python3 -I .project-agent-workflow/scripts/lint-python.py', workflow)
+        self.assertIn(
+            'python3 -m pip install -r .project-agent-workflow/tools/python-quality/requirements.txt',
+            workflow,
+        )
         self.assertIn('python3 .project-agent-workflow/scripts/security-static-check.py --managed', workflow)
         self.assertNotIn('npm run test', workflow)
         self.assertIn("fetch-depth: 0", workflow)

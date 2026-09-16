@@ -18,6 +18,7 @@ from unittest import mock
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]

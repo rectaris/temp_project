@@ -217,6 +217,21 @@ def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
     if py_files:
         add_command(commands, ["python3", "-m", "py_compile", *py_files])
 
+    lint_inputs = {
+        "pyproject.toml", "uv.lock", "tools/python-quality/requirements.txt",
+        "tools/python-quality/ruff.toml",
+        "template/.project-agent-workflow/tools/python-quality/requirements.txt",
+        "template/.project-agent-workflow/tools/python-quality/ruff.toml",
+    }
+    if any(
+        path in lint_inputs or (
+            path.endswith(".py")
+            and path.startswith(("scripts/", "tests/", "template/.project-agent-workflow/scripts/"))
+        )
+        for path in paths
+    ) and existing("scripts/lint-python.py"):
+        add_command(commands, ["python3", "-I", "scripts/lint-python.py"])
+
     if any(path.endswith(".toml") or path.startswith(".codex/") for path in paths) and existing("scripts/check-codex-toml.py"):
         add_command(commands, ["python3", "scripts/check-codex-toml.py"])
 

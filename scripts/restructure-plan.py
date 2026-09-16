@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
+from types import ModuleType
 
 sys.dont_write_bytecode = True
 

@@ -44,6 +44,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install pinned managed Python lint
+        run: python3 -m pip install -r .project-agent-workflow/tools/python-quality/requirements.txt
+
       - name: Check whitespace
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -90,6 +93,7 @@ jobs:
       - name: Validate project agent workflow
         run: |
           set -eu
+          python3 -I .project-agent-workflow/scripts/lint-python.py
           python3 .project-agent-workflow/scripts/lint-plan-docs.py
           python3 .project-agent-workflow/scripts/format-plan-docs.py --check
           python3 .project-agent-workflow/scripts/check-codex-toml.py

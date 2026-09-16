@@ -17,6 +17,30 @@ from .support import PLANLIB, PLAN_COMMAND_MODULES, ROOT, load_module
 
 
 class PlanValidationCommandsTest(unittest.TestCase):
+    def test_python_lint_admits_only_the_isolated_non_mutating_check(self) -> None:
+        for index, path in enumerate(PLAN_COMMAND_MODULES):
+            module = load_module(path, f"lint_commands_{index}")
+            prefix = ".project-agent-workflow/" if index else ""
+            script = f"{prefix}scripts/lint-python.py"
+            command = f"python3 -I {script}"
+            module.parse_validation_command(command)
+            for suffix in (" --fix", " scripts/example.py", " --help", " --config other.toml"):
+                with self.subTest(path=path, suffix=suffix):
+                    with self.assertRaises(module.ValidationCommandError):
+                        module.parse_validation_command(command + suffix)
+            # A declared lint check that an inherited environment can redirect
+            # would report success without linting, so the plain launch and the
+            # other isolation spellings stay outside the allowlist.
+            for rejected in (
+                f"python3 {script}",
+                f"python3 -E -s {script}",
+                f"python3 -I -I {script}",
+                f"python3 -I {prefix}scripts/lint-plan-docs.py",
+            ):
+                with self.subTest(path=path, rejected=rejected):
+                    with self.assertRaises(module.ValidationCommandError):
+                        module.parse_validation_command(rejected)
+
     ROOT_POLICY = ROOT / "scripts/check-root-agent-policy.py"
     GROUP_AUTHORITY = ROOT / "scripts/parallel-plan-state.py"
 

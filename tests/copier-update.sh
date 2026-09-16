@@ -1800,6 +1800,84 @@ if (cd "$opencode_go_v1_out" && python3 .project-agent-workflow/scripts/check-ex
   exit 1
 fi
 
+python_lint_out="$tmp/python-lint-update"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.2.1 \
+  --data-file "$root/tests/fixtures/typescript.answers.yml" "$update_source" "$python_lint_out" >/dev/null
+test ! -e "$python_lint_out/.project-agent-workflow/scripts/lint-python.py"
+test ! -e "$python_lint_out/.project-agent-workflow/tools/python-quality/requirements.txt"
+fixture_git "$python_lint_out" init -b main >/dev/null
+fixture_git "$python_lint_out" config user.email "ci@example.invalid"
+fixture_git "$python_lint_out" config user.name "CI"
+mkdir -p "$python_lint_out/src" "$python_lint_out/scripts" "$python_lint_out/.github/workflows"
+printf 'product_value = product_owned_symbol\n' >"$python_lint_out/src/product.py"
+printf '{"scripts":{"verify":"sh scripts/product-check.sh"},"private":true}\n' >"$python_lint_out/package.json"
+printf '[project]\nname = "product-owned"\nversion = "1.0.0"\n[tool.ruff.lint]\nignore = ["ALL"]\n' >"$python_lint_out/pyproject.toml"
+printf '# Product policy\n\nKeep this project-owned policy.\n' >"$python_lint_out/docs/agent/SPEC_PRODUCT.md"
+printf '#!/bin/sh\nset -eu\ngrep -q product_owned_symbol src/product.py\n' >"$python_lint_out/scripts/product-check.sh"
+printf 'name: Product verification\non: workflow_dispatch\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: sh scripts/product-check.sh\n' >"$python_lint_out/.github/workflows/product-verify.yml"
+python_lint_snapshot="$tmp/python-lint-project-before.json"
+python3 - "$python_lint_out" "$python_lint_snapshot" <<'EOF_PYTHON_LINT_BEFORE'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+project, snapshot = map(Path, sys.argv[1:])
+paths = [
+    "src/product.py", "package.json", "pyproject.toml", "docs/agent/SPEC_PRODUCT.md",
+    "docs/agent/external-services.yaml", "scripts/product-check.sh",
+    ".github/workflows/product-verify.yml",
+]
+workflow = (project / ".github/workflows/project-agent-workflow.yml").read_text()
+snapshot.write_text(json.dumps({
+    "files": {path: hashlib.sha256((project / path).read_bytes()).hexdigest() for path in paths},
+    "commands": [
+        line.strip() for line in workflow.splitlines()
+        if line.strip().startswith(("python3 ", "sh "))
+    ],
+}))
+EOF_PYTHON_LINT_BEFORE
+fixture_git "$python_lint_out" add -A
+fixture_git "$python_lint_out" commit -m "Preserve product code and validation before Python lint update" >/dev/null
+run_copier update -q --trust --defaults --vcs-ref "$target_ref" "$python_lint_out" >/dev/null
+for python_lint_file in scripts/lint-python.py tools/python-quality/requirements.txt tools/python-quality/ruff.toml; do
+  cmp "$root/template/.project-agent-workflow/$python_lint_file" \
+    "$python_lint_out/.project-agent-workflow/$python_lint_file"
+done
+python3 - "$python_lint_out" "$python_lint_snapshot" <<'EOF_PYTHON_LINT_AFTER'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+project, snapshot = map(Path, sys.argv[1:])
+before = json.loads(snapshot.read_text())
+for path, expected in before["files"].items():
+    if hashlib.sha256((project / path).read_bytes()).hexdigest() != expected:
+        raise SystemExit(f"Python lint update changed project-owned bytes: {path}")
+workflow = (project / ".github/workflows/project-agent-workflow.yml").read_text()
+commands = [line.strip() for line in workflow.splitlines()]
+for command in before["commands"]:
+    if command not in commands:
+        raise SystemExit(f"Python lint update removed required validation: {command}")
+if "python3 -I .project-agent-workflow/scripts/lint-python.py" not in commands:
+    raise SystemExit("Python lint update omitted the managed CI check")
+EOF_PYTHON_LINT_AFTER
+(cd "$python_lint_out" && python3 -I .project-agent-workflow/scripts/lint-python.py && sh scripts/product-check.sh)
+if find "$python_lint_out" -name '*.rej' -print -quit | grep -q .; then
+  echo "Python lint update produced rejection files" >&2
+  exit 1
+fi
+if grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' "$python_lint_out" --exclude-dir=.git >/dev/null; then
+  echo "Python lint update produced inline conflict markers" >&2
+  exit 1
+fi
+if [ -n "$(fixture_git "$python_lint_out" diff --diff-filter=D --name-only)" ]; then
+  echo "Python lint update deleted tracked project files" >&2
+  exit 1
+fi
+fixture_git "$python_lint_out" diff --check
+
 future_source="$update_source"
 future_out="$tmp/future-project"
 run_copier copy -q -f --trust --defaults --vcs-ref v1.2.2 --data-file "$root/tests/fixtures/typescript.answers.yml" "$future_source" "$future_out" >/dev/null

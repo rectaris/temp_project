@@ -51,6 +51,25 @@ def domain_test_ids(module_name: str) -> set[str]:
 
 
 class ValidateChangesTest(unittest.TestCase):
+    def test_python_lint_selection_stays_inside_each_layout(self) -> None:
+        for index, source in enumerate(VALIDATE_CHANGE_MODULES):
+            dependency = load_module(PLAN_COMMAND_MODULES[index], "plan_validation_commands")
+            sys.modules["plan_validation_commands"] = dependency
+            module = load_module(source, f"lint_selection_{index}")
+            module.existing = lambda path: True
+            prefix = ".project-agent-workflow/" if index else ""
+            command = ["python3", "-I", f"{prefix}scripts/lint-python.py"]
+            for path in (
+                f"{prefix}scripts/example.py",
+                f"{prefix}tools/python-quality/requirements.txt",
+                f"{prefix}tools/python-quality/ruff.toml",
+            ):
+                with self.subTest(source=source, path=path):
+                    selected = module.select_commands([path], "all")
+                    self.assertIn(command, selected)
+                    module.validate_selected_commands(selected)
+            self.assertNotIn(command, module.select_commands(["src/product.py"], "all"))
+
     def test_all_mode_checks_staged_and_unstaged_whitespace(self) -> None:
         for index, (plan_path, validate_path) in enumerate(
             zip(PLAN_COMMAND_MODULES, VALIDATE_CHANGE_MODULES, strict=True)

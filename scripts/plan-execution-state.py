@@ -308,7 +308,7 @@ CANDIDATE_LIFECYCLE_KEYS = {
     "parent_review_rejections",
     "plan_execution_attempt_id",
 }
-EMPTY_CHAIN_DIGEST = digest(b"") if "digest" in globals() else "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+EMPTY_CHAIN_DIGEST = "sha256:" + hashlib.sha256(b"").hexdigest()
 
 
 class StateError(ValueError):

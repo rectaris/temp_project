@@ -1,0 +1,10 @@
+required-version = "==0.15.7"
+preview = false
+respect-gitignore = false
+force-exclude = false
+
+[lint]
+select = ["E9", "F541", "F631", "F634", "F821", "F822", "F823"]
+ignore = []
+fixable = ["F541"]
+unfixable = []

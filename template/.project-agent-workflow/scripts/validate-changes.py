@@ -273,6 +273,16 @@ def select_commands(paths: list[str], diff_mode: str) -> list[list[str]]:
     if py_files:
         add_command(commands, ["python3", "-m", "py_compile", *py_files])
 
+    if any(
+        (path.startswith(".project-agent-workflow/scripts/") and path.endswith(".py"))
+        or path in {
+            ".project-agent-workflow/tools/python-quality/requirements.txt",
+            ".project-agent-workflow/tools/python-quality/ruff.toml",
+        }
+        for path in paths
+    ) and existing(".project-agent-workflow/scripts/lint-python.py"):
+        add_command(commands, ["python3", "-I", ".project-agent-workflow/scripts/lint-python.py"])
+
     if any(path.endswith(".toml") or path.startswith(".codex/") for path in paths) and existing(".project-agent-workflow/scripts/check-codex-toml.py"):
         add_command(commands, ["python3", ".project-agent-workflow/scripts/check-codex-toml.py"])
 

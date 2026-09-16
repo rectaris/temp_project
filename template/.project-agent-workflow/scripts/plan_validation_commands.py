@@ -36,6 +36,13 @@ PYTHON_SCRIPT_ARGUMENTS = {
     ".project-agent-workflow/scripts/plan_validation_commands.py": {("--self-test",)},
     ".project-agent-workflow/skills/verify-copier-update/scripts/check-triage-coverage.py": {()},
 }
+# The lint wrapper decides which Ruff runs, so a declared lint check that an
+# inherited environment can redirect would report success without linting. Only
+# the isolated launch is declarable, and it stays a separate table so adding an
+# ordinary allowlist entry can never grant that weaker form.
+PYTHON_ISOLATED_SCRIPT_ARGUMENTS = {
+    ".project-agent-workflow/scripts/lint-python.py": {()},
+}
 VALIDATE_CHANGES_FLAGS = frozenset({"--all", "--staged", "--print-only", "--json"})
 SHELL_SCRIPT_ARGUMENTS = {
     ".project-agent-workflow/scripts/lint-plan-docs.sh": {()},
@@ -147,6 +154,7 @@ def validate_argv(
         for checker in (
             is_git_diff_check,
             is_python_script_check,
+            is_isolated_python_script_check,
             is_validate_changes,
             is_shell_script_check,
             is_direct_script_check,
@@ -180,6 +188,13 @@ def is_python_script_check(argv: tuple[str, ...]) -> bool:
     script = argv[1]
     suffixes = PYTHON_SCRIPT_ARGUMENTS.get(script)
     return suffixes is not None and tuple(argv[2:]) in suffixes
+
+
+def is_isolated_python_script_check(argv: tuple[str, ...]) -> bool:
+    if len(argv) < 3 or argv[:2] != ("python3", "-I"):
+        return False
+    suffixes = PYTHON_ISOLATED_SCRIPT_ARGUMENTS.get(argv[2])
+    return suffixes is not None and tuple(argv[3:]) in suffixes
 
 
 def is_validate_changes(argv: tuple[str, ...]) -> bool:

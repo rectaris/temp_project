@@ -7,6 +7,12 @@ template/AGENTS.md.jinja
 template/README.md.jinja
 template/.githooks/pre-commit
 template/.github/hooks/plan-lifecycle.json
+template/.github/workflows/project-agent-workflow.yml
+template/.project-agent-workflow/scripts/lint-python.py
+template/.project-agent-workflow/scripts/plan-execution-state.py
+template/.project-agent-workflow/tools/python-quality/requirements.txt
+template/.project-agent-workflow/tools/python-quality/ruff.toml
+template/.project-agent-workflow/docs/agent/SPEC_VALIDATION.md.jinja
 template/.github/workflows/codex-ci-autofix.yml.jinja
 template/.project-agent-workflow/docs/agent/SPEC_COPIER_ADOPTION.md
 template/.project-agent-workflow/docs/agent/SPEC_GIT_RETIREMENT.md

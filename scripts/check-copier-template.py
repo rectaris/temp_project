@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import os
+import tomllib
 import yaml
 from typing import Any
 from itertools import combinations, product
@@ -3101,6 +3102,35 @@ def require_generated_whitespace_range() -> None:
         fail(f"{path} must not check only the clean worktree")
 
 
+def require_python_lint_alignment() -> None:
+    for path in (
+        "scripts/lint-python.py",
+        "tools/python-quality/requirements.txt",
+        "tools/python-quality/ruff.toml",
+    ):
+        if read(path) != read(f"template/.project-agent-workflow/{path}"):
+            fail(f"Python lint counterpart differs: {path}")
+    if read("tools/python-quality/requirements.txt") != "ruff==0.15.7\n":
+        fail("Python lint requirements must pin Ruff 0.15.7")
+    project = tomllib.loads(read("pyproject.toml"))
+    if "ruff==0.15.7" not in project.get("dependency-groups", {}).get("dev", []):
+        fail("root development dependencies must pin Ruff 0.15.7")
+    locked = tomllib.loads(read("uv.lock"))
+    versions = [item["version"] for item in locked["package"] if item["name"] == "ruff"]
+    if versions != ["0.15.7"]:
+        fail("uv.lock must resolve exactly Ruff 0.15.7")
+    require_markers(
+        "scripts/lint-project-workflow.sh", "Python correctness lint",
+        read("scripts/lint-project-workflow.sh"),
+        ['(cd "$root" && python3 -I scripts/lint-python.py)'],
+    )
+    workflow = "template/.github/workflows/project-agent-workflow.yml"
+    require_markers(workflow, "pinned managed Python lint", read(workflow), [
+        "python3 -m pip install -r .project-agent-workflow/tools/python-quality/requirements.txt",
+        "python3 -I .project-agent-workflow/scripts/lint-python.py",
+    ])
+
+
 def require_namespaced_reference_paths() -> None:
     agents = read("AGENTS.md")
     japanese = read("docs/agent/SPEC_JAPANESE_TECH_WRITING.md")
@@ -3757,6 +3787,7 @@ def main() -> int:
     require_documented_release_version()
     require_ci_autofix_root_boundaries()
     require_generated_whitespace_range()
+    require_python_lint_alignment()
     require_namespaced_reference_paths()
     require_mcp_execution_context_contract()
     require_browser_automation_contract()

@@ -62,6 +62,40 @@ Before final report:
 - A pre-v1 open plan may use an old generic root CLI spelling only when the adoption manifest records the v0 source and the root file exactly matches the executable compatibility bridge to the managed helper.
 - Add project-specific commands by editing `.project-agent-workflow/scripts/plan_validation_commands.py` in the generated project and documenting the rule here.
 
+## Managed Python Correctness Checks
+
+Install the pinned tool explicitly into the Python environment used for validation:
+`python3 -m pip install -r .project-agent-workflow/tools/python-quality/requirements.txt`.
+Run `python3 -I .project-agent-workflow/scripts/lint-python.py`.
+The generated workflow installs these requirements and runs this check in CI.
+The change-aware selector also selects it for managed Python or lint-setting changes.
+No command automatically installs a missing tool.
+
+Ruff 0.15.7 checks only Python under `.project-agent-workflow/scripts/`, excluding
+dependency/cache directories, with exactly `E9,F541,F631,F634,F821,F822,F823` and
+preview disabled.
+The dedicated managed configuration is used instead of product configuration.
+The wrapper removes Ruff-specific environment overrides (`RUFF_*`), including
+`RUFF_OUTPUT_FILE`, so Ruff diagnostics go to stdout rather than creating or
+overwriting another file. Other caller environment settings are retained.
+The check makes no source edits, writes no Ruff cache and refuses missing tools,
+wrong versions, altered managed settings, empty scope and symlinked targets.
+Every required caller passes `-I`. Interpreter startup runs before the wrapper
+selects Ruff, so a `sitecustomize` module on an inherited `PYTHONPATH` could
+otherwise exit successfully and leave the check green without linting anything.
+These are selected correctness checks, not full bug coverage or type checking.
+
+Explicit `--fix` requires a live task-bound worktree and explicit managed Python
+file operands, such as
+`python3 -I .project-agent-workflow/scripts/lint-python.py --fix .project-agent-workflow/scripts/example.py`.
+It permits only safe `F541` fixes.
+The complete operand list is checked before writing; directories, duplicates,
+out-of-scope paths, symlinks and hard-linked files are refused.
+The caller retains responsibility for the task's exact write scope.
+Validation manifests admit only the isolated check invocation, not automatic
+fixes and not a launch that omits `-I`.
+Product code, dependency manifests and project-owned settings are outside this scope.
+
 ## Optional Checks
 
 - Static security for changed files: `python3 .project-agent-workflow/scripts/security-static-check.py --changed`

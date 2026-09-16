@@ -63,6 +63,7 @@ if [ -s "$python_list" ]; then
 fi
 
 python3 "$root/scripts/check-copier-template.py"
+(cd "$root" && python3 -I scripts/lint-python.py)
 (cd "$root" && python3 scripts/check-text-hygiene.py)
 python3 "$root/.codex/skills/verify-copier-update/scripts/check-triage-coverage.py"
 python3 "$root/template/.project-agent-workflow/skills/verify-copier-update/scripts/check-triage-coverage.py"
