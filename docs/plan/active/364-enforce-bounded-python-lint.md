@@ -1,6 +1,7 @@
 # Enforce bounded Python lint with explicitly permitted automatic fixes
 
-status: in_progress
+status: deferred
+completion_deferred_reason: The owner authorized a separate terminal-review eligibility policy change; keep this implementation and its stopped ledgers paused until that policy is checked and published.
 implementation_mode: parent_direct
 primary_invariant: The same pinned Python lint rules reject selected defects in root and managed template scripts without expanding automatic writes into project-owned files.
 task_types:
