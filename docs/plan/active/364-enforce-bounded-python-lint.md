@@ -1,7 +1,6 @@
 # Enforce bounded Python lint with explicitly permitted automatic fixes
 
-status: deferred
-completion_deferred_reason: Await the separately owner-approved unused-fourth-review policy; preserve the candidate and all stopped ledgers, then restore the exact original plan before gated continuation.
+status: in_progress
 implementation_mode: parent_direct
 primary_invariant: The same pinned Python lint rules reject selected defects in root and managed template scripts without expanding automatic writes into project-owned files.
 task_types:
