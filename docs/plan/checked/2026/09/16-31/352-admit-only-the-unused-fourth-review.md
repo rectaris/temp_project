@@ -1,6 +1,6 @@
 # Admit only the unused fourth review through a separately authorized immutable continuation
 
-status: in_progress
+status: checked
 primary_invariant: An explicitly authorized fourth-review continuation proves exactly three prior formal reviews and admits only one remaining review, without rewriting stopped histories or increasing the cumulative maximum of four.
 task_types:
   - template_workflow
@@ -76,15 +76,19 @@ checked_summary_ja: 停止済みの記録を保ったまま、未使用の第4�
 
 ## Tasks
 
-- [ ] Implement the explicit fourth-review route and schema-3 bounds using the existing guarded final-continuation envelope.
-- [ ] Verify the complete three-ledger ancestry and both registry histories before any new child is consumed or published.
-- [ ] Apply strict one-review and cumulative-four limits at record and history-read boundaries while preserving historical behavior.
-- [ ] Extend the existing root/generated isolated CLI fixture coverage for admission, all new refusal paths and unchanged earlier routes.
-- [ ] Align root and generated workflow, orchestration and entrypoint policy with the new explicit operation.
-- [ ] Review the exact candidate independently, run focused checks and the authoritative suite once, commit and publish the accepted policy before any plan-364 product correction.
+- [x] Implement the explicit fourth-review route and schema-3 bounds using the existing guarded final-continuation envelope.
+- [x] Verify the complete three-ledger ancestry and both registry histories before any new child is consumed or published.
+- [x] Apply strict one-review and cumulative-four limits at record and history-read boundaries while preserving historical behavior.
+- [x] Extend the existing root/generated isolated CLI fixture coverage for admission, all new refusal paths and unchanged earlier routes.
+- [x] Align root and generated workflow, orchestration and entrypoint policy with the new explicit operation.
+- [x] Review the exact candidate independently, run focused checks and the authoritative suite once, commit and publish the accepted policy before any plan-364 product correction.
 
 ## Validation Notes
 
 - The plan-364 candidate remains sha256:a60254482ab68117191c69e3ca072066376874b0601886051e081fcd76940923. Its stopped epoch-2 ledger remains sha256:0d9ee322de2c6299c5ca87283e0350e4be92356afe844235a657b96379fc4661. These observations do not grant product write or acceptance authority.
 - The current policy intentionally rejects a fourth review after epoch 2. This plan changes that rule only under the new explicit owner approval; it does not retroactively claim the previous stop was erroneous.
 - Plan 364 must separately adopt the published policy, receive its exact new owner-bound continuation, resolve the Ruff execution assumptions and pass its remaining review and unchanged validation.
+- Implemented at 86cda16 on the task worktree for this plan. `python3 tests/test-plan-execution-state.py` passed 212 tests, and `python3 scripts/check-copier-template.py` reported the static template check passed. Root and generated `plan-execution-state.py` remain byte-identical.
+- One independent review of the exact candidate reported no significant issues. It probed the cumulative bound at both the record and stored-history boundaries, the refusal of any epoch-3 continuation through `continue`, `continue-final` and `continue-fourth-review`, the path, alias and lock coverage of `--epoch-one-state`, the behavior-preserving `edges` and recovery refactors, and the two-way authorization schema gating. All three stopped ledger files stayed byte-identical across every probe.
+- The authoritative suite ran once on the accepted candidate: `scripts/lint-project-workflow.sh` reported the workflow package lint passed and `tests/smoke.sh` reported the smoke test passed.
+- `AGENTS.md` first exceeded the routed-entrypoint byte budget at 22875 bytes. The two duplicated detail clauses were shortened, not dropped: the full recovery-refusal rule remains in `docs/agent/SPEC_PLAN_WORKFLOW.md`, `references/orchestration.md` and the generated counterparts. The reviewed entrypoint is 22713 bytes. A second bounded review of that delta reported no significant issues.
