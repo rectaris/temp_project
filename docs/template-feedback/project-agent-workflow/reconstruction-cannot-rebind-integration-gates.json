@@ -1,0 +1,31 @@
+{
+  "attribution": {
+    "certainty": "template_defect",
+    "reason": "Both refusals come from scripts/restructure-plan.py, a template-owned tool, and neither depends on project-specific content."
+  },
+  "desired_behavior": "Let a reconstruction transaction rebind integration_gates the same way it rebinds context_files, and let a lineage rebind of an unstarted plan proceed without re-admitting manifest fields it is not allowed to change.",
+  "evidence": [
+    {
+      "kind": "change_reference",
+      "reference": "scripts/restructure-plan.py",
+      "summary": "validate_live_plan_reference_targets checks context_files and integration_gates, but apply_referrer_context_rebinds rewrites only context_files, so a live plan whose gate names the source plan blocks the transaction."
+    },
+    {
+      "kind": "agent_paraphrase",
+      "reference": "docs/plan/backlog/365-check-types-in-python-validation-tools.md",
+      "summary": "A rebind_lineage run on this plan was refused with 'updated plan required_specs is missing: docs/agent/SPEC_JAPANESE_TECH_WRITING.md, docs/agent/SPEC_USER_COMMUNICATION.md', although lineage_rebind may change only context_files, predecessor_plans and integration_gates."
+    }
+  ],
+  "expected_behavior": "Reconstructing a stopped plan rebinds every reference the same tool later verifies, and rebinding a lineage reference on an unstarted plan does not require unrelated manifest repairs.",
+  "impact": "The reconstruction of plan 364 needed a separate preparatory commit that rewrote plan 365's gate as prose, and the gate could not be restored to an exact path afterwards because rebind_lineage accepts only a replanned-source path as its replacement input.",
+  "observed_behavior": "The reconstruction transaction stopped on the unrebindable gate, and the follow-up lineage rebind stopped on a required_specs gap the rebind itself cannot repair.",
+  "project_alias": "project-agent-workflow",
+  "report_id": "reconstruction-cannot-rebind-integration-gates",
+  "schema_version": 1,
+  "supersedes": "none",
+  "template_source": {
+    "alias": "project-agent-workflow",
+    "revision": "unknown"
+  },
+  "workaround": "Restate the gate as prose in a preparatory commit before the reconstruction, and leave the unstarted plan's context_files pointing at the replanned archive."
+}
