@@ -1,6 +1,8 @@
 # Enforce bounded Python lint with explicitly permitted automatic fixes
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 implementation_mode: parent_direct
 primary_invariant: The same pinned Python lint rules reject selected defects in root and managed template scripts without expanding automatic writes into project-owned files.
 task_types:
@@ -115,3 +117,9 @@ checked_summary_ja: Pythonの未定義名などを検査し、自動修正を許
 
 - The owner requested implementation of the active and backlog plans on 2026-09-16. Plan 376 is checked and published, leaving the serial implementation slot free. This plan starts the declared lint, type-checking and formatting sequence; the latter two remain unstarted until their predecessors are checked.
 - Use the existing parent-direct workflow because the declared scope changes validation authority, dependency pins and guarded writes. Parallel candidate generation cannot admit this scope. Preserve all accepted requirements and run a fresh observed review-route probe before product edits.
+- The owner authorized the unused fourth review on 2026-09-16 after plan 352 published `continue-fourth-review`. `plan-execution-state.py continue-fourth-review` created the schema-3 epoch-3 child `plan364-20260916-epoch3` at source head `7a8de77`, with three predecessor reviews and cumulative limit four. All three earlier stopped ledgers remain byte-identical.
+- The epoch-2 Medium finding is fixed. `scripts/lint-python.py` and its managed mirror now resolve the pinned tool through `ruff_executable()` from `sysconfig.get_path("scripts")` and invoke that executable directly, so a working-directory `ruff.py`, a `PYTHONPATH` `ruff` package and an earlier `PATH` `ruff` no longer replace it. A new real-tool test covers all three shadows, and a mutation probe confirmed both the reverted `-m ruff` entry and a removed sanitized environment are rejected by the real-tool suite.
+- Focused validation passed at that candidate: `python3 tests/test-validation-tools.py` (369 tests, exit 0), `python3 scripts/check-copier-template.py` (exit 0) and `tests/copier-update.sh --require-copier` (exit 0). The whole v1.4.5 migration guardian rule in `references/orchestration.md` was read before the update suite.
+- The single permitted epoch-3 independent review reported one Medium finding: because required callers launch the wrapper as `python3 scripts/lint-python.py`, a `sitecustomize` module on an inherited `PYTHONPATH` runs before any wrapper code and can exit the interpreter successfully, so the lint check can still be made false-green. The review receipt, adversarial preflight and resource manifest are bound to review target `sha256:d1f362c4961a81b800d02c01f1c9be4fb567a6b603ed1e69ab44a97dbee285e8`.
+- Parent reproduction established that this is a pre-existing repository-wide launch property rather than a defect introduced by this candidate: with a `sitecustomize.py` calling `os._exit(0)` on `PYTHONPATH`, `scripts/check-copier-template.py`, `scripts/check-root-agent-policy.py`, `scripts/lint-plan-docs.py`, `scripts/check-text-hygiene.py` and `scripts/check-agent-log-manifest.py` all returned 0 with no output, exactly like `scripts/lint-python.py`. `python3 -I scripts/lint-python.py` ran the real check under the same environment. Isolating every required Python launch point is outside this plan's write scope and acceptance.
+- The execution ledger recorded the review with its Medium severity and stopped the run at `descope_pending` with `parent_remediation_budget_exhausted`. The cumulative four-review maximum is now spent and no further continuation exists, so this plan stops for the owner at `status: replan_required` with the same reason code. The reviewed candidate is preserved outside the repository as `364-epoch3-stopped-candidate.patch`, whose digest equals the reviewed target. No repair, descope or reconstruction successor was created to reset review.
