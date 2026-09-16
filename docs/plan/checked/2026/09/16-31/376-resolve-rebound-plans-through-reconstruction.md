@@ -1,6 +1,6 @@
 # Resolve a lineage_rebind record whose plan was later reconstructed, through the reconstruction contract's verified source content rather than the replanned archive wrapper.
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: A lineage_rebind record still names exactly one plan after that plan is reconstructed, and the content it verifies is the contract's stopped source, not the archive wrapper.
 task_types:
@@ -84,12 +84,12 @@ checked_summary_ja: 付け替え記録を持つプランが後で再構築され
 
 ## Tasks
 
-- [ ] Confirm the write scope and the current required specifications, and reproduce the stranded record with the committed test fixtures before changing anything.
-- [ ] Find the reconstruction contract that names the recorded path as its source, and resolve the plan's current location from it.
-- [ ] Register the entry with the contract's verified stopped source content, and keep the ambiguity and unknown-plan refusals unchanged.
-- [ ] Add tests for resolution, for the verified content, and for both refusals, and confirm each one fails when its production line is reverted.
-- [ ] Mirror the module into the template byte-for-byte and record the rule in both copies of the plan workflow specification.
-- [ ] Run the focused validation, then run the authoritative suite once on the final candidate.
+- [x] Confirm the write scope and the current required specifications, and reproduce the stranded record with the committed test fixtures before changing anything.
+- [x] Find the reconstruction contract that names the recorded path as its source, and resolve the plan's current location from it.
+- [x] Register the entry with the contract's verified stopped source content, and keep the ambiguity and unknown-plan refusals unchanged.
+- [x] Add tests for resolution, for the verified content, and for both refusals, and confirm each one fails when its production line is reverted.
+- [x] Mirror the module into the template byte-for-byte and record the rule in both copies of the plan workflow specification.
+- [x] Run the focused validation, then run the authoritative suite once on the final candidate.
 
 ## Validation Notes
 
@@ -98,3 +98,11 @@ checked_summary_ja: 付け替え記録を持つプランが後で再構築され
 - The probe used for the evidence above is not committed. It reuses the committed fixtures in tests/test-plan-restructure.py so the observation comes from the production module unchanged.
 - On 2026-09-15 the owner confirmed that the previous writer had stopped and authorized pausing this plan while plans 333, 335 and 344 proceed. Its five dirty product paths remain unchanged in the existing plan-376 task worktree; this deferral neither accepts that candidate nor resumes its execution.
 - On 2026-09-16 the owner requested implementation of the active and backlog plans after 333, 335 and 344 were checked and published. Resume this same plan in its existing task worktree, preserve the original candidate, and pass the current review-route gate before any further product edit. No prior execution ledger or admitted formal review exists for this plan; the earlier rejected helper response grants no acceptance evidence.
+- The parent resumed the existing task binding after the prior writer had stopped, preserved the original binary patch outside the repository, and adopted published source `5bcd6aabaf99e85578989f1df4a01800aff98738` by a conflict-free fast-forward with Git autostash. Stable patch identities before and after adoption matched; all five original dirty paths were preserved.
+- Execution `plan376-20260916` began with fresh epoch-zero reviewer and continuation registries. Runtime probe `plan376-route-probe-20260916` observed the execution-bound packet at turn zero and one tool call; the parent admitted the probe and passed the execution gate without claiming a formal review.
+- The four added reconstruction and refusal cases passed. Five isolated mutation controls detected removal of contract-location lookup, stopped-source selection, single-source registration, ambiguity refusal and unknown-source refusal. No production file was changed by those controls.
+- Fresh read-only reviewer `plan376-review1-20260916` inspected the complete five-file target and reported no High or Medium findings. Its bound manifest observed turn zero and 31 tool calls. The parent admitted this first formal review against the exact target and unchanged required specifications. The reviewer's attempted fixture execution was blocked by its read-only temporary-directory boundary; parent-owned execution supplied the behavioral evidence instead.
+- Focused validation passed: `python3 tests/test-plan-restructure.py` ran 208 tests; `tests/root-plan-lifecycle.sh`, `python3 scripts/check-copier-template.py` and `tests/smoke.sh` each exited zero. All 40 existing rebind records remained unchanged and verified.
+- The authoritative suite ran once on the final candidate: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each exited zero. The parent bound the final lifecycle results without adding a review or validation attempt.
+- Product commit `6f43ce1fceb71902c73fa4e31240cc73d52f34c1` contains exactly the five reviewed paths. Its complete diff from the published source hashes to the admitted review target `sha256:cca6db365e11c9a7cab1329d2cc13c0d939630d73fe23b7690a4d07b4d9759f3`.
+- Probe and reviewer manifests retain both runtime transcript and hook sources under their run ids. The parent execution ledger, review receipt, preserved original patch and validation outputs remain in the local Copilot session `2b6824b8-6e98-4b54-8959-26a72f107f88`; no parent transcript manifest or session checkpoint is claimed.
