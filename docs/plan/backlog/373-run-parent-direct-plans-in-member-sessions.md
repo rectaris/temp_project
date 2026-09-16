@@ -55,7 +55,7 @@ context_files:
   - tests/AGENTS.md
   - docs/agent/spec-index.yaml
   - scripts/plan_validation_commands.py
-  - docs/plan/backlog/372-bind-parallel-plans-to-separate-session-owners.md
+  - docs/plan/active/372-bind-parallel-plans-to-separate-session-owners.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
@@ -80,7 +80,7 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:fa4ce009e24182f76dea672e9a6d437a6fa398b6db2c2d072209510a0c34ae4a","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
   - {"acceptance_sha256":"sha256:d3984292ad76f289cf0acda9e4f69697f868e7730a8cf096723bcb5fc701e164","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 integration_gates:
-  - Start only after docs/plan/backlog/372-bind-parallel-plans-to-separate-session-owners.md is checked; resolve it to the exact checked archive before promotion.
+  - Start only after docs/plan/active/372-bind-parallel-plans-to-separate-session-owners.md is checked; resolve it to the exact checked archive before promotion.
   - Implement this execution-control change through the existing serial parent-direct workflow.
 checked_summary_ja: 各セッションで実装と修正を進め、実行記録を保って取り込み担当へ渡す。
 

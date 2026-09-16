@@ -78,7 +78,7 @@ context_files:
   - docs/agent/spec-index.yaml
   - scripts/plan_validation_commands.py
   - docs/plan/checked/2026/09/01-15/108-orchestrate-supervised-orca-workers.md
-  - docs/plan/backlog/372-bind-parallel-plans-to-separate-session-owners.md
+  - docs/plan/active/372-bind-parallel-plans-to-separate-session-owners.md
   - docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
@@ -109,7 +109,7 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:405a824fe0f24376c2ce7a8275ef41575cc19ddb95b3d66029a3600aba97a1d2","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 integration_gates:
   - Start only after docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md is checked; resolve it to the exact checked archive before promotion.
-  - Start only after docs/plan/backlog/372-bind-parallel-plans-to-separate-session-owners.md is checked; resolve it to the exact checked archive before promotion.
+  - Start only after docs/plan/active/372-bind-parallel-plans-to-separate-session-owners.md is checked; resolve it to the exact checked archive before promotion.
   - Implement this integration serially.
   - Demonstration plans change bounded product files, not the governing controls; candidate-only or mock sessions cannot substitute for independent parent-direct sessions.
   - Live evidence is additional acceptance, not a replacement for focused/authoritative/Copy update checks. Bind its report path/digest before focused verification and completion.

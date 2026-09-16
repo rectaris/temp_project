@@ -1,6 +1,6 @@
 # Bind independent plans to separate session owners and worktrees
 
-status: backlog
+status: in_progress
 primary_invariant: Each admitted member has one exclusive session/worktree binding, without transferring shared integration or validation authority.
 task_types:
   - template_workflow
@@ -115,6 +115,8 @@ checked_summary_ja: 独立した2件のプランを別セッションと専用 w
 
 ## Validation Notes
 
+- Implementation authorization: 「@docs/plan/backlog/372-bind-parallel-plans-to-separate-session-owners.md @docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md @docs/plan/backlog/374-publish-and-verify-separate-session-plan-results.md の実装作業をせよ。」 Activate 372 first and keep 373 and 374 queued until their checked predecessors exist.
+- Activation baseline: fc63404dfd7107713694da4c97931da6e15d6058 on dev in temp_project. The active index is empty, and prerequisites 287, 284, 285 and 103 resolve to their exact checked archives. Plan 360 is checked. The approved Tier 2 parent-direct design, scope and acceptance remain unchanged; no new design decision is introduced by promotion.
 - Owner authorization: 「提案の方針でプランを作成せよ。」 The accepted proposal assigns one plan to each separate session/worktree, initially two independent members, one integration owner and real-session acceptance. This turn authors plans only.
 - Planning baseline: 6dfb0167b26906a0d47bbf9f621c47cb8b19d4ba in temp_project. Plan 360 occupies the runnable slot. Queue this work without changing that task or reopening a stopped run.
 - Tier 2 and class C apply because execution ownership and lifecycle authority change. Recheck scope and specifications before promotion. These are new plans, not reconstruction successors.
