@@ -7449,6 +7449,161 @@ class PlanRestructureTest(unittest.TestCase):
         self.assertEqual(live[recorded]["live_path"], promoted)
         self.assertEqual(live[recorded]["lifecycle"], "active")
 
+    def prepare_rebound_direct_source(self):
+        module, _, _ = self.prepare_replanned_source_with_checked_successor(
+            "rebound_direct_source"
+        )
+        checked = self.check_successor("docs/plan/active/003-integration.md")
+        _, archive, owner = module.replanned_rows(
+            (self.repo / "docs/plan/replanned.md").read_text(encoding="utf-8")
+        )[0]
+        recorded = "docs/plan/backlog/050-stranded.md"
+        active = "docs/plan/active/050-stranded.md"
+        content = self.direct_source_content(
+            title="Rebound direct source",
+            acceptance=["Keep the rebound requirement."],
+            stopped=False,
+            predecessor=None,
+        ).replace("status: in_progress", "status: backlog", 1).replace(
+            "context_files:\n  - none\n", f"context_files:\n  - {archive}\n", 1
+        )
+        target = self.repo / recorded
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "add an unstarted referrer")
+        state = module.verify_repository_contracts()
+        replacement = {
+            "scope": "manifest",
+            "field": "context_files",
+            "old": f"  - {archive}\n",
+            "new": f"  - {checked}\n",
+            "count": 1,
+        }
+        spec = {
+            "schema_version": 3,
+            "operation": "rebind_lineage",
+            "source_head": git(self.repo, "rev-parse", "HEAD"),
+            "rebindings": [{
+                "kind": "lineage_rebind",
+                "plan_path": recorded,
+                "owning_contract_path": owner,
+                "original_content_digest": digest(content),
+                "prior_effective_projection_digest": module.projection_digest(
+                    state["effective_projections"][recorded]
+                ),
+                "updated_content_digest": digest(
+                    content.replace(replacement["old"], replacement["new"], 1)
+                ),
+                "replacements": [replacement],
+                "promoted_preservation_path": None,
+            }],
+        }
+        rebound = self.run_spec_data(spec, "rebind-direct.json")
+        self.assertEqual(rebound.returncode, 0, rebound.stderr)
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "rebind the direct source")
+        target.rename(self.repo / active)
+        promoted = self.repo / active
+        promoted.write_text(
+            module.derive_stopped_source_content(
+                promoted.read_text(encoding="utf-8").replace(
+                    "status: backlog", "status: in_progress", 1
+                ),
+                ["multiple_independent_invariants"],
+            ),
+            encoding="utf-8",
+        )
+        index = self.repo / "docs/plan/plan.md"
+        index.write_text(
+            index.read_text(encoding="utf-8")
+            + f"050\t{active}\treplan_required\n",
+            encoding="utf-8",
+        )
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "promote and stop the rebound source")
+        return module, recorded, active
+
+    def test_rebound_direct_source_survives_reconstruction(self) -> None:
+        module, recorded, active = self.prepare_rebound_direct_source()
+        baseline = (self.repo / module.REBIND_BASELINE_PATH).read_bytes()
+        spec = self.direct_active_spec(module, [active], successor_id="051")
+        result = self.run_spec_data(spec, "reconstruct-rebound.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = module.verify_repository_contracts()
+        entry = state["live_successors"][recorded]
+        contract = json.loads(
+            (self.repo / str(spec["contract_path"])).read_text(encoding="utf-8")
+        )
+        source = contract["sources"][0]
+        self.assertEqual(entry["live_path"], source["archive_path"])
+        self.assertEqual(entry["lifecycle"], "replanned")
+        self.assertEqual(entry["live_content"], source["stopped_content"])
+        self.assertEqual(entry["replan_original_content"], source["original_content"])
+        wrapper = (self.repo / source["archive_path"]).read_text(encoding="utf-8")
+        self.assertNotEqual(entry["live_content"], wrapper)
+        self.assertEqual((self.repo / module.REBIND_BASELINE_PATH).read_bytes(), baseline)
+        entry["live_content"] = wrapper
+        entry["live_manifest"] = module.parse_manifest(wrapper)
+        with self.assertRaises(module.RestructureError):
+            module.verify_rebind_records(
+                state["rebind_records"], state["live_successors"],
+                state["contract_digests"], set(),
+            )
+
+    def test_rebound_source_survives_single_source_reconstruction(self) -> None:
+        module, recorded, active = self.prepare_rebound_direct_source()
+        self.source_path = active
+        self.acceptance = ["Keep the rebound requirement."]
+        spec_text = json.dumps(self.make_spec())
+        for old, new in (
+            ("001-source", "050-stranded"),
+            ("002-data", "051-data"),
+            ("003-integration", "052-integration"),
+            ('"id": "002"', '"id": "051"'),
+            ('"id": "003"', '"id": "052"'),
+        ):
+            spec_text = spec_text.replace(old, new)
+        spec = json.loads(spec_text)
+        result = self.run_spec_data(spec, "single-rebound.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contract = json.loads(
+            (self.repo / spec["contract_path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(contract["schema_version"], 2)
+        entry = module.verify_repository_contracts()["live_successors"][recorded]
+        self.assertEqual(entry["live_content"], contract["source"]["content"])
+        self.assertEqual(entry["live_path"], contract["archive_path"])
+
+    def test_reconstructed_rebound_plan_still_refuses_two_locations(self) -> None:
+        module, recorded, active = self.prepare_rebound_direct_source()
+        original = (self.repo / active).read_text(encoding="utf-8")
+        spec = self.direct_active_spec(module, [active], successor_id="051")
+        result = self.run_spec_data(spec, "ambiguous-rebound.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (self.repo / recorded).write_text(
+            original.replace("status: replan_required", "status: backlog", 1),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(module.RestructureError, "more than one location"):
+            module.verify_repository_contracts()
+
+    def test_missing_rebound_source_is_not_silently_dropped(self) -> None:
+        module, recorded, active = self.prepare_rebound_direct_source()
+        (self.repo / active).unlink()
+        index = self.repo / "docs/plan/plan.md"
+        index.write_text(
+            index.read_text(encoding="utf-8").replace(
+                f"050\t{active}\treplan_required\n", ""
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            module.RestructureError,
+            f"unknown live successors: {re.escape(recorded)}",
+        ):
+            module.verify_repository_contracts()
+
     def test_lineage_rebinding_reaches_a_plan_naming_only_the_archive(self) -> None:
         """A stale reference written as the archive path is addressable too."""
         module, _, _ = self.prepare_replanned_source_with_checked_successor(

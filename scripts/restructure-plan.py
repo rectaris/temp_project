@@ -7707,7 +7707,10 @@ def stranded_plan_lifecycle(path: str) -> str:
     return PurePosixPath(path).parts[2]
 
 
-def locate_stranded_plan(recorded_path: str) -> str | None:
+def locate_stranded_plan(
+    recorded_path: str,
+    replanned_sources: dict[str, dict[str, str]] | None = None,
+) -> str | None:
     """Find where a plan named by an existing rebind record lives today.
 
     A record is keyed by the path the plan held when it was rebound, and the
@@ -7731,6 +7734,9 @@ def locate_stranded_plan(recorded_path: str) -> str | None:
     if (ROOT / recorded_path).is_file():
         found.add(recorded_path)
     found.update(checked_paths_for_successor(name[:3], recorded_path))
+    source = (replanned_sources or {}).get(f"docs/plan/active/{name}")
+    if source is not None:
+        found.add(source["archive_path"])
     if len(found) > 1:
         raise RestructureError(
             "rebind record names a plan in more than one location: "
@@ -7743,6 +7749,7 @@ def register_stranded_reference_plans(
     records: list[dict[str, Any]],
     live_successors: dict[str, dict[str, Any]],
     contract_digests: dict[str, str],
+    replanned_sources: dict[str, dict[str, str]] | None = None,
 ) -> None:
     """Reach an unstarted plan that a reconstruction stranded but no contract owns.
 
@@ -7800,7 +7807,15 @@ def register_stranded_reference_plans(
             raise RestructureError(
                 f"stranded reference plan names an unknown contract: {key}"
             )
-        content = read_regular_file(ROOT / live_path, live_path).decode("utf-8")
+        source = (replanned_sources or {}).get(
+            f"docs/plan/active/{PurePosixPath(key).name}"
+        )
+        if source is not None and live_path == source["archive_path"]:
+            content = source["stopped_content"]
+            replan_original_content = source["original_content"]
+        else:
+            content = read_regular_file(ROOT / live_path, live_path).decode("utf-8")
+            replan_original_content = None
         manifest = parse_manifest(content)
         live_successors[key] = {
             "contract_path": owner,
@@ -7818,7 +7833,7 @@ def register_stranded_reference_plans(
             "live_content": content,
             "live_path": live_path,
             "lifecycle": stranded_plan_lifecycle(live_path),
-            "replan_original_content": None,
+            "replan_original_content": replan_original_content,
             "enforce_projection_semantics": False,
             "role": "stranded_reference",
         }
@@ -7826,7 +7841,7 @@ def register_stranded_reference_plans(
     for key, owner in recorded.items():
         if key in live_successors:
             continue
-        located = locate_stranded_plan(key)
+        located = locate_stranded_plan(key, replanned_sources)
         if located is None:
             continue
         register(key, located, owner)
@@ -8761,6 +8776,21 @@ def verify_repository_contracts(
     companion_records: list[dict[str, Any]] = []
     live_successors: dict[str, dict[str, Any]] = {}
     contract_digests: dict[str, str] = {}
+    replanned_sources: dict[str, dict[str, str]] = {}
+
+    def register_verified_source(
+        path: str, archive: str, original: str, stopped: str
+    ) -> None:
+        if path in replanned_sources:
+            raise RestructureError(
+                f"replanned source is owned by multiple contracts: {path}"
+            )
+        replanned_sources[path] = {
+            "archive_path": archive,
+            "original_content": original,
+            "stopped_content": stopped,
+        }
+
     rows_by_contract: dict[str, list[tuple[str, str, str]]] = {}
     for row in rows:
         rows_by_contract.setdefault(row[2], []).append(row)
@@ -8796,6 +8826,11 @@ def verify_repository_contracts(
                 schema_version=schema_version,
                 registered_sources=registered_sources,
             )
+            for source in contract["sources"]:
+                register_verified_source(
+                    source["path"], source["archive_path"],
+                    source["original_content"], source["stopped_content"],
+                )
             verified_schema_three.add(contract_path)
             continue
         if schema_version not in {1, 2}:
@@ -9134,6 +9169,9 @@ def verify_repository_contracts(
             raise RestructureError(f"archive acceptance lineage mismatch for {plan_id}")
         if items(archive_manifest, "acceptance") != [record["text"] for record in source_records]:
             raise RestructureError(f"archive acceptance text mismatch for {plan_id}")
+        register_verified_source(
+            source_path, archive_path, source["content"], source["content"]
+        )
         if schema_version == 1 and live_companion_successors:
             companion_records.append(
                 {
@@ -9155,6 +9193,7 @@ def verify_repository_contracts(
         rebind_records,
         live_successors,
         contract_digests,
+        replanned_sources,
     )
     effective_projections = verify_rebind_records(
         rebind_records,
