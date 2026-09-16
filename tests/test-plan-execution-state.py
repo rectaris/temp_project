@@ -796,6 +796,490 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertNotEqual(restarted.returncode, 0)
         self.assertIn("differs from the admitted candidate diff", restarted.stderr)
 
+    def staged_parent_review_fixture(
+        self, state: Path, lifecycle: Path, label: str, *,
+        medium: bool = False, session: str | None = None, check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        payload = STATE_MODULE.read_state(state)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            target, identity = STATE_MODULE.parent_direct_review_identity(payload)
+            specifications = STATE_MODULE.applicable_specification_digests(payload)
+        if not any(
+            event["event_type"] == "adversarial_preflight"
+            and event["review_target_digest"] == target
+            for event in payload["events"]
+        ):
+            evidence = self.base / f"{label}-preflight.json"
+            evidence.write_text(json.dumps({
+                "schema_version": 1,
+                "plan_digest": payload["plan_digest"],
+                "review_target_digest": target,
+                "review_identity_digest": identity,
+                "applicable_specification_digests": specifications,
+                "cases": [{"id": label, "result": "passed",
+                           "evidence_digest": digest(f"bounded fixture {label}")}],
+            }))
+            evidence.chmod(0o600)
+            self.run_cli(
+                "preflight", str(state), "--run-id", payload["run_id"],
+                "--event-id", f"{label}-preflight", "--implementation-mode", "parent_direct",
+                "--preflight-evidence", str(evidence), "--lifecycle-state", str(lifecycle),
+                check=True,
+            )
+        receipt = self.review_receipt(
+            label, payload["plan_digest"], round_value=STATE_MODULE.formal_review_count(payload) + 1,
+            reviewer_session=session, source_head=payload["source_head"],
+        )
+        return self.run_cli(
+            "review", str(state), "--run-id", payload["run_id"], "--event-id", label,
+            "--implementation-mode", "parent_direct", "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", payload["primary_invariant_digest"],
+            "--lifecycle-state", str(lifecycle),
+            *(["--finding-severity", "Medium"] if medium else []), check=check,
+        )
+
+    def continuation_authorization_fixture(
+        self, state: Path, child: Path, run_id: str, *,
+        final: bool = False, source_head: str | None = None,
+    ) -> Path:
+        payload = STATE_MODULE.read_state(state)
+        registry = STATE_MODULE.read_continuation_registry(self.continuation_registry)
+        authorization = {
+            "schema_version": 2 if final else 1,
+            **{key: payload[key] for key in (
+                "plan_path", "plan_digest", "source_head",
+                "primary_invariant_digest", "implementation_mode",
+            )},
+            "predecessor_state_digest": digest(state.read_bytes()),
+            "predecessor_run_id": payload["run_id"],
+            "predecessor_event_chain_digest": payload["event_chain_digest"],
+            "next_epoch": STATE_MODULE.execution_epoch(payload)["epoch"] + 1,
+            "child_run_id": run_id,
+            "child_state_path_digest": digest(str(child.absolute())),
+            "continuation_registry_identity_digest": registry["identity_digest"],
+            "cumulative_review_limit": 4,
+            "owner_authorization": "Use this bounded continuation without reopening stopped evidence.",
+        }
+        if final:
+            authorization.update(
+                source_head=source_head or payload["source_head"],
+                predecessor_source_head=payload["source_head"],
+                reviewer_registry=STATE_MODULE.reviewer_registry_reference(
+                    STATE_MODULE.read_reviewer_registry(self.registry)
+                ),
+            )
+        path = self.base / f"{run_id}-authorization.json"
+        path.write_text(json.dumps(authorization, sort_keys=True, indent=2) + "\n")
+        path.chmod(0o600)
+        return path
+
+    def final_continuation_fixture(
+        self, *, adopt_policy: bool = False, spent_all_reviews: bool = False
+    ) -> dict:
+        origin, origin_lifecycle, origin_run = self.initialize_execution(
+            "final-origin", mode="parent_direct", require_preflight=True
+        )
+        (self.repo / "allowed.txt").write_text("preserved product candidate\n")
+        self.staged_parent_review_fixture(origin, origin_lifecycle, "final-origin-review-1")
+        self.staged_parent_review_fixture(
+            origin, origin_lifecycle, "final-origin-review-2", medium=True
+        )
+        stopped = self.base / "final-stopped.json"
+        stopped_lifecycle = self.base / "final-stopped-lifecycle.json"
+        authorization = self.continuation_authorization_fixture(origin, stopped, "final-stopped")
+        self.run_cli(
+            "continue", str(stopped), "--predecessor-state", str(origin),
+            "--continuation-registry", str(self.continuation_registry),
+            "--authorization", str(authorization), "--run-id", "final-stopped",
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--lifecycle-state", str(stopped_lifecycle),
+            "--implementation-mode", "parent_direct", check=True,
+        )
+        if spent_all_reviews:
+            self.staged_parent_review_fixture(
+                stopped, stopped_lifecycle, "final-stopped-first-review"
+            )
+        self.staged_parent_review_fixture(
+            stopped, stopped_lifecycle, "final-stopped-review", medium=True
+        )
+        if adopt_policy:
+            (self.repo / "AGENTS.md").write_text("accepted updated test policy\n")
+            subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "adopt policy"], cwd=self.repo, check=True)
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        child = self.base / "final-child.json"
+        lifecycle = self.base / "final-child-lifecycle.json"
+        authorization = self.continuation_authorization_fixture(
+            stopped, child, "final-child", final=True, source_head=head
+        )
+        return {
+            "origin": origin, "stopped": stopped, "child": child, "lifecycle": lifecycle,
+            "authorization": authorization,
+            "arguments": [
+                "continue-final", str(child), "--predecessor-state", str(stopped),
+                "--epoch-zero-state", str(origin), "--continuation-registry",
+                str(self.continuation_registry), "--reviewer-registry", str(self.registry),
+                "--authorization", str(authorization), "--source-head", head,
+                "--run-id", "final-child", "--plan", self.plan.relative_to(self.repo).as_posix(),
+                "--lifecycle-state", str(lifecycle), "--implementation-mode", "parent_direct",
+            ],
+        }
+
+    def test_final_continuation_preserves_history_and_spends_only_the_last_review(self) -> None:
+        fixture = self.final_continuation_fixture(adopt_policy=True)
+        before = {name: fixture[name].read_bytes() for name in ("origin", "stopped")}
+        self.run_cli(*fixture["arguments"], check=True)
+        self.run_cli(*fixture["arguments"], check=True)
+        child = STATE_MODULE.read_state(fixture["child"])
+        epoch = STATE_MODULE.execution_epoch(child)
+        self.assertEqual((epoch["schema_version"], epoch["epoch"]), (2, 2))
+        self.assertEqual((epoch["predecessor_review_count"], epoch["cumulative_review_limit"]), (3, 4))
+        self.assertNotEqual(child["source_head"], self.head)
+        self.assertEqual(epoch["predecessor_source_head"], self.head)
+        registry_before = self.registry.read_bytes()
+        reused = self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "final-reused-review",
+            session="final-origin-review-1", check=False,
+        )
+        self.assertNotEqual(reused.returncode, 0)
+        self.assertIn("cannot be reused", reused.stderr)
+        self.assertEqual(self.registry.read_bytes(), registry_before)
+        self.staged_parent_review_fixture(fixture["child"], fixture["lifecycle"], "final-fresh-review")
+        registry_before = self.registry.read_bytes()
+        child_before = fixture["child"].read_bytes()
+        fifth = self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "final-fifth-review", check=False
+        )
+        self.assertNotEqual(fifth.returncode, 0)
+        self.assertIn("cumulative review limit", fifth.stderr)
+        self.assertEqual(self.registry.read_bytes(), registry_before)
+        self.assertEqual(fixture["child"].read_bytes(), child_before)
+        for name, content in before.items():
+            self.assertEqual(fixture[name].read_bytes(), content)
+        started = self.start_writable_attempt(
+            fixture["child"], fixture["lifecycle"], "final-child", "forbidden-worker"
+        )
+        self.assertNotEqual(started.returncode, 0)
+        self.assertIn("candidate implementation mode", started.stderr)
+
+    def test_final_continuation_rejects_bad_bindings_before_consumption(self) -> None:
+        fixture = self.final_continuation_fixture()
+        authorization = fixture["authorization"]
+        original = json.loads(authorization.read_text())
+        registry_before = self.continuation_registry.read_bytes()
+        stopped_before = fixture["stopped"].read_bytes()
+        for key, value in (
+            ("schema_version", 1), ("schema_version", True), ("next_epoch", 3),
+            ("next_epoch", 2.0), ("cumulative_review_limit", 4.0),
+            ("owner_authorization", ""), ("plan_digest", digest("different plan")),
+            ("predecessor_source_head", "0" * 40), ("source_head", "0" * 40),
+            ("child_state_path_digest", digest("another destination")),
+            ("predecessor_event_chain_digest", digest("another chain")),
+            ("reviewer_registry", {}),
+        ):
+            with self.subTest(field=key, value=value):
+                authorization.write_text(json.dumps({**original, key: value}))
+                refused = self.run_cli(*fixture["arguments"])
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertFalse(fixture["child"].exists())
+                self.assertEqual(self.continuation_registry.read_bytes(), registry_before)
+                self.assertEqual(fixture["stopped"].read_bytes(), stopped_before)
+        authorization.write_text(json.dumps(original, sort_keys=True, indent=2) + "\n")
+        changed_plan = self.plan.read_bytes()
+        self.plan.write_bytes(changed_plan + b"\nchanged plan\n")
+        refused = self.run_cli(*fixture["arguments"])
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("plan digest differs", refused.stderr)
+        self.plan.write_bytes(changed_plan)
+        self.assertEqual(self.continuation_registry.read_bytes(), registry_before)
+        self.run_cli(*fixture["arguments"], check=True)
+        fork = list(fixture["arguments"])
+        fork_path = self.base / "final-fork.json"
+        fork_authorization = self.continuation_authorization_fixture(
+            fixture["stopped"], fork_path, "final-fork", final=True
+        )
+        fork[1] = str(fork_path)
+        fork[fork.index("--run-id") + 1] = "final-fork"
+        fork[fork.index("--authorization") + 1] = str(fork_authorization)
+        rejected = self.run_cli(*fork)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("already continued", rejected.stderr)
+        self.assertFalse(fork_path.exists())
+
+    def test_final_epoch_schema_retains_historical_bounds(self) -> None:
+        fixture = self.final_continuation_fixture()
+        self.run_cli(*fixture["arguments"], check=True)
+        epoch = STATE_MODULE.execution_epoch(STATE_MODULE.read_state(fixture["child"]))
+        for key, value in (
+            ("epoch", 3), ("epoch", 2.0), ("schema_version", 2.0),
+            ("predecessor_review_count", 2), ("predecessor_review_count", 3.0),
+            ("cumulative_review_limit", 5), ("predecessor_source_head", ""),
+            ("reviewer_registry", {}),
+            ("reviewer_registry", {**epoch["reviewer_registry"], "event_count": 2}),
+            ("unrecognized", "field"),
+        ):
+            with self.subTest(field=key, value=value):
+                with self.assertRaises(STATE_MODULE.StateError):
+                    STATE_MODULE.validate_execution_epoch({**epoch, key: value})
+        historical = STATE_MODULE.execution_epoch(STATE_MODULE.read_state(fixture["stopped"]))
+        with self.assertRaisesRegex(STATE_MODULE.StateError, "outside the supported bound"):
+            STATE_MODULE.validate_execution_epoch({**historical, "epoch": 2})
+
+    def test_final_continuation_refuses_an_exhausted_total(self) -> None:
+        fixture = self.final_continuation_fixture(spent_all_reviews=True)
+        before = self.continuation_registry.read_bytes()
+        refused = self.run_cli(*fixture["arguments"])
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("exactly three prior reviews", refused.stderr)
+        self.assertEqual(self.continuation_registry.read_bytes(), before)
+        self.assertFalse(fixture["child"].exists())
+
+    def test_final_continuation_has_no_further_epoch_after_an_uncleared_review(self) -> None:
+        fixture = self.final_continuation_fixture()
+        self.run_cli(*fixture["arguments"], check=True)
+        self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "final-uncleared-review", medium=True
+        )
+        before = fixture["child"].read_bytes()
+        registry_before = self.continuation_registry.read_bytes()
+        arguments = list(fixture["arguments"])
+        arguments[1] = str(self.base / "forbidden-next-epoch.json")
+        arguments[arguments.index("--predecessor-state") + 1] = str(fixture["child"])
+        refused = self.run_cli(*arguments)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("epoch one", refused.stderr)
+        self.assertEqual(fixture["child"].read_bytes(), before)
+        self.assertEqual(self.continuation_registry.read_bytes(), registry_before)
+
+    def test_final_continuation_requires_the_complete_existing_reviewer_registry(self) -> None:
+        fixture = self.final_continuation_fixture()
+        original = json.loads(fixture["authorization"].read_text())
+        before = self.continuation_registry.read_bytes()
+        self.continuation_registry.write_bytes(before.splitlines(keepends=True)[0])
+        refused = self.run_cli(*fixture["arguments"])
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("does not bind the prior continuation", refused.stderr)
+        self.assertFalse(fixture["child"].exists())
+        self.continuation_registry.write_bytes(before)
+        registry = STATE_MODULE.read_reviewer_registry(self.registry)
+        original["reviewer_registry"].update(
+            event_count=0, event_chain_digest=registry["header"]["genesis_digest"]
+        )
+        fixture["authorization"].write_text(json.dumps(original))
+        refused = self.run_cli(*fixture["arguments"])
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("omits a prior formal review", refused.stderr)
+        self.assertEqual(self.continuation_registry.read_bytes(), before)
+        self.assertFalse(fixture["child"].exists())
+
+    def test_final_continuation_rejects_changed_committed_plan_bytes(self) -> None:
+        fixture = self.final_continuation_fixture()
+        plan_before = self.plan.read_bytes()
+        self.plan.write_bytes(plan_before + b"\nchanged committed plan\n")
+        subprocess.run(["git", "add", str(self.plan)], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "changed plan"], cwd=self.repo, check=True)
+        self.plan.write_bytes(plan_before)
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        authorization = json.loads(fixture["authorization"].read_text())
+        authorization["source_head"] = head
+        fixture["authorization"].write_text(json.dumps(authorization))
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--source-head") + 1] = head
+        before = self.continuation_registry.read_bytes()
+        refused = self.run_cli(*arguments)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("unchanged committed plan bytes", refused.stderr)
+        self.assertEqual(self.continuation_registry.read_bytes(), before)
+
+    def test_final_continuation_refuses_an_unrelated_source_with_identical_plan_bytes(self) -> None:
+        fixture = self.final_continuation_fixture()
+        unrelated = subprocess.check_output(
+            ["git", "commit-tree", f"{self.head}^{{tree}}"],
+            cwd=self.repo, input="unrelated source\n", text=True,
+        ).strip()
+        subprocess.run(["git", "checkout", "--detach", "-q", unrelated], cwd=self.repo, check=True)
+        authorization = json.loads(fixture["authorization"].read_text())
+        authorization["source_head"] = unrelated
+        fixture["authorization"].write_text(json.dumps(authorization))
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--source-head") + 1] = unrelated
+        before = self.continuation_registry.read_bytes()
+        refused = self.run_cli(*arguments)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("not a verified descendant", refused.stderr)
+        self.assertEqual(self.continuation_registry.read_bytes(), before)
+        self.assertFalse(fixture["child"].exists())
+
+    def test_final_continuation_consumes_one_of_two_concurrent_children(self) -> None:
+        fixture = self.final_continuation_fixture()
+        fork = list(fixture["arguments"])
+        fork_path = self.base / "concurrent-final-fork.json"
+        fork_authorization = self.continuation_authorization_fixture(
+            fixture["stopped"], fork_path, "concurrent-final-fork", final=True
+        )
+        fork[1] = str(fork_path)
+        fork[fork.index("--run-id") + 1] = "concurrent-final-fork"
+        fork[fork.index("--authorization") + 1] = str(fork_authorization)
+        before = fixture["stopped"].read_bytes()
+        processes = [
+            subprocess.Popen(
+                [sys.executable, str(STATE_SCRIPT), *arguments],
+                cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            for arguments in (fixture["arguments"], fork)
+        ]
+        try:
+            outputs = [process.communicate(timeout=15) for process in processes]
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+        self.assertEqual(sorted(process.returncode for process in processes), [0, 1], outputs)
+        self.assertEqual(sum(path.exists() for path in (fixture["child"], fork_path)), 1)
+        self.assertEqual(fixture["stopped"].read_bytes(), before)
+        registry = STATE_MODULE.read_continuation_registry(self.continuation_registry)
+        self.assertEqual(len(registry["events"]), 2)
+
+    def test_final_continuation_refuses_occupied_or_aliased_destinations_before_consumption(self) -> None:
+        fixture = self.final_continuation_fixture()
+        registry_before = self.continuation_registry.read_bytes()
+        stopped_before = fixture["stopped"].read_bytes()
+        for source in (
+            fixture["stopped"], fixture["origin"], fixture["authorization"],
+            fixture["lifecycle"], self.continuation_registry, self.registry,
+        ):
+            with self.subTest(source=source.name):
+                arguments = list(fixture["arguments"])
+                arguments[1] = str(source)
+                refused = self.run_cli(*arguments)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("aliases an input", refused.stderr)
+                self.assertEqual(self.continuation_registry.read_bytes(), registry_before)
+        fixture["child"].write_bytes(b"unrelated retained file\n")
+        refused = self.run_cli(*fixture["arguments"])
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("already occupied", refused.stderr)
+        self.assertEqual(fixture["child"].read_bytes(), b"unrelated retained file\n")
+        self.assertEqual(fixture["stopped"].read_bytes(), stopped_before)
+        self.assertEqual(self.continuation_registry.read_bytes(), registry_before)
+
+    def forged_final_history_fixture(self, *, graft: bool) -> dict:
+        fixture = self.final_continuation_fixture()
+        unrelated = subprocess.check_output(
+            ["git", "commit-tree", f"{self.head}^{{tree}}"],
+            cwd=self.repo, input="unrelated terminal source\n", text=True,
+        ).strip()
+        subprocess.run(["git", "checkout", "--detach", "-q", unrelated], cwd=self.repo, check=True)
+        if graft:
+            (self.repo / ".git/info/grafts").write_text(f"{unrelated} {self.head}\n")
+        else:
+            replacement = subprocess.check_output(
+                ["git", "commit-tree", f"{self.head}^{{tree}}", "-p", self.head],
+                cwd=self.repo, input="replacement terminal source\n", text=True,
+            ).strip()
+            subprocess.run(["git", "replace", unrelated, replacement], cwd=self.repo, check=True)
+        apparent_ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", self.head, unrelated],
+            cwd=self.repo, check=False, capture_output=True, text=True,
+            env=STATE_MODULE.sanitized_git_environment(),
+        )
+        self.assertEqual(apparent_ancestor.returncode, 0, apparent_ancestor.stderr)
+        authorization = json.loads(fixture["authorization"].read_text())
+        authorization["source_head"] = unrelated
+        fixture["authorization"].write_text(json.dumps(authorization))
+        fixture["arguments"][fixture["arguments"].index("--source-head") + 1] = unrelated
+        return fixture
+
+    def assert_final_refused_without_consumption(
+        self, fixture: dict, arguments: list[str], reason: str,
+    ) -> None:
+        preserved = {
+            path: path.read_bytes() for path in (
+                fixture["origin"], fixture["stopped"], self.continuation_registry, self.registry,
+            )
+        }
+        refused = self.run_cli(*arguments)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn(reason, refused.stderr)
+        for path, before in preserved.items():
+            self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(fixture["child"].exists())
+
+    def test_final_continuation_refuses_replace_ref_ancestry(self) -> None:
+        fixture = self.forged_final_history_fixture(graft=False)
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "not a verified descendant"
+        )
+
+    def test_final_continuation_refuses_grafted_ancestry(self) -> None:
+        fixture = self.forged_final_history_fixture(graft=True)
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "not a verified descendant"
+        )
+
+    def test_final_continuation_refuses_a_symlinked_lifecycle_alias(self) -> None:
+        fixture = self.final_continuation_fixture()
+        alias = self.base / "external-alias"
+        alias.symlink_to(self.base, target_is_directory=True)
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--lifecycle-state") + 1] = str(alias / fixture["child"].name)
+        self.assert_final_refused_without_consumption(fixture, arguments, "symlink")
+
+    def test_final_continuation_refuses_a_symlinked_repository_lifecycle(self) -> None:
+        fixture = self.final_continuation_fixture()
+        alias = self.base / "repository-alias"
+        alias.symlink_to(self.repo, target_is_directory=True)
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--lifecycle-state") + 1] = str(alias / "lifecycle.json")
+        self.assert_final_refused_without_consumption(fixture, arguments, "symlink")
+        self.assertFalse((self.repo / "lifecycle.json").exists())
+
+    def test_final_continuation_refuses_symlink_components_for_every_input(self) -> None:
+        fixture = self.final_continuation_fixture()
+        alias = self.base / "input-alias"
+        alias.symlink_to(self.base, target_is_directory=True)
+        positions = [1] + [
+            fixture["arguments"].index(option) + 1 for option in (
+                "--predecessor-state", "--epoch-zero-state", "--continuation-registry",
+                "--reviewer-registry", "--authorization", "--lifecycle-state",
+            )
+        ]
+        for position in positions:
+            with self.subTest(position=position):
+                arguments = list(fixture["arguments"])
+                arguments[position] = str(alias / Path(arguments[position]).relative_to(self.base))
+                self.assert_final_refused_without_consumption(fixture, arguments, "symlink")
+
+    def test_final_continuation_refuses_canonical_path_aliases(self) -> None:
+        fixture = self.final_continuation_fixture()
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--lifecycle-state") + 1] = "//" + str(fixture["child"]).lstrip("/")
+        self.assert_final_refused_without_consumption(fixture, arguments, "aliases an input")
+
+    def test_final_continuation_refuses_derived_lock_path_aliases(self) -> None:
+        fixture = self.final_continuation_fixture()
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--lifecycle-state") + 1] = str(fixture["child"]) + ".lock"
+        self.assert_final_refused_without_consumption(fixture, arguments, "lock path")
+
+    def test_final_continuation_refuses_symlinked_input_lock_paths(self) -> None:
+        fixture = self.final_continuation_fixture()
+        Path(str(fixture["lifecycle"]) + ".lock").symlink_to(self.continuation_registry)
+        self.assert_final_refused_without_consumption(fixture, fixture["arguments"], "symlink")
+
+    def test_final_continuation_refuses_hardlinked_lock_aliases(self) -> None:
+        fixture = self.final_continuation_fixture()
+        lock_path = Path(str(fixture["child"]) + ".lock")
+        lock_path.touch(mode=0o600)
+        os.link(lock_path, fixture["lifecycle"])
+        self.assert_final_refused_without_consumption(fixture, fixture["arguments"], "single-link")
+
     def test_same_plan_continuation_requires_preflight_and_refuses_replay(self) -> None:
         state, lifecycle, run_id = self.initialize_execution(
             "continuation-source", mode="parent_direct", require_preflight=True

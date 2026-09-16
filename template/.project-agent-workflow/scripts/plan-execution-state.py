@@ -189,6 +189,7 @@ CONTINUATION_AUTHORIZATION_KEYS = {
     "child_state_path_digest", "continuation_registry_identity_digest",
     "cumulative_review_limit", "owner_authorization",
 }
+FINAL_CONTINUATION_FIELDS = {"predecessor_source_head", "reviewer_registry"}
 PREFLIGHT_EVIDENCE_KEYS = {
     "schema_version", "plan_digest", "review_target_digest",
     "review_identity_digest", "applicable_specification_digests", "cases",
@@ -308,6 +309,7 @@ class StateError(ValueError):
 
 _SANDBOXED_WORKER_MODULE: ModuleType | None = None
 _PARALLEL_PLAN_MODULE: ModuleType | None = None
+_WORKTREE_GUARD_MODULE: ModuleType | None = None
 
 
 def sanitized_git_environment() -> dict[str, str]:
@@ -362,6 +364,26 @@ def load_parallel_plan_module() -> ModuleType:
     spec.loader.exec_module(module)
     _PARALLEL_PLAN_MODULE = module
     return module
+
+
+def load_worktree_guard_module() -> ModuleType:
+    global _WORKTREE_GUARD_MODULE
+    if _WORKTREE_GUARD_MODULE is not None:
+        return _WORKTREE_GUARD_MODULE
+    base = Path(__file__).resolve().parent
+    for relative in ("worktree_guard.py", "project_workflow/worktree_guard.py"):
+        path = base / relative
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("plan_execution_state_worktree_guard", path)
+        if spec is None or spec.loader is None:
+            break
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _WORKTREE_GUARD_MODULE = module
+        return module
+    raise StateError("shared raw-history worktree guard is unavailable")
 
 
 def require_group_execution_permit(
@@ -1488,6 +1510,26 @@ def execution_epoch(state: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def validate_execution_epoch(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        if set(value) != EXECUTION_EPOCH_KEYS | FINAL_CONTINUATION_FIELDS:
+            raise StateError("final execution epoch has an invalid exact field shape")
+        if (
+            type(value["schema_version"]) is not int
+            or type(value["epoch"]) is not int or value["epoch"] != 2
+            or type(value["predecessor_review_count"]) is not int
+            or value["predecessor_review_count"] != MAX_CUMULATIVE_REVIEWS - 1
+            or not isinstance(value["predecessor_source_head"], str)
+            or not re.fullmatch(r"[0-9a-f]{40}", value["predecessor_source_head"])
+        ):
+            raise StateError("final execution epoch has invalid terminal bounds")
+        validate_reviewer_registry_reference_shape(value["reviewer_registry"])
+        if value["reviewer_registry"]["event_count"] < value["predecessor_review_count"]:
+            raise StateError("final execution epoch omits prior reviewer admissions")
+        # Reuse the envelope checks without widening historical schema-one limits.
+        historical = {key: value[key] for key in EXECUTION_EPOCH_KEYS}
+        historical.update(schema_version=1, epoch=1, predecessor_review_count=2)
+        validate_execution_epoch(historical)
+        return value
     if not isinstance(value, dict) or set(value) != EXECUTION_EPOCH_KEYS:
         raise StateError("execution epoch has an invalid exact field shape")
     if value["schema_version"] != 1:
@@ -1768,6 +1810,8 @@ def validate_state(value: Any) -> dict[str, Any]:
             epoch = validate_execution_epoch(event["execution_epoch"])
             if event["implementation_mode"] != value["implementation_mode"]:
                 raise StateError("execution epoch implementation mode mismatch")
+            if epoch["schema_version"] == 2 and value["implementation_mode"] != "parent_direct":
+                raise StateError("final execution epoch requires parent-direct implementation")
             if any(
                 (
                     event["invariant_digests"],
@@ -3094,12 +3138,7 @@ def reviewer_registry_reference(registry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_reviewer_registry_reference(
-    reference: Any,
-    registry: dict[str, Any],
-    *,
-    exact: bool,
-) -> None:
+def validate_reviewer_registry_reference_shape(reference: Any) -> None:
     if not isinstance(reference, dict) or set(reference) != REVIEWER_REGISTRY_REFERENCE_KEYS:
         raise StateError("reviewer registry reference has an invalid exact shape")
     for field in ("registry_id", "path_digest", "event_chain_digest"):
@@ -3107,6 +3146,16 @@ def validate_reviewer_registry_reference(
     count = reference["event_count"]
     if isinstance(count, bool) or not isinstance(count, int) or count < 0:
         raise StateError("reviewer registry event count is invalid")
+
+
+def validate_reviewer_registry_reference(
+    reference: Any,
+    registry: dict[str, Any],
+    *,
+    exact: bool,
+) -> None:
+    validate_reviewer_registry_reference_shape(reference)
+    count = reference["event_count"]
     current = reviewer_registry_reference(registry)
     if any(reference[field] != current[field] for field in ("registry_id", "path_digest")):
         raise StateError("reviewer registry identity differs from the checkpoint")
@@ -3809,12 +3858,70 @@ def validate_continuation_authorization(
     return value
 
 
+def continue_final_state(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    references = (
+        args.predecessor_state, args.epoch_zero_state, args.lifecycle_state,
+        args.authorization, args.continuation_registry, args.reviewer_registry,
+    )
+    canonical_paths = []
+    for raw in (args.state, *references):
+        candidate = Path(raw)
+        require_plain_path_components(candidate, "final continuation path")
+        reject_symlink_ancestors(candidate, include_target=True)
+        canonical = candidate.resolve()
+        require_outside_repository(canonical, "final continuation path")
+        if not canonical.name:
+            raise StateError("final continuation path must name a regular file")
+        if canonical.exists():
+            metadata = canonical.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise StateError("final continuation path must name a single-link regular file")
+        canonical_paths.append(canonical)
+    if len(set(canonical_paths)) != len(canonical_paths):
+        raise StateError("final continuation path aliases an input")
+    lock_paths = [
+        candidate.with_name(candidate.name + ".lock") for candidate in canonical_paths
+    ]
+    for lock_path in lock_paths:
+        reject_symlink_ancestors(lock_path, include_target=True)
+        if lock_path.exists():
+            metadata = lock_path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise StateError("final continuation lock path must name a single-link regular file")
+    if set(canonical_paths) & set(lock_paths):
+        raise StateError("final continuation input aliases a lock path")
+    require_group_execution_permit(args.plan, "execution", args)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        continue_state(args)
+
+
+def bind_continuation_registry_event(state: dict[str, Any], event_digest: str) -> None:
+    event = state["events"][0]
+    event["execution_epoch"]["continuation_registry_event_digest"] = event_digest
+    event["event_digest"] = canonical_digest(
+        {key: event[key] for key in event if key != "event_digest"}
+    )
+    state["event_chain_digest"] = event["event_digest"]
+    validate_state(state)
+
+
+def publish_continuation_state(path: Path, state: dict[str, Any], *, create_new: bool) -> None:
+    if path.exists() or path.is_symlink():
+        if read_state(path) == state:
+            return
+        raise StateError("continuation execution state already exists")
+    atomic_write(path, state, create_new=create_new)
+
+
 def continue_state(args: argparse.Namespace) -> None:
     path = Path(args.state)
     predecessor_path = Path(args.predecessor_state)
     lifecycle_path = Path(args.lifecycle_state)
     authorization_path = Path(args.authorization)
     registry_path = Path(args.continuation_registry)
+    final = getattr(args, "final_continuation", False)
     for external, label in (
         (path, "execution state"),
         (predecessor_path, "predecessor execution state"),
@@ -3823,7 +3930,12 @@ def continue_state(args: argparse.Namespace) -> None:
         (registry_path, "continuation registry"),
     ):
         require_outside_repository(external, label)
+    if final:
+        require_outside_repository(Path(args.epoch_zero_state), "epoch-zero execution state")
+        require_outside_repository(Path(args.reviewer_registry), "reviewer registry")
     require_group_execution_permit(args.plan, "execution", args)
+    if final and load_parallel_plan_module().enrolled_member(repository_root(), args.plan):
+        raise StateError("final continuation requires an ungrouped plan")
     if not ID_RE.fullmatch(args.run_id):
         raise StateError("invalid run_id")
     with with_lock(predecessor_path) as predecessor_lock:
@@ -3845,13 +3957,62 @@ def continue_state(args: argparse.Namespace) -> None:
             raise StateError(
                 "legacy execution ledger is not eligible for same-plan continuation"
             )
-        if prior_epoch["epoch"] >= MAX_CONTINUATION_EPOCH:
+        if not final and prior_epoch["epoch"] >= MAX_CONTINUATION_EPOCH:
             raise StateError("same-plan continuation epoch limit is exhausted")
         prior_review_count = formal_review_count(predecessor)
         if not 1 <= prior_review_count <= INDEPENDENT_REVIEW_LIMIT:
             raise StateError(
                 "continuation requires exactly one or two prior formal reviews"
             )
+        final_reference = None
+        if final:
+            if (
+                prior_epoch["schema_version"] != 1
+                or prior_epoch["epoch"] != 1
+                or predecessor["implementation_mode"] != "parent_direct"
+                or args.implementation_mode != "parent_direct"
+                or prior_review_count != 1
+                or prior_epoch["predecessor_review_count"] != 2
+            ):
+                raise StateError("final continuation requires epoch one with exactly three prior reviews")
+            authorization, authorization_digest = read_private_json(
+                authorization_path, "continuation authorization"
+            )
+            origin, origin_digest = read_state_with_digest(
+                Path(args.epoch_zero_state), require_canonical=True
+            )
+            if (
+                origin_digest != prior_epoch["predecessor_state_digest"]
+                or origin["run_id"] != prior_epoch["predecessor_run_id"]
+                or origin["event_chain_digest"] != prior_epoch["predecessor_event_chain_digest"]
+                or execution_epoch(origin) is None
+                or execution_epoch(origin)["epoch"] != 0
+                or formal_review_count(origin) != 2
+                or any(origin[key] != predecessor[key] for key in (
+                    "plan_path", "plan_digest", "source_head",
+                    "primary_invariant_digest", "implementation_mode",
+                ))
+            ):
+                raise StateError("final continuation origin differs from the bound epoch-zero ledger")
+            reviewers = snapshot_reviewer_registry(Path(args.reviewer_registry))
+            final_reference = authorization.get("reviewer_registry")
+            validate_reviewer_registry_reference(final_reference, reviewers, exact=False)
+            covered_admissions = reviewers["events"][:final_reference["event_count"]]
+            for previous in (origin, predecessor):
+                for event in previous["events"]:
+                    if event["event_type"] != "parent_review" or not event["review_target_digest"]:
+                        continue
+                    if not any(
+                        admission["execution_genesis_digest"] == previous["genesis_digest"]
+                        and admission["plan_digest"] == previous["plan_digest"]
+                        and admission["run_id"] == previous["run_id"]
+                        and admission["event_id"] == event["event_id"]
+                        and admission["review_receipt_digest"]
+                        == event["independent_review_receipt_digest"]
+                        for admission in covered_admissions
+                    ):
+                        raise StateError("final continuation registry omits a prior formal review")
+            prior_review_count += prior_epoch["predecessor_review_count"]
         registry = read_continuation_registry(registry_path)
         if (
             registry["identity_digest"]
@@ -3860,12 +4021,47 @@ def continue_state(args: argparse.Namespace) -> None:
             raise StateError(
                 "continuation registry differs from the predecessor execution"
             )
-        authorization, authorization_digest = read_private_json(
-            authorization_path, "continuation authorization"
-        )
+        if final and not any(
+            event["event_digest"] == prior_epoch["continuation_registry_event_digest"]
+            and event["child_genesis_digest"] == predecessor["genesis_digest"]
+            and event["child_run_id"] == predecessor["run_id"]
+            and event["child_state_path_digest"] == continuation_state_path_digest(predecessor_path)
+            and event["predecessor_state_digest"] == origin_digest
+            and event["predecessor_genesis_digest"] == origin["genesis_digest"]
+            and event["predecessor_event_chain_digest"] == origin["event_chain_digest"]
+            and event["authorization_digest"] == prior_epoch["owner_authorization_digest"]
+            for event in registry["events"]
+        ):
+            raise StateError("final continuation registry does not bind the prior continuation")
+        if not final:
+            authorization, authorization_digest = read_private_json(
+                authorization_path, "continuation authorization"
+            )
+        source_head = predecessor["source_head"]
+        checked_authorization = authorization
+        authorization_predecessor = predecessor
+        if final:
+            source_head = args.source_head
+            if (
+                set(authorization) != CONTINUATION_AUTHORIZATION_KEYS | FINAL_CONTINUATION_FIELDS
+                or type(authorization["schema_version"]) is not int
+                or authorization["schema_version"] != 2
+                or type(authorization["next_epoch"]) is not int
+                or type(authorization["cumulative_review_limit"]) is not int
+                or authorization["predecessor_source_head"] != predecessor["source_head"]
+                or authorization["reviewer_registry"] != final_reference
+                or not isinstance(source_head, str)
+                or not re.fullmatch(r"[0-9a-f]{40}", source_head)
+            ):
+                raise StateError("final continuation authorization has an invalid binding")
+            checked_authorization = {
+                key: authorization[key] for key in CONTINUATION_AUTHORIZATION_KEYS
+            }
+            checked_authorization["schema_version"] = CONTINUATION_AUTHORIZATION_SCHEMA_VERSION
+            authorization_predecessor = {**predecessor, "source_head": source_head}
         validate_continuation_authorization(
-            authorization,
-            predecessor=predecessor,
+            checked_authorization,
+            predecessor=authorization_predecessor,
             predecessor_state_digest=predecessor_digest,
             child_run_id=args.run_id,
             child_state_path_digest=continuation_state_path_digest(path),
@@ -3879,8 +4075,23 @@ def continue_state(args: argparse.Namespace) -> None:
         plan_bytes = plan.read_bytes()
         if digest(plan_bytes) != predecessor["plan_digest"]:
             raise StateError("continuation plan digest differs from the stopped execution")
-        if current_head(repository_root()) != predecessor["source_head"]:
+        if current_head(repository_root()) != source_head:
             raise StateError("continuation source HEAD differs from the stopped execution")
+        if final:
+            root = repository_root()
+            guard = load_worktree_guard_module()
+            ancestry = guard.git(
+                root, "merge-base", "--is-ancestor", predecessor["source_head"], source_head,
+                check=False,
+            )
+            if ancestry.returncode != 0:
+                raise StateError("final continuation source is not a verified descendant")
+            for commit in (predecessor["source_head"], source_head):
+                committed = guard.git(
+                    root, "cat-file", "blob", f"{commit}:{args.plan}", check=False,
+                )
+                if committed.returncode != 0 or committed.stdout != plan_bytes:
+                    raise StateError("final continuation requires unchanged committed plan bytes")
         invariant = re.findall(
             r"^primary_invariant: (.+)$",
             plan_bytes.decode("utf-8"),
@@ -3895,7 +4106,7 @@ def continue_state(args: argparse.Namespace) -> None:
             run_id=args.run_id,
             plan_path=args.plan,
             plan_digest=predecessor["plan_digest"],
-            source_head=predecessor["source_head"],
+            source_head=source_head,
             invariant_digest=predecessor["primary_invariant_digest"],
             lifecycle_path=lifecycle_path,
             implementation_mode=args.implementation_mode,
@@ -3903,8 +4114,8 @@ def continue_state(args: argparse.Namespace) -> None:
         append_execution_epoch(
             state,
             {
-                "schema_version": 1,
-                "epoch": 1,
+                "schema_version": 2 if final else 1,
+                "epoch": 2 if final else 1,
                 "predecessor_state_digest": predecessor_digest,
                 "predecessor_run_id": predecessor["run_id"],
                 "predecessor_event_chain_digest": predecessor["event_chain_digest"],
@@ -3915,9 +4126,26 @@ def continue_state(args: argparse.Namespace) -> None:
                     "identity_digest"
                 ],
                 "continuation_registry_event_digest": digest("pending"),
+                **({
+                    "predecessor_source_head": predecessor["source_head"],
+                    "reviewer_registry": final_reference,
+                } if final else {}),
             },
         )
         validate_state(state)
+        if final and (path.exists() or path.is_symlink()):
+            consumed_identity = canonical_digest({
+                "plan_digest": predecessor["plan_digest"],
+                "predecessor_run_id": predecessor["run_id"],
+                "predecessor_genesis_digest": predecessor["genesis_digest"],
+            })
+            prior_consumption = registry["consumed"].get(consumed_identity)
+            if prior_consumption is None:
+                raise StateError("final continuation destination is already occupied")
+            expected = json.loads(json.dumps(state))
+            bind_continuation_registry_event(expected, prior_consumption["event_digest"])
+            if read_state(path) != expected:
+                raise StateError("final continuation destination differs from exact recovery")
         registry_event_digest = consume_continuation_authorization(
             registry_path,
             plan_digest=predecessor["plan_digest"],
@@ -3933,22 +4161,13 @@ def continue_state(args: argparse.Namespace) -> None:
                 "continuation_registry_identity_digest"
             ],
         )
-        epoch_event = state["events"][0]
-        epoch_event["execution_epoch"][
-            "continuation_registry_event_digest"
-        ] = registry_event_digest
-        epoch_event["event_digest"] = canonical_digest(
-            {key: epoch_event[key] for key in epoch_event if key != "event_digest"}
-        )
-        state["event_chain_digest"] = epoch_event["event_digest"]
-        validate_state(state)
-        with with_lock(path) as state_lock:
-            fcntl.flock(state_lock.fileno(), fcntl.LOCK_EX)
-            if path.exists() or path.is_symlink():
-                if read_state(path) == state:
-                    return
-                raise StateError("continuation execution state already exists")
-            atomic_write(path, state)
+        bind_continuation_registry_event(state, registry_event_digest)
+        if final:
+            publish_continuation_state(path, state, create_new=True)
+        else:
+            with with_lock(path) as state_lock:
+                fcntl.flock(state_lock.fileno(), fcntl.LOCK_EX)
+                publish_continuation_state(path, state, create_new=False)
 
 
 def checkpoint_boundary_matches(state: dict[str, Any], boundary: str) -> bool:
@@ -4956,6 +5175,11 @@ def record_event(args: argparse.Namespace) -> None:
                 raise StateError(
                     "review budget permits one initial review and one bounded rereview"
                 )
+            if epoch and (
+                epoch["predecessor_review_count"] + len(prior_reviews)
+                >= epoch["cumulative_review_limit"]
+            ):
+                raise StateError("cumulative review limit is exhausted")
             has_predecessor = bool(state["predecessor_plan_digest"])
             checkpoint_claims = [
                 event for event in state["events"]
@@ -4967,7 +5191,9 @@ def record_event(args: argparse.Namespace) -> None:
                 raise StateError(
                     "dependent plan review requires the predecessor state and session checkpoint"
                 )
-            predecessor_reference = None
+            predecessor_reference = (
+                epoch["reviewer_registry"] if epoch and epoch["schema_version"] == 2 else None
+            )
             if args.predecessor_checkpoint:
                 if not args.predecessor_state:
                     raise StateError(
@@ -5692,6 +5918,19 @@ def parser() -> argparse.ArgumentParser:
         "--implementation-mode", choices=sorted(MODES), required=True
     )
     continuation.set_defaults(handler=continue_state)
+    final_continuation = sub.add_parser("continue-final")
+    final_continuation.add_argument("state")
+    final_continuation.add_argument("--predecessor-state", required=True)
+    final_continuation.add_argument("--epoch-zero-state", required=True)
+    final_continuation.add_argument("--continuation-registry", required=True)
+    final_continuation.add_argument("--reviewer-registry", required=True)
+    final_continuation.add_argument("--authorization", required=True)
+    final_continuation.add_argument("--source-head", required=True)
+    final_continuation.add_argument("--run-id", required=True)
+    final_continuation.add_argument("--plan", required=True)
+    final_continuation.add_argument("--lifecycle-state", required=True)
+    final_continuation.add_argument("--implementation-mode", choices=["parent_direct"], required=True)
+    final_continuation.set_defaults(handler=continue_final_state, final_continuation=True)
     record = sub.add_parser("record")
     record.add_argument("state")
     record.add_argument("--run-id", required=True)
