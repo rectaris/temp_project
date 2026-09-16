@@ -66,3 +66,4 @@ id	path	contract
 343	docs/plan/replanned/2026/09/01-15/343-admit-project-source-compile-checks.md	docs/plan/replanned/contracts/343-admit-project-source-compile-checks.json
 355	docs/plan/replanned/2026/09/01-15/355-isolate-opencode-go-inference-credentials.md	docs/plan/replanned/contracts/355-isolate-opencode-go-inference-credentials.json
 358	docs/plan/replanned/2026/09/01-15/358-isolate-opencode-go-inference-credentials.md	docs/plan/replanned/contracts/358-isolate-opencode-go-inference-credentials.json
+364	docs/plan/replanned/2026/09/16-31/364-enforce-bounded-python-lint.md	docs/plan/replanned/contracts/364-enforce-bounded-python-lint.json

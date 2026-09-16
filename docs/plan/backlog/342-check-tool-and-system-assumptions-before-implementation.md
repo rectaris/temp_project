@@ -58,7 +58,7 @@ context_files:
   - docs/agent/spec-index.yaml
   - docs/agent/template-feedback.json
   - docs/plan/checked/2026/09/01-15/299-reuse-established-decisions-in-existing-skills.md
-  - docs/plan/active/364-enforce-bounded-python-lint.md
+  - docs/plan/replanned/2026/09/16-31/364-enforce-bounded-python-lint.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md

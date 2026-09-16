@@ -1,10 +1,7 @@
 # Enforce bounded Python lint with explicitly permitted automatic fixes
 
-status: replan_required
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: The same pinned Python lint rules reject selected defects in root and managed template scripts without expanding automatic writes into project-owned files.
 task_types:
   - template_workflow
 review_class: B
@@ -86,6 +83,17 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:a3a0b337ed66d64d66bde9dfac65dc46f5481a88bb30c51691b81d0e18e92be0","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:45d0a5a440d4225c2c9a0c49c23a13226a3cee80c8fbdced266eedf625c400fc","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/364-enforce-bounded-python-lint.md
+replan_contract: docs/plan/replanned/contracts/364-enforce-bounded-python-lint.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/353-enforce-bounded-python-lint.md
+inherited_acceptance_digests:
+  - sha256:a3a0b337ed66d64d66bde9dfac65dc46f5481a88bb30c51691b81d0e18e92be0
+  - sha256:45d0a5a440d4225c2c9a0c49c23a13226a3cee80c8fbdced266eedf625c400fc
 checked_summary_ja: Pythonの未定義名などを検査し、自動修正を許可した規則に限定する。
 
 ## Decisions
