@@ -119,12 +119,14 @@ EVENT_TYPES = {
     "predecessor_checkpoint_bound",
     "execution_epoch_started",
     "adversarial_preflight",
+    "review_route_checked",
 }
 RECORD_EVENT_TYPES = EVENT_TYPES - {
     "writable_attempt_started",
     "attempt_closed",
     "execution_epoch_started",
     "adversarial_preflight",
+    "review_route_checked",
 }
 EXACT_KEYS = {
     "schema_version", "run_id", "plan_path", "plan_digest", "source_head",
@@ -174,6 +176,12 @@ PREFLIGHT_EVENT_KEYS = EVENT_KEYS | {
     "preflight_evidence", "preflight_evidence_digest"
 }
 REVIEW_EVENT_KEYS = EVENT_KEYS | {"review_specification_digests"}
+REVIEW_ROUTE_EVENT_KEYS = EVENT_KEYS | {"review_route_evidence"}
+REVIEW_ROUTE_EVIDENCE_KEYS = {
+    "schema_version", "probe_packet_digest", "manifest_digest",
+    "reviewer_session_digest", "inheritance_evidence_digest",
+    "inherited_turns", "tool_call_count",
+}
 EXECUTION_EPOCH_KEYS = {
     "schema_version", "epoch", "predecessor_state_digest",
     "predecessor_run_id", "predecessor_event_chain_digest",
@@ -1637,6 +1645,39 @@ def validate_preflight_evidence(
     return value
 
 
+def review_route_probe_packet(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "record_type": "review_route_probe",
+        "execution_genesis_digest": state["genesis_digest"],
+    }
+
+
+def validate_review_route_evidence(value: Any, state: dict[str, Any]) -> None:
+    if not isinstance(value, dict) or set(value) != REVIEW_ROUTE_EVIDENCE_KEYS:
+        raise StateError("review-route evidence has an invalid exact shape")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise StateError("review-route evidence has an unsupported schema version")
+    for field in (
+        "probe_packet_digest", "manifest_digest", "reviewer_session_digest",
+        "inheritance_evidence_digest",
+    ):
+        require_digest(value[field], f"review-route {field}")
+    if value["probe_packet_digest"] != canonical_digest(review_route_probe_packet(state)):
+        raise StateError("review-route probe packet differs from this execution")
+    if type(value["inherited_turns"]) is not int or value["inherited_turns"] != 0:
+        raise StateError("review-route probe must observe zero inherited turns")
+    if type(value["tool_call_count"]) is not int or value["tool_call_count"] < 1:
+        raise StateError("review-route probe requires at least one observed reviewer tool call")
+
+
+def require_review_route(state: dict[str, Any]) -> None:
+    if execution_epoch(state) is not None and not any(
+        event["event_type"] == "review_route_checked" for event in state["events"]
+    ):
+        raise StateError("epoch-enabled execution requires a recorded review-route check before writes")
+
+
 def validate_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != EXACT_KEYS:
         raise StateError("execution state has an invalid exact schema")
@@ -1779,6 +1820,7 @@ def validate_state(value: Any) -> dict[str, Any]:
             frozenset(EPOCH_EVENT_KEYS),
             frozenset(PREFLIGHT_EVENT_KEYS),
             frozenset(REVIEW_EVENT_KEYS),
+            frozenset(REVIEW_ROUTE_EVENT_KEYS),
         }
         if not isinstance(event, dict) or frozenset(event) not in allowed_event_keys:
             raise StateError("event has an invalid exact schema")
@@ -1799,9 +1841,13 @@ def validate_state(value: Any) -> dict[str, Any]:
         elif event["event_type"] == "adversarial_preflight":
             if event_keys != frozenset(PREFLIGHT_EVENT_KEYS):
                 raise StateError("adversarial preflight has an invalid exact schema")
+        elif event["event_type"] == "review_route_checked":
+            if event_keys != frozenset(REVIEW_ROUTE_EVENT_KEYS):
+                raise StateError("review-route check has an invalid exact schema")
         elif event_keys in {
             frozenset(EPOCH_EVENT_KEYS),
             frozenset(PREFLIGHT_EVENT_KEYS),
+            frozenset(REVIEW_ROUTE_EVENT_KEYS),
         }:
             raise StateError("event carries evidence reserved for another event type")
         if event["event_type"] == "execution_epoch_started":
@@ -1989,7 +2035,23 @@ def validate_state(value: Any) -> dict[str, Any]:
             successor_source and not re.fullmatch(r"[0-9a-f]{40}", successor_source)
         ):
             raise StateError("event has an invalid successor source HEAD")
-        if event["event_type"] == "parent_review" and review_target_digest:
+        if event["event_type"] == "review_route_checked":
+            if execution_epoch({"events": validated_events}) is None or any(
+                prior["event_type"] == "review_route_checked" for prior in validated_events
+            ):
+                raise StateError("review-route check requires one unchecked execution epoch")
+            if any(
+                prior["event_type"] == "writable_attempt_started" for prior in validated_events
+            ):
+                raise StateError("review-route check must be recorded before any writable attempt")
+            envelope = {
+                "sequence", "event_id", "event_type", "implementation_mode",
+                "elapsed_seconds", "monotonic_ns", "previous_event_digest", "event_digest",
+            }
+            if any(event[key] for key in EVENT_KEYS - envelope):
+                raise StateError("review-route check carries unrelated event evidence")
+            validate_review_route_evidence(event["review_route_evidence"], value)
+        elif event["event_type"] == "parent_review" and review_target_digest:
             if (
                 not review_target_digest
                 or not event["candidate_lifecycle_digest"]
@@ -4872,6 +4934,83 @@ def candidate_review_identity(
     )
 
 
+def print_review_route_packet(args: argparse.Namespace) -> None:
+    state = read_state(Path(args.state))
+    if state["run_id"] != args.run_id:
+        raise StateError("run_id mismatch")
+    if state["state"] != "active":
+        raise StateError(stopped_message(state))
+    if execution_epoch(state) is None:
+        raise StateError("legacy execution ledger does not require a review-route check")
+    require_repository_baseline(state)
+    packet = review_route_probe_packet(state)
+    print(f"ReviewPacket: {canonical_digest(packet)}")
+    print(json.dumps(packet, sort_keys=True, separators=(",", ":")))
+
+
+def review_route_manifest_digest(path: Path) -> str:
+    reject_symlink_ancestors(path, include_target=True)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise StateError("review-route manifest must be a regular file")
+        data = os.read(descriptor, MAX_BYTES + 1)
+        if len(data) > MAX_BYTES:
+            raise StateError("review-route manifest exceeds size limit")
+        return digest(data)
+    finally:
+        os.close(descriptor)
+
+
+def record_review_route_check(args: argparse.Namespace) -> None:
+    path = Path(args.state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        if state["run_id"] != args.run_id:
+            raise StateError("run_id mismatch")
+        if state["state"] != "active":
+            raise StateError(stopped_message(state))
+        if execution_epoch(state) is None:
+            raise StateError("legacy execution ledger does not require a review-route check")
+        if any(event["event_type"] == "review_route_checked" for event in state["events"]):
+            raise StateError("review-route check is already recorded")
+        if any(event["event_type"] == "writable_attempt_started" for event in state["events"]):
+            raise StateError("review-route check must be recorded before any writable attempt")
+        require_group_execution_permit(state["plan_path"], "execution", args)
+        require_repository_baseline(state)
+        manifest = Path(args.probe_manifest)
+        manifest_digest = review_route_manifest_digest(manifest)
+        observations = resource_observations_from_manifest(manifest)
+        session_digest = observations["root_session_identity"]["digest"]
+        packet_digest = canonical_digest(review_route_probe_packet(state))
+        review_turn_zero_from_manifest(
+            manifest, session_digest, packet_digest, args.inheritance_evidence_digest
+        )
+        if review_route_manifest_digest(manifest) != manifest_digest:
+            raise StateError("review-route manifest changed during verification")
+        evidence = {
+            "schema_version": 1,
+            "probe_packet_digest": packet_digest,
+            "manifest_digest": manifest_digest,
+            "reviewer_session_digest": session_digest,
+            "inheritance_evidence_digest": args.inheritance_evidence_digest,
+            "inherited_turns": 0,
+            "tool_call_count": observations["metrics"]["tool_call_count"]["value"],
+        }
+        validate_review_route_evidence(evidence, state)
+        event = empty_execution_event(
+            state, event_id=args.event_id, event_type="review_route_checked"
+        )
+        event["review_route_evidence"] = evidence
+        event["event_digest"] = canonical_digest(event)
+        state["events"].append(event)
+        state["last_monotonic_ns"] = event["monotonic_ns"]
+        state["event_chain_digest"] = event["event_digest"]
+        validate_state(state)
+        atomic_write(path, state)
+
+
 def record_adversarial_preflight(args: argparse.Namespace) -> None:
     path = Path(args.state)
     with with_lock(path) as lock:
@@ -5440,6 +5579,7 @@ def record_writable_attempt_start(args: argparse.Namespace) -> None:
             raise StateError(stopped_message(state))
         if state["implementation_mode"] != "candidate":
             raise StateError("writable attempt start requires candidate implementation mode")
+        require_review_route(state)
         require_repository_baseline(state)
         require_lifecycle_identity(state, args.run_id, lifecycle_path)
         if state["open_attempt_id"]:
@@ -5829,7 +5969,14 @@ def record_attempt_close(args: argparse.Namespace) -> None:
 
 
 def check_gate(args: argparse.Namespace) -> None:
-    state = read_state(Path(args.state))
+    path = Path(args.state)
+    with with_lock(path) as lock:
+        # Runner operations already hold a shared execution lease on this lock.
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        check_gate_locked(args, read_state(path))
+
+
+def check_gate_locked(args: argparse.Namespace, state: dict[str, Any]) -> None:
     if state["run_id"] != args.run_id:
         raise StateError("run_id mismatch")
     if args.operation in {"execution", "completion", "archive"}:
@@ -5853,6 +6000,8 @@ def check_gate(args: argparse.Namespace) -> None:
         raise StateError("plan path mismatch")
     if args.open_attempt_id and state["open_attempt_id"] != args.open_attempt_id:
         raise StateError("plan execution attempt is no longer the exact open writable attempt")
+    if args.operation == "execution":
+        require_review_route(state)
     require_repository_baseline(state)
     if args.lifecycle_state and state["candidate_lifecycle_identity_digest"] != lifecycle_identity_digest(
         args.run_id, Path(args.lifecycle_state)
@@ -5886,6 +6035,19 @@ def parser() -> argparse.ArgumentParser:
     continuation_registry_init = sub.add_parser("continuation-registry-init")
     continuation_registry_init.add_argument("--output", required=True)
     continuation_registry_init.set_defaults(handler=initialize_continuation_registry)
+    probe = sub.add_parser("review-route-packet")
+    probe.add_argument("state")
+    probe.add_argument("--run-id", required=True)
+    probe.set_defaults(handler=print_review_route_packet)
+    route = sub.add_parser("review-route-check")
+    route.add_argument("state")
+    route.add_argument("--run-id", required=True)
+    route.add_argument("--event-id", required=True)
+    route.add_argument("--group-permit")
+    route.add_argument("--group-state")
+    route.add_argument("--probe-manifest", required=True)
+    route.add_argument("--inheritance-evidence-digest", required=True)
+    route.set_defaults(handler=record_review_route_check)
     init = sub.add_parser("init")
     init.add_argument("state")
     init.add_argument("--run-id", required=True)

@@ -2034,6 +2034,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             mode="candidate",
             require_preflight=True,
         )
+        self.record_review_route_fixture(state, run_id, "candidate-preflight-route")
         attempt_id = "candidate-preflight-attempt"
         started = self.start_writable_attempt(
             state, lifecycle, run_id, attempt_id
@@ -2696,6 +2697,455 @@ class PlanExecutionStateTest(unittest.TestCase):
         ])
         self.assertEqual(parsed.review_receipt, [])
         self.assertEqual(parsed.checkpoint_review_receipt, [])
+
+    def record_review_route_fixture(self, state: Path, run_id: str, label: str) -> Path:
+        payload = STATE_MODULE.read_state(state)
+        packet = STATE_MODULE.review_route_probe_packet(payload)
+        manifest = self.resource_manifest(
+            label, session=label, review_packet_digest=STATE_MODULE.canonical_digest(packet)
+        )
+        self.record_route(state, run_id, manifest, label, check=True)
+        return manifest
+
+    def record_route(
+        self, state: Path, run_id: str, manifest: Path, event_id: str, *, check: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        resources = json.loads(manifest.read_text())["resource_observations"]
+        return self.run_cli(
+            "review-route-check", str(state), "--run-id", run_id, "--event-id", event_id,
+            "--probe-manifest", str(manifest), "--inheritance-evidence-digest",
+            resources["evidence_digests"]["codex_hooks"], check=check,
+        )
+
+    def test_epoch_execution_refuses_writes_without_a_recorded_route_check(self) -> None:
+        for mode in ("candidate", "parent_direct"):
+            with self.subTest(mode=mode):
+                state, lifecycle, run_id = self.initialize_execution(
+                    f"missing-route-{mode}", mode=mode, require_preflight=True
+                )
+                before = state.read_bytes()
+                result = self.run_cli(
+                    "check", str(state), "--run-id", run_id,
+                    "--operation", "execution", "--lifecycle-state", str(lifecycle),
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("recorded review-route check before writes", result.stderr)
+                if mode == "candidate":
+                    result = self.start_writable_attempt(
+                        state, lifecycle, run_id, "unchecked-attempt"
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("recorded review-route check before writes", result.stderr)
+                self.assertEqual(STATE_MODULE.read_state(state)["state"], "active")
+                self.assertEqual(state.read_bytes(), before)
+
+    def test_valid_review_route_releases_writes_without_admitting_a_review(self) -> None:
+        for mode in ("candidate", "parent_direct"):
+            with self.subTest(mode=mode):
+                label = f"valid-route-{mode}"
+                state, lifecycle, run_id = self.initialize_execution(
+                    label, mode=mode, require_preflight=True
+                )
+                before = state.read_bytes()
+                declaration = self.run_cli(
+                    "review-route-packet", str(state), "--run-id", run_id, check=True
+                )
+                packet = STATE_MODULE.review_route_probe_packet(STATE_MODULE.read_state(state))
+                self.assertEqual(declaration.stdout.splitlines(), [
+                    f"ReviewPacket: {STATE_MODULE.canonical_digest(packet)}",
+                    json.dumps(packet, sort_keys=True, separators=(",", ":")),
+                ])
+                self.assertEqual(state.read_bytes(), before)
+                registry_before = self.registry.read_bytes()
+                manifest = self.record_review_route_fixture(state, run_id, label)
+                payload = STATE_MODULE.read_state(state)
+                self.assertEqual(len(payload["events"]), 2)
+                self.assertEqual(payload["events"][-1]["event_type"], "review_route_checked")
+                evidence = payload["events"][-1]["review_route_evidence"]
+                self.assertEqual(evidence["manifest_digest"], digest(manifest.read_bytes()))
+                self.assertEqual(evidence["tool_call_count"], 3)
+                self.assertEqual(evidence["inherited_turns"], 0)
+                self.assertEqual(STATE_MODULE.formal_review_count(payload), 0)
+                self.assertEqual(self.registry.read_bytes(), registry_before)
+                self.run_cli(
+                    "check", str(state), "--run-id", run_id, "--operation", "execution",
+                    "--lifecycle-state", str(lifecycle), check=True,
+                )
+                before_replay = state.read_bytes()
+                replay = self.record_route(state, run_id, manifest, "repeated-route")
+                self.assertNotEqual(replay.returncode, 0)
+                self.assertIn("already recorded", replay.stderr)
+                self.assertEqual(state.read_bytes(), before_replay)
+                if mode == "candidate":
+                    started = self.start_writable_attempt(
+                        state, lifecycle, run_id, "checked-attempt"
+                    )
+                    self.assertEqual(started.returncode, 0, started.stderr)
+
+    def test_invalid_route_probe_leaves_no_check_or_registry_effect(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "rejected-route", mode="parent_direct", require_preflight=True
+        )
+        packet_digest = STATE_MODULE.canonical_digest(
+            STATE_MODULE.review_route_probe_packet(STATE_MODULE.read_state(state))
+        )
+        before = state.read_bytes()
+        registry_before = self.registry.read_bytes()
+        cases = (
+            ("missing-packet", None, 0, 3),
+            ("wrong-packet", digest("another packet"), 0, 3),
+            ("inherited-turn", packet_digest, 1, 3),
+            ("zero-calls", packet_digest, 0, 0),
+            ("unobserved-calls", packet_digest, 0, None),
+        )
+        for label, declared_packet, inherited_turns, count in cases:
+            with self.subTest(case=label):
+                manifest = self.resource_manifest(
+                    label, session=label, review_packet_digest=declared_packet,
+                    inherited_turns=inherited_turns,
+                )
+                payload = json.loads(manifest.read_text())
+                payload["resource_observations"]["metrics"]["tool_call_count"] = (
+                    {"status": "not_observed", "value": None, "provenance": "not_observed"}
+                    if count is None else
+                    {"status": "observed", "value": count, "provenance": "deterministic_proxy"}
+                )
+                manifest.write_text(json.dumps(payload))
+                rejected = self.record_route(state, run_id, manifest, label)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertEqual(state.read_bytes(), before)
+                self.assertEqual(self.registry.read_bytes(), registry_before)
+        refused = self.run_cli(
+            "check", str(state), "--run-id", run_id, "--lifecycle-state", str(lifecycle)
+        )
+        self.assertNotEqual(refused.returncode, 0)
+
+    def test_review_route_requires_and_accepts_current_group_authority(self) -> None:
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.invalid/owner/repo.git"],
+            cwd=self.repo, check=True,
+        )
+        members = []
+        for plan, plan_id, scope in (
+            (self.plan, "001", "allowed.txt"),
+            (self.child_plan, "002", "child.txt"),
+        ):
+            plan.write_text(
+                "plan_purpose: implementation\n"
+                + plan.read_text().replace("  - allowed.txt\n", f"  - {scope}\n")
+            )
+            members.append({
+                "plan_id": plan_id,
+                "plan_path": plan.relative_to(self.repo).as_posix(),
+                "plan_digest": digest(plan.read_bytes()),
+                "write_scope_digest": STATE_MODULE.canonical_digest([scope]),
+            })
+        target_ref = subprocess.check_output(
+            ["git", "symbolic-ref", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        description = self.repo / "docs/plan/execution-groups/route.json"
+        description.parent.mkdir()
+        description.write_text(json.dumps({
+            "schema_version": 1,
+            "group_id": "route",
+            "target_ref": target_ref,
+            "declared_independence": "Separate fixture product files with no shared interface.",
+            "members": members,
+        }))
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "enroll route fixtures"], cwd=self.repo, check=True)
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        group_state = self.base / "route-group.json"
+        permit = self.base / "route-permit.json"
+        for arguments in (
+            ["group-init", str(group_state), "--group-description",
+             description.relative_to(self.repo).as_posix(), "--target-ref", target_ref,
+             "--start-commit", head],
+            ["permit-issue", str(group_state), "--member", members[0]["plan_path"],
+             "--permit-id", "route-permit", "--workspace-digest", digest("route workspace"),
+             "--output", str(permit)],
+        ):
+            subprocess.run(
+                [sys.executable, str(GROUP_SCRIPT), *arguments], cwd=self.repo,
+                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+        state = self.base / "grouped-route-execution.json"
+        lifecycle = self.base / "grouped-route-lifecycle.json"
+        run_id = "grouped-route"
+        authority = ["--group-permit", str(permit), "--group-state", str(group_state)]
+        self.run_cli(
+            "init", str(state), "--run-id", run_id, "--plan", members[0]["plan_path"],
+            "--plan-digest", members[0]["plan_digest"], "--source-head", head,
+            "--primary-invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle), "--implementation-mode", "parent_direct",
+            "--require-adversarial-preflight", "--continuation-registry",
+            str(self.continuation_registry), *authority, check=True,
+        )
+        packet = STATE_MODULE.review_route_probe_packet(STATE_MODULE.read_state(state))
+        manifest = self.resource_manifest(
+            "grouped-route-probe", review_packet_digest=STATE_MODULE.canonical_digest(packet)
+        )
+        evidence = json.loads(manifest.read_text())["resource_observations"]["evidence_digests"]
+        arguments = [
+            "review-route-check", str(state), "--run-id", run_id, "--event-id", "route",
+            "--probe-manifest", str(manifest),
+            "--inheritance-evidence-digest", evidence["codex_hooks"],
+        ]
+        before = state.read_bytes()
+        for incomplete in ([], authority[:2], authority[2:]):
+            with self.subTest(authority=incomplete):
+                refused = self.run_cli(*arguments, *incomplete)
+                self.assertEqual(refused.returncode, 1, refused.stderr)
+                self.assertRegex(refused.stderr, "verified group member permit|live group execution state")
+                self.assertEqual(state.read_bytes(), before)
+        accepted = self.run_cli(*arguments, *authority)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(STATE_MODULE.read_state(state)["events"][-1]["event_type"],
+                         "review_route_checked")
+        self.run_cli(
+            "check", str(state), "--run-id", run_id, "--operation", "execution",
+            "--lifecycle-state", str(lifecycle), *authority, check=True,
+        )
+
+    def test_route_probe_is_bound_to_one_execution_and_is_not_a_real_review(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "probe-owner", mode="parent_direct", require_preflight=True
+        )
+        manifest = self.record_review_route_fixture(state, run_id, "probe-runtime")
+        other, _, other_run = self.initialize_execution(
+            "probe-other", mode="parent_direct", require_preflight=True
+        )
+        other_before = other.read_bytes()
+        rejected = self.record_route(other, other_run, manifest, "copied-probe")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("does not observe this review packet", rejected.stderr)
+        self.assertEqual(other.read_bytes(), other_before)
+
+        (self.repo / "allowed.txt").write_text("real review target\n")
+        receipt = self.review_receipt(
+            "real-review", digest(self.plan.read_text()), round_value=1
+        )
+        real_manifest = self.review_manifests[receipt]
+        rejected = self.record_route(other, other_run, real_manifest, "review-as-probe")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("does not observe this review packet", rejected.stderr)
+        self.assertEqual(other.read_bytes(), other_before)
+
+        receipt_payload = json.loads(receipt.read_text())
+        resources = json.loads(manifest.read_text())["resource_observations"]
+        receipt_payload["reviewer_session_digest"] = resources["root_session_identity"]["digest"]
+        receipt_payload["inheritance_evidence_digest"] = resources["evidence_digests"]["codex_hooks"]
+        receipt.write_text(json.dumps(receipt_payload))
+        before = state.read_bytes()
+        rejected = self.run_cli(
+            "review", str(state), "--run-id", run_id, "--event-id", "probe-as-review",
+            "--implementation-mode", "parent_direct", "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(manifest), "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("does not observe this review packet", rejected.stderr)
+        self.assertEqual(state.read_bytes(), before)
+
+    def test_legacy_execution_keeps_its_existing_gate_and_start_behavior(self) -> None:
+        before = self.state.read_bytes()
+        self.run_cli(
+            "check", str(self.state), "--run-id", "run-1",
+            "--lifecycle-state", str(self.lifecycle), check=True,
+        )
+        self.assertIsNone(STATE_MODULE.execution_epoch(STATE_MODULE.read_state(self.state)))
+        self.assertEqual(self.state.read_bytes(), before)
+        started = self.start_writable_attempt(self.state, self.lifecycle, "run-1", "legacy-start")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        before_probe = self.state.read_bytes()
+        rejected = self.run_cli("review-route-packet", str(self.state), "--run-id", "run-1")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("legacy execution ledger", rejected.stderr)
+        self.assertEqual(self.state.read_bytes(), before_probe)
+
+    def test_review_route_evidence_schema_and_probe_binding_are_verified_on_read(self) -> None:
+        state, _, run_id = self.initialize_execution(
+            "route-evidence", mode="parent_direct", require_preflight=True
+        )
+        self.record_review_route_fixture(state, run_id, "route-evidence-runtime")
+        original = STATE_MODULE.read_state(state)
+        for field, value in (
+            ("schema_version", True), ("tool_call_count", 0), ("tool_call_count", True),
+            ("inherited_turns", 1), ("probe_packet_digest", digest("other execution")),
+            ("manifest_digest", ""), ("prompt", "must never be retained"),
+        ):
+            with self.subTest(field=field, value=value):
+                tampered = json.loads(json.dumps(original))
+                event = tampered["events"][-1]
+                event["review_route_evidence"][field] = value
+                event["event_digest"] = STATE_MODULE.canonical_digest(
+                    {key: item for key, item in event.items() if key != "event_digest"}
+                )
+                tampered["event_chain_digest"] = event["event_digest"]
+                with self.assertRaisesRegex(STATE_MODULE.StateError, "review-route"):
+                    STATE_MODULE.validate_state(tampered)
+        forged = self.run_cli(
+            "record", str(state), "--run-id", run_id, "--event-id", "forged-route",
+            "--event-type", "review_route_checked", "--implementation-mode", "parent_direct",
+            "--lifecycle-state", str(self.lifecycle),
+        )
+        self.assertNotEqual(forged.returncode, 0)
+        self.assertEqual(STATE_MODULE.read_state(state), original)
+
+    def pre_update_attempt_with_probe_fixture(
+        self, label: str, *, closed: bool
+    ) -> tuple[Path, Path, str, Path]:
+        state, lifecycle, run_id = self.initialize_execution(label, require_preflight=True)
+        attempt_id = f"{label}-attempt"
+        arguments = STATE_MODULE.parser().parse_args([
+            "start", str(state), "--run-id", run_id,
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--attempt-id", attempt_id, "--attempt-kind", "initial",
+            "--lifecycle-state", str(lifecycle),
+        ])
+        # Simulate the old writer, before it acquired the new route precondition.
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(STATE_MODULE, "require_review_route", return_value=None),
+        ):
+            arguments.handler(arguments)
+        if closed:
+            result = self.close_writable_attempt(
+                state, lifecycle, run_id, attempt_id,
+                invariant=STATE_MODULE.read_state(state)["primary_invariant_digest"],
+                outcome="correction_requested", reason="acceptance_unmet",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+        payload = STATE_MODULE.read_state(state)
+        self.assertEqual(payload["open_attempt_id"], "" if closed else attempt_id)
+        self.assertEqual(payload["state"], "active")
+        packet = STATE_MODULE.review_route_probe_packet(payload)
+        manifest = self.resource_manifest(
+            label, session=label, review_packet_digest=STATE_MODULE.canonical_digest(packet)
+        )
+        return state, lifecycle, run_id, manifest
+
+    def test_late_review_route_is_refused_after_open_or_closed_pre_update_attempt(self) -> None:
+        for closed in (False, True):
+            with self.subTest(closed=closed):
+                state, lifecycle, run_id, manifest = self.pre_update_attempt_with_probe_fixture(
+                    f"late-route-writer-{closed}", closed=closed
+                )
+                before = state.read_bytes()
+                registry_before = self.registry.read_bytes()
+                refused = self.record_route(state, run_id, manifest, "late-route")
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("before any writable attempt", refused.stderr)
+                self.assertEqual(state.read_bytes(), before)
+                self.assertEqual(self.registry.read_bytes(), registry_before)
+                self.assertEqual(STATE_MODULE.read_state(state)["state"], "active")
+                gate = self.run_cli(
+                    "check", str(state), "--run-id", run_id,
+                    "--lifecycle-state", str(lifecycle),
+                )
+                self.assertNotEqual(gate.returncode, 0)
+                self.assertIn("recorded review-route check before writes", gate.stderr)
+                self.assertEqual(state.read_bytes(), before)
+
+    def test_late_review_route_is_rejected_by_reader_with_valid_event_hashes(self) -> None:
+        for closed in (False, True):
+            with self.subTest(closed=closed):
+                state, lifecycle, run_id, manifest = self.pre_update_attempt_with_probe_fixture(
+                    f"late-route-reader-{closed}", closed=closed
+                )
+                payload = STATE_MODULE.read_state(state)
+                observations = json.loads(manifest.read_text())["resource_observations"]
+                evidence = {
+                    "schema_version": 1,
+                    "probe_packet_digest": STATE_MODULE.canonical_digest(
+                        STATE_MODULE.review_route_probe_packet(payload)
+                    ),
+                    "manifest_digest": digest(manifest.read_bytes()),
+                    "reviewer_session_digest": observations["root_session_identity"]["digest"],
+                    "inheritance_evidence_digest": observations["evidence_digests"]["codex_hooks"],
+                    "inherited_turns": 0,
+                    "tool_call_count": observations["metrics"]["tool_call_count"]["value"],
+                }
+                STATE_MODULE.validate_review_route_evidence(evidence, payload)
+                event = STATE_MODULE.empty_execution_event(
+                    payload, event_id="late-route", event_type="review_route_checked"
+                )
+                event["review_route_evidence"] = evidence
+                event["event_digest"] = STATE_MODULE.canonical_digest(event)
+                payload["events"].append(event)
+                payload["last_monotonic_ns"] = event["monotonic_ns"]
+                payload["event_chain_digest"] = event["event_digest"]
+                with self.assertRaisesRegex(STATE_MODULE.StateError, "before any writable attempt"):
+                    STATE_MODULE.validate_state(payload)
+                state.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+                before = state.read_bytes()
+                refused = self.run_cli(
+                    "check", str(state), "--run-id", run_id,
+                    "--lifecycle-state", str(lifecycle),
+                )
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("before any writable attempt", refused.stderr)
+                self.assertEqual(state.read_bytes(), before)
+
+    def test_execution_gate_reads_and_checks_under_the_ledger_lock(self) -> None:
+        def verify_lock(args, state):
+            with STATE_MODULE.with_lock(self.state) as competing:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(competing.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with STATE_MODULE.with_lock(self.state) as runner_lease:
+                fcntl.flock(runner_lease.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                fcntl.flock(runner_lease.fileno(), fcntl.LOCK_UN)
+
+        with mock.patch.object(STATE_MODULE, "check_gate_locked", side_effect=verify_lock) as checked:
+            STATE_MODULE.check_gate(SimpleNamespace(state=str(self.state)))
+        checked.assert_called_once()
+        with STATE_MODULE.with_lock(self.state) as released:
+            fcntl.flock(released.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(released.fileno(), fcntl.LOCK_UN)
+
+    def test_review_route_manifest_bounds_and_change_are_refused_before_recording(self) -> None:
+        state, _, run_id = self.initialize_execution(
+            "route-manifest-boundary", mode="parent_direct", require_preflight=True
+        )
+        payload = STATE_MODULE.read_state(state)
+        packet_digest = STATE_MODULE.canonical_digest(STATE_MODULE.review_route_probe_packet(payload))
+        manifest = self.resource_manifest(
+            "route-manifest-boundary", review_packet_digest=packet_digest
+        )
+        resources = json.loads(manifest.read_text())["resource_observations"]
+        args = SimpleNamespace(
+            state=str(state), run_id=run_id, event_id="route-manifest",
+            probe_manifest=str(manifest),
+            inheritance_evidence_digest=resources["evidence_digests"]["codex_hooks"],
+        )
+        before = state.read_bytes()
+        original = manifest.read_bytes()
+        manifest.write_bytes(b" " * (STATE_MODULE.MAX_BYTES + 1))
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            self.assertRaisesRegex(STATE_MODULE.StateError, "exceeds size limit"),
+        ):
+            STATE_MODULE.record_review_route_check(args)
+        self.assertEqual(state.read_bytes(), before)
+        manifest.write_bytes(original)
+        verify = STATE_MODULE.review_turn_zero_from_manifest
+
+        def change_after_verification(*values):
+            verify(*values)
+            manifest.write_bytes(original + b" ")
+
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(
+                STATE_MODULE, "review_turn_zero_from_manifest",
+                side_effect=change_after_verification,
+            ),
+            self.assertRaisesRegex(STATE_MODULE.StateError, "manifest changed during verification"),
+        ):
+            STATE_MODULE.record_review_route_check(args)
+        self.assertEqual(state.read_bytes(), before)
 
     def test_staged_review_requires_at_least_one_observed_tool_call(self) -> None:
         for count in (None, 0, 1, 3):
