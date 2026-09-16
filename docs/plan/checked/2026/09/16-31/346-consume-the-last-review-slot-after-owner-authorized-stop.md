@@ -1,6 +1,6 @@
 # Consume the last review slot after an owner-authorized parent stop
 
-status: in_progress
+status: checked
 primary_invariant: One stopped epoch-one parent-direct execution may consume its sole remaining cumulative review slot once through explicit owner authorization, preserving immutable stopped evidence and exact plan identity.
 task_types:
   - validation_tools
@@ -87,15 +87,25 @@ checked_summary_ja: 停止記録を保持し、所有者の承認で残る1回�
 
 ## Tasks
 
-- [ ] Reproduce refusal of the eligible epoch-one stopped fixture and capture its exact historical bytes and cumulative count.
-- [ ] Implement the bounded final authorization and terminal epoch through the existing lock and registry consumption path, retaining old schema behavior.
-- [ ] Bind approved descendant policy adoption without relaxing exact plan identity or the ordinary continuation baseline gate.
-- [ ] Cover successful final consumption, all eligibility and binding refusals, repeated and concurrent consumption, legacy byte preservation, reviewer reuse, the fifth review and further continuation refusal.
-- [ ] Mirror the implementation and governing policy across all declared root and generated surfaces.
-- [ ] Run independent review of the exact target, focused validation and the authoritative suite once, then publish this policy separately from plan 344.
+- [x] Reproduce refusal of the eligible epoch-one stopped fixture and capture its exact historical bytes and cumulative count.
+- [x] Implement the bounded final authorization and terminal epoch through the existing lock and registry consumption path, retaining old schema behavior.
+- [x] Bind approved descendant policy adoption without relaxing exact plan identity or the ordinary continuation baseline gate.
+- [x] Cover successful final consumption, all eligibility and binding refusals, repeated and concurrent consumption, legacy byte preservation, reviewer reuse, the fifth review and further continuation refusal.
+- [x] Mirror the implementation and governing policy across all declared root and generated surfaces.
+- [x] Run independent review of the exact target, focused validation and the authoritative suite once, then publish this policy separately from plan 344.
 
 ## Validation Notes
 
 - Owner instruction: 344の修正に必要な再開条件の仕様変更を、別の作業として扱うことを承認する。既存の停止記録は改変せず、無制限の継続は認めない。
 - The original plan 344 candidate remains uncommitted in its exact task worktree. Its existing runner-authority omission is pre-existing and outside this policy plan's scope.
 - The decision audit is retained locally in the authoring session. Unknown applicability of the later policy commit to the dirty candidate remains an explicit stop condition, not permission to discard changes.
+- The historical CLI refused the eligible isolated final-continuation fixture with exit status 2 and preserved the stopped ledger bytes.
+- The first independent review found two Medium defects: replace/graft-sensitive history proof and incomplete terminal path confinement.
+- Ordinary continuation owner instruction: 計画346の計画、作業範囲、受入条件、検証権限を変えず、指摘2件の修正と独立レビューを行う一度限りの通常継続を承認する。停止記録は改変しない。
+- The stopped epoch-zero ledger remained byte-identical. The ordinary continuation reused its existing reviewer and continuation registries; this plan did not use the final-continuation allowance.
+- Four isolated regression cases reproduced the two defects before correction. After correction, all 22 targeted final/ordinary-continuation cases passed, including raw replace/graft history, every terminal input's symlink boundary, canonical and lock aliases, hardlinks and repository confinement.
+- Read-only independent review run `plan346-epoch1-review` cleared both findings and reported no High or Medium findings in the complete nine-file target. Runtime evidence established turn zero and 45 observed tool calls; the parent verified and admitted that receipt.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` ran 185 tests; `python3 scripts/check-copier-template.py` and `python3 scripts/check-root-agent-policy.py` each exited zero.
+- Authoritative validation passed once: `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each exited zero. An earlier combined invocation was refused at its excluded log destination before validation events were recorded; the parent left that file untouched and used standard output for the actual suite.
+- Product commit `e14ac33ea13b10a5ea728d89a3dec3e332bd805e` contains only the nine reviewed paths. Its complete diff from the admitted source matches review target `sha256:2dc52b6c7d92013120b31d299892e2d2f5d1aa711356d3b4e7226a8c7118ea4f`.
+- Plans 344 and 376 and their retained dirty task worktrees remained unchanged during this implementation. A reviewed local feedback draft records the optional logging obstacle with unknown template revision and attribution; no tracked feedback record was created.
