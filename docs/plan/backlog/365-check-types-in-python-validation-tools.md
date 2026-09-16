@@ -83,7 +83,7 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:145a7519dbd68b50cefe1ee0210df4e57c1e083752b5a61fdf1089e826e28045","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 integration_gates:
-  - docs/plan/active/364-enforce-bounded-python-lint.md
+  - Start only after the bounded Python lint plan reconstructed from plan 364 is checked, because this plan extends the pinned managed-tool setup and test registration that plan installs.
 checked_summary_ja: 検証用Pythonスクリプトの引数や戻り値の型を検査する。
 
 ## Decisions
