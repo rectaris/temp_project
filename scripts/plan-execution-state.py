@@ -1525,7 +1525,9 @@ def validate_execution_epoch(value: Any) -> dict[str, Any]:
             type(value["schema_version"]) is not int
             or type(value["epoch"]) is not int or value["epoch"] != 2
             or type(value["predecessor_review_count"]) is not int
-            or value["predecessor_review_count"] != MAX_CUMULATIVE_REVIEWS - 1
+            or value["predecessor_review_count"] not in {
+                INDEPENDENT_REVIEW_LIMIT, MAX_CUMULATIVE_REVIEWS - 1
+            }
             or not isinstance(value["predecessor_source_head"], str)
             or not re.fullmatch(r"[0-9a-f]{40}", value["predecessor_source_head"])
         ):
@@ -2096,6 +2098,8 @@ def validate_state(value: Any) -> dict[str, Any]:
                 "cumulative_review_limit"
             ]:
                 raise StateError("numbered-plan cumulative review budget is exhausted")
+            if epoch and epoch["schema_version"] == 2 and bounded_review_count > 1:
+                raise StateError("terminal continuation permits only one formal review")
             if epoch:
                 matching_preflight = [
                     prior for prior in validated_events
@@ -4034,9 +4038,12 @@ def continue_state(args: argparse.Namespace) -> None:
                 or predecessor["implementation_mode"] != "parent_direct"
                 or args.implementation_mode != "parent_direct"
                 or prior_review_count != 1
-                or prior_epoch["predecessor_review_count"] != 2
+                or not 1 <= prior_epoch["predecessor_review_count"] <= INDEPENDENT_REVIEW_LIMIT
             ):
-                raise StateError("final continuation requires epoch one with exactly three prior reviews")
+                raise StateError(
+                    "final continuation requires epoch one with one local review "
+                    "and one or two original reviews"
+                )
             authorization, authorization_digest = read_private_json(
                 authorization_path, "continuation authorization"
             )
@@ -4049,7 +4056,7 @@ def continue_state(args: argparse.Namespace) -> None:
                 or origin["event_chain_digest"] != prior_epoch["predecessor_event_chain_digest"]
                 or execution_epoch(origin) is None
                 or execution_epoch(origin)["epoch"] != 0
-                or formal_review_count(origin) != 2
+                or formal_review_count(origin) != prior_epoch["predecessor_review_count"]
                 or any(origin[key] != predecessor[key] for key in (
                     "plan_path", "plan_digest", "source_head",
                     "primary_invariant_digest", "implementation_mode",
@@ -5319,6 +5326,8 @@ def record_event(args: argparse.Namespace) -> None:
                 >= epoch["cumulative_review_limit"]
             ):
                 raise StateError("cumulative review limit is exhausted")
+            if epoch and epoch["schema_version"] == 2 and prior_reviews:
+                raise StateError("terminal continuation permits only one formal review")
             has_predecessor = bool(state["predecessor_plan_digest"])
             checkpoint_claims = [
                 event for event in state["events"]

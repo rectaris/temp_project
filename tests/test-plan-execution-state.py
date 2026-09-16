@@ -875,16 +875,19 @@ class PlanExecutionStateTest(unittest.TestCase):
         return path
 
     def final_continuation_fixture(
-        self, *, adopt_policy: bool = False, spent_all_reviews: bool = False
+        self, *, adopt_policy: bool = False, spent_all_reviews: bool = False,
+        origin_reviews: int = 2,
     ) -> dict:
+        self.assertIn(origin_reviews, (1, 2))
         origin, origin_lifecycle, origin_run = self.initialize_execution(
             "final-origin", mode="parent_direct", require_preflight=True
         )
         (self.repo / "allowed.txt").write_text("preserved product candidate\n")
-        self.staged_parent_review_fixture(origin, origin_lifecycle, "final-origin-review-1")
-        self.staged_parent_review_fixture(
-            origin, origin_lifecycle, "final-origin-review-2", medium=True
-        )
+        for review in range(1, origin_reviews + 1):
+            self.staged_parent_review_fixture(
+                origin, origin_lifecycle, f"final-origin-review-{review}",
+                medium=review == origin_reviews,
+            )
         stopped = self.base / "final-stopped.json"
         stopped_lifecycle = self.base / "final-stopped-lifecycle.json"
         authorization = self.continuation_authorization_fixture(origin, stopped, "final-stopped")
@@ -1009,13 +1012,62 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertIn("already continued", rejected.stderr)
         self.assertFalse(fork_path.exists())
 
+    def test_final_continuation_after_two_reviews_keeps_one_terminal_review(self) -> None:
+        fixture = self.final_continuation_fixture(origin_reviews=1, adopt_policy=True)
+        before = {name: fixture[name].read_bytes() for name in ("origin", "stopped")}
+        self.run_cli(*fixture["arguments"], check=True)
+        self.run_cli(*fixture["arguments"], check=True)
+        child = STATE_MODULE.read_state(fixture["child"])
+        epoch = STATE_MODULE.execution_epoch(child)
+        self.assertEqual((epoch["predecessor_review_count"], epoch["cumulative_review_limit"]), (2, 4))
+        self.assertNotEqual(child["source_head"], self.head)
+        self.assertEqual(epoch["predecessor_source_head"], self.head)
+        for name, content in before.items():
+            self.assertEqual(fixture[name].read_bytes(), content)
+        self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "two-prior-terminal-review"
+        )
+        child = STATE_MODULE.read_state(fixture["child"])
+        child_before = fixture["child"].read_bytes()
+        registry_before = self.registry.read_bytes()
+        refused = self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "two-prior-second-terminal-review", check=False
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("terminal continuation permits only one formal review", refused.stderr)
+        self.assertEqual(fixture["child"].read_bytes(), child_before)
+        self.assertEqual(self.registry.read_bytes(), registry_before)
+
+        last = child["events"][-1]
+        extra = {
+            **last,
+            "event_id": "forged-second-terminal-review",
+            "sequence": len(child["events"]) + 1,
+            "monotonic_ns": last["monotonic_ns"] + 1,
+            "previous_event_digest": last["event_digest"],
+            "independent_review_receipt_digest": digest("another terminal receipt"),
+        }
+        extra["event_digest"] = STATE_MODULE.canonical_digest(
+            {key: value for key, value in extra.items() if key != "event_digest"}
+        )
+        with self.assertRaisesRegex(
+            STATE_MODULE.StateError, "terminal continuation permits only one formal review"
+        ):
+            STATE_MODULE.validate_state({**child, "events": [*child["events"], extra]})
+
+    def test_generated_final_continuation_after_two_reviews_keeps_one_terminal_review(self) -> None:
+        generated = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
+        with mock.patch.dict(globals(), {"STATE_SCRIPT": generated}):
+            self.test_final_continuation_after_two_reviews_keeps_one_terminal_review()
+
     def test_final_epoch_schema_retains_historical_bounds(self) -> None:
         fixture = self.final_continuation_fixture()
         self.run_cli(*fixture["arguments"], check=True)
         epoch = STATE_MODULE.execution_epoch(STATE_MODULE.read_state(fixture["child"]))
         for key, value in (
             ("epoch", 3), ("epoch", 2.0), ("schema_version", 2.0),
-            ("predecessor_review_count", 2), ("predecessor_review_count", 3.0),
+            ("predecessor_review_count", 1), ("predecessor_review_count", 4),
+            ("predecessor_review_count", 2.0), ("predecessor_review_count", 3.0),
             ("cumulative_review_limit", 5), ("predecessor_source_head", ""),
             ("reviewer_registry", {}),
             ("reviewer_registry", {**epoch["reviewer_registry"], "event_count": 2}),
@@ -1033,9 +1085,23 @@ class PlanExecutionStateTest(unittest.TestCase):
         before = self.continuation_registry.read_bytes()
         refused = self.run_cli(*fixture["arguments"])
         self.assertNotEqual(refused.returncode, 0)
-        self.assertIn("exactly three prior reviews", refused.stderr)
+        self.assertIn("one local review and one or two original reviews", refused.stderr)
         self.assertEqual(self.continuation_registry.read_bytes(), before)
         self.assertFalse(fixture["child"].exists())
+
+    def test_final_continuation_refuses_two_local_reviews_even_with_three_total(self) -> None:
+        fixture = self.final_continuation_fixture(origin_reviews=1, spent_all_reviews=True)
+        before = {
+            path: path.read_bytes() for path in (
+                fixture["origin"], fixture["stopped"], self.registry, self.continuation_registry,
+            )
+        }
+        refused = self.run_cli(*fixture["arguments"])
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("one local review and one or two original reviews", refused.stderr)
+        self.assertFalse(fixture["child"].exists())
+        for path, content in before.items():
+            self.assertEqual(path.read_bytes(), content)
 
     def test_final_continuation_has_no_further_epoch_after_an_uncleared_review(self) -> None:
         fixture = self.final_continuation_fixture()
