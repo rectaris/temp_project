@@ -64,7 +64,7 @@ context_files:
   - AGENTS.md
   - scripts/AGENTS.md
   - tests/AGENTS.md
-  - docs/plan/backlog/364-enforce-bounded-python-lint.md
+  - docs/plan/active/364-enforce-bounded-python-lint.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
@@ -83,12 +83,12 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:145a7519dbd68b50cefe1ee0210df4e57c1e083752b5a61fdf1089e826e28045","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 integration_gates:
-  - docs/plan/backlog/364-enforce-bounded-python-lint.md
+  - docs/plan/active/364-enforce-bounded-python-lint.md
 checked_summary_ja: 検証用Pythonスクリプトの引数や戻り値の型を検査する。
 
 ## Decisions
 
-- Start only after docs/plan/backlog/364-enforce-bounded-python-lint.md has completed and its checked archive is resolved. Keep this plan in backlog until implementation is requested; execute serially.
+- Start only after docs/plan/active/364-enforce-bounded-python-lint.md has completed and its checked archive is resolved. Keep this plan in backlog until implementation is requested; execute serially.
 - Use parent-owned implementation for validation and dependency changes, with the existing independent-review and ledger requirements. Preserve the full required validation suite.
 - Pin the official npm package pyright to 1.1.407 in paired tools/python-quality/package.json and package-lock.json files. Use npm ci during explicit setup; never use npx with automatic downloads inside a validation command.
 - Use Node 24 in root and generated CI and document it for local setup. Install only the managed tool directory; do not create or change a generated project's product package.json, lockfile or pyproject.toml.

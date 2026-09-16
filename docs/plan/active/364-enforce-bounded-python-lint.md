@@ -1,6 +1,7 @@
 # Enforce bounded Python lint with explicitly permitted automatic fixes
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: The same pinned Python lint rules reject selected defects in root and managed template scripts without expanding automatic writes into project-owned files.
 task_types:
   - template_workflow
@@ -111,3 +112,6 @@ checked_summary_ja: Pythonの未定義名などを検査し、自動修正を許
 - [ ] Extend the update-source fixture inventory and real Copier-update scenarios for the new managed files; assert project-owned byte preservation and existing validation retention. Read the whole v1.4.5 migration guardian rule in references/orchestration.md before running the update suite.
 
 ## Validation Notes
+
+- The owner requested implementation of the active and backlog plans on 2026-09-16. Plan 376 is checked and published, leaving the serial implementation slot free. This plan starts the declared lint, type-checking and formatting sequence; the latter two remain unstarted until their predecessors are checked.
+- Use the existing parent-direct workflow because the declared scope changes validation authority, dependency pins and guarded writes. Parallel candidate generation cannot admit this scope. Preserve all accepted requirements and run a fresh observed review-route probe before product edits.

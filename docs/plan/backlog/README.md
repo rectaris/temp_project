@@ -12,7 +12,7 @@
 Ruffによる検査から型検査、整形の順に導入する。
 前のプランを完了記録に解決してから次を開始する。
 
-1. [364：lintと限定した自動修正](364-enforce-bounded-python-lint.md)
+1. [364：lintと限定した自動修正](../active/364-enforce-bounded-python-lint.md)（実装中）
    未定義名などを検査し、自動修正は許可した規則と明示したファイルに限定する。
    試行でRuff 0.15.7が5ファイルに報告したF821の13件を、診断として確認したうえで解消する。
 2. [365：検証用スクリプトの型検査](365-check-types-in-python-validation-tools.md)
