@@ -1,6 +1,6 @@
 # Enforce bounded Python lint through an isolated pinned entrypoint
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: The same pinned Python lint rules reject selected defects in root and managed template scripts through an isolated entrypoint, without expanding automatic writes into project-owned files.
 replan_sources:
@@ -122,14 +122,14 @@ checked_summary_ja: Pythonの未定義名などを隔離起動の検査で拒否
 
 ## Tasks
 
-- [ ] Apply the reviewed plan-364 candidate bytes as the implementation baseline and confirm the resolved undefined-name references keep their intended binding, including the guarded EMPTY_CHAIN_DIGEST initializer value.
-- [ ] Launch the wrapper in isolated mode from scripts/lint-project-workflow.sh, the generated CI job and both change-aware selectors, and admit only that isolated form in both plan validation allowlists.
-- [ ] Extend the real-tool test module with a `sitecustomize` case proving the non-isolated launch is defeated and the isolated launch still runs Ruff, and cover the isolated selector emission and allowlist decisions.
-- [ ] Keep the existing real-tool coverage for every selected rule, missing and mismatched tool versions, invalid configuration, nonempty target selection, path escapes, failed preflight with no partial writes, fix idempotence and preservation of project-owned files.
-- [ ] Run the real check against the complete current initial scope in the focused suite. Do not substitute fake tool output or skip tests when Ruff is missing.
-- [ ] Keep every new file and mirrored parity registered in copier_inventory.py and check-copier-template.py, and keep root and generated validation guidance and generated-CI assertions aligned with the isolated launch.
-- [ ] Extend the update-source fixture inventory and real Copier-update scenarios for the new managed files; assert project-owned byte preservation and existing validation retention. Read the whole v1.4.5 migration guardian rule in references/orchestration.md before running the update suite.
-- [ ] Review and validate the final in-scope diff, then commit the lint implementation independently of later type-checking and formatter changes and use the ordinary completion and publication lifecycle.
+- [x] Apply the reviewed plan-364 candidate bytes as the implementation baseline and confirm the resolved undefined-name references keep their intended binding, including the guarded EMPTY_CHAIN_DIGEST initializer value.
+- [x] Launch the wrapper in isolated mode from scripts/lint-project-workflow.sh, the generated CI job and both change-aware selectors, and admit only that isolated form in both plan validation allowlists.
+- [x] Extend the real-tool test module with a `sitecustomize` case proving the non-isolated launch is defeated and the isolated launch still runs Ruff, and cover the isolated selector emission and allowlist decisions.
+- [x] Keep the existing real-tool coverage for every selected rule, missing and mismatched tool versions, invalid configuration, nonempty target selection, path escapes, failed preflight with no partial writes, fix idempotence and preservation of project-owned files.
+- [x] Run the real check against the complete current initial scope in the focused suite. Do not substitute fake tool output or skip tests when Ruff is missing.
+- [x] Keep every new file and mirrored parity registered in copier_inventory.py and check-copier-template.py, and keep root and generated validation guidance and generated-CI assertions aligned with the isolated launch.
+- [x] Extend the update-source fixture inventory and real Copier-update scenarios for the new managed files; assert project-owned byte preservation and existing validation retention. Read the whole v1.4.5 migration guardian rule in references/orchestration.md before running the update suite.
+- [x] Review and validate the final in-scope diff, then commit the lint implementation independently of later type-checking and formatter changes and use the ordinary completion and publication lifecycle.
 
 ## Validation Notes
 
@@ -137,3 +137,8 @@ checked_summary_ja: Pythonの未定義名などを隔離起動の検査で拒否
 - The reconstruction changes only the launch method, the declarable command form and the matching tests. The source requirements, accepted safety conditions and both acceptance items are preserved exactly.
 - The epoch-2 Medium finding remains fixed in the inherited baseline: `ruff_executable()` resolves the pinned tool through `sysconfig.get_path("scripts")` and invokes it directly, so a working-directory `ruff.py`, a `PYTHONPATH` `ruff` package and an earlier `PATH` `ruff` cannot replace it.
 - Ruff 0.15.7 must be installed into the repository Python environment from tools/python-quality/requirements.txt before the focused suite runs; the real-tool tests must never be skipped when the tool is missing.
+- Implemented parent-direct. Epoch 0: one independent review reported a Medium finding, that `--fix` launched `worktree_guard.py` without isolation, so inherited startup code could print a forged `enforced` verdict and unlock fixes in a checkout that is not task-bound. The guard subprocess now runs under `-I`, and `test_inherited_startup_code_cannot_forge_the_fix_worktree_guard` fails when that flag is removed.
+- The epoch-0 ledger stopped at `descope_pending` with `parent_remediation_budget_exhausted` and stays byte-identical. The owner authorized one epoch-1 continuation, whose single review reported no High or Medium findings.
+- Focused validation passed on the remediated diff: `python3 tests/test-validation-tools.py` (370 tests), `python3 scripts/check-copier-template.py`, `tests/copier-update.sh --require-copier`.
+- Authoritative validation passed once: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- Backlog plans 342 and 365 were rebound to plan 364's replanned archive by the reconstruction transaction. Plan 365's ordering gate was restated as prose before the transaction, because a restructuring rebinds `context_files` but not `integration_gates`, and refresh it to this plan's checked archive when that work starts.
