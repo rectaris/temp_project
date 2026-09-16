@@ -841,12 +841,12 @@ class PlanExecutionStateTest(unittest.TestCase):
 
     def continuation_authorization_fixture(
         self, state: Path, child: Path, run_id: str, *,
-        final: bool = False, source_head: str | None = None,
+        final: bool = False, fourth: bool = False, source_head: str | None = None,
     ) -> Path:
         payload = STATE_MODULE.read_state(state)
         registry = STATE_MODULE.read_continuation_registry(self.continuation_registry)
         authorization = {
-            "schema_version": 2 if final else 1,
+            "schema_version": 3 if fourth else 2 if final else 1,
             **{key: payload[key] for key in (
                 "plan_path", "plan_digest", "source_head",
                 "primary_invariant_digest", "implementation_mode",
@@ -1059,6 +1059,343 @@ class PlanExecutionStateTest(unittest.TestCase):
         generated = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
         with mock.patch.dict(globals(), {"STATE_SCRIPT": generated}):
             self.test_final_continuation_after_two_reviews_keeps_one_terminal_review()
+
+    def fourth_review_fixture(
+        self, *, adopt_policy: bool = False, origin_reviews: int = 1,
+    ) -> dict:
+        previous = self.final_continuation_fixture(
+            origin_reviews=origin_reviews, adopt_policy=adopt_policy
+        )
+        self.run_cli(*previous["arguments"], check=True)
+        self.staged_parent_review_fixture(
+            previous["child"], previous["lifecycle"], "fourth-predecessor-review", medium=True
+        )
+        if adopt_policy:
+            (self.repo / "AGENTS.md").write_text("accepted fourth-review policy\n")
+            subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "adopt fourth-review policy"], cwd=self.repo, check=True)
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        child = self.base / "fourth-child.json"
+        lifecycle = self.base / "fourth-child-lifecycle.json"
+        authorization = self.continuation_authorization_fixture(
+            previous["child"], child, "fourth-child", final=True, fourth=True, source_head=head
+        )
+        return {
+            "origin": previous["origin"], "middle": previous["stopped"],
+            "stopped": previous["child"], "child": child, "lifecycle": lifecycle,
+            "authorization": authorization,
+            "arguments": [
+                "continue-fourth-review", str(child),
+                "--predecessor-state", str(previous["child"]),
+                "--epoch-zero-state", str(previous["origin"]),
+                "--epoch-one-state", str(previous["stopped"]),
+                "--continuation-registry", str(self.continuation_registry),
+                "--reviewer-registry", str(self.registry),
+                "--authorization", str(authorization), "--source-head", head,
+                "--run-id", "fourth-child", "--plan", self.plan.relative_to(self.repo).as_posix(),
+                "--lifecycle-state", str(lifecycle), "--implementation-mode", "parent_direct",
+            ],
+        }
+
+    def test_fourth_review_preserves_three_histories_and_has_no_fifth_review(self) -> None:
+        fixture = self.fourth_review_fixture(adopt_policy=True)
+        before = {name: fixture[name].read_bytes() for name in ("origin", "middle", "stopped")}
+        self.run_cli(*fixture["arguments"], check=True)
+        registry_after = self.continuation_registry.read_bytes()
+        child_after = fixture["child"].read_bytes()
+        self.run_cli(*fixture["arguments"], check=True)
+        self.assertEqual(self.continuation_registry.read_bytes(), registry_after)
+        self.assertEqual(fixture["child"].read_bytes(), child_after)
+        child = STATE_MODULE.read_state(fixture["child"])
+        epoch = STATE_MODULE.execution_epoch(child)
+        self.assertEqual((epoch["schema_version"], epoch["epoch"]), (3, 3))
+        self.assertEqual((epoch["predecessor_review_count"], epoch["cumulative_review_limit"]), (3, 4))
+        predecessor = STATE_MODULE.read_state(fixture["stopped"])
+        self.assertEqual(epoch["predecessor_source_head"], predecessor["source_head"])
+        self.assertNotEqual(child["source_head"], predecessor["source_head"])
+        reused = self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "fourth-reused-review",
+            session="final-origin-review-1", check=False,
+        )
+        self.assertNotEqual(reused.returncode, 0)
+        self.assertIn("cannot be reused", reused.stderr)
+        self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "fourth-final-review"
+        )
+        child = STATE_MODULE.read_state(fixture["child"])
+        child_before = fixture["child"].read_bytes()
+        reviewers_before = self.registry.read_bytes()
+        fifth = self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "fourth-forbidden-fifth-review", check=False
+        )
+        self.assertNotEqual(fifth.returncode, 0)
+        self.assertIn("cumulative review limit", fifth.stderr)
+        self.assertEqual(fixture["child"].read_bytes(), child_before)
+        self.assertEqual(self.registry.read_bytes(), reviewers_before)
+        last = child["events"][-1]
+        extra = {
+            **last, "event_id": "forged-fifth-review", "sequence": len(child["events"]) + 1,
+            "monotonic_ns": last["monotonic_ns"] + 1, "previous_event_digest": last["event_digest"],
+            "independent_review_receipt_digest": digest("fifth receipt"),
+        }
+        extra["event_digest"] = STATE_MODULE.canonical_digest(
+            {key: value for key, value in extra.items() if key != "event_digest"}
+        )
+        with self.assertRaisesRegex(STATE_MODULE.StateError, "cumulative review budget"):
+            STATE_MODULE.validate_state({**child, "events": [*child["events"], extra]})
+        for name, content in before.items():
+            self.assertEqual(fixture[name].read_bytes(), content)
+        worker = self.start_writable_attempt(
+            fixture["child"], fixture["lifecycle"], "fourth-child", "forbidden-fourth-worker"
+        )
+        self.assertNotEqual(worker.returncode, 0)
+        self.assertIn("candidate implementation mode", worker.stderr)
+
+    def test_generated_fourth_review_preserves_three_histories_and_has_no_fifth_review(self) -> None:
+        generated = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
+        with mock.patch.dict(globals(), {"STATE_SCRIPT": generated}):
+            self.test_fourth_review_preserves_three_histories_and_has_no_fifth_review()
+
+    def test_fourth_review_rejects_bad_authorizations_before_effects(self) -> None:
+        fixture = self.fourth_review_fixture()
+        authorization = fixture["authorization"]
+        original = json.loads(authorization.read_text())
+        preserved = {
+            path: path.read_bytes() for path in (
+                fixture["origin"], fixture["middle"], fixture["stopped"],
+                self.registry, self.continuation_registry,
+            )
+        }
+        for key, value in (
+            ("schema_version", 1), ("schema_version", 2), ("schema_version", 3.0),
+            ("next_epoch", 2), ("next_epoch", 3.0), ("next_epoch", 4),
+            ("cumulative_review_limit", 5), ("cumulative_review_limit", 4.0),
+            ("owner_authorization", ""), ("plan_digest", digest("different plan")),
+            ("predecessor_source_head", "0" * 40), ("source_head", "0" * 40),
+            ("child_state_path_digest", digest("other child")),
+            ("predecessor_state_digest", digest("other stopped state")),
+            ("reviewer_registry", {}),
+        ):
+            with self.subTest(field=key, value=value):
+                authorization.write_text(json.dumps({**original, key: value}))
+                refused = self.run_cli(*fixture["arguments"])
+                self.assertNotEqual(refused.returncode, 0, refused.stdout)
+                self.assertFalse(fixture["child"].exists())
+                for path, content in preserved.items():
+                    self.assertEqual(path.read_bytes(), content)
+        authorization.write_text(json.dumps(original))
+
+    def test_fourth_review_rejects_an_already_spent_fourth_review(self) -> None:
+        fixture = self.fourth_review_fixture(origin_reviews=2)
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "exactly three prior reviews"
+        )
+
+    def test_fourth_review_rejects_missing_and_relocated_ancestors(self) -> None:
+        fixture = self.fourth_review_fixture()
+        for option in ("--epoch-zero-state", "--epoch-one-state"):
+            with self.subTest(option=option):
+                arguments = list(fixture["arguments"])
+                arguments[arguments.index(option) + 1] = str(self.base / "absent-ancestor.json")
+                self.assert_final_refused_without_consumption(
+                    fixture, arguments, "No such file"
+                )
+        copied_middle = self.base / "copied-epoch-one.json"
+        copied_middle.write_bytes(fixture["middle"].read_bytes())
+        copied_middle.chmod(0o600)
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--epoch-one-state") + 1] = str(copied_middle)
+        self.assert_final_refused_without_consumption(
+            fixture, arguments, "does not bind the prior continuation"
+        )
+
+    def test_fourth_review_keeps_the_predecessors_reviewer_registry_identity(self) -> None:
+        fixture = self.fourth_review_fixture()
+        copied = self.base / "copied-fourth-reviewers.jsonl"
+        copied.write_bytes(self.registry.read_bytes())
+        copied.chmod(0o600)
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--reviewer-registry") + 1] = str(copied)
+        self.assert_final_refused_without_consumption(fixture, arguments, "copied to another path")
+        replacement = self.base / "replacement-fourth-reviewers.jsonl"
+        self.run_cli("registry-init", "--output", str(replacement), check=True)
+        original_registry = STATE_MODULE.read_reviewer_registry(self.registry)
+        replacement_registry = STATE_MODULE.read_reviewer_registry(replacement)
+        previous = replacement_registry["event_chain_digest"]
+        with replacement.open("ab") as handle:
+            for original_event in original_registry["events"]:
+                event = {
+                    **original_event,
+                    "registry_id": replacement_registry["header"]["registry_id"],
+                    "previous_event_digest": previous,
+                }
+                event["event_digest"] = STATE_MODULE.canonical_digest(
+                    {key: value for key, value in event.items() if key != "event_digest"}
+                )
+                handle.write(STATE_MODULE.canonical_registry_record(event))
+                previous = event["event_digest"]
+        replacement_registry = STATE_MODULE.read_reviewer_registry(replacement)
+        self.assertEqual(len(replacement_registry["events"]), 3)
+        authorization = json.loads(fixture["authorization"].read_text())
+        authorization["reviewer_registry"] = STATE_MODULE.reviewer_registry_reference(
+            replacement_registry
+        )
+        fixture["authorization"].write_text(json.dumps(authorization))
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--reviewer-registry") + 1] = str(replacement)
+        self.assert_final_refused_without_consumption(fixture, arguments, "registry")
+
+    def test_fourth_review_requires_both_continuation_edges_and_all_review_admissions(self) -> None:
+        fixture = self.fourth_review_fixture()
+        original = self.continuation_registry.read_bytes()
+        self.continuation_registry.write_bytes(b"".join(original.splitlines(keepends=True)[:2]))
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "does not bind the prior continuation"
+        )
+        self.continuation_registry.write_bytes(original)
+        authorization = json.loads(fixture["authorization"].read_text())
+        registry = STATE_MODULE.read_reviewer_registry(self.registry)
+        authorization["reviewer_registry"].update(
+            event_count=2, event_chain_digest=registry["events"][1]["event_digest"]
+        )
+        fixture["authorization"].write_text(json.dumps(authorization))
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "omits a prior formal review"
+        )
+
+    def test_fourth_review_refuses_missing_child_after_consumption(self) -> None:
+        fixture = self.fourth_review_fixture()
+        unconsumed_registry = self.continuation_registry.read_bytes()
+        three_review_prefix = self.registry.read_bytes()
+        self.run_cli(*fixture["arguments"], check=True)
+        original = fixture["child"].read_bytes()
+        registry_before = self.continuation_registry.read_bytes()
+        fixture["child"].unlink()
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "cannot recover a missing consumed child"
+        )
+        self.assertEqual(self.registry.read_bytes(), three_review_prefix)
+        self.assertEqual(self.continuation_registry.read_bytes(), registry_before)
+        fixture["child"].write_bytes(original)
+        fixture["child"].chmod(0o600)
+        self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "fourth-before-lost-state"
+        )
+        reviewers_before = self.registry.read_bytes()
+        fixture["child"].unlink()
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "cannot recover an already reviewed child"
+        )
+        self.assertEqual(self.registry.read_bytes(), reviewers_before)
+        self.assertEqual(self.continuation_registry.read_bytes(), registry_before)
+        self.registry.write_bytes(three_review_prefix)
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "cannot recover a missing consumed child"
+        )
+        self.registry.write_bytes(reviewers_before)
+        self.continuation_registry.write_bytes(unconsumed_registry)
+        self.assert_final_refused_without_consumption(
+            fixture, fixture["arguments"], "cannot recover an already reviewed child"
+        )
+
+    def test_generated_fourth_review_refuses_missing_child_after_consumption(self) -> None:
+        generated = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
+        with mock.patch.dict(globals(), {"STATE_SCRIPT": generated}):
+            self.test_fourth_review_refuses_missing_child_after_consumption()
+
+    def test_fourth_review_consumes_only_one_concurrent_child(self) -> None:
+        fixture = self.fourth_review_fixture()
+        fork = list(fixture["arguments"])
+        fork_path = self.base / "fourth-fork.json"
+        fork_authorization = self.continuation_authorization_fixture(
+            fixture["stopped"], fork_path, "fourth-fork", final=True, fourth=True
+        )
+        fork[1] = str(fork_path)
+        fork[fork.index("--run-id") + 1] = "fourth-fork"
+        fork[fork.index("--authorization") + 1] = str(fork_authorization)
+        before = {name: fixture[name].read_bytes() for name in ("origin", "middle", "stopped")}
+        processes = [
+            subprocess.Popen(
+                [sys.executable, str(STATE_SCRIPT), *arguments], cwd=self.repo,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            for arguments in (fixture["arguments"], fork)
+        ]
+        try:
+            outputs = [process.communicate(timeout=15) for process in processes]
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+        self.assertEqual(sorted(process.returncode for process in processes), [0, 1], outputs)
+        self.assertEqual(sum(path.exists() for path in (fixture["child"], fork_path)), 1)
+        self.assertEqual(len(STATE_MODULE.read_continuation_registry(self.continuation_registry)["events"]), 3)
+        for name, content in before.items():
+            self.assertEqual(fixture[name].read_bytes(), content)
+
+    def test_fourth_review_checks_the_new_ancestor_path_and_its_lock(self) -> None:
+        fixture = self.fourth_review_fixture()
+        alias = self.base / "fourth-input-alias"
+        alias.symlink_to(self.base, target_is_directory=True)
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--epoch-one-state") + 1] = str(alias / fixture["middle"].name)
+        self.assert_final_refused_without_consumption(fixture, arguments, "symlink")
+        arguments = list(fixture["arguments"])
+        arguments[1] = str(fixture["middle"])
+        self.assert_final_refused_without_consumption(fixture, arguments, "aliases an input")
+        lock_alias = Path(str(fixture["middle"]) + ".lock")
+        lock_alias.unlink()
+        lock_alias.symlink_to(self.registry)
+        self.assert_final_refused_without_consumption(fixture, fixture["arguments"], "symlink")
+
+    def test_fourth_review_schema_has_exact_bounds(self) -> None:
+        fixture = self.fourth_review_fixture()
+        self.run_cli(*fixture["arguments"], check=True)
+        epoch = STATE_MODULE.execution_epoch(STATE_MODULE.read_state(fixture["child"]))
+        for key, value in (
+            ("schema_version", 2), ("schema_version", 3.0), ("epoch", 2), ("epoch", 4),
+            ("epoch", 3.0), ("predecessor_review_count", 2),
+            ("predecessor_review_count", 4), ("predecessor_review_count", 3.0),
+            ("cumulative_review_limit", 5), ("predecessor_source_head", ""),
+            ("reviewer_registry", {}), ("extra", "not allowed"),
+        ):
+            with self.subTest(field=key, value=value):
+                with self.assertRaises(STATE_MODULE.StateError):
+                    STATE_MODULE.validate_execution_epoch({**epoch, key: value})
+
+    def test_fourth_review_has_no_continuation_after_an_uncleared_review(self) -> None:
+        fixture = self.fourth_review_fixture()
+        self.run_cli(*fixture["arguments"], check=True)
+        self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "fourth-uncleared-review", medium=True
+        )
+        preserved = {
+            path: path.read_bytes() for path in (
+                fixture["origin"], fixture["middle"], fixture["stopped"], fixture["child"],
+                self.registry, self.continuation_registry,
+            )
+        }
+        for command in ("continue", "continue-final", "continue-fourth-review"):
+            arguments = list(fixture["arguments"])
+            arguments[0] = command
+            arguments[1] = str(self.base / f"forbidden-{command}.json")
+            arguments[arguments.index("--predecessor-state") + 1] = str(fixture["child"])
+            if command != "continue-fourth-review":
+                index = arguments.index("--epoch-one-state")
+                del arguments[index:index + 2]
+            if command == "continue":
+                for option in ("--epoch-zero-state", "--reviewer-registry", "--source-head"):
+                    index = arguments.index(option)
+                    del arguments[index:index + 2]
+            with self.subTest(command=command):
+                refused = self.run_cli(*arguments)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertFalse(Path(arguments[1]).exists())
+                for path, content in preserved.items():
+                    self.assertEqual(path.read_bytes(), content)
 
     def test_final_epoch_schema_retains_historical_bounds(self) -> None:
         fixture = self.final_continuation_fixture()

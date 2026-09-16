@@ -1518,16 +1518,18 @@ def execution_epoch(state: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def validate_execution_epoch(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict) and value.get("schema_version") == 2:
+    if isinstance(value, dict) and value.get("schema_version") in (2, 3):
         if set(value) != EXECUTION_EPOCH_KEYS | FINAL_CONTINUATION_FIELDS:
             raise StateError("final execution epoch has an invalid exact field shape")
+        fourth = value["schema_version"] == 3
         if (
             type(value["schema_version"]) is not int
-            or type(value["epoch"]) is not int or value["epoch"] != 2
+            or type(value["epoch"]) is not int or value["epoch"] != (3 if fourth else 2)
             or type(value["predecessor_review_count"]) is not int
-            or value["predecessor_review_count"] not in {
+            or (fourth and value["predecessor_review_count"] != MAX_CUMULATIVE_REVIEWS - 1)
+            or (not fourth and value["predecessor_review_count"] not in {
                 INDEPENDENT_REVIEW_LIMIT, MAX_CUMULATIVE_REVIEWS - 1
-            }
+            })
             or not isinstance(value["predecessor_source_head"], str)
             or not re.fullmatch(r"[0-9a-f]{40}", value["predecessor_source_head"])
         ):
@@ -1858,7 +1860,7 @@ def validate_state(value: Any) -> dict[str, Any]:
             epoch = validate_execution_epoch(event["execution_epoch"])
             if event["implementation_mode"] != value["implementation_mode"]:
                 raise StateError("execution epoch implementation mode mismatch")
-            if epoch["schema_version"] == 2 and value["implementation_mode"] != "parent_direct":
+            if epoch["schema_version"] in (2, 3) and value["implementation_mode"] != "parent_direct":
                 raise StateError("final execution epoch requires parent-direct implementation")
             if any(
                 (
@@ -2098,7 +2100,7 @@ def validate_state(value: Any) -> dict[str, Any]:
                 "cumulative_review_limit"
             ]:
                 raise StateError("numbered-plan cumulative review budget is exhausted")
-            if epoch and epoch["schema_version"] == 2 and bounded_review_count > 1:
+            if epoch and epoch["schema_version"] in (2, 3) and bounded_review_count > 1:
                 raise StateError("terminal continuation permits only one formal review")
             if epoch:
                 matching_preflight = [
@@ -3930,6 +3932,8 @@ def continue_final_state(args: argparse.Namespace) -> None:
         args.predecessor_state, args.epoch_zero_state, args.lifecycle_state,
         args.authorization, args.continuation_registry, args.reviewer_registry,
     )
+    if getattr(args, "fourth_review_continuation", False):
+        references += (args.epoch_one_state,)
     canonical_paths = []
     for raw in (args.state, *references):
         candidate = Path(raw)
@@ -3988,6 +3992,7 @@ def continue_state(args: argparse.Namespace) -> None:
     authorization_path = Path(args.authorization)
     registry_path = Path(args.continuation_registry)
     final = getattr(args, "final_continuation", False)
+    fourth = getattr(args, "fourth_review_continuation", False)
     for external, label in (
         (path, "execution state"),
         (predecessor_path, "predecessor execution state"),
@@ -3999,6 +4004,8 @@ def continue_state(args: argparse.Namespace) -> None:
     if final:
         require_outside_repository(Path(args.epoch_zero_state), "epoch-zero execution state")
         require_outside_repository(Path(args.reviewer_registry), "reviewer registry")
+        if fourth:
+            require_outside_repository(Path(args.epoch_one_state), "epoch-one execution state")
     require_group_execution_permit(args.plan, "execution", args)
     if final and load_parallel_plan_module().enrolled_member(repository_root(), args.plan):
         raise StateError("final continuation requires an ungrouped plan")
@@ -4033,14 +4040,20 @@ def continue_state(args: argparse.Namespace) -> None:
         final_reference = None
         if final:
             if (
-                prior_epoch["schema_version"] != 1
-                or prior_epoch["epoch"] != 1
+                prior_epoch["schema_version"] != (2 if fourth else 1)
+                or prior_epoch["epoch"] != (2 if fourth else 1)
                 or predecessor["implementation_mode"] != "parent_direct"
                 or args.implementation_mode != "parent_direct"
                 or prior_review_count != 1
-                or not 1 <= prior_epoch["predecessor_review_count"] <= INDEPENDENT_REVIEW_LIMIT
+                or (fourth and prior_epoch["predecessor_review_count"] != 2)
+                or (
+                    not fourth
+                    and not 1 <= prior_epoch["predecessor_review_count"] <= INDEPENDENT_REVIEW_LIMIT
+                )
             ):
                 raise StateError(
+                    "fourth-review continuation requires epoch two with exactly three prior reviews"
+                    if fourth else
                     "final continuation requires epoch one with one local review "
                     "and one or two original reviews"
                 )
@@ -4050,24 +4063,71 @@ def continue_state(args: argparse.Namespace) -> None:
             origin, origin_digest = read_state_with_digest(
                 Path(args.epoch_zero_state), require_canonical=True
             )
+            origin_successor = predecessor
+            origin_successor_epoch = prior_epoch
+            history = [origin]
+            edges = []
+            if fourth:
+                middle_path = Path(args.epoch_one_state)
+                middle, middle_digest = read_state_with_digest(
+                    middle_path, require_canonical=True
+                )
+                middle_epoch = execution_epoch(middle)
+                if (
+                    middle_epoch is None
+                    or middle_epoch["schema_version"] != 1
+                    or middle_epoch["epoch"] != 1
+                    or middle_epoch["predecessor_review_count"] != 1
+                    or formal_review_count(middle) != 1
+                    or middle["state"] != "descope_pending"
+                    or middle["descope_pending_reason_codes"]
+                    != ["parent_remediation_budget_exhausted"]
+                    or middle["open_attempt_id"]
+                    or middle_digest != prior_epoch["predecessor_state_digest"]
+                    or middle["run_id"] != prior_epoch["predecessor_run_id"]
+                    or middle["event_chain_digest"] != prior_epoch["predecessor_event_chain_digest"]
+                    or middle["source_head"] != prior_epoch["predecessor_source_head"]
+                    or any(middle[key] != predecessor[key] for key in (
+                        "plan_path", "plan_digest", "primary_invariant_digest", "implementation_mode",
+                    ))
+                ):
+                    raise StateError("fourth-review continuation differs from the bound epoch-one ledger")
+                origin_successor = middle
+                origin_successor_epoch = middle_epoch
+                history.append(middle)
+                edges.append((middle, middle_digest, predecessor, predecessor_path))
+            edges.insert(0, (
+                origin, origin_digest, origin_successor,
+                Path(args.epoch_one_state) if fourth else predecessor_path,
+            ))
             if (
-                origin_digest != prior_epoch["predecessor_state_digest"]
-                or origin["run_id"] != prior_epoch["predecessor_run_id"]
-                or origin["event_chain_digest"] != prior_epoch["predecessor_event_chain_digest"]
+                origin_digest != origin_successor_epoch["predecessor_state_digest"]
+                or origin["run_id"] != origin_successor_epoch["predecessor_run_id"]
+                or origin["event_chain_digest"] != origin_successor_epoch["predecessor_event_chain_digest"]
                 or execution_epoch(origin) is None
                 or execution_epoch(origin)["epoch"] != 0
-                or formal_review_count(origin) != prior_epoch["predecessor_review_count"]
-                or any(origin[key] != predecessor[key] for key in (
+                or formal_review_count(origin) != origin_successor_epoch["predecessor_review_count"]
+                or any(origin[key] != origin_successor[key] for key in (
                     "plan_path", "plan_digest", "source_head",
                     "primary_invariant_digest", "implementation_mode",
                 ))
             ):
                 raise StateError("final continuation origin differs from the bound epoch-zero ledger")
+            if fourth and (
+                origin["state"] != "descope_pending"
+                or origin["descope_pending_reason_codes"] != ["parent_remediation_budget_exhausted"]
+                or origin["open_attempt_id"]
+            ):
+                raise StateError("fourth-review continuation requires three closed stopped histories")
             reviewers = snapshot_reviewer_registry(Path(args.reviewer_registry))
+            if fourth:
+                validate_reviewer_registry_reference(
+                    prior_epoch["reviewer_registry"], reviewers, exact=False
+                )
             final_reference = authorization.get("reviewer_registry")
             validate_reviewer_registry_reference(final_reference, reviewers, exact=False)
             covered_admissions = reviewers["events"][:final_reference["event_count"]]
-            for previous in (origin, predecessor):
+            for previous in (*history, predecessor):
                 for event in previous["events"]:
                     if event["event_type"] != "parent_review" or not event["review_target_digest"]:
                         continue
@@ -4090,18 +4150,30 @@ def continue_state(args: argparse.Namespace) -> None:
             raise StateError(
                 "continuation registry differs from the predecessor execution"
             )
-        if final and not any(
-            event["event_digest"] == prior_epoch["continuation_registry_event_digest"]
-            and event["child_genesis_digest"] == predecessor["genesis_digest"]
-            and event["child_run_id"] == predecessor["run_id"]
-            and event["child_state_path_digest"] == continuation_state_path_digest(predecessor_path)
-            and event["predecessor_state_digest"] == origin_digest
-            and event["predecessor_genesis_digest"] == origin["genesis_digest"]
-            and event["predecessor_event_chain_digest"] == origin["event_chain_digest"]
-            and event["authorization_digest"] == prior_epoch["owner_authorization_digest"]
-            for event in registry["events"]
-        ):
-            raise StateError("final continuation registry does not bind the prior continuation")
+        if final:
+            if fourth and any(
+                execution_epoch(previous)["continuation_registry_identity_digest"]
+                != registry["identity_digest"]
+                for previous in history
+            ):
+                raise StateError("fourth-review continuation history uses a different registry")
+            for older, older_digest, newer, newer_path in edges:
+                newer_epoch = execution_epoch(newer)
+                if newer_epoch is None or (
+                    newer_epoch["continuation_registry_identity_digest"] != registry["identity_digest"]
+                    or not any(
+                        event["event_digest"] == newer_epoch["continuation_registry_event_digest"]
+                        and event["child_genesis_digest"] == newer["genesis_digest"]
+                        and event["child_run_id"] == newer["run_id"]
+                        and event["child_state_path_digest"] == continuation_state_path_digest(newer_path)
+                        and event["predecessor_state_digest"] == older_digest
+                        and event["predecessor_genesis_digest"] == older["genesis_digest"]
+                        and event["predecessor_event_chain_digest"] == older["event_chain_digest"]
+                        and event["authorization_digest"] == newer_epoch["owner_authorization_digest"]
+                        for event in registry["events"]
+                    )
+                ):
+                    raise StateError("final continuation registry does not bind the prior continuation")
         if not final:
             authorization, authorization_digest = read_private_json(
                 authorization_path, "continuation authorization"
@@ -4114,7 +4186,7 @@ def continue_state(args: argparse.Namespace) -> None:
             if (
                 set(authorization) != CONTINUATION_AUTHORIZATION_KEYS | FINAL_CONTINUATION_FIELDS
                 or type(authorization["schema_version"]) is not int
-                or authorization["schema_version"] != 2
+                or authorization["schema_version"] != (3 if fourth else 2)
                 or type(authorization["next_epoch"]) is not int
                 or type(authorization["cumulative_review_limit"]) is not int
                 or authorization["predecessor_source_head"] != predecessor["source_head"]
@@ -4183,8 +4255,8 @@ def continue_state(args: argparse.Namespace) -> None:
         append_execution_epoch(
             state,
             {
-                "schema_version": 2 if final else 1,
-                "epoch": 2 if final else 1,
+                "schema_version": 3 if fourth else 2 if final else 1,
+                "epoch": 3 if fourth else 2 if final else 1,
                 "predecessor_state_digest": predecessor_digest,
                 "predecessor_run_id": predecessor["run_id"],
                 "predecessor_event_chain_digest": predecessor["event_chain_digest"],
@@ -4202,19 +4274,27 @@ def continue_state(args: argparse.Namespace) -> None:
             },
         )
         validate_state(state)
-        if final and (path.exists() or path.is_symlink()):
+        if fourth and not path.exists() and any(
+            admission["execution_genesis_digest"] == state["genesis_digest"]
+            for admission in reviewers["events"]
+        ):
+            raise StateError("fourth-review continuation cannot recover an already reviewed child")
+        if final:
             consumed_identity = canonical_digest({
                 "plan_digest": predecessor["plan_digest"],
                 "predecessor_run_id": predecessor["run_id"],
                 "predecessor_genesis_digest": predecessor["genesis_digest"],
             })
             prior_consumption = registry["consumed"].get(consumed_identity)
-            if prior_consumption is None:
-                raise StateError("final continuation destination is already occupied")
-            expected = json.loads(json.dumps(state))
-            bind_continuation_registry_event(expected, prior_consumption["event_digest"])
-            if read_state(path) != expected:
-                raise StateError("final continuation destination differs from exact recovery")
+            if fourth and prior_consumption is not None and not path.exists():
+                raise StateError("fourth-review continuation cannot recover a missing consumed child")
+            if path.exists() or path.is_symlink():
+                if prior_consumption is None:
+                    raise StateError("final continuation destination is already occupied")
+                expected = json.loads(json.dumps(state))
+                bind_continuation_registry_event(expected, prior_consumption["event_digest"])
+                if read_state(path) != expected:
+                    raise StateError("final continuation destination differs from exact recovery")
         registry_event_digest = consume_continuation_authorization(
             registry_path,
             plan_digest=predecessor["plan_digest"],
@@ -5326,7 +5406,7 @@ def record_event(args: argparse.Namespace) -> None:
                 >= epoch["cumulative_review_limit"]
             ):
                 raise StateError("cumulative review limit is exhausted")
-            if epoch and epoch["schema_version"] == 2 and prior_reviews:
+            if epoch and epoch["schema_version"] in (2, 3) and prior_reviews:
                 raise StateError("terminal continuation permits only one formal review")
             has_predecessor = bool(state["predecessor_plan_digest"])
             checkpoint_claims = [
@@ -5340,7 +5420,7 @@ def record_event(args: argparse.Namespace) -> None:
                     "dependent plan review requires the predecessor state and session checkpoint"
                 )
             predecessor_reference = (
-                epoch["reviewer_registry"] if epoch and epoch["schema_version"] == 2 else None
+                epoch["reviewer_registry"] if epoch and epoch["schema_version"] in (2, 3) else None
             )
             if args.predecessor_checkpoint:
                 if not args.predecessor_state:
@@ -6089,19 +6169,25 @@ def parser() -> argparse.ArgumentParser:
         "--implementation-mode", choices=sorted(MODES), required=True
     )
     continuation.set_defaults(handler=continue_state)
-    final_continuation = sub.add_parser("continue-final")
-    final_continuation.add_argument("state")
-    final_continuation.add_argument("--predecessor-state", required=True)
-    final_continuation.add_argument("--epoch-zero-state", required=True)
-    final_continuation.add_argument("--continuation-registry", required=True)
-    final_continuation.add_argument("--reviewer-registry", required=True)
-    final_continuation.add_argument("--authorization", required=True)
-    final_continuation.add_argument("--source-head", required=True)
-    final_continuation.add_argument("--run-id", required=True)
-    final_continuation.add_argument("--plan", required=True)
-    final_continuation.add_argument("--lifecycle-state", required=True)
-    final_continuation.add_argument("--implementation-mode", choices=["parent_direct"], required=True)
-    final_continuation.set_defaults(handler=continue_final_state, final_continuation=True)
+    for name in ("continue-final", "continue-fourth-review"):
+        final_continuation = sub.add_parser(name)
+        final_continuation.add_argument("state")
+        final_continuation.add_argument("--predecessor-state", required=True)
+        final_continuation.add_argument("--epoch-zero-state", required=True)
+        if name == "continue-fourth-review":
+            final_continuation.add_argument("--epoch-one-state", required=True)
+        final_continuation.add_argument("--continuation-registry", required=True)
+        final_continuation.add_argument("--reviewer-registry", required=True)
+        final_continuation.add_argument("--authorization", required=True)
+        final_continuation.add_argument("--source-head", required=True)
+        final_continuation.add_argument("--run-id", required=True)
+        final_continuation.add_argument("--plan", required=True)
+        final_continuation.add_argument("--lifecycle-state", required=True)
+        final_continuation.add_argument("--implementation-mode", choices=["parent_direct"], required=True)
+        final_continuation.set_defaults(
+            handler=continue_final_state, final_continuation=True,
+            fourth_review_continuation=name == "continue-fourth-review",
+        )
     record = sub.add_parser("record")
     record.add_argument("state")
     record.add_argument("--run-id", required=True)
