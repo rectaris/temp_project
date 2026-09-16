@@ -2,7 +2,7 @@
 
 Read this reference when a task is about to move from deciding to doing: before
 reopening a settled choice, before writing long plan prose, and after a formal
-validation failure.
+validation failure, or before broad integration when a material tool or current-system assumption is uncertain.
 
 Project policy is normative. `.project-agent-workflow/docs/agent/SPEC_DECISION_AUDIT.md`,
 `.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md`, and `.project-agent-workflow/docs/agent/SPEC_SECURITY.md` decide
@@ -62,6 +62,33 @@ Confirm each of the following before the prose grows.
 A missing counterpart, an unregistered test file, or an acceptance item with no
 witness is a preflight failure. Fix the manifest first. Do not open a numbered
 feasibility plan to answer a preflight question.
+
+## Check Material Assumptions Before Integration
+
+Start with the intended behavior and trace the current entrypoint, processing, state owner, consumers and retained behavior.
+Name the repository evidence for that flow; an isolated function or a green unit test does not establish who owns the complete operation.
+For each assumption that could invalidate the outcome, connect that flow to the adopted tool version's documented and observed behavior.
+Select only relevant configuration, input/output, executable or module lookup, inherited environment, side effects and failure behavior; this is not a universal checklist.
+Record the source revision or version for documentation and the exact command, inputs, directory and environment differences for observations, without recording secrets.
+State what is documented, what was observed, what remains unknown, and which required behavior depends on the unknown.
+
+When material uncertainty remains, run a bounded normal case and an assumption-breaking case before broad integration, within existing execution authority.
+Choose the counterexample to challenge the assumption, not merely to repeat the successful path with different data.
+Check the required output shape, destination, retained state and failure effect as applicable; a version string or successful exit alone is not proof.
+Use a local synthetic input or disposable fixture when that safely answers the question.
+If a probe needs unavailable access or expanded effects, keep the assumption unresolved and stop the dependent implementation rather than invent evidence or authority.
+Keep this evidence in the existing task notes or local artifacts, not in a numbered investigation plan or a new form.
+For mechanical work or an unchanged assumption already supported by applicable accepted evidence, skip extra probes and proceed through the existing validation.
+
+## When Evidence Contradicts An Assumption
+
+First identify the failed behavior and the premise it contradicts, without assuming every implementation error invalidates the design.
+Code that violates a still-supported design takes the existing bounded correction path.
+Evidence that refutes a design-critical assumption returns to normative decision audit before another patch.
+Reconsider only the affected decisions and preserve the requirements, accepted safety conditions and external-effect authority.
+After authoritative validation fails, record and preserve diagnosis_required before any repair classification; only its existing read-only reproduction and confirmed independent diagnosis path may proceed.
+A new explanation or procedure improvement never reopens a stopped run or replenishes a review budget.
+At task wrap-up, use `.project-agent-workflow/docs/agent/SPEC_TEMPLATE_FEEDBACK.md` for a reusable failed-assumption lesson; it grants no automatic persistence or publication.
 
 ## Exact Failure Reproduction
 

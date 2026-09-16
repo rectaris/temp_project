@@ -1098,15 +1098,33 @@ def require_decision_reuse_alignment() -> None:
                 f"instruction: {defect}"
             )
         lines = policy.markdown_prose_lines(generated_text)
-        for instruction in policy.DECISION_REUSE_SKILL_INSTRUCTIONS[root_skill]:
-            expected = instruction.format(
-                reference=policy.DECISION_REUSE_GENERATED_REFERENCE
-            )
+        for expected in policy.decision_reuse_instruction_lines(
+            root_skill, policy.DECISION_REUSE_GENERATED_REFERENCE
+        ):
             if expected not in lines:
                 fail(
                     f"{generated_skill} does not carry the routed preflight instruction: "
                     f"{expected}"
                 )
+
+    for root_path, instructions in policy.ASSUMPTION_GUIDANCE_LINES.items():
+        if root_path.startswith("tests/"):
+            continue
+        template_path = "template/.project-agent-workflow/" + root_path.removeprefix(".codex/")
+        normalized = normalized_template_core(template_path)
+        for instruction in instructions:
+            if instruction not in normalized.splitlines():
+                fail(f"{template_path} missing assumption-check instruction: {instruction}")
+    section = "### Evidence For Implementation Assumptions\n"
+    root_policy = read("docs/agent/SPEC_DECISION_AUDIT.md")
+    generated_policy = normalized_template_core(
+        "template/.project-agent-workflow/docs/agent/SPEC_DECISION_AUDIT.md"
+    )
+    for text in (root_policy, generated_policy):
+        if text.count(section) != 1:
+            fail("decision-audit policy must declare one implementation-assumption section")
+    if root_policy.split(section)[1].split("\n## ", 1)[0] != generated_policy.split(section)[1].split("\n## ", 1)[0]:
+        fail("decision-audit implementation-assumption sections differ")
 
     reference = ".codex/skills/decision-audit/references/implementation-preflight.md"
     text = read(reference)

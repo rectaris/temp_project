@@ -34,6 +34,22 @@ Evidence items are agent-written paraphrases, synthetic reproduction steps, or r
 
 Records are immutable. A correction uses a new report id and names the earlier one in `supersedes`.
 
+## Lessons From Failed Assumptions
+
+Use the current record fields, not a separate report schema.
+In `expected_behavior`, identify the assumption and the behavior it was meant to preserve.
+In `observed_behavior` and `evidence`, describe the counterexample, its bounded reproduction and the actual result, separating documentation claims from observations.
+Use `impact` for the affected behavior and `desired_behavior` for the next earlier check that would expose the assumption before broad integration.
+Keep any temporary response in `workaround`, without presenting it as an accepted repair.
+
+Distinguish an operating omission from a policy gap and a reproducible regression before choosing corrective action.
+If existing guidance already required the missed check, describe how to apply that guidance earlier rather than adding a duplicate rule.
+If the guidance omitted a material check, propose a bounded clarification in the existing policy or reference.
+If a deterministic implementation defect violates the accepted behavior, propose a regression test and scoped repair through the existing task workflow.
+These descriptions are evidence, not new attribution values: keep `attribution.certainty` and `template_source.revision` unknown when the cause or revision is not established.
+One counterexample alone does not prove a generic template defect or that the proposed improvement will prevent future failures.
+The existing draft eligibility, disabled mode, evidence review and separate task-bound persistence rules still apply; a lesson never continues stopped work.
+
 ## Evidence Safety
 
 Select evidence explicitly and review the exact bytes before recording. Raw logs are never copied.

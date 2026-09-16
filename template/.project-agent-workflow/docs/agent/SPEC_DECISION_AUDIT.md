@@ -76,8 +76,8 @@ deciding into doing. It covers accepted-decision reuse, the requirement, scope,
 condition, and witness preflight that runs before long plan prose, and exact
 failure reproduction after a formal validation failure.
 
-Read it when one of those three situations applies. Do not read it for an
-ordinary audit that changes nothing.
+Read it in those situations and before broad integration when a tool or current-system assumption could invalidate the intended behavior.
+Do not read it for an ordinary audit that changes nothing.
 
 This document and the routed specifications stay normative. The reference
 records how to apply them; it grants no new authority and never replaces
@@ -88,6 +88,19 @@ conditions, the class of external effects, and the approving authority are all
 unchanged. A new plan id, a routine checkpoint, or a resumed session does not by
 itself require the same approval again. A changed requirement, a changed safety
 condition, expanded external effects, or continuing a stopped run always does.
+
+### Evidence For Implementation Assumptions
+
+Connect each design-critical assumption to the existing processing, its owners and consumers, the adopted tool version, and the intended end-to-end behavior.
+Distinguish documented claims from observed behavior and keep missing evidence explicit.
+When material uncertainty remains, use bounded normal and assumption-breaking probes before broad integration, within existing read, write and execution authority.
+A version string, zero exit status or aggregate check count alone does not establish the required behavior.
+Skip extra investigation for mechanical work and reuse applicable accepted evidence rather than repeat it without a changed premise.
+
+If code violates a settled design, use the existing bounded implementation correction path.
+If evidence invalidates a design assumption, return to decision audit before another patch; do not keep patching around a premise the evidence refuted.
+This distinction grants no continuation: formal validation failure retains diagnosis_required, and exhausted budgets and stopped runs retain their existing owner-authorization rules.
+Use the existing template-feedback guidance for a reusable lesson, not as authority to repair or publish it.
 
 ## Artifact Boundary
 

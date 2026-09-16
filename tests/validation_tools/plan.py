@@ -3000,6 +3000,116 @@ class PlanValidationCommandsTest(unittest.TestCase):
         serialized = self.ROUTING_FIXTURE.read_text(encoding="utf-8")
         self.assertNotIn("held-out case", serialized)
 
+    def build_assumption_fixture(self, directory: Path):
+        policy = self.load_routing_policy(directory, "assumption_fixture")
+        paths = {
+            policy.DECISION_REUSE_FIXTURE,
+            *policy.DECISION_REUSE_SKILL_INSTRUCTIONS,
+            *policy.DECISION_REUSE_REQUIRED_POLICY_REFERENCES,
+            *policy.ASSUMPTION_GUIDANCE_LINES,
+        }
+        for relative in tuple(paths):
+            if not relative.startswith("tests/"):
+                paths.add(
+                    "template/.project-agent-workflow/" + relative.removeprefix(".codex/")
+                )
+        paths.add("scripts/check-root-agent-policy.py")
+        for relative in paths:
+            target = directory / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
+        for prefix in (".codex/skills", "template/.project-agent-workflow/skills"):
+            for skill in (ROOT / prefix).iterdir():
+                if skill.is_dir():
+                    (directory / prefix / skill.name).mkdir(parents=True, exist_ok=True)
+        return policy
+
+    def test_assumption_cases_and_guidance_are_registered(self) -> None:
+        policy = load_module(self.ROOT_POLICY, "assumption_registered")
+        self.assertEqual(len(policy.ASSUMPTION_CASE_EXPECTATIONS), 7)
+        policy.check_decision_reuse_scenarios()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.build_assumption_fixture(root)
+            checker = load_module(ROOT / "scripts/check-copier-template.py", "assumption_aligned")
+            checker.ROOT = root
+            checker.require_decision_reuse_alignment()
+
+    def test_assumption_checker_rejects_missing_or_weakened_cases(self) -> None:
+        policy = load_module(self.ROOT_POLICY, "assumption_expectations")
+        for case_id in policy.ASSUMPTION_CASE_EXPECTATIONS:
+            for field in ("case", "expected", "critical_failures", "required_before_action", "kind", "task", "empty-task"):
+                with self.subTest(case=case_id, mutation=field), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    checker = self.build_assumption_fixture(root)
+                    target = root / checker.DECISION_REUSE_FIXTURE
+                    fixture = json.loads(target.read_text(encoding="utf-8"))
+                    case = next(item for item in fixture["scenarios"] if item["id"] == case_id)
+                    if field == "case":
+                        fixture["scenarios"].remove(case)
+                    elif field in ("critical_failures", "required_before_action"):
+                        case[field] = []
+                    elif field == "empty-task":
+                        case["task"] = ""
+                    elif field == "task":
+                        case[field] = "Fix a spelling error in one established documentation file."
+                    else:
+                        case[field] = "Proceed without checking."
+                    target.write_text(json.dumps(fixture), encoding="utf-8")
+                    with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                        checker.check_decision_reuse_scenarios()
+
+    def test_assumption_checker_rejects_missing_or_negated_instructions(self) -> None:
+        policy = load_module(self.ROOT_POLICY, "assumption_instructions")
+        for relative, instructions in policy.ASSUMPTION_GUIDANCE_LINES.items():
+            for instruction in instructions:
+                for replacement in ("", "Do not follow this: " + instruction):
+                    with self.subTest(path=relative, instruction=instruction, replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                        root = Path(tmp)
+                        checker = self.build_assumption_fixture(root)
+                        target = root / relative
+                        text = target.read_text(encoding="utf-8")
+                        self.assertEqual(text.count(instruction), 1)
+                        target.write_text(text.replace(instruction, replacement), encoding="utf-8")
+                        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                            checker.check_decision_reuse_scenarios()
+
+    def test_assumption_alignment_rejects_counterpart_drift(self) -> None:
+        policy = load_module(self.ROOT_POLICY, "assumption_counterparts")
+        paths = [path for path in policy.ASSUMPTION_GUIDANCE_LINES if not path.startswith("tests/")]
+        paths.append(".codex/skills/implementation-guidelines/SKILL.md")
+        for relative in paths:
+            with self.subTest(path=relative), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.build_assumption_fixture(root)
+                counterpart = root / ("template/.project-agent-workflow/" + relative.removeprefix(".codex/"))
+                if relative.endswith("SKILL.md"):
+                    marker = "- Use that reference for material"
+                else:
+                    marker = policy.ASSUMPTION_GUIDANCE_LINES[relative][0]
+                text = counterpart.read_text(encoding="utf-8")
+                self.assertIn(marker, text)
+                counterpart.write_text(text.replace(marker, "Ignore " + marker, 1), encoding="utf-8")
+                checker = load_module(ROOT / "scripts/check-copier-template.py", "assumption_drift")
+                checker.ROOT = root
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    checker.require_decision_reuse_alignment()
+
+    def test_assumption_routing_rejects_removed_skill_instructions(self) -> None:
+        skill = ".codex/skills/implementation-guidelines/SKILL.md"
+        policy = load_module(self.ROOT_POLICY, "assumption_skill")
+        instructions = policy.decision_reuse_instruction_lines(skill, policy.DECISION_REUSE_REFERENCE)
+        for instruction in instructions:
+            with self.subTest(instruction=instruction), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                checker = self.build_assumption_fixture(root)
+                target = root / skill
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(instruction, text)
+                target.write_text(text.replace(instruction, ""), encoding="utf-8")
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    checker.check_decision_reuse_scenarios()
+
     def test_routed_destinations_are_reachable_from_every_entrypoint(self) -> None:
         module = load_module(self.ROOT_POLICY, "root_policy_routing_reachable")
         fixture = json.loads(self.ROUTING_FIXTURE.read_text(encoding="utf-8"))

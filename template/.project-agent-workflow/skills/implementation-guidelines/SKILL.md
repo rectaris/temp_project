@@ -19,6 +19,7 @@ Use this skill as auxiliary behavior guidance while implementing, reviewing, or 
 - Ask or challenge briefly when ambiguity affects data semantics, user-visible behavior, validation scope, security, or project invariants.
 - Define success criteria through tests, scripts, builds, screenshots, or other deterministic validation when practical.
 - Read `.project-agent-workflow/skills/decision-audit/references/implementation-preflight.md` before reopening an already accepted decision and before writing long plan prose.
+- Use that reference for material tool or system uncertainty before broad integration; skip redundant probes for unchanged supported assumptions.
 
 ## During Implementation
 
@@ -28,6 +29,7 @@ Use this skill as auxiliary behavior guidance while implementing, reviewing, or 
 - Avoid drive-by formatting, comment rewrites, dependency churn, and unrelated cleanup.
 - Keep public contracts, generated artifacts, data schemas, and integration boundaries explicit.
 - Prefer enforceable checks over prose-only rules when a rule can be tested or linted.
+- If evidence refutes a design assumption, return to `.project-agent-workflow/docs/agent/SPEC_DECISION_AUDIT.md` before another patch; preserve existing correction and stop rules.
 
 ## Verification
 

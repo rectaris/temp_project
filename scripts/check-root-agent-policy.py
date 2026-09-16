@@ -216,6 +216,8 @@ DECISION_REUSE_AUTHORIZATIONS = (
 DECISION_REUSE_SECTIONS = (
     "## Accepted Decision Reuse",
     "## Requirement, Scope, Condition, And Witness Preflight",
+    "## Check Material Assumptions Before Integration",
+    "## When Evidence Contradicts An Assumption",
     "## Exact Failure Reproduction",
 )
 DECISION_REUSE_INSUFFICIENT_RECORD = (
@@ -268,6 +270,10 @@ DECISION_REUSE_SKILL_INSTRUCTIONS = {
     ".codex/skills/implementation-guidelines/SKILL.md": (
         "- Read `{reference}` before reopening an already accepted decision and before"
         " writing long plan prose.",
+        "- Use that reference for material tool or system uncertainty before broad integration;"
+        " skip redundant probes for unchanged supported assumptions.",
+        "- If evidence refutes a design assumption, return to `{policy_prefix}docs/agent/"
+        "SPEC_DECISION_AUDIT.md` before another patch; preserve existing correction and stop rules.",
         "- After a formal validation failure, reproduce the exact failure as described in"
         " `{reference}` before proposing a repair.",
     ),
@@ -275,6 +281,97 @@ DECISION_REUSE_SKILL_INSTRUCTIONS = {
         "   Read `{reference}` before classifying a repair, before reopening a settled"
         " decision, and before asking for approval that the unchanged authorization"
         " already covers.",
+    ),
+}
+
+ASSUMPTION_CASE_EXPECTATIONS = {
+    "tool-lookup-and-output-effects": {
+        "kind": "edge",
+        "task": "Integrate FormatBox 2.1, whose manual promises JSON diagnostics on stdout. With default environment the expected JSON appears. With FORMATBOX_REPORT pointing to a disposable file, the command still exits zero but stdout is empty; an earlier lookup directory can also select a different executable.",
+        "required_before_action": [DECISION_REUSE_REFERENCE],
+        "expected": "Compare documented version behavior with observations of the resolved tool, output destination and required output shape in normal and environment-override cases before integration; zero exit alone proves neither execution nor output.",
+        "critical_failures": ["accepting zero exit as proof of the required tool and output", "running a probe with unapproved external effects"],
+    },
+    "trace-existing-owners-and-consumers": {
+        "kind": "edge",
+        "task": "A cache helper appears to own all writes, but the upload entrypoint also sends a queued update consumed by a background reconciler. Only the helper's unit test has been read; the requested change must preserve the reconciler's retained state.",
+        "required_before_action": [DECISION_REUSE_REFERENCE],
+        "expected": "Trace the existing entrypoint, state owner and downstream consumers; preserve their behavior and keep unknown ownership explicit before selecting a bounded normal and counterexample probe.",
+        "critical_failures": ["inferring complete ownership from one helper", "changing retained behavior without resolving the affected assumption"],
+    },
+    "review-refutes-design-assumption": {
+        "kind": "edge",
+        "task": "Before authoritative validation, a reviewer reproduces two valid events with the same timestamp. The code implements the chosen design exactly, but that design assumes timestamps uniquely identify events. The execution still has its ordinary bounded correction available.",
+        "required_before_action": ["docs/agent/SPEC_DECISION_AUDIT.md"],
+        "expected": "Return to decision audit before another patch because the review counterexample refutes the design premise; preserve requirements and all existing diagnosis, correction-budget and authorization boundaries.",
+        "critical_failures": ["patching repeatedly around a refuted premise", "using a new diagnosis as stopped-run continuation authority"],
+    },
+    "settled-design-implementation-mistake": {
+        "kind": "median",
+        "task": "A focused test shows that an implementation uses greater-than instead of the specified greater-than-or-equal comparison. Boundary examples still support the accepted design, no authoritative suite has run, and the ordinary correction allowance is available.",
+        "required_before_action": [DECISION_REUSE_REFERENCE],
+        "expected": "Correct the code through the existing bounded path because evidence still supports the design; do not reopen settled decisions or bypass formal-failure diagnosis.",
+        "critical_failures": ["requiring redesign for an ordinary implementation mistake", "repairing during diagnosis_required"],
+    },
+    "unchanged-mechanical-work": {
+        "kind": "median",
+        "task": "Fix a spelling error in one established mirrored documentation pair. Its correspondence and existing validation are already accepted; no behavior, input, version, effect or authority changes.",
+        "required_before_action": ["docs/agent/SPEC_DECISION_AUDIT.md"],
+        "expected": "Reuse applicable accepted evidence, make the already-determined mechanical change and run existing validation without another audit, probe campaign or numbered investigation plan.",
+        "critical_failures": ["imposing unnecessary investigation on unchanged simple work", "skipping existing validation"],
+    },
+    "feedback-with-unknown-attribution": {
+        "kind": "edge",
+        "task": "At task wrap-up in agent_select_local mode, one observed report unexpectedly went to a file rather than stdout. Existing guidance called for checking side effects, but a local extension may also be involved and the template revision is unavailable. The product task authorizes no durable feedback record.",
+        "required_before_action": ["docs/agent/SPEC_TEMPLATE_FEEDBACK.md"],
+        "expected": "Use existing feedback fields for the failed assumption, observed counterexample, impact and next earlier check; distinguish a missed existing instruction, missing guidance and a regression while keeping unproven attribution and revision unknown and persistence separately task-bound.",
+        "critical_failures": ["asserting a generic template defect from one unexplained result", "persisting feedback as a product-task side effect"],
+    },
+    "procedure-change-does-not-reopen-stop": {
+        "kind": "edge",
+        "task": "A run exhausted all permitted review and continuation allowances with a finding open. The owner now asks to implement better assumption-check guidance, not to change the stopped run's requirements or execution policy.",
+        "required_before_action": ["docs/agent/SPEC_PLAN_WORKFLOW.md", DECISION_REUSE_REFERENCE],
+        "expected": "Keep the exhausted run stopped, retain its findings and budget, and report the owner-decision boundary; improving development guidance grants no product continuation or replacement review allowance.",
+        "critical_failures": ["continuing the stopped run under procedure-improvement authority", "creating a successor merely to reset the review budget"],
+    },
+}
+
+# Exact instruction presence and scenario registration are structural evidence,
+# not a judgment that the guidance or a witness establishes agent behavior.
+ASSUMPTION_GUIDANCE_LINES = {
+    "docs/agent/SPEC_DECISION_AUDIT.md": (
+        "Connect each design-critical assumption to the existing processing, its owners and consumers, the adopted tool version, and the intended end-to-end behavior.",
+        "Distinguish documented claims from observed behavior and keep missing evidence explicit.",
+        "If evidence invalidates a design assumption, return to decision audit before another patch; do not keep patching around a premise the evidence refuted.",
+        "This distinction grants no continuation: formal validation failure retains diagnosis_required, and exhausted budgets and stopped runs retain their existing owner-authorization rules.",
+    ),
+    DECISION_REUSE_REFERENCE: (
+        "Select only relevant configuration, input/output, executable or module lookup, inherited environment, side effects and failure behavior; this is not a universal checklist.",
+        "When material uncertainty remains, run a bounded normal case and an assumption-breaking case before broad integration, within existing execution authority.",
+        "Check the required output shape, destination, retained state and failure effect as applicable; a version string or successful exit alone is not proof.",
+        "If a probe needs unavailable access or expanded effects, keep the assumption unresolved and stop the dependent implementation rather than invent evidence or authority.",
+        "For mechanical work or an unchanged assumption already supported by applicable accepted evidence, skip extra probes and proceed through the existing validation.",
+        "Code that violates a still-supported design takes the existing bounded correction path.",
+        "Evidence that refutes a design-critical assumption returns to normative decision audit before another patch.",
+        "A new explanation or procedure improvement never reopens a stopped run or replenishes a review budget.",
+    ),
+    "docs/agent/SPEC_TEMPLATE_FEEDBACK.md": (
+        "In `expected_behavior`, identify the assumption and the behavior it was meant to preserve.",
+        "In `observed_behavior` and `evidence`, describe the counterexample, its bounded reproduction and the actual result, separating documentation claims from observations.",
+        "Use `impact` for the affected behavior and `desired_behavior` for the next earlier check that would expose the assumption before broad integration.",
+        "Distinguish an operating omission from a policy gap and a reproducible regression before choosing corrective action.",
+        "These descriptions are evidence, not new attribution values: keep `attribution.certainty` and `template_source.revision` unknown when the cause or revision is not established.",
+        "The existing draft eligibility, disabled mode, evidence review and separate task-bound persistence rules still apply; a lesson never continues stopped work.",
+    ),
+    "tests/fixtures/agent-policy-routing/evaluation-protocol.md": (
+        "Freeze the baseline instruction revision, candidate instruction bytes, fixed task inputs and scoring criteria before comparison.",
+        "Use the same permitted evaluator route, requested model and effort for both sides, with separate fresh sessions and no baseline answer supplied to the candidate session.",
+        "Evaluate both the root instructions and generated instructions with only their established path substitutions, preserving identical task facts and criteria.",
+        "Separate a reader's proposed action from an actually executed probe; neither static checks nor a plausible proposal establishes observed tool behavior.",
+        "Apply those critical-failure stops to candidate fixed-case and holdout evaluation as well as formal implementation review.",
+        "Report matched per-case baseline and candidate observations, including unchanged, worse and inconclusive results rather than only improvements.",
+        "Record measured extra reading, probes, model starts and elapsed time with their measurement boundaries and source coverage; leave unavailable values unobserved.",
+        "If the comparison does not demonstrate improvement, report no demonstrated improvement.",
     ),
 }
 
@@ -960,7 +1057,10 @@ def check_reusable_skill_parity() -> None:
 
 def decision_reuse_instruction_lines(relative: str, reference: str) -> tuple[str, ...]:
     return tuple(
-        instruction.format(reference=reference)
+        instruction.format(
+            reference=reference,
+            policy_prefix=".project-agent-workflow/" if reference == DECISION_REUSE_GENERATED_REFERENCE else "",
+        )
         for instruction in DECISION_REUSE_SKILL_INSTRUCTIONS[relative]
     )
 
@@ -1139,6 +1239,27 @@ def check_decision_reuse_scenarios() -> None:
             fail(f"{relative} scenario {index} is not an object")
         if not isinstance(scenario.get("id"), str) or not scenario["id"].strip():
             fail(f"{relative} scenario {index} needs a non-empty string id")
+    scenario_ids = [scenario["id"] for scenario in scenarios]
+    if len(scenario_ids) != len(set(scenario_ids)):
+        fail(f"{relative} must not repeat scenario ids")
+    by_id = {scenario["id"]: scenario for scenario in scenarios}
+    for case_id, expectations in ASSUMPTION_CASE_EXPECTATIONS.items():
+        scenario = by_id.get(case_id)
+        if scenario is None:
+            fail(f"{relative} missing required assumption case: {case_id}")
+        if not isinstance(scenario.get("task"), str) or not scenario["task"].strip():
+            fail(f"{relative} case {case_id} missing task")
+        for key, expected in expectations.items():
+            if scenario.get(key) != expected:
+                fail(f"{relative} case {case_id} must preserve checker-owned {key}")
+        for policy in expectations["required_before_action"]:
+            if not (ROOT / policy).is_file():
+                fail(f"{relative} case {case_id} names an unresolved policy: {policy}")
+    for target, instructions in ASSUMPTION_GUIDANCE_LINES.items():
+        lines = read(target).splitlines()
+        for instruction in instructions:
+            if instruction not in lines:
+                fail(f"{target} missing assumption-check instruction: {instruction}")
 
     block = fixture.get("decision_reuse")
     if not isinstance(block, dict):
