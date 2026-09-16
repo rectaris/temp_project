@@ -1,6 +1,6 @@
 # Admit one terminal review after two or three verified prior reviews
 
-status: in_progress
+status: checked
 primary_invariant: An owner-authorized terminal continuation consumes at most one existing review allowance after two or three verified prior reviews, without reopening stopped histories, replenishing budgets, or bypassing acceptance gates.
 task_types:
   - template_workflow
@@ -70,12 +70,18 @@ checked_summary_ja: 過去2回のレビューで停止した作業にも、最�
 
 ## Tasks
 
-- [ ] Implement the bounded prior-count admission and cross-check it against the verified original ledger.
-- [ ] Enforce one terminal review independently of the cumulative budget at both record and history-read boundaries.
-- [ ] Extend the existing isolated fixtures and regressions for two-review root/generated admission, retained historical behavior and refusal before effects.
-- [ ] Align both implementation copies and the root/generated workflow, orchestration and entrypoint guidance.
-- [ ] Review the exact in-scope diff independently, run focused and authoritative validation, commit the policy separately and publish it before any adoption by plan 364.
+- [x] Implement the bounded prior-count admission and cross-check it against the verified original ledger.
+- [x] Enforce one terminal review independently of the cumulative budget at both record and history-read boundaries.
+- [x] Extend the existing isolated fixtures and regressions for two-review root/generated admission, retained historical behavior and refusal before effects.
+- [x] Align both implementation copies and the root/generated workflow, orchestration and entrypoint guidance.
+- [x] Review the exact in-scope diff independently, run focused and authoritative validation, commit the policy separately and publish it before any adoption by plan 364.
 
 ## Validation Notes
 
 - The separately preserved plan364 candidate has digest sha256:a3061ecb55710d7e5d4e028b0fd11656de47ab4568d5dc111c70a25a9ac0efe3. Its epoch-zero ledger remains byte-identical with digest sha256:fbde1cd3459e07b061ca4a42575456fb85c032fbb674e0b21658364363b519e6. These are preservation observations, not write authority.
+- Activation commit `98700877b1b455b8ad6bbd4381c411da00370b83` records the owner-approved pause of the unbound direct plan 364 and authorizes its later exact lifecycle restoration in a separate task. No reconstruction contract or replacement execution was created for it.
+- Parent-direct execution `plan316-20260916` used separate external execution, reviewer and continuation records. Runtime route probe `plan316-route-probe-20260916` observed its execution-bound first prompt and one tool call before product edits.
+- Read-only independent reviewer `plan316-review1-20260916` inspected the complete nine-file target and its critical call chains, with observed turn zero and 26 tool calls, and reported no High or Medium findings. The parent accepted and admitted that first formal review. Fixture execution in the review sandbox was blocked at temporary-directory setup; parent-owned execution supplied the behavioral evidence.
+- Focused validation passed: `python3 tests/test-plan-execution-state.py` ran 199 tests, including the root/generated two-review route and the separate CLI/history one-review guards; `python3 scripts/check-copier-template.py` passed. The authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` each exited zero in one authorized suite.
+- Product commit `183d0d7` contains exactly the nine reviewed paths. Its complete diff from the published activation source hashes to `sha256:990ca1b51e14b8875afee2f7032e4ac49233e4c8d70350d6b7b4df44c7603466`, matching the admitted target.
+- Both runtime review sources are present. Parent-owned ledgers, receipts and command outputs remain in local Copilot session `2b6824b8-6e98-4b54-8959-26a72f107f88`; no parent transcript manifest or session checkpoint is claimed. The lifecycle helper had no write scope; the parent checked its corrected distinction between direct-root and contract-bound plans before accepting the lifecycle route.

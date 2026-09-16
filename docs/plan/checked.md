@@ -281,3 +281,4 @@ id	path
 346	docs/plan/checked/2026/09/16-31/346-consume-the-last-review-slot-after-owner-authorized-stop.md
 344	docs/plan/checked/2026/09/16-31/344-check-review-route-before-product-edits.md
 376	docs/plan/checked/2026/09/16-31/376-resolve-rebound-plans-through-reconstruction.md
+316	docs/plan/checked/2026/09/16-31/316-admit-terminal-review-after-two-prior-reviews.md
