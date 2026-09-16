@@ -1,6 +1,6 @@
 # Check tool and system assumptions before implementation and improve the existing development guidance from observed failures
 
-status: backlog
+status: in_progress
 primary_invariant: Existing development guidance connects design-critical assumptions to evidence and reusable corrective action without inventing authority, reopening stopped work, or presenting structural checks as proof of agent behavior.
 task_types:
   - template_workflow
@@ -116,3 +116,4 @@ checked_summary_ja: ツールの挙動とシステムの制約を実装前に照
 - Plan 364's terminal review still has one reproduced Medium finding. Current policy permits no later terminal continuation, including under a new owner quotation. This authoring work preserves its plan, candidate, stopped ledgers and registries.
 - The focused witness claims are structural and regression claims, not assertions that current checks already prove the proposed behavior. The independent evaluation required during implementation supplies separate semantic observations.
 - No improvement in elapsed time, review count or future reliability has yet been measured. Record an unchanged or inconclusive comparison honestly instead of claiming this plan proves all future agents will follow the guidance.
+- Implementation authorization: the owner requested implementation of plan 342 on 2026-09-16. Retain Tier 2, the accepted parent-direct method, every requirement and witness, and the independent evaluation boundary; plan 364 remains untouched.
