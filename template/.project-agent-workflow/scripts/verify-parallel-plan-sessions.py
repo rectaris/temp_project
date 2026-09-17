@@ -571,6 +571,14 @@ def command_require(args: argparse.Namespace) -> None:
     repository = repository_root()
     contract = plan_contract(repository, args.plan)
     if contract is None:
+        # A reserved obligation is not revoked by editing the plan. Dropping
+        # the contract fields must refuse, not silently clear the requirement.
+        path = requirement_path(repository, args.plan)
+        if path.exists() or path.is_symlink():
+            raise EvidenceError(
+                "this plan reserves a live-evidence demonstration but no longer "
+                "declares its live-evidence contract"
+            )
         emit({"operation": "require", "plan_path": args.plan, "obligation": "none"})
         return
     record = load_requirement(repository, args.plan)

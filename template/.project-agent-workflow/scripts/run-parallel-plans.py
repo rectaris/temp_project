@@ -1145,6 +1145,10 @@ def command_publish(args: argparse.Namespace) -> None:
         "handoff_record_digest": (
             record["original_handoff_record_digest"] if parent_direct else ""
         ),
+        "integration_session_id": args.integration_session_id or "",
+        "integration_session_pid": (
+            args.integration_session_pid if args.integration_session_pid else 0
+        ),
         "member_worktree_path": (
             record["original_worktree_path"] if parent_direct else ""
         ),
@@ -1291,7 +1295,14 @@ def finalize_publication(
     state_path: Path, journal_path: Path, journal: dict[str, Any], root: Path
 ) -> None:
     identity = (
-        ["--handoff-digest", journal["handoff_record_digest"]]
+        [
+            "--handoff-digest",
+            journal["handoff_record_digest"],
+            "--integration-session-id",
+            journal["integration_session_id"],
+            "--integration-session-pid",
+            str(journal["integration_session_pid"]),
+        ]
         if journal.get("handoff_mode") == HANDOFF_MODE
         else ["--permit-id", journal["permit_id"]]
     )
@@ -1704,6 +1715,8 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--commit", required=True)
     publish.add_argument("--owner", required=True)
     publish.add_argument("--journal", required=True)
+    publish.add_argument("--integration-session-id")
+    publish.add_argument("--integration-session-pid", type=int)
     publish.set_defaults(handler=command_publish)
 
     recover = sub.add_parser(

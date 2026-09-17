@@ -6468,7 +6468,7 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         # Publication requires the integration review of this exact assembly.
         lease = self.run_group(
             "lease-acquire", str(self.state), "--member", self.ALPHA,
-            "--owner", "integration",
+            "--owner", "integration", *self.integration_identity(),
         )
         self.assertEqual(lease.returncode, 0, lease.stderr)
         commit = self.apply_assembled_commit(record)
@@ -6498,6 +6498,82 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         self.assertNotIn(
             "plan/284-alpha", self.git("branch", "--format=%(refname:short)")
         )
+
+    def test_member_cannot_take_the_publication_lease_without_integration(self) -> None:
+        """A member knows the owner string; it does not know integration.
+
+        The lease is what opens the schema-2 publication path, so naming
+        oneself `integration` must not be enough to hold it.
+        """
+
+        unnamed = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.ALPHA,
+            "--owner", "integration",
+        )
+        self.assertNotEqual(unnamed.returncode, 0, unnamed.stdout)
+        self.assertIn("integration session identity", unnamed.stderr)
+        impostor = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.ALPHA,
+            "--owner", "integration",
+            "--integration-session-id", "session-alpha",
+            "--integration-session-pid", str(os.getpid()),
+        )
+        self.assertNotEqual(impostor.returncode, 0, impostor.stdout)
+        self.assertIn("admitted the group", impostor.stderr)
+        self.assertEqual(self.payload()["publication_lease"]["owner"], "")
+
+    def test_publication_frees_the_lease_for_the_partner_member(self) -> None:
+        """One member's publication must not lock the other one out.
+
+        The lease is exclusive for the whole group, so publication has to
+        return it; otherwise the second member can never be integrated.
+        """
+
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        handoff_path = self.base / "handoff.json"
+        ready = self.ready_member(alpha, self.ALPHA, worktree, handoff_path)
+        self.assertEqual(ready["returncode"], 0, ready)
+        assembly_path = self.base / "assembly.json"
+        assembled = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(handoff_path), "--output", str(assembly_path),
+        )
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        record = json.loads(assembly_path.read_text(encoding="utf-8"))
+        lease = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.ALPHA,
+            "--owner", "integration", *self.integration_identity(),
+        )
+        self.assertEqual(lease.returncode, 0, lease.stderr)
+        review = self.run_group(
+            "record-review", str(self.state), "--member", self.ALPHA,
+            "--registry-path-digest", adapter_digest("registry"),
+            "--registry-event-count", "1",
+            "--registry-event-chain-digest", adapter_digest("chain"),
+            "--assembly-record-digest", record["record_digest"],
+        )
+        self.assertEqual(review.returncode, 0, review.stderr)
+        commit = self.apply_assembled_commit(record)
+        published = self.publish_member(record, commit, self.base / "journal.json")
+        self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertEqual(self.payload()["publication_lease"]["owner"], "")
+        partner = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.BETA,
+            "--owner", "integration", *self.integration_identity(),
+        )
+        self.assertEqual(partner.returncode, 0, partner.stderr)
+        released = self.run_group(
+            "lease-release", str(self.state), "--owner", "integration",
+            *self.integration_identity(),
+        )
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertEqual(self.payload()["publication_lease"]["owner"], "")
 
     def test_member_retirement_requires_verified_integration_authority(self) -> None:
         alpha = self.session("session-alpha")
@@ -6542,6 +6618,7 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
             "member_worktree_path": str(worktree),
             "member_branch_ref": "refs/heads/plan/284-alpha",
             "member_head": record["original_member_head"],
+            "member_result_tree": record["original_result_tree"],
             "target_ref": "refs/heads/main",
             # Nothing was published, so this names the unchanged target.
             "published_commit": self.start_commit,
@@ -6562,6 +6639,32 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         )
         self.assertNotEqual(tampered.returncode, 0, tampered.stdout)
         self.assertIn("digest verification failed", tampered.stderr)
+        self.assertTrue(worktree.exists())
+
+        # The digest is a self-hash, so a member can compute a well-formed one.
+        # Only the parent-owned group state decides that a publication happened.
+        manager = self.group.worktree_manager()
+        authorization["repository_identity"] = manager.repository_identity(self.repo)
+        authorization["member_result_tree"] = record["original_result_tree"]
+        authorization["authorization_digest"] = manager.canonical_digest(
+            {
+                key: value
+                for key, value in authorization.items()
+                if key != "authorization_digest"
+            }
+        )
+        forged.write_text(json.dumps(authorization), encoding="utf-8")
+        forged.chmod(0o600)
+        unpublished = subprocess.run(
+            [
+                sys.executable, str(WORKTREE_SCRIPT), "retire", self.ALPHA,
+                "--owner-id", "parent", "--integration-authorization", str(forged),
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(unpublished.returncode, 0, unpublished.stdout)
+        self.assertIn("records no publication", unpublished.stderr)
         self.assertTrue(worktree.exists())
 
     def test_assembly_refuses_stale_mixed_and_unsubmitted_member_evidence(self) -> None:
@@ -6613,6 +6716,18 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
 
     # -- integration helpers --------------------------------------------
 
+    def integration_identity(self) -> list[str]:
+        """Name the integration session that admitted this group.
+
+        Publication and lease operations authenticate this identity, so a
+        member session cannot take either by naming itself the owner.
+        """
+
+        return [
+            "--integration-session-id", "integration-session",
+            "--integration-session-pid", str(os.getpid()),
+        ]
+
     def run_adapter(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(ADAPTER_SCRIPT), *arguments],
@@ -6647,6 +6762,7 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
             "publish", "--state", str(self.state), "--plan", self.ALPHA,
             "--assembly", str(self.base / "assembly.json"), "--commit", commit,
             "--owner", "integration", "--journal", str(journal),
+            *self.integration_identity(),
         )
 
     def test_root_and_generated_member_adapter_stay_identical(self) -> None:
@@ -6738,6 +6854,41 @@ class LiveEvidenceGateTests(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
                 self.assertNotEqual(refused.returncode, 0, refused.stdout)
+
+    def test_removing_the_contract_does_not_revoke_a_reserved_obligation(self) -> None:
+        """Editing the plan must not be a way out of the demonstration.
+
+        The obligation lives in a fixed private record, so a plan that drops
+        its contract fields after reserving one is refused, not released.
+        """
+
+        contract = self.verifier.plan_contract(self.repo, self.PLAN)
+        record = {
+            "schema_version": self.verifier.REQUIREMENT_SCHEMA_VERSION,
+            "record_type": self.verifier.REQUIREMENT_RECORD_TYPE,
+            "repository_identity": self.verifier.repository_identity(self.repo),
+            "plan_path": self.PLAN,
+            "plan_digest": contract["plan_digest"],
+            "execution_plan_digest": contract["plan_digest"],
+            "live_evidence_contract": contract["contract"],
+            "live_acceptance_digest": contract["live_acceptance_digest"],
+            "execution_genesis_digest": "sha256:" + "1" * 64,
+            "run_id": "live-demo-run",
+            "reserved_group_id": "live-demo",
+            "state": "reserved",
+            "group_description_digest": "",
+            "report_path": "",
+            "report_digest": "",
+            "record_digest": "",
+        }
+        record["record_digest"] = self.verifier.self_digest(record)
+        self.verifier.write_private_json(
+            self.verifier.requirement_path(self.repo, self.PLAN), record
+        )
+        self.write_plan(self.PLAN, gated=False)
+        refused = self.run_verifier("require", "--plan", self.PLAN)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("no longer declares", refused.stderr)
 
     def test_root_and_generated_verifier_stay_identical(self) -> None:
         generated = (

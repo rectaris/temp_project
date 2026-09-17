@@ -1693,6 +1693,21 @@ def recover_stranded_record(
 
 INTEGRATION_AUTHORIZATION_SCHEMA_VERSION = 1
 INTEGRATION_AUTHORIZATION_KIND = "parallel_group_member_retirement"
+INTEGRATION_AUTHORIZATION_KEYS = (
+    "adapter_version",
+    "repository_identity",
+    "group_id",
+    "plan_path",
+    "member_worktree_path",
+    "member_branch_ref",
+    "member_head",
+    "member_result_tree",
+    "target_ref",
+    "published_commit",
+    "assembly_record_digest",
+    "assembled_patch_digest",
+    "handoff_record_digest",
+)
 
 
 def canonical_digest(value: Any) -> str:
@@ -1735,6 +1750,13 @@ def load_integration_authorization(args: argparse.Namespace) -> dict[str, Any] |
         raise WorktreeError("integration authorization must declare schema_version 1")
     if authorization.get("authorization_kind") != INTEGRATION_AUTHORIZATION_KIND:
         raise WorktreeError("integration authorization names another authorization kind")
+    missing = [
+        key for key in INTEGRATION_AUTHORIZATION_KEYS if key not in authorization
+    ]
+    if missing:
+        raise WorktreeError(
+            "integration authorization omits " + ", ".join(sorted(missing))
+        )
     expected = canonical_digest(
         {
             key: value
@@ -1787,6 +1809,47 @@ def verify_integration_authorization(
     published_commit = authorization["published_commit"]
     if not authorization["member_result_tree"]:
         raise WorktreeError("integration authorization names no frozen member result")
+    # The authorization is a file, and a self-digest names no author. The
+    # parent-owned group state is the fact that decides: it records this
+    # member's publication only for the authenticated integration session.
+    try:
+        state_path = group.session_state_path(repository, enrolled["group_id"])
+        state = group.read_state(state_path)
+        group.require_session_state(repository, state_path, state)
+        member = group.require_member(state, args.plan)
+    except group.GroupError as exc:
+        raise WorktreeError(
+            f"integration authorization has no live group publication: {exc}"
+        ) from exc
+    if not member["publication"]["published"]:
+        raise WorktreeError(
+            "the group authority records no publication for this member; the "
+            "member worktree is preserved"
+        )
+    if member["publication"]["commit"] != published_commit:
+        raise WorktreeError(
+            "integration authorization names another published commit than the "
+            "group authority recorded"
+        )
+    if member["handoff"] is None or (
+        member["handoff"]["record_digest"] != authorization["handoff_record_digest"]
+    ):
+        raise WorktreeError(
+            "integration authorization names another member handoff than the "
+            "group authority published"
+        )
+    recorded = any(
+        event["event_type"] == "member_published"
+        and event["detail"].get("plan_path") == args.plan
+        and event["detail"].get("assembly_digest")
+        == authorization["assembly_record_digest"]
+        for event in state["events"]
+    )
+    if not recorded:
+        raise WorktreeError(
+            "integration authorization names another assembled result than the "
+            "group authority published"
+        )
     if exact_ref_tip(repository, authorization["target_ref"]) is None:
         raise WorktreeError("integration authorization names an unknown target ref")
     if not is_ancestor(repository, published_commit, authorization["target_ref"]):

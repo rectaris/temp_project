@@ -2372,10 +2372,13 @@ def lease_acquire(args: argparse.Namespace) -> None:
         state = read_state(path)
         root = repository_root()
         if state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION:
-            # Integration, not the member session, holds this lease. Admitting
-            # it here is what lets a parent-direct result reach the target at
-            # all; member publication stays closed by its own gates.
+            # Integration, not the member session, holds this lease. The
+            # authenticated integration session is the only caller that may
+            # take it, so registration still grants a member nothing.
             require_session_state(root, path, state)
+            require_integration_session(
+                state, args.integration_session_id, args.integration_session_pid
+            )
         else:
             require_live_group(root, state)
         member = require_member(state, args.member)
@@ -2397,13 +2400,42 @@ def lease_acquire(args: argparse.Namespace) -> None:
     print(owner)
 
 
+def require_integration_session(
+    state: dict[str, Any], session_id: str | None, session_pid: int | None
+) -> None:
+    """Authenticate the integration session that admitted this schema-2 group.
+
+    A member session can read the group state and knows its own handoff digest,
+    so neither fact is publication authority. The group records the integration
+    session identity and its process incarnation at admission, and the process
+    check requires the caller to actually run inside that process tree, which a
+    separately started member session cannot do.
+    """
+
+    if session_id is None or session_pid is None:
+        raise GroupError(
+            "this operation requires the integration session identity and its "
+            "live process"
+        )
+    if session_identity(session_id) != state["integration_session_digest"]:
+        raise GroupError(
+            "this operation requires the integration session that admitted the group"
+        )
+    identity = require_session_process(session_pid)
+    if identity["boot_digest"] != state["integration_process_identity"]["boot_digest"]:
+        raise GroupError(
+            "the integration session process evidence comes from another boot"
+        )
+
+
 def lease_release(args: argparse.Namespace) -> None:
     """Free the exclusive publication lease held by its recorded owner.
 
-    Releasing must keep working after authority drift, so this path refuses a
-    session group explicitly instead of rechecking the live group. The owner is
-    a bounded identifier, which keeps an unheld lease, whose owner is the empty
-    string, from being "released" repeatedly into the bounded event chain.
+    Releasing must keep working after authority drift, so this path rechecks
+    the live group only for a schema-2 group, whose lease belongs to the
+    authenticated integration session. The owner is a bounded identifier, which
+    keeps an unheld lease, whose owner is the empty string, from being
+    "released" repeatedly into the bounded event chain.
     """
 
     path = Path(args.state)
@@ -2412,9 +2444,8 @@ def lease_release(args: argparse.Namespace) -> None:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
         if state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION:
-            raise GroupError(
-                "legacy lease-release is closed for session groups; "
-                "parent-direct registration holds no publication lease"
+            require_integration_session(
+                state, args.integration_session_id, args.integration_session_pid
             )
         if state["publication_lease"]["owner"] != owner:
             raise GroupError("only the recorded lease owner may release the lease")
@@ -2759,6 +2790,9 @@ def publication_record(args: argparse.Namespace) -> None:
         root = repository_root()
         if args.handoff_digest:
             require_session_state(root, path, state)
+            require_integration_session(
+                state, args.integration_session_id, args.integration_session_pid
+            )
         else:
             require_live_group(root, state)
         member = require_member(state, args.member)
@@ -2783,6 +2817,20 @@ def publication_record(args: argparse.Namespace) -> None:
             ):
                 raise GroupError(
                     "a publication must consume the exact submitted member handoff"
+                )
+            # The adapter checks the review too, but the authority must not
+            # depend on its caller for that fact: a member knows its own
+            # handoff digest and could otherwise record a publication directly.
+            reviewed = any(
+                event["event_type"] == "member_review_recorded"
+                and event["detail"].get("plan_path") == args.member
+                and event["detail"].get("assembly_record_digest") == assembly_digest
+                for event in state["events"]
+            )
+            if not reviewed:
+                raise GroupError(
+                    "a parent-direct publication requires one recorded independent "
+                    "review of this exact assembled result"
                 )
         elif (
             member["permit"]["permit_id"] != args.permit_id
@@ -2811,7 +2859,11 @@ def publication_record(args: argparse.Namespace) -> None:
                 "the published commit is not reachable from the group target ref"
             )
         member["publication"] = {"published": True, "commit": commit}
-        if not args.handoff_digest:
+        if args.handoff_digest:
+            # The lease is one-use per member: leaving it held would lock the
+            # partner out of its own publication.
+            state["publication_lease"] = {"owner": "", "plan_path": ""}
+        else:
             member["permit"]["open"] = False
         append_event(
             state,
@@ -2830,7 +2882,12 @@ def group_complete(args: argparse.Namespace) -> None:
     """Report the group complete only after every member published."""
 
     state = read_state(Path(args.state))
-    require_live_group(repository_root(), state, allow_lifecycle_evolution=True)
+    require_live_group(
+        repository_root(),
+        state,
+        allow_lifecycle_evolution=True,
+        allow_sessions=state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION,
+    )
     pending = sorted(
         plan
         for plan, member in state["members"].items()
@@ -2953,11 +3010,15 @@ def parser() -> argparse.ArgumentParser:
     acquire.add_argument("state")
     acquire.add_argument("--member", required=True)
     acquire.add_argument("--owner", required=True)
+    acquire.add_argument("--integration-session-id")
+    acquire.add_argument("--integration-session-pid", type=int)
     acquire.set_defaults(handler=lease_acquire)
 
     lease_free = sub.add_parser("lease-release")
     lease_free.add_argument("state")
     lease_free.add_argument("--owner", required=True)
+    lease_free.add_argument("--integration-session-id")
+    lease_free.add_argument("--integration-session-pid", type=int)
     lease_free.set_defaults(handler=lease_release)
 
     review = sub.add_parser("record-review")
@@ -3005,6 +3066,8 @@ def parser() -> argparse.ArgumentParser:
     publication.add_argument("--member", required=True)
     publication.add_argument("--permit-id")
     publication.add_argument("--handoff-digest")
+    publication.add_argument("--integration-session-id")
+    publication.add_argument("--integration-session-pid", type=int)
     publication.add_argument("--commit", required=True)
     publication.add_argument("--assembly-digest", required=True)
     publication.set_defaults(handler=publication_record)
