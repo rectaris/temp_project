@@ -1,6 +1,6 @@
 # Run and hand off parent-direct implementation in each member session
 
-status: backlog
+status: in_progress
 primary_invariant: Each member changes only its scope under the same logical execution budget and hands off independently derived Git evidence without acceptance or publication.
 task_types:
   - template_workflow
@@ -80,7 +80,7 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:fa4ce009e24182f76dea672e9a6d437a6fa398b6db2c2d072209510a0c34ae4a","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
   - {"acceptance_sha256":"sha256:d3984292ad76f289cf0acda9e4f69697f868e7730a8cf096723bcb5fc701e164","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
 integration_gates:
-  - Start only after docs/plan/active/372-bind-parallel-plans-to-separate-session-owners.md is checked; resolve it to the exact checked archive before promotion.
+  - Start only after docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md is checked; that archive is the exact resolved predecessor.
   - Implement this execution-control change through the existing serial parent-direct workflow.
 checked_summary_ja: 各セッションで実装と修正を進め、実行記録を保って取り込み担当へ渡す。
 
@@ -109,6 +109,9 @@ checked_summary_ja: 各セッションで実装と修正を進め、実行記録
 
 ## Validation Notes
 
+- Implementation authorization: 「@docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md @docs/plan/backlog/374-publish-and-verify-separate-session-plan-results.md の実装作業をせよ。本セッションはオーケストレーターとして動き、作業はサブエージェントを用意して作業させよ。」 Activate 373 first and keep 374 queued until this plan has a checked archive.
+- Activation baseline: 75bcf874983fb28cacb4a1d323893250a04633e3 on dev in temp_project. The active index was empty, and predecessor 372 resolves to docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md. The approved Tier 2 parent-direct design, scope and acceptance remain unchanged; no new design decision is introduced by promotion.
+- Writable delegation stays refused because `implementation_risk` is `high`. Implement through bounded parent-direct execution with an external execution ledger and independent review, exactly as this plan's Decisions require. Read-only helpers may reduce context; they hold no write scope.
 - Owner authorization: 「提案の方針でプランを作成せよ。」 The accepted proposal assigns one plan to each separate session/worktree, initially two independent members, one integration owner and real-session acceptance. This turn authors plans only.
 - Planning baseline: 6dfb0167b26906a0d47bbf9f621c47cb8b19d4ba in temp_project. Plan 360 occupies the runnable slot. Queue this work without changing that task or reopening a stopped run.
 - Tier 2 and class C apply because execution ownership and lifecycle authority change. Recheck scope and specifications before promotion. These are new plans, not reconstruction successors.

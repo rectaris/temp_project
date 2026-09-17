@@ -79,7 +79,7 @@ context_files:
   - scripts/plan_validation_commands.py
   - docs/plan/checked/2026/09/01-15/108-orchestrate-supervised-orca-workers.md
   - docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md
-  - docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md
+  - docs/plan/active/373-run-parent-direct-plans-in-member-sessions.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
@@ -108,8 +108,8 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411","stage":"focused","witness":"tests/root-plan-lifecycle.sh"}
   - {"acceptance_sha256":"sha256:405a824fe0f24376c2ce7a8275ef41575cc19ddb95b3d66029a3600aba97a1d2","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 integration_gates:
-  - Start only after docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md is checked; resolve it to the exact checked archive before promotion.
-  - Start only after docs/plan/active/372-bind-parallel-plans-to-separate-session-owners.md is checked; resolve it to the exact checked archive before promotion.
+  - Start only after docs/plan/active/373-run-parent-direct-plans-in-member-sessions.md is checked; resolve it to the exact checked archive before promotion.
+  - Start only after docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md is checked; that archive is the exact resolved predecessor.
   - Implement this integration serially.
   - Demonstration plans change bounded product files, not the governing controls; candidate-only or mock sessions cannot substitute for independent parent-direct sessions.
   - Live evidence is additional acceptance, not a replacement for focused/authoritative/Copy update checks. Bind its report path/digest before focused verification and completion.
