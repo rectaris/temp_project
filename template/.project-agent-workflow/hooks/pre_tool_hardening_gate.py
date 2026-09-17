@@ -127,6 +127,7 @@ def worktree_refusal(
     workdir: str | None,
     context_error: str | None,
     context_candidates: tuple[str, ...] = (),
+    session_id: str | None = None,
 ) -> str | None:
     """Report why this write must move into a task worktree, if it must.
 
@@ -168,7 +169,9 @@ def worktree_refusal(
             guard = guard_module(cwd)
             if guard is None:
                 continue
-            guard.require_task_worktree(cwd=cwd, action="this repository write")
+            guard.require_task_worktree(
+                cwd=cwd, action="this repository write", session_id=session_id,
+            )
     except Exception as error:
         return f"{error}"
     return None
@@ -199,9 +202,146 @@ def candidate_commands(payload: dict) -> list[str]:
     return out
 
 
+FILE_EDIT_TOOLS = {
+    "apply_patch", "write", "edit", "multiedit", "create_file",
+    "insert_edit_into_file", "replace_string_in_file", "str_replace_editor",
+    "multi_replace_string_in_file",
+}
+
+
+# Envelope keys that can carry an edit's own targets at the top level, next to
+# a nested `arguments`/`tool_input` section rather than instead of one.
+FILE_EDIT_ENVELOPE_KEYS = (
+    "patch", "input", "file_path", "filePath", "path", "replacements",
+)
+
+
+def file_edit_targets(tool: str, payload: dict) -> list[str]:
+    """Return every path this edit can touch, refusing an ambiguous envelope.
+
+    A runtime may carry the edit nested under `arguments` or `tool_input`, or
+    directly on the payload. Deriving from one section alone would let an
+    envelope that carries both hide a second target behind an innocuous one, so
+    every section that carries an edit-bearing key is derived independently and
+    the derived targets must agree.
+    """
+
+    nested = [payload[key] for key in ("arguments", "tool_input") if key in payload]
+    if nested and any(value != nested[0] for value in nested[1:]):
+        raise ValueError("file edit arguments contradict each other")
+    containers = list(nested)
+    if any(key in payload for key in FILE_EDIT_ENVELOPE_KEYS):
+        containers.append(payload)
+    if not containers:
+        containers = [payload]
+    derived = [file_edit_container_targets(tool, container) for container in containers]
+    if any(targets != derived[0] for targets in derived[1:]):
+        raise ValueError("file edit arguments contradict each other")
+    return derived[0]
+
+
+def file_edit_container_targets(tool: str, arguments) -> list[str]:
+    if tool == "apply_patch":
+        patches = [arguments] if isinstance(arguments, str) else [
+            arguments[key] for key in ("patch", "input") if key in arguments
+        ] if isinstance(arguments, dict) else []
+        if not patches or any(patch != patches[0] for patch in patches[1:]):
+            raise ValueError("file edit requires one unambiguous patch")
+        patch = patches[0]
+        if not isinstance(patch, str):
+            raise ValueError("file edit patch must be text")
+        lines = patch.strip().splitlines()
+        if len(lines) < 3 or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+            raise ValueError("file edit requires a supported complete patch")
+        targets = []
+        can_move = False
+        for line in lines[1:-1]:
+            header = next((
+                prefix for prefix in (
+                    "*** Add File: ", "*** Update File: ", "*** Delete File: ",
+                    "*** Move to: ",
+                ) if line.startswith(prefix)
+            ), None)
+            if header is not None:
+                if header == "*** Move to: " and not can_move:
+                    raise ValueError("patch move has no unambiguous update source")
+                targets.append(line[len(header):])
+                can_move = header == "*** Update File: "
+            else:
+                can_move = False
+                if line.startswith("*** ") and line != "*** End of File":
+                    raise ValueError("file edit patch contains an unsupported header")
+    else:
+        if not isinstance(arguments, dict):
+            raise ValueError("file edit arguments must be an object")
+        if tool == "str_replace_editor" and arguments.get("command") == "view":
+            return []
+        entries = (
+            arguments.get("replacements")
+            if tool == "multi_replace_string_in_file" else [arguments]
+        )
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("file edit requires explicit target entries")
+        targets = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError("file edit target entry must be an object")
+            paths = [entry[key] for key in ("file_path", "filePath", "path") if key in entry]
+            if not paths or any(path != paths[0] for path in paths[1:]):
+                raise ValueError("file edit requires one unambiguous path per target")
+            targets.append(paths[0])
+    if not targets or any(
+        not isinstance(target, str) or not target.strip() or "\0" in target
+        for target in targets
+    ):
+        raise ValueError("file edit targets must be nonblank paths")
+    return targets
+
+
+def file_edit_refusal(
+    tool: str, payload: dict, workdir: str | None,
+    context_error: str | None, session_id: str | None,
+) -> str | None:
+    if tool not in FILE_EDIT_TOOLS:
+        return None
+    try:
+        targets = file_edit_targets(tool, payload)
+        if not targets:
+            return None
+        if context_error is not None:
+            return context_error
+        base = tool_command_context.effective_directory(Path.cwd(), workdir, ())
+        directories: set[Path] = set()
+        for raw in targets:
+            target = Path(raw)
+            if not target.is_absolute():
+                target = base / target
+            # A tool may replace a symlink or follow it; guard both locations.
+            for candidate in (target, target.resolve()):
+                directory = candidate.parent
+                while not directory.exists():
+                    directory = directory.parent
+                if not directory.is_dir():
+                    raise ValueError("file edit target has a non-directory ancestor")
+                directories.add(directory)
+        for directory in sorted(directories):
+            guard = guard_module(directory)
+            if guard is not None:
+                guard.require_task_worktree(
+                    cwd=directory, action="this file edit", session_id=session_id,
+                )
+    except (ValueError, OSError, RuntimeError, ImportError, SyntaxError,
+            AttributeError, TypeError, KeyError) as error:
+        return f"file edit guard failed: {error}"
+    return None
+
+
 def main() -> int:
     payload = load_payload()
     commands = candidate_commands(payload)
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str):
+        session_id = None
     for command in commands:
         for pattern, reason in RULES:
             if pattern.search(command):
@@ -223,11 +363,19 @@ def main() -> int:
         workdir, context_error = None, f"{error}"
         context_candidates = error.candidates
     for command in commands:
-        reason = worktree_refusal(command, workdir, context_error, context_candidates)
+        reason = worktree_refusal(
+            command, workdir, context_error, context_candidates, session_id,
+        )
         if reason is not None:
             json.dump({"decision": "block", "reason": reason}, sys.stdout)
             sys.stdout.write("\n")
             return 0
+    tool = str(payload.get("tool_name") or payload.get("tool") or "").split(".")[-1].lower()
+    reason = file_edit_refusal(tool, payload, workdir, context_error, session_id)
+    if reason is not None:
+        json.dump({"decision": "block", "reason": reason}, sys.stdout)
+        sys.stdout.write("\n")
+        return 0
     json.dump({}, sys.stdout)
     sys.stdout.write("\n")
     return 0

@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import pwd
@@ -870,6 +871,7 @@ def assert_task_worktree(
     plan: str | None = None,
     now: int | None = None,
     action: str = "this repository write",
+    session_id: str | None = None,
 ) -> TaskBinding:
     """Require that the caller runs inside its exact bound task worktree."""
 
@@ -896,7 +898,35 @@ def assert_task_worktree(
                 f"{action} is bound to {binding.label}, not {plan}. "
                 + preparation_guidance(repository, plan)
             )
+    group = parallel_group_module(repository)
+    if group is not None:
+        try:
+            group.require_session_binding(repository, binding, session_id=session_id)
+        except group.GroupError as exc:
+            raise GuardError(str(exc)) from exc
     return binding
+
+
+def parallel_group_module(repository: Path | None = None):
+    for path in (
+        Path(__file__).with_name("parallel-plan-state.py"),
+        Path(__file__).parent.parent / "parallel-plan-state.py",
+    ):
+        if not path.is_file():
+            continue
+        if path.is_symlink():
+            raise GuardError("parallel group authority must not be a symlink")
+        name = "worktree_parallel_group"
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise GuardError("parallel group authority could not be loaded")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    directory = (repository if repository is not None else repository_root()) / "docs/plan/execution-groups"
+    if directory.is_dir() and any(directory.glob("*.json")):
+        raise GuardError("parallel group authority is missing")
+    return None
 
 
 # --- shared plan-identifier allocation across every linked worktree ---
@@ -1474,6 +1504,7 @@ def require_task_worktree(
     plan: str | None = None,
     now: int | None = None,
     action: str = "this repository write",
+    session_id: str | None = None,
 ) -> TaskBinding | None:
     """Assert the task-worktree boundary wherever the repository is governed.
 
@@ -1491,7 +1522,9 @@ def require_task_worktree(
     governed, _ = enforcement_scope(repository)
     if not governed:
         return None
-    return assert_task_worktree(repository, kind=kind, plan=plan, now=now, action=action)
+    return assert_task_worktree(
+        repository, kind=kind, plan=plan, now=now, action=action, session_id=session_id,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1512,6 +1545,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         action = arguments[index + 1]
     plan = None
+    session_id = None
+    if "--session-id" in arguments:
+        index = arguments.index("--session-id")
+        if index + 1 >= len(arguments):
+            print("worktree guard failed: --session-id needs a value", file=sys.stderr)
+            return 2
+        session_id = arguments[index + 1]
     if "--plan" in arguments:
         index = arguments.index("--plan")
         if index + 1 >= len(arguments):
@@ -1547,7 +1587,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"bound": binding is not None} | (binding.summary() if binding else {}), sort_keys=True))
             return 0
         if command == "require":
-            binding = require_task_worktree(action=action, plan=plan)
+            binding = require_task_worktree(action=action, plan=plan, session_id=session_id)
             if binding is None:
                 try:
                     _, reason = enforcement_scope(repository_root())

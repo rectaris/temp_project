@@ -7091,6 +7091,16 @@ class ParallelPlanGroupTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_releasing_an_unheld_publication_lease_changes_nothing(self) -> None:
+        self.initialize_group()
+        before = self.state.read_bytes()
+        for owner in ("", "parent-one"):
+            completed = self.run_group(
+                "lease-release", str(self.state), "--owner", owner
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout)
+            self.assertEqual(before, self.state.read_bytes())
+
     def test_group_state_rejects_a_foreign_member(self) -> None:
         self.initialize_group()
         completed = self.run_group(
@@ -8230,6 +8240,326 @@ class ParallelPlanGroupTest(unittest.TestCase):
         self.assertTrue(generated.exists())
         self.assertEqual(GROUP_SCRIPT.read_bytes(), generated.read_bytes())
         self.assertTrue(os.access(generated, os.X_OK))
+
+    def enable_session_group(self) -> None:
+        document = self.group_document()
+        document["schema_version"] = 2
+        for member in document["members"]:
+            member["implementation_mode"] = "parent_direct"
+        self.write_description(document)
+        head = self.commit("session group")
+        location = self.run_group(
+            "session-state-path", "--group-description",
+            "docs/plan/execution-groups/alpha-beta.json", check=True,
+        )
+        self.state = Path(location.stdout.strip())
+        self.addCleanup(self.state.unlink, missing_ok=True)
+        self.addCleanup(self.state.with_name(self.state.name + ".lock").unlink, missing_ok=True)
+        self.run_group(
+            "group-init", str(self.state), "--group-description",
+            "docs/plan/execution-groups/alpha-beta.json", "--target-ref",
+            "refs/heads/main", "--start-commit", head,
+            "--integration-session-id", "integration-session",
+            "--integration-session-pid", str(os.getpid()), check=True,
+        )
+        self.managed = self.base / "managed"
+        self.managed.mkdir(mode=0o700)
+        spec = importlib.util.spec_from_file_location("session_group_fixture", GROUP_SCRIPT)
+        group = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(group)
+        manager = group.worktree_manager()
+        identity = manager.repository_identity(self.repo)
+        for plan in (self.alpha_path, self.beta_path):
+            paths = manager.metadata_paths(
+                identity, {"kind": "plan", "identity": {"path": plan}},
+            )
+            for key in ("record", "journal", "lock", "publication"):
+                self.addCleanup(paths[key].unlink, missing_ok=True)
+
+    def session_process(self, identity: str) -> subprocess.Popen:
+        process = subprocess.Popen(
+            [
+                sys.executable, "-u", "-c",
+                "import json,os,subprocess,sys\n"
+                "for line in sys.stdin:\n"
+                " request=json.loads(line)\n"
+                " command=[sys.executable,request.get('script',sys.argv[1]),*request['arguments']]\n"
+                " if request.get('owner',True):\n"
+                "  command+=['--session-id',sys.argv[2],'--session-pid',str(os.getpid())]\n"
+                " result=subprocess.run(command,cwd=request['cwd'],text=True,"
+                "stdout=subprocess.PIPE,stderr=subprocess.PIPE)\n"
+                " print(json.dumps({'returncode':result.returncode,"
+                "'stdout':result.stdout,'stderr':result.stderr}),flush=True)\n",
+                str(ROOT / "scripts/manage-plan-worktrees.py"), identity,
+            ],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        def finish() -> None:
+            process.communicate(timeout=10)
+
+        self.addCleanup(finish)
+        return process
+
+    def session_request(
+        self, process: subprocess.Popen, plan: str, operation: str = "prepare",
+        *, extra: tuple[str, ...] = (), owner: bool = True,
+    ) -> dict:
+        arguments = [
+            operation, plan, "--allowed-root", str(self.managed), *extra,
+        ]
+        if operation == "resume":
+            arguments.extend(["--owner-id", "parent"])
+        process.stdin.write(json.dumps({
+            "arguments": arguments, "cwd": str(self.repo), "owner": owner,
+        }) + "\n")
+        process.stdin.flush()
+        result = json.loads(process.stdout.readline())
+        if result["returncode"] == 0 and operation in {"prepare", "resume"}:
+            record = Path(json.loads(result["stdout"])["record"])
+            self.addCleanup(record.unlink, missing_ok=True)
+        return result
+
+    def test_separate_sessions_bind_distinct_worktrees_and_refuse_duplicate_start(self) -> None:
+        self.enable_session_group()
+        first = self.session_process("session-alpha")
+        second = self.session_process("session-beta")
+        alpha = self.session_request(first, self.alpha_path)
+        beta = self.session_request(second, self.beta_path)
+        self.assertEqual(alpha["returncode"], 0, alpha)
+        self.assertEqual(beta["returncode"], 0, beta)
+        a, b = json.loads(alpha["stdout"]), json.loads(beta["stdout"])
+        self.assertNotEqual(a["worktree"], b["worktree"])
+        self.assertFalse(a["execution_enabled"])
+        self.assertFalse(b["publication_enabled"])
+        before = self.state.read_bytes()
+        duplicate = self.session_request(first, self.alpha_path)
+        self.assertNotEqual(duplicate["returncode"], 0, duplicate)
+        self.assertIn("already started", duplicate["stderr"])
+        self.assertEqual(before, self.state.read_bytes())
+        publication = self.session_request(
+            first, self.alpha_path, "publish", owner=False,
+        )
+        self.assertNotEqual(publication["returncode"], 0, publication)
+        self.assertIn("publication is closed", publication["stderr"])
+
+    def test_session_resume_refuses_live_process_even_with_same_owner_string(self) -> None:
+        self.enable_session_group()
+        first = self.session_process("session-alpha")
+        second = self.session_process("session-alpha")
+        initial = self.session_request(first, self.alpha_path)
+        self.assertEqual(initial["returncode"], 0, initial)
+        before = self.state.read_bytes()
+        rejected = self.session_request(second, self.alpha_path, "resume")
+        self.assertNotEqual(rejected["returncode"], 0, rejected)
+        self.assertIn("still live", rejected["stderr"])
+        self.assertEqual(before, self.state.read_bytes())
+        first.stdin.close()
+        first.stdin = None
+        first.wait(timeout=10)
+        resumed = self.session_request(second, self.alpha_path, "resume")
+        self.assertEqual(resumed["returncode"], 0, resumed)
+        old, new = json.loads(initial["stdout"]), json.loads(resumed["stdout"])
+        self.assertEqual(old["worktree"], new["worktree"])
+        self.assertEqual(new["session_generation"], 1)
+
+    def test_session_identity_cannot_own_both_members_or_integration(self) -> None:
+        self.enable_session_group()
+        first = self.session_process("shared-session")
+        second = self.session_process("shared-session")
+        integrator = self.session_process("integration-session")
+        self.assertEqual(self.session_request(first, self.alpha_path)["returncode"], 0)
+        for process in (first, second, integrator):
+            with self.subTest(pid=process.pid):
+                before = self.state.read_bytes()
+                rejected = self.session_request(process, self.beta_path)
+                self.assertNotEqual(rejected["returncode"], 0, rejected)
+                self.assertEqual(before, self.state.read_bytes())
+
+    def test_integration_process_cannot_register_or_resume_under_a_different_session(self) -> None:
+        self.enable_session_group()
+        before = self.state.read_bytes()
+        for operation in ("prepare", "resume"):
+            rejected = subprocess.run([
+                sys.executable, str(ROOT / "scripts/manage-plan-worktrees.py"),
+                operation, self.alpha_path, "--allowed-root", str(self.managed),
+                "--owner-id", "parent", "--session-id", "different-session",
+                "--session-pid", str(os.getpid()),
+            ], cwd=self.repo, text=True, capture_output=True)
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn("sessions and processes must be distinct", rejected.stderr)
+            self.assertEqual(before, self.state.read_bytes())
+            self.assertEqual(list(self.managed.iterdir()), [])
+
+    def test_integration_process_binding_is_checked_against_admission_history(self) -> None:
+        self.enable_session_group()
+        state = self.payload()
+        state["integration_process_identity"]["start_ticks"] += 1
+        self.state.write_text(json.dumps(state))
+        worker = self.session_process("session-alpha")
+        rejected = self.session_request(worker, self.alpha_path)
+        self.assertNotEqual(rejected["returncode"], 0, rejected)
+        self.assertIn("integration owner differs", rejected["stderr"])
+        self.assertEqual(list(self.managed.iterdir()), [])
+
+    def test_session_resume_preserves_checkout_after_wrong_path_or_symlink(self) -> None:
+        self.enable_session_group()
+        first = self.session_process("session-alpha")
+        second = self.session_process("new-session")
+        initial = self.session_request(first, self.alpha_path)
+        self.assertEqual(initial["returncode"], 0, initial)
+        first.stdin.close()
+        first.stdin = None
+        first.wait(timeout=10)
+        link = self.base / "alias"
+        link.symlink_to(self.managed, target_is_directory=True)
+        before = self.state.read_bytes()
+        rejected = self.session_request(
+            second, self.alpha_path, "resume", extra=("--allowed-root", str(link)),
+        )
+        self.assertNotEqual(rejected["returncode"], 0, rejected)
+        self.assertEqual(before, self.state.read_bytes())
+        self.assertTrue(Path(json.loads(initial["stdout"])["worktree"]).is_dir())
+
+    def test_same_member_concurrent_session_starts_have_one_owner(self) -> None:
+        self.enable_session_group()
+        workers = [self.session_process(f"session-{index}") for index in range(2)]
+        for worker in workers:
+            worker.stdin.write(json.dumps({
+                "arguments": ["prepare", self.alpha_path, "--allowed-root", str(self.managed)],
+                "cwd": str(self.repo),
+            }) + "\n")
+            worker.stdin.flush()
+        results = [json.loads(worker.stdout.readline()) for worker in workers]
+        self.assertEqual(sorted(result["returncode"] for result in results), [0, 1], results)
+        self.assertEqual(self.payload()["members"][self.alpha_path]["session_binding"]["generation"], 0)
+        self.assertEqual(len(list(self.managed.iterdir())), 1)
+
+    def test_partial_session_preparation_recovers_only_exact_owner(self) -> None:
+        self.enable_session_group()
+        worker = self.session_process("session-alpha")
+        crash = self.base / "interrupt-session-binding.py"
+        crash.write_text(
+            "import importlib.util,sys\n"
+            f"spec=importlib.util.spec_from_file_location('manager',{str(ROOT / 'scripts/manage-plan-worktrees.py')!r})\n"
+            "manager=importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(manager)\n"
+            "original=manager.guard.parallel_group_module\n"
+            "def load():\n"
+            " group=original()\n"
+            " write=group.atomic_write\n"
+            " def interrupt(path,state):\n"
+            "  if state['events'][-1]['event_type']=='member_session_bound':\n"
+            "   raise SystemExit(9)\n"
+            "  write(path,state)\n"
+            " group.atomic_write=interrupt\n"
+            " return group\n"
+            "manager.guard.parallel_group_module=load\n"
+            "raise SystemExit(manager.main())\n",
+            encoding="utf-8",
+        )
+        worker.stdin.write(json.dumps({
+            "script": str(crash), "cwd": str(self.repo),
+            "arguments": ["prepare", self.alpha_path, "--allowed-root", str(self.managed)],
+        }) + "\n")
+        worker.stdin.flush()
+        failed = json.loads(worker.stdout.readline())
+        self.assertEqual(failed["returncode"], 9, failed)
+        binding = self.payload()["members"][self.alpha_path]["session_binding"]
+        self.assertEqual(binding["state"], "preparing")
+        self.assertTrue(Path(binding["worktree_path"]).is_dir())
+        foreign = self.session_process("session-foreign")
+        rejected = self.session_request(foreign, self.alpha_path)
+        self.assertNotEqual(rejected["returncode"], 0)
+        recovered = self.session_request(worker, self.alpha_path)
+        self.assertEqual(recovered["returncode"], 0, recovered)
+        self.assertEqual(json.loads(recovered["stdout"])["session_generation"], 0)
+
+    def test_explicit_stopped_handoff_allows_new_session_without_lease_wait(self) -> None:
+        self.enable_session_group()
+        first = self.session_process("session-alpha")
+        second = self.session_process("session-new")
+        self.assertEqual(self.session_request(first, self.alpha_path)["returncode"], 0)
+        first.stdin.write(json.dumps({
+            "script": str(GROUP_SCRIPT), "owner": False, "cwd": str(self.repo),
+            "arguments": ["session-stop", str(self.state), "--member", self.alpha_path,
+                          "--session-id", "session-alpha"],
+        }) + "\n")
+        first.stdin.flush()
+        stopped = json.loads(first.stdout.readline())
+        self.assertEqual(stopped["returncode"], 0, stopped)
+        resumed = self.session_request(second, self.alpha_path, "resume")
+        self.assertEqual(resumed["returncode"], 0, resumed)
+        self.assertEqual(json.loads(resumed["stdout"])["session_generation"], 1)
+
+    def test_session_group_rejects_reinitialization_and_copied_private_state(self) -> None:
+        self.enable_session_group()
+        before = self.state.read_bytes()
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True,
+        ).strip()
+        for target in (self.state, self.base / "second-state.json"):
+            rejected = self.run_group(
+                "group-init", str(target), "--group-description",
+                "docs/plan/execution-groups/alpha-beta.json", "--target-ref",
+                "refs/heads/main", "--start-commit", head,
+                "--integration-session-id", "another-integration-session",
+                "--integration-session-pid", str(os.getpid()),
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+        self.assertEqual(before, self.state.read_bytes())
+        self.assertFalse((self.base / "second-state.json").exists())
+
+    def test_session_group_does_not_enable_candidate_permits_or_execution(self) -> None:
+        self.enable_session_group()
+        before = self.state.read_bytes()
+        rejected = self.run_group(
+            "permit-issue", str(self.state), "--member", self.alpha_path,
+            "--permit-id", "worker-permit", "--workspace-digest", digest("workspace"),
+            "--output", str(self.base / "permit.json"),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(before, self.state.read_bytes())
+        for operation in ("run", "correct", "validate", "apply", "completion", "archive"):
+            rejected = self.run_group(
+                "check-enrollment", "--plan", self.alpha_path, "--operation", operation,
+                "--group-state", str(self.state),
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("later session adapter", rejected.stderr)
+
+    def test_session_group_refuses_legacy_terminal_stop_of_either_member(self) -> None:
+        self.enable_session_group()
+        worker = self.session_process("session-alpha")
+        self.assertEqual(self.session_request(worker, self.alpha_path)["returncode"], 0)
+        before = self.state.read_bytes()
+        for member in (self.alpha_path, self.beta_path):
+            worker.stdin.write(json.dumps({
+                "script": str(GROUP_SCRIPT), "owner": False, "cwd": str(self.repo),
+                "arguments": ["member-stop", str(self.state), "--member", member,
+                              "--reason", "owner_stop"],
+            }) + "\n")
+            worker.stdin.flush()
+            rejected = json.loads(worker.stdout.readline())
+            self.assertNotEqual(rejected["returncode"], 0, rejected)
+            self.assertIn("legacy member-stop is closed", rejected["stderr"])
+            self.assertEqual(before, self.state.read_bytes())
+            self.assertEqual(self.payload()["members"][member]["state"], "active")
+
+    def test_session_group_refuses_legacy_publication_lease_release(self) -> None:
+        self.enable_session_group()
+        before = self.state.read_bytes()
+        self.assertEqual(self.payload()["publication_lease"]["owner"], "")
+        for owner in ("", "integration-owner"):
+            rejected = self.run_group(
+                "lease-release", str(self.state), "--owner", owner,
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertEqual(before, self.state.read_bytes())
+        self.assertNotIn(
+            "publication_lease_released",
+            [event["event_type"] for event in self.payload()["events"]],
+        )
 
 
 

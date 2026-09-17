@@ -634,6 +634,191 @@ class TaskWorktreeGateTest(unittest.TestCase):
         self.assertIn("pre-existing checkout", output["reason"])
         self.assertIn("prepare", output["reason"])
 
+    def test_pre_tool_file_edits_require_a_bound_task_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_guarded_repository(Path(tmp))
+            for tool in ("apply_patch", "Write", "Edit", "create_file"):
+                with self.subTest(tool=tool):
+                    arguments = {"file_path": str(repo / "file.txt")}
+                    if tool == "apply_patch":
+                        arguments = {"patch": (
+                            f"*** Begin Patch\n*** Add File: {repo / 'file.txt'}\n"
+                            "+unexecuted\n*** End Patch"
+                        )}
+                    output = run_hook(
+                        ROOT_PRE_TOOL,
+                        {"tool_name": tool, "session_id": "member-session",
+                         "tool_input": arguments},
+                        cwd=repo,
+                    )
+                    self.assertEqual(output["decision"], "block")
+                    self.assertIn("pre-existing checkout", output["reason"])
+
+    def test_file_edit_targets_are_guarded_from_unrelated_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_guarded_repository(base / "repo")
+            other = base / "other"
+            other.mkdir()
+            subprocess.run(["git", "init", "-q", str(other)], check=True)
+            target = repo / "new" / "target.txt"
+            link = base / "target-link"
+            link.symlink_to(target)
+            payloads = (
+                {"tool_name": "Write", "tool_input": {"file_path": str(target)}},
+                {"tool_name": "Edit", "arguments": {"path": str(link)}},
+                {"tool_name": "create_file", "tool_input": {"filePath": str(target)}},
+                {"tool_name": "multi_replace_string_in_file", "tool_input": {"replacements": [
+                    {"filePath": str(other / "first.txt")}, {"filePath": str(target)},
+                ]}},
+                {"tool_name": "apply_patch", "tool_input": {"patch": (
+                    f"*** Begin Patch\n*** Update File: {other / 'old.txt'}\n"
+                    f"*** Move to: {target}\n@@\n-old\n+new\n*** End Patch"
+                )}},
+                {"tool_name": "apply_patch", "input": (
+                    f"*** Begin Patch\n*** Add File: {other / 'first.txt'}\n+first\n"
+                    f"*** Delete File: {target}\n*** End Patch"
+                )},
+            )
+            for hook in (ROOT_PRE_TOOL, PRE_TOOL):
+                for cwd in (base, other):
+                    for payload in payloads:
+                        with self.subTest(hook=hook, cwd=cwd, tool=payload["tool_name"]):
+                            output = run_hook(hook, payload, cwd=cwd)
+                            self.assertEqual(output["decision"], "block")
+                            self.assertIn("pre-existing checkout", output["reason"])
+                output = run_hook(hook, {
+                    "tool_name": "Write",
+                    "tool_input": {"workdir": str(other), "file_path": "../repo/new/target.txt"},
+                }, cwd=base)
+                self.assertEqual(output["decision"], "block")
+                self.assertIn("pre-existing checkout", output["reason"])
+            self.assertFalse(target.exists())
+
+    def test_file_edits_refuse_ambiguous_targets_but_leave_ungoverned_writes_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            for hook in (ROOT_PRE_TOOL, PRE_TOOL):
+                for payload in (
+                    {"tool_name": "Write", "tool_input": {}},
+                    {"tool_name": "Edit", "tool_input": {"path": "a", "file_path": "b"}},
+                    {"tool_name": "Write", "arguments": {"path": "a"},
+                     "tool_input": {"path": "b"}},
+                    {"tool_name": "apply_patch", "tool_input": {"patch": "unexecuted"}},
+                    {"tool_name": "multi_replace_string_in_file", "tool_input": {
+                        "replacements": [{"filePath": "a"}, {}],
+                    }},
+                    # An envelope may carry the edit nested and at the top
+                    # level; a second target hidden beside an innocuous one
+                    # must refuse rather than leave the hidden path unguarded.
+                    {"tool_name": "apply_patch",
+                     "arguments": {"patch": (
+                         "*** Begin Patch\n*** Add File: harmless.txt\n"
+                         "+unexecuted\n*** End Patch"
+                     )},
+                     "input": (
+                         "*** Begin Patch\n*** Add File: hidden.txt\n"
+                         "+unexecuted\n*** End Patch"
+                     )},
+                    {"tool_name": "Write", "arguments": {"file_path": "a"}, "path": "b"},
+                ):
+                    with self.subTest(hook=hook, payload=payload):
+                        self.assertEqual(run_hook(hook, payload, cwd=base)["decision"], "block")
+                self.assertEqual(run_hook(hook, {
+                    "tool_name": "Write", "tool_input": {"file_path": str(base / "new.txt")},
+                }, cwd=base), {})
+                self.assertEqual(run_hook(hook, {
+                    "tool_name": "str_replace_editor",
+                    "tool_input": {"command": "view", "path": str(base / "new.txt")},
+                }, cwd=base), {})
+                # The same target named in both sections is one edit, not a
+                # contradiction, so an ungoverned write still passes.
+                patch = (
+                    f"*** Begin Patch\n*** Add File: {base / 'new.txt'}\n"
+                    "+unexecuted\n*** End Patch"
+                )
+                self.assertEqual(run_hook(hook, {
+                    "tool_name": "apply_patch",
+                    "arguments": {"patch": patch}, "input": patch,
+                }, cwd=base), {})
+
+    def test_grouped_hooks_check_the_exact_session_and_keep_execution_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            repo = init_guarded_repository(base / "repo")
+            shutil.copy2(ROOT / "scripts/parallel-plan-state.py", repo / "scripts/parallel-plan-state.py")
+            group = worktree_guard().parallel_group_module()
+            label = "docs/plan/execution-groups/hooks.json"
+            members = []
+            for number in ("284", "285"):
+                plan = f"docs/plan/active/{number}-hooks.md"
+                body = f"status: in_progress\nwrite_scope:\n  - product-{number}.py\n"
+                path = repo / plan
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body)
+                members.append({
+                    "plan_id": number, "plan_path": plan, "plan_digest": group.digest(body),
+                    "write_scope_digest": group.canonical_digest([f"product-{number}.py"]),
+                    "implementation_mode": "parent_direct",
+                })
+            (repo / label).parent.mkdir(parents=True)
+            (repo / label).write_text(json.dumps({
+                "schema_version": 2, "group_id": "hooks", "target_ref": "refs/heads/main",
+                "declared_independence": "independent product modules", "members": members,
+            }))
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "session fixture"], cwd=repo, check=True)
+            head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+            state = group.session_state_path(repo, "hooks")
+            own_records(self, [state, state.with_name(state.name + ".lock")])
+            subprocess.run([
+                "python3", str(repo / "scripts/parallel-plan-state.py"), "group-init", str(state),
+                "--group-description", label, "--target-ref", "refs/heads/main",
+                "--start-commit", head, "--integration-session-id", "integrator",
+                "--integration-session-pid", str(os.getppid()),
+            ], cwd=repo, check=True, stdout=subprocess.PIPE)
+            plan = members[0]["plan_path"]
+            own_records(self, owned_record_paths(repo, {"kind": "plan", "identity": {"path": plan}}))
+            allowed = base / "managed"
+            allowed.mkdir(mode=0o700)
+            result = subprocess.run([
+                "python3", str(repo / "scripts/manage-plan-worktrees.py"), "prepare", plan,
+                "--allowed-root", str(allowed), "--session-id", "member-session",
+                "--session-pid", str(os.getpid()),
+            ], cwd=repo, text=True, capture_output=True, check=True)
+            checkout = Path(json.loads(result.stdout)["worktree"])
+            before = state.read_bytes()
+            for hook in (ROOT_PRE_TOOL, PRE_TOOL):
+                for session, message in (
+                    ("foreign-session", "different session"),
+                    ("member-session", "execution remains closed"),
+                ):
+                    for payload in (
+                        {"tool_name": "apply_patch", "tool_input": {"patch": (
+                            "*** Begin Patch\n*** Add File: product-284.py\n"
+                            "+unexecuted\n*** End Patch"
+                        )}},
+                        {"cmd": "git commit -m unexecuted"},
+                    ):
+                        with self.subTest(hook=hook, session=session, payload=payload):
+                            output = run_hook(hook, {**payload, "session_id": session}, cwd=checkout)
+                            self.assertEqual(output["decision"], "block")
+                            self.assertIn(message, output["reason"])
+                    output = run_hook(hook, {
+                        "tool_name": "Write", "session_id": session,
+                        "tool_input": {"file_path": str(checkout / "product-284.py")},
+                    }, cwd=base)
+                    self.assertEqual(output["decision"], "block")
+                    self.assertIn(message, output["reason"])
+            for hook in (PRE_COMMIT, TEMPLATE_PRE_COMMIT):
+                result = subprocess.run(
+                    ["sh", str(hook)], cwd=checkout, text=True, capture_output=True,
+                    env={**os.environ, "PROJECT_AGENT_WORKFLOW_SESSION_ID": "foreign-session"},
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("different session", result.stderr)
+            self.assertEqual(state.read_bytes(), before)
+
     def test_pre_tool_blocks_a_lifecycle_command_outside_a_task_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = init_guarded_repository(Path(tmp))

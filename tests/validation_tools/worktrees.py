@@ -134,6 +134,140 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
     def record_path(self, result: subprocess.CompletedProcess[str]) -> Path:
         return Path(json.loads(result.stdout)["record"])
 
+    def session_description(
+        self, first_scope: str | list[str], *, partner_input: str = "none",
+        partner_validation: str | None = None,
+    ) -> tuple:
+        group = GUARD_MODULE.parallel_group_module()
+        second = "docs/plan/active/279-partner.md"
+        label = "docs/plan/execution-groups/session-pair.json"
+        documents = (
+            (self.plan, first_scope, "none"),
+            (second, "src/partner.py", partner_input),
+        )
+        members = []
+        for path, scope, required in documents:
+            scope = [scope] if isinstance(scope, str) else scope
+            scope_text = "\n".join(f"  - {entry}" for entry in scope)
+            content = (
+                "status: in_progress\nplan_purpose: implementation\n"
+                f"write_scope:\n{scope_text}\nrequired_specs:\n  - {required}\n"
+                f"execution_group: {label}\n"
+            )
+            if path == second and partner_validation:
+                content += f"focused_validation:\n  - {partner_validation}\n"
+            (self.repository / path).write_text(content, encoding="utf-8")
+            members.append({
+                "plan_id": Path(path).name[:3], "plan_path": path,
+                "plan_digest": group.digest(content),
+                "write_scope_digest": group.canonical_digest(scope),
+                "implementation_mode": "parent_direct",
+            })
+        description = {
+            "schema_version": 2, "group_id": "session-pair",
+            "target_ref": SOURCE_REF,
+            "declared_independence": "independent product changes with reviewed input scopes",
+            "members": members,
+        }
+        return group, description, label
+
+    def test_session_scope_admits_product_tooling_but_rejects_partner_specs(self) -> None:
+        for path in (
+            "scripts/product-tool.py", "scripts/project_workflow/product.py",
+            ".project-agent-workflow/scripts/product-tool.py",
+            "template/.project-agent-workflow/scripts/product-tool.py",
+            "template/.project-agent-workflow/docs/agent/PROJECT_PRODUCT.md",
+            ["scripts/product-tool.py", "template/.project-agent-workflow/scripts/product-tool.py"],
+            "src/planlib.py", "docs/product/SPEC_SECURITY.md",
+            "template/.project-agent-workflow/src/planlib.py",
+            "template/.project-agent-workflow/docs/product/SPEC_SECURITY.md",
+        ):
+            with self.subTest(path=path):
+                group, description, label = self.session_description(path)
+                self.assertEqual(len(group.resolve_group_members(self.repository, description, label)), 2)
+        group, description, label = self.session_description(
+            "docs/agent/PROJECT_PRODUCT.md", partner_input="docs/agent/PROJECT_PRODUCT.md",
+        )
+        with self.assertRaisesRegex(group.GroupError, "partner input"):
+            group.resolve_group_members(self.repository, description, label)
+
+    def test_session_scope_preserves_candidate_denials_and_shared_controls(self) -> None:
+        group, description, label = self.session_description("docs/agent/PROJECT_PRODUCT.md")
+        self.assertEqual(len(group.resolve_group_members(self.repository, description, label)), 2)
+        description["schema_version"] = 1
+        for member in description["members"]:
+            member.pop("implementation_mode")
+        with self.assertRaisesRegex(group.GroupError, "authority"):
+            group.resolve_group_members(self.repository, description, label)
+        for path in (
+            "scripts/manage-plan-worktrees.py", ".githooks/pre-commit",
+            "docs/agent/SPEC_PLAN_WORKFLOW.md", "scripts/plan-execution-state.py",
+            "template/.project-agent-workflow/scripts/manage-plan-worktrees.py",
+            "template/.project-agent-workflow/scripts/worktree_guard.py",
+            "template/.project-agent-workflow/scripts/security_rules.py",
+            "template/.project-agent-workflow/scripts/agent_log_manifest.py",
+            "template/.project-agent-workflow/scripts/lint-python.py",
+            "scripts/project_workflow/worktree_guard.py",
+            "scripts/project_workflow/plan_authoring.py",
+            "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+            "template/.project-agent-workflow/hooks/pre_tool_hardening_gate.py",
+            "template/.githooks/pre-commit", "template/AGENTS.md.jinja",
+        ):
+            with self.subTest(path=path):
+                group, description, label = self.session_description(path)
+                with self.assertRaisesRegex(group.GroupError, "authority"):
+                    group.resolve_group_members(self.repository, description, label)
+
+    def test_session_scope_protects_every_validation_path_operand(self) -> None:
+        cases = (
+            ("pytest tests/focused.py", "tests/focused.py"),
+            ("python3 -m pytest tests/focused.py::TestCase", "tests/focused.py"),
+            ("uv run pytest tests/first.py tests/focused.py", "tests/focused.py"),
+            ("pytest", "tests/focused.py"),
+            ("python3 -m py_compile scripts/first.py scripts/focused.py", "scripts/focused.py"),
+            ("python3 scripts/project_workflow/copier_fixture.py --check tests/copier-update.sh",
+             "tests/copier-update.sh"),
+            ("bash -n scripts/product.sh", "scripts/product.sh"),
+            ("npm run test", "package.json"),
+            ("uv run pytest tests/first.py", "uv.lock"),
+        )
+        for command, path in cases:
+            with self.subTest(command=command, path=path):
+                group, description, label = self.session_description(
+                    path, partner_validation=command,
+                )
+                with self.assertRaisesRegex(group.GroupError, "partner input"):
+                    group.resolve_group_members(self.repository, description, label)
+
+    def test_validation_input_extraction_uses_each_installed_parser(self) -> None:
+        for script, command, expected in (
+            (ROOT / "scripts/parallel-plan-state.py",
+             "python3 -I scripts/lint-python.py", {"scripts/lint-python.py"}),
+            (ROOT / "template/.project-agent-workflow/scripts/parallel-plan-state.py",
+             "python3 -I .project-agent-workflow/scripts/lint-python.py",
+             {".project-agent-workflow/scripts/lint-python.py"}),
+            (ROOT / "template/.project-agent-workflow/scripts/parallel-plan-state.py",
+             "python3 -m py_compile first.py second.py", {"first.py", "second.py"}),
+            (ROOT / "template/.project-agent-workflow/scripts/parallel-plan-state.py",
+             "sh -n product.sh", {"product.sh"}),
+        ):
+            with self.subTest(script=script):
+                spec = importlib.util.spec_from_file_location("validation_input_fixture", script)
+                group = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(group)
+                manifest = {
+                    "context_files": ["context.txt"], "required_specs": ["policy.md"],
+                    "validation_authority_scope": ["transitive.py"],
+                    "focused_validation": [command], "validation": ["git diff --check"],
+                }
+                self.assertEqual(
+                    group.member_read_inputs(manifest),
+                    expected | {"context.txt", "policy.md", "transitive.py"},
+                )
+                manifest["validation"] = ["python3 unapproved.py"]
+                with self.assertRaisesRegex(group.GroupError, "not allowlisted"):
+                    group.member_read_inputs(manifest)
+
     def interrupt_before_hook_normalization(self) -> subprocess.CompletedProcess[str]:
         crash = self.base / "interrupt-hook-normalization.py"
         crash.write_text(

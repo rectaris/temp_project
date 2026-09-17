@@ -7,6 +7,8 @@ set: exclusive member permits, one upstream claim, one publication lease, the
 single parent-adjustment slot, source-baseline transfers, and every member's
 cumulative budgets and stop state. The runtime record lives outside the
 repository; the committed description carries no runtime authority by itself.
+
+session_binding means the private plan-bound session, process-incarnation, exact task-worktree and ownership-generation record; it grants no implementation or publication authority.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -77,6 +80,38 @@ GROUP_MEMBER_KEYS = {
     "plan_digest",
     "write_scope_digest",
 }
+SESSION_GROUP_SCHEMA_VERSION = 2
+SESSION_MEMBER_KEYS = GROUP_MEMBER_KEYS | {"implementation_mode"}
+SESSION_ENVIRONMENT_VARIABLE = "PROJECT_AGENT_WORKFLOW_SESSION_ID"
+
+# Product tooling and specifications may be editable, but the controls that
+# admit, review, validate and publish this group must remain serial-only.
+SESSION_SERIAL_PATHS = (
+    ".git", ".githooks", ".codex", ".github", "docs/plan",
+    "AGENTS.md", "scripts/AGENTS.md", "tests/AGENTS.md",
+    "hooks", "scripts/project_workflow/__init__.py",
+    "scripts/project_workflow/worktree_guard.py",
+    "scripts/project_workflow/plan_authoring.py",
+)
+SESSION_SERIAL_COMMANDS = (
+    "parallel-plan-state.py", "plan-execution-state.py", "run-parallel-plans.py",
+    "run-sandboxed-plan-worker.py", "manage-plan-worktrees.py", "worktree_guard.py",
+    "plan_validation_commands.py", "complete-plan.sh", "finalize-active-plan.sh",
+    "check-agent-completion.sh", "check-root-agent-policy.py", "planlib.py",
+    "lint-plan-docs.py", "lint-project-workflow.sh", "check-copier-template.py",
+    "restructure-plan.py", "create-root-plan.py", "create-plan.sh", "promote-plan.sh",
+    "shelve-plan.sh", "plan_authoring.py",
+    "security_rules.py", "tool_command_context.py", "validate-changes.py",
+    "check-agent-log-manifest.py", "agent_log_manifest.py", "lint-python.py",
+)
+SESSION_SERIAL_SPECS = (
+    "SPEC_PLAN_WORKFLOW.md", "SPEC_SECURITY.md", "SPEC_GIT_RETIREMENT.md",
+    "SPEC_ORCHESTRATION.md", "SPEC_AGENT_LOGGING.md", "spec-index.yaml",
+)
+SESSION_BINDING_KEYS = {
+    "state", "session_digest", "generation", "process_identity",
+    "worktree_path", "branch_ref", "worktree_identity",
+}
 
 # A delegated worker never owns validation or specification authority, so a
 # member write scope that reaches one of these paths is refused before the group
@@ -133,6 +168,11 @@ LIST_MANIFEST_KEYS = {
     "predecessor_plans",
     "context_files",
     "integration_gates",
+    "required_specs",
+    "validation_authority_scope",
+    "focused_validation",
+    "validation",
+    "acceptance",
 }
 
 
@@ -394,6 +434,68 @@ def scope_reaches_authority(entry: str) -> bool:
     return False
 
 
+def session_scope_reaches_authority(entry: str) -> bool:
+    entry = normalized_scope_path(entry)
+    for prefix in ("template/", ".project-agent-workflow/"):
+        if entry.startswith(prefix):
+            entry = entry[len(prefix):]
+    if entry.endswith(".jinja"):
+        entry = entry[:-6]
+    controls = (
+        *SESSION_SERIAL_PATHS,
+        *(f"scripts/{name}" for name in SESSION_SERIAL_COMMANDS),
+        *(f"docs/agent/{name}" for name in SESSION_SERIAL_SPECS),
+        "references/orchestration.md", "tests/smoke.sh",
+    )
+    return any(scopes_overlap(entry, path) for path in controls)
+
+
+def member_read_inputs(manifest: dict[str, Any]) -> set[str]:
+    inputs = {
+        normalized_scope_path(path)
+        for key in ("context_files", "required_specs", "validation_authority_scope")
+        for path in manifest[key]
+        if path != "none"
+    }
+    for command in (*manifest["focused_validation"], *manifest["validation"]):
+        parser = validation_command_parser()
+        try:
+            arguments = parser.parse_validation_command(command).argv
+        except parser.ValidationCommandError as exc:
+            raise GroupError(f"member validation command is invalid: {exc}") from exc
+        if parser.is_pytest_check(arguments):
+            prefix = next(p for p in parser.PYTEST_PREFIXES if arguments[:len(p)] == p)
+            operands = arguments[len(prefix):] or ("tests",)
+            inputs.update(normalized_scope_path(p.split("::", 1)[0]) for p in operands)
+            inputs.update({"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py"})
+        else:
+            # The authoritative grammar admits only literal path operands.
+            # Include every operand, not just the invoked validation script.
+            inputs.update(
+                normalized_scope_path(argument)
+                for argument in arguments
+                if "/" in argument or Path(argument).suffix in {".py", ".sh"}
+            )
+        if arguments[0] == "npm":
+            inputs.update({"package.json", "package-lock.json", "npm-shrinkwrap.json", ".npmrc"})
+        if arguments[:2] == ("uv", "run"):
+            inputs.update({"pyproject.toml", "uv.lock"})
+    return inputs
+
+
+def validation_command_parser():
+    path = Path(__file__).with_name("plan_validation_commands.py").resolve()
+    name = f"parallel_validation_commands_{digest(str(path))[7:]}"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise GroupError("validation command authority is unavailable")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
 def validate_group_description(
     data: Any,
     *,
@@ -403,8 +505,9 @@ def validate_group_description(
     """Validate the committed shape of one execution group description."""
 
     description = exact_object(data, GROUP_DESCRIPTION_KEYS, label)
-    if description["schema_version"] != GROUP_DESCRIPTION_SCHEMA_VERSION:
-        raise GroupError(f"{label} must declare schema_version 1")
+    version = description["schema_version"]
+    if type(version) is not int or version not in {1, SESSION_GROUP_SCHEMA_VERSION}:
+        raise GroupError(f"{label} must declare schema_version 1 or 2")
     group_id = description["group_id"]
     if not isinstance(group_id, str) or not GROUP_ID_RE.fullmatch(group_id):
         raise GroupError(f"{label} group_id must be a bounded lowercase slug")
@@ -430,7 +533,12 @@ def validate_group_description(
     seen_ids: set[str] = set()
     seen_paths: set[str] = set()
     for index, raw in enumerate(members, start=1):
-        member = exact_object(raw, GROUP_MEMBER_KEYS, f"{label} member {index}")
+        member = exact_object(
+            raw, SESSION_MEMBER_KEYS if version == 2 else GROUP_MEMBER_KEYS,
+            f"{label} member {index}",
+        )
+        if version == 2 and member["implementation_mode"] != "parent_direct":
+            raise GroupError(f"{label} schema-2 members require parent_direct mode")
         plan_path = member["plan_path"]
         if not isinstance(plan_path, str):
             raise GroupError(f"{label} member {index} plan_path must be text")
@@ -540,7 +648,18 @@ def resolve_group_members(
                 f"{label} member write scope digest does not match the plan: {plan_path}"
             )
         for entry in write_scope:
-            if scope_reaches_authority(entry):
+            session_member = description["schema_version"] == 2
+            if session_member:
+                if entry not in manifest["write_scope"]:
+                    raise GroupError("session member write scope must use exact canonical files")
+                target = root / entry
+                reject_symlink_ancestors(target, include_target=True)
+                if target.is_dir():
+                    raise GroupError("session member write scope requires exact file paths")
+            if (
+                session_scope_reaches_authority(entry) if session_member
+                else scope_reaches_authority(entry)
+            ):
                 raise GroupError(
                     f"{label} member write scope reaches validation or specification "
                     f"authority: {plan_path} -> {entry}"
@@ -566,6 +685,16 @@ def resolve_group_members(
         manifest = resolved[path]["manifest"]
         others = [other for other in paths if other != path]
         for other in others:
+            if (
+                description["schema_version"] == 2
+                and resolved[other]["manifest"] is not None
+            ):
+                for write in resolved[path]["write_scope"]:
+                    for read in member_read_inputs(resolved[other]["manifest"]):
+                        if scopes_overlap(write, read):
+                            raise GroupError(
+                                f"{label} member writes a partner input: {write} / {read}"
+                            )
             if other in manifest["predecessor_plans"]:
                 raise GroupError(
                     f"{label} declares a member-to-member predecessor edge: {path}"
@@ -776,6 +905,7 @@ def enrolled_member(
                 "group_id": group["description"]["group_id"],
                 "description_digest": group["description_digest"],
                 "plan_path": normalized,
+                "schema_version": group["description"]["schema_version"],
             }
     return None
 
@@ -800,6 +930,11 @@ def require_group_permit(
     enrolment = enrolled_member(root, plan_path, published_member_paths(root, state))
     if enrolment is None:
         return
+    if enrolment["schema_version"] == 2:
+        raise GroupError(
+            "parent-direct session registration grants no execution or publication "
+            f"authority; the {operation} path requires the later session adapter"
+        )
     if grouped_adapter_version() is None:
         raise GroupError(
             f"{plan_path} requires the grouped execution adapter, which is not "
@@ -1080,8 +1215,8 @@ def append_event(state: dict[str, Any], event_type: str, detail: dict[str, Any])
     state["events"].append(event)
 
 
-def read_state(path: Path) -> dict[str, Any]:
-    require_outside_repository(path, "group execution state")
+def read_state(path: Path, *, root: Path | None = None) -> dict[str, Any]:
+    require_outside_repository(path, "group execution state", root)
     reject_symlink_ancestors(path, include_target=True)
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -1101,10 +1236,84 @@ def read_state(path: Path) -> dict[str, Any]:
         state = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise GroupError("group execution state is invalid JSON") from exc
-    if not isinstance(state, dict) or state.get("schema_version") != GROUP_STATE_SCHEMA_VERSION:
-        raise GroupError("group execution state must declare schema_version 1")
+    if (
+        not isinstance(state, dict)
+        or type(state.get("schema_version")) is not int
+        or state["schema_version"] not in {1, SESSION_GROUP_SCHEMA_VERSION}
+    ):
+        raise GroupError("group execution state must declare schema_version 1 or 2")
     require_event_chain(state)
+    if state["schema_version"] == 2:
+        validate_session_state(state)
     return state
+
+
+def validate_session_state(state: dict[str, Any]) -> None:
+    exact_object(state, {
+        "schema_version", "group_id", "group_description_path",
+        "group_description_digest", "repository_identity", "target_ref",
+        "common_start_commit", "upstream_claim", "publication_lease",
+        "final_successor_claim", "members", "events", "common_git_identity",
+        "integration_session_digest", "integration_process_identity",
+    }, "session group state")
+    require_digest(state["integration_session_digest"], "integration session digest")
+    validate_process_identity(state["integration_process_identity"])
+    admission = state["events"][0] if state["events"] else {}
+    if admission.get("event_type") != "group_admitted" or any(
+        admission.get("detail", {}).get(key) != state[key]
+        for key in ("integration_session_digest", "integration_process_identity")
+    ):
+        raise GroupError("integration owner differs from its admitted history")
+    if not isinstance(state["members"], dict) or len(state["members"]) != 2:
+        raise GroupError("session group must retain exactly two members")
+    seen: set[str] = {state["integration_session_digest"]}
+    processes = [state["integration_process_identity"]]
+    for plan, member in state["members"].items():
+        if not isinstance(plan, str) or not PLAN_PATH_RE.fullmatch(plan):
+            raise GroupError("session group member path is invalid")
+        keys = set(empty_member_state(plan, "", "")) | {
+            "session_binding", "obligations_digest",
+        }
+        exact_object(member, keys, "session group member")
+        require_digest(member["obligations_digest"], "member obligations digest")
+        binding = member["session_binding"]
+        latest = [
+            event["detail"]["session_binding"]
+            for event in state["events"]
+            if event["event_type"] in {
+                "member_session_preparing", "member_session_bound", "member_session_stopped",
+            } and event["detail"].get("plan_path") == plan
+        ]
+        if binding != (latest[-1] if latest else None):
+            raise GroupError("session binding differs from its recorded history")
+        if binding is None:
+            continue
+        exact_object(binding, SESSION_BINDING_KEYS, "session binding")
+        if binding["state"] not in {"preparing", "bound", "stopped"}:
+            raise GroupError("session binding state is invalid")
+        require_digest(binding["session_digest"], "member session digest")
+        if binding["session_digest"] in seen:
+            raise GroupError("session group reuses a member or integration session")
+        seen.add(binding["session_digest"])
+        if type(binding["generation"]) is not int or binding["generation"] < 0:
+            raise GroupError("session ownership generation is invalid")
+        process = binding["process_identity"]
+        validate_process_identity(process)
+        if process in processes:
+            raise GroupError("session group reuses a member or integration process")
+        processes.append(process)
+        if not isinstance(binding["worktree_path"], str) or not Path(
+            binding["worktree_path"]
+        ).is_absolute():
+            raise GroupError("session worktree path must be absolute")
+        if not isinstance(binding["branch_ref"], str) or not TARGET_REF_RE.fullmatch(
+            binding["branch_ref"]
+        ):
+            raise GroupError("session worktree branch is invalid")
+        if binding["state"] != "preparing" and not isinstance(
+            binding["worktree_identity"], dict
+        ):
+            raise GroupError("bound session must retain its worktree identity")
 
 
 def require_event_chain(state: dict[str, Any]) -> None:
@@ -1139,11 +1348,297 @@ def require_event_chain(state: dict[str, Any]) -> None:
         previous = expected
 
 
+def worktree_manager():
+    name = "parallel_session_worktree_manager"
+    if name not in sys.modules:
+        path = Path(__file__).with_name("manage-plan-worktrees.py")
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise GroupError("managed worktree command is unavailable")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def session_state_path(root: Path, group_id: str) -> Path:
+    guard = worktree_manager().guard
+    key = canonical_digest({
+        "repository_identity": guard.repository_identity(root), "group_id": group_id,
+    })[7:]
+    return guard.account_home() / (
+        ".local/state/project-agent-workflow/session-groups"
+    ) / f"{key}.json"
+
+
+def session_identity(explicit: str | None = None) -> str:
+    value = explicit or os.environ.get(SESSION_ENVIRONMENT_VARIABLE) or os.environ.get(
+        "CODEX_THREAD_ID"
+    )
+    return digest(require_identifier(value, "session identity"))
+
+
+def process_identity(pid: int) -> dict[str, Any] | None:
+    if type(pid) is not int or pid <= 1:
+        raise GroupError("session process must have a positive non-system PID")
+    if not Path("/proc/self/stat").is_file():
+        raise GroupError("session process identity requires readable procfs evidence")
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return None
+    fields = raw[raw.rfind(")") + 2:].split()
+    if len(fields) < 20:
+        raise GroupError("session process identity is malformed")
+    if fields[0] == "Z":
+        return None
+    return {
+        "pid": pid, "start_ticks": int(fields[19]),
+        "boot_digest": digest(Path("/proc/sys/kernel/random/boot_id").read_bytes()),
+    }
+
+
+def validate_process_identity(value: Any) -> None:
+    process = exact_object(
+        value, {"pid", "start_ticks", "boot_digest"}, "session process identity",
+    )
+    if (
+        type(process["pid"]) is not int or process["pid"] <= 1
+        or type(process["start_ticks"]) is not int or process["start_ticks"] < 0
+    ):
+        raise GroupError("session process identity is invalid")
+    require_digest(process["boot_digest"], "session process boot digest")
+
+
+def require_session_process(pid: int) -> dict[str, Any]:
+    identity = process_identity(pid)
+    if identity is None:
+        raise GroupError("session process has already stopped")
+    current = os.getpid()
+    for _ in range(128):
+        if current == pid:
+            return identity
+        if current <= 1:
+            break
+        try:
+            raw = Path(f"/proc/{current}/stat").read_text()
+            current = int(raw[raw.rfind(")") + 2:].split()[1])
+        except (FileNotFoundError, ValueError, IndexError) as exc:
+            raise GroupError("session process ancestry is unavailable") from exc
+    raise GroupError("session process is not an ancestor of this command")
+
+
+def require_session_state(root: Path, path: Path, state: dict[str, Any]) -> None:
+    if state["schema_version"] != SESSION_GROUP_SCHEMA_VERSION:
+        raise GroupError("session ownership requires a schema-2 group")
+    if path.absolute() != session_state_path(root, state["group_id"]):
+        raise GroupError("session group state is not at its canonical private path")
+    if state["common_git_identity"] != worktree_manager().guard.repository_identity(root):
+        raise GroupError("session group belongs to a different common Git directory")
+    require_live_group(root, state, allow_sessions=True)
+
+
+def session_enrolment(root: Path, plan: str | None) -> dict[str, Any] | None:
+    if plan is None:
+        return None
+    enrolled = enrolled_member(root, plan)
+    return enrolled if enrolled and enrolled["schema_version"] == 2 else None
+
+
+def session_member_prepare(manager, args: argparse.Namespace, *, resume: bool) -> bool:
+    root = manager.repository_root()
+    enrolled = session_enrolment(root, args.plan)
+    if enrolled is None:
+        return False
+    path = session_state_path(root, enrolled["group_id"])
+    owner = session_identity(getattr(args, "session_id", None))
+    process = require_session_process(getattr(args, "session_pid", None))
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        require_session_state(root, path, state)
+        if (
+            owner == state["integration_session_digest"]
+            or process == state["integration_process_identity"]
+        ):
+            raise GroupError("integration and member sessions and processes must be distinct")
+        member = require_member(state, args.plan)
+        require_active_member(member)
+        for other_path, other in state["members"].items():
+            binding = other["session_binding"]
+            if other_path != args.plan and binding and (
+                binding["session_digest"] == owner
+                or binding["process_identity"] == process
+            ):
+                raise GroupError("another member already binds this session or process")
+        previous = member["session_binding"]
+        if previous:
+            recovering = (
+                previous["state"] == "preparing"
+                and previous["session_digest"] == owner
+                and previous["process_identity"] == process
+            )
+            if not recovering and not resume:
+                raise GroupError("member session already started; use an explicit stopped resume")
+            if not recovering and previous["state"] != "stopped" and (
+                process_identity(previous["process_identity"]["pid"])
+                == previous["process_identity"]
+            ):
+                raise GroupError("prior session process is still live; lease expiry is insufficient")
+        elif resume:
+            raise GroupError("member has no prior session to resume")
+        if manager.git_text(root, "rev-parse", "HEAD") != member["base_commit"]:
+            raise GroupError("member preparation requires its exact admitted baseline")
+        delegated = argparse.Namespace(**vars(args))
+        if getattr(args, "source_ref", None) not in {None, state["target_ref"]}:
+            raise GroupError("member preparation cannot change the admitted source ref")
+        delegated.owner_id = f"group-{state['group_id']}-{member['logical_member_id']}"
+        delegated.source_ref = state["target_ref"]
+        delegated.worktree = getattr(args, "worktree", None)
+        delegated.branch = getattr(args, "branch", None)
+        delegated.purpose = None
+        delegated.lease_seconds = getattr(args, "lease_seconds", 14_400)
+        allowed = manager.resolve_allowed_root(root, args.allowed_root)
+        task = manager.plan_task(manager.committed_plan(root, args.plan, member["base_commit"]))
+        target, branch = manager.default_placement(task, allowed)
+        target = manager.validate_target(
+            delegated.worktree or str(target), allowed, must_exist=False, allow_existing=True,
+        )
+        _, branch_ref = manager.normalize_branch(delegated.branch or branch, root)
+        paths = manager.metadata_paths(manager.repository_identity(root), task)
+        if not previous and (paths["record"].exists() or paths["journal"].exists()):
+            raise GroupError("task worktree already exists outside this session preparation")
+        if previous and paths["record"].exists():
+            old_record = manager.read_record(paths["record"])
+            if (
+                old_record["owner"]["id"] != delegated.owner_id
+                or old_record["start_commit"] != member["base_commit"]
+                or old_record["source_ref"] != state["target_ref"]
+                or old_record["branch_ref"] != previous["branch_ref"]
+                or old_record["worktree_path"] != previous["worktree_path"]
+            ):
+                raise GroupError("existing task record differs from this session preparation")
+        if previous and (
+            previous["worktree_path"] != str(target) or previous["branch_ref"] != branch_ref
+        ):
+            raise GroupError("resume cannot change the exact member worktree or branch")
+        for other_path, other in state["members"].items():
+            binding = other["session_binding"]
+            if other_path != args.plan and binding and (
+                binding["worktree_path"] == str(target) or binding["branch_ref"] == branch_ref
+            ):
+                raise GroupError("member worktrees and branches must be distinct")
+        if not previous or not recovering:
+            member["session_binding"] = {
+                "state": "preparing", "session_digest": owner,
+                "generation": previous["generation"] + 1 if previous else 0,
+                "process_identity": process, "worktree_path": str(target),
+                "branch_ref": branch_ref, "worktree_identity": None,
+            }
+            append_event(state, "member_session_preparing", {
+                "plan_path": args.plan, "session_binding": member["session_binding"].copy(),
+            })
+            atomic_write(path, state)
+        # The group lock precedes the manager's ownership lock. A partial
+        # manager result remains bound to this exact preparation for recovery.
+        result = manager.prepare_ungrouped(delegated, emit=False)
+        record = manager.read_record(paths["record"])
+        actual, _ = manager.verify_record_context(root, allowed, record)
+        if (
+            actual != target or record["branch_ref"] != branch_ref
+            or record["source_ref"] != state["target_ref"]
+            or record["start_commit"] != member["base_commit"]
+            or record["owner"]["id"] != delegated.owner_id
+        ):
+            raise GroupError("prepared worktree differs from the session binding")
+        if require_session_process(process["pid"]) != process:
+            raise GroupError("session process changed during worktree preparation")
+        binding = member["session_binding"]
+        binding["state"] = "bound"
+        binding["worktree_identity"] = record["worktree_identity"]
+        append_event(state, "member_session_bound", {
+            "plan_path": args.plan, "session_binding": binding.copy(),
+        })
+        atomic_write(path, state)
+    print(json.dumps({
+        **result, "session_generation": binding["generation"],
+        "execution_enabled": False, "publication_enabled": False,
+    }, sort_keys=True))
+    return True
+
+
+def require_session_binding(
+    root: Path, binding, *, session_id: str | None = None,
+) -> None:
+    if binding.kind != "plan":
+        return
+    plan = binding.task["identity"]["path"]
+    enrolled = session_enrolment(root, plan)
+    if enrolled is None:
+        return
+    path = session_state_path(root, enrolled["group_id"])
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        state = read_state(path, root=root)
+        require_session_state(root, path, state)
+        member = require_member(state, plan)
+        require_active_member(member)
+        owner = member["session_binding"]
+        if owner is None or owner["state"] != "bound":
+            raise GroupError("member session has no completed live worktree binding")
+        if owner["session_digest"] != session_identity(session_id):
+            raise GroupError("grouped write belongs to a different session")
+        if (
+            owner["worktree_path"] != str(root)
+            or owner["branch_ref"] != binding.branch_ref
+            or owner["worktree_identity"] != binding.record["worktree_identity"]
+        ):
+            raise GroupError("grouped write belongs to a different worktree")
+        if require_session_process(owner["process_identity"]["pid"]) != owner["process_identity"]:
+            raise GroupError("grouped write belongs to a stale session process")
+    raise GroupError(
+        "session binding is valid, but member execution remains closed until "
+        "the parent-direct session adapter is installed"
+    )
+
+
+def session_stop(args: argparse.Namespace) -> None:
+    root = repository_root()
+    path = Path(args.state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        require_session_state(root, path, state)
+        member = require_member(state, args.member)
+        binding = member["session_binding"]
+        if binding is None or binding["state"] != "bound":
+            raise GroupError("only a bound session can issue a stopped handoff")
+        if binding["session_digest"] != session_identity(args.session_id):
+            raise GroupError("only the current session can stop its writing claim")
+        if require_session_process(binding["process_identity"]["pid"]) != binding["process_identity"]:
+            raise GroupError("stopped handoff requires the exact live session process")
+        binding["state"] = "stopped"
+        append_event(state, "member_session_stopped", {
+            "plan_path": args.member, "session_binding": binding.copy(),
+        })
+        atomic_write(path, state)
+    print("member session stopped; execution budgets and worktree are retained")
+
+
+def print_session_state_path(args: argparse.Namespace) -> None:
+    root = repository_root()
+    group = load_group_descriptions(root).get(args.group_description)
+    if group is None or group["description"]["schema_version"] != 2:
+        raise GroupError("expected one committed schema-2 group description")
+    print(session_state_path(root, group["description"]["group_id"]))
+
+
 def require_live_group(
     root: Path,
     state: dict[str, Any],
     *,
     allow_lifecycle_evolution: bool = False,
+    allow_sessions: bool = False,
 ) -> dict[str, Any]:
     """Recheck that the committed group still matches the admitted record.
 
@@ -1155,6 +1650,10 @@ def require_live_group(
     and the repository identity stay pinned in both cases.
     """
 
+    if state["schema_version"] == 2 and not allow_sessions:
+        raise GroupError(
+            "parent-direct session registration does not enable this execution operation"
+        )
     published = frozenset(
         plan_path
         for plan_path, member in state["members"].items()
@@ -1243,14 +1742,39 @@ def group_init(args: argparse.Namespace) -> None:
         },
         "events": [],
     }
-    append_event(
-        state,
-        "group_admitted",
-        {
-            "group_description_digest": group["description_digest"],
-            "common_start_commit": head,
-        },
-    )
+    if group["description"]["schema_version"] == 2:
+        expected = session_state_path(root, state["group_id"])
+        if path.absolute() != expected:
+            raise GroupError(f"schema-2 group state must use its canonical private path: {expected}")
+        state["schema_version"] = 2
+        state["common_git_identity"] = worktree_manager().guard.repository_identity(root)
+        state["integration_session_digest"] = session_identity(args.integration_session_id)
+        state["integration_process_identity"] = require_session_process(args.integration_session_pid)
+        for plan_path, member in state["members"].items():
+            manifest = group["members"][plan_path]["manifest"]
+            if manifest is None:
+                raise GroupError("session group initialization requires two live plans")
+            specifications = {
+                relative: digest(read_bounded_bytes(root / relative, "required specification"))
+                for relative in manifest["required_specs"] if relative != "none"
+            }
+            member["session_binding"] = None
+            member["obligations_digest"] = canonical_digest({
+                "acceptance": manifest["acceptance"],
+                "validation": manifest["validation"],
+                "focused_validation": manifest["focused_validation"],
+                "required_specifications": specifications,
+            })
+    admission = {
+        "group_description_digest": group["description_digest"],
+        "common_start_commit": head,
+    }
+    if state["schema_version"] == 2:
+        admission.update({
+            "integration_session_digest": state["integration_session_digest"],
+            "integration_process_identity": state["integration_process_identity"],
+        })
+    append_event(state, "group_admitted", admission)
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         if path.exists() or path.is_symlink():
@@ -1379,16 +1903,30 @@ def lease_acquire(args: argparse.Namespace) -> None:
 
 
 def lease_release(args: argparse.Namespace) -> None:
+    """Free the exclusive publication lease held by its recorded owner.
+
+    Releasing must keep working after authority drift, so this path refuses a
+    session group explicitly instead of rechecking the live group. The owner is
+    a bounded identifier, which keeps an unheld lease, whose owner is the empty
+    string, from being "released" repeatedly into the bounded event chain.
+    """
+
     path = Path(args.state)
+    owner = require_identifier(args.owner, "owner")
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
-        if state["publication_lease"]["owner"] != args.owner:
+        if state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION:
+            raise GroupError(
+                "legacy lease-release is closed for session groups; "
+                "parent-direct registration holds no publication lease"
+            )
+        if state["publication_lease"]["owner"] != owner:
             raise GroupError("only the recorded lease owner may release the lease")
         state["publication_lease"] = {"owner": "", "plan_path": ""}
-        append_event(state, "publication_lease_released", {"owner": args.owner})
+        append_event(state, "publication_lease_released", {"owner": owner})
         atomic_write(path, state)
-    print(args.owner)
+    print(owner)
 
 
 def record_review(args: argparse.Namespace) -> None:
@@ -1533,6 +2071,11 @@ def member_stop(args: argparse.Namespace) -> None:
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
+        if state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION:
+            raise GroupError(
+                "legacy member-stop is closed for session groups; "
+                "session-stop releases only the current owner's writing claim"
+            )
         member = require_member(state, args.member)
         if member["state"] != "active":
             raise GroupError(
@@ -1783,7 +2326,19 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--group-description", required=True)
     init.add_argument("--target-ref", required=True)
     init.add_argument("--start-commit", required=True)
+    init.add_argument("--integration-session-id")
+    init.add_argument("--integration-session-pid", type=int)
     init.set_defaults(handler=group_init)
+
+    location = sub.add_parser("session-state-path")
+    location.add_argument("--group-description", required=True)
+    location.set_defaults(handler=print_session_state_path)
+
+    stop_session = sub.add_parser("session-stop")
+    stop_session.add_argument("state")
+    stop_session.add_argument("--member", required=True)
+    stop_session.add_argument("--session-id")
+    stop_session.set_defaults(handler=session_stop)
 
     upstream = sub.add_parser("claim-upstream")
     upstream.add_argument("state")

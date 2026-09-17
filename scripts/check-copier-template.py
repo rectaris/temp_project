@@ -1272,6 +1272,28 @@ def require_git_retirement_alignment() -> None:
 
 
 def require_parent_worktree_alignment() -> None:
+    # The task-worktree security boundary, including the schema-2 session
+    # binding and file-edit target rules, must read identically in both
+    # copies. Only the sections that name repository-relative commands are
+    # rewritten elsewhere in this file, so this one compares verbatim.
+    root_boundary = plan_workflow_section(
+        read("docs/agent/SPEC_SECURITY.md"),
+        "Task Worktree Boundary",
+        "root security specification",
+    )
+    template_boundary = plan_workflow_section(
+        read("template/.project-agent-workflow/docs/agent/SPEC_SECURITY.md"),
+        "Task Worktree Boundary",
+        "generated security specification",
+    )
+    if root_boundary != template_boundary:
+        fail("root and generated task-worktree security boundaries differ")
+    root_group = ROOT / "scripts/parallel-plan-state.py"
+    template_group = ROOT / "template/.project-agent-workflow/scripts/parallel-plan-state.py"
+    if root_group.read_bytes() != template_group.read_bytes():
+        fail("root and generated parallel-session authority differ")
+    if (root_group.stat().st_mode & 0o777) != (template_group.stat().st_mode & 0o777):
+        fail("root and generated parallel-session authority modes differ")
     root_cli = ROOT / "scripts/manage-plan-worktrees.py"
     template_cli = ROOT / "template/.project-agent-workflow/scripts/manage-plan-worktrees.py"
     if root_cli.read_bytes() != template_cli.read_bytes():

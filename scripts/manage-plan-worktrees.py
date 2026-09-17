@@ -834,6 +834,7 @@ def reject_retired_record(paths: dict[str, Path]) -> None:
 
 
 def create(args: argparse.Namespace) -> None:
+    refuse_session_operation(args, "create")
     repository = repository_root()
     allowed_root = resolve_allowed_root(repository, args.allowed_root)
     target = validate_target(args.worktree, allowed_root, must_exist=False, allow_existing=True)
@@ -925,7 +926,7 @@ def read_task_record(paths: dict[str, Path]) -> dict:
         ) from exc
 
 
-def prepare(args: argparse.Namespace) -> None:
+def prepare_ungrouped(args: argparse.Namespace, *, emit: bool = True) -> dict[str, Any]:
     """Create or resume the task worktree without another owner prompt."""
 
     repository = repository_root()
@@ -947,9 +948,7 @@ def prepare(args: argparse.Namespace) -> None:
                 args.owner_id,
                 args.lease_seconds,
             )
-            print(
-                json.dumps(
-                    {
+            result = {
                         "operation": "prepare",
                         "outcome": "resumed",
                         "record": str(paths["record"]),
@@ -958,11 +957,10 @@ def prepare(args: argparse.Namespace) -> None:
                         "source_ref": updated["source_ref"],
                         "task": task_label(updated["task"]),
                         "accepted_tip": tip,
-                    },
-                    sort_keys=True,
-                )
-            )
-            return
+                    }
+            if emit:
+                print(json.dumps(result, sort_keys=True))
+            return result
         reject_retired_record(paths)
         default_target, default_branch = default_placement(task, allowed_root)
         target = validate_target(
@@ -989,9 +987,7 @@ def prepare(args: argparse.Namespace) -> None:
             paths,
             identity,
         )
-    print(
-        json.dumps(
-            {
+    result = {
                 "operation": "prepare",
                 "outcome": "created",
                 "record": str(paths["record"]),
@@ -1000,10 +996,40 @@ def prepare(args: argparse.Namespace) -> None:
                 "source_ref": record["source_ref"],
                 "task": task_label(record["task"]),
                 "accepted_tip": record["accepted_tip"],
-            },
-            sort_keys=True,
+            }
+    if emit:
+        print(json.dumps(result, sort_keys=True))
+    return result
+
+
+def prepare(args: argparse.Namespace) -> None:
+    if not prepare_session_member(args, resume=False):
+        prepare_ungrouped(args)
+
+
+def prepare_session_member(args: argparse.Namespace, *, resume: bool) -> bool:
+    group = guard.parallel_group_module()
+    if group is None:
+        return False
+    try:
+        return group.session_member_prepare(group.worktree_manager(), args, resume=resume)
+    except group.GroupError as exc:
+        raise WorktreeError(str(exc)) from exc
+
+
+def refuse_session_operation(args: argparse.Namespace, operation: str) -> None:
+    group = guard.parallel_group_module()
+    if group is None:
+        return
+    try:
+        enrolled = group.session_enrolment(repository_root(), args.plan)
+    except group.GroupError as exc:
+        raise WorktreeError(str(exc)) from exc
+    if enrolled is not None:
+        raise WorktreeError(
+            f"schema-2 member {operation} is closed; use session-bound prepare/resume "
+            "and retain the worktree until the integration adapter is installed"
         )
-    )
 
 
 def load_bound_record(
@@ -1073,6 +1099,8 @@ def inspect_record(args: argparse.Namespace) -> None:
 
 
 def resume(args: argparse.Namespace) -> None:
+    if prepare_session_member(args, resume=True):
+        return
     repository = repository_root()
     allowed_root, record, paths = load_bound_record(
         repository, args, allow_resume_journal=True
@@ -1423,6 +1451,7 @@ def publish(args: argparse.Namespace) -> None:
     worktree that still holds work.
     """
 
+    refuse_session_operation(args, "publication")
     repository = repository_root()
     allowed_root, record, paths = load_bound_record(repository, args, allow_resume_journal=True)
     with locked_file(paths["lock"]):
@@ -1620,6 +1649,7 @@ def recover_stranded_record(
 
 
 def retire(args: argparse.Namespace) -> None:
+    refuse_session_operation(args, "retirement")
     """Retire a task worktree the current transaction did not publish.
 
     Retirement outside a successful publication stays explicit. A stopped
@@ -1732,6 +1762,8 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--source-ref")
     prepare_parser.add_argument("--worktree")
     prepare_parser.add_argument("--branch")
+    prepare_parser.add_argument("--session-id")
+    prepare_parser.add_argument("--session-pid", type=int)
     prepare_parser.set_defaults(handler=prepare)
 
     inspect_parser = sub.add_parser("inspect")
@@ -1741,6 +1773,8 @@ def parser() -> argparse.ArgumentParser:
     resume_parser = sub.add_parser("resume")
     add_task_arguments(resume_parser)
     add_owner_arguments(resume_parser)
+    resume_parser.add_argument("--session-id")
+    resume_parser.add_argument("--session-pid", type=int)
     resume_parser.set_defaults(handler=resume)
 
     publish_parser = sub.add_parser("publish")
