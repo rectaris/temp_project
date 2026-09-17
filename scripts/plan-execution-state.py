@@ -3442,6 +3442,7 @@ def init_state(args: argparse.Namespace) -> None:
     require_outside_repository(path, "execution state")
     require_outside_repository(lifecycle_path, "candidate lifecycle state")
     require_group_execution_permit(args.plan, "execution", args)
+    require_group_member_ledger_binding(args)
     if path.exists() or path.is_symlink():
         raise StateError("execution state already exists")
     plan = Path(args.plan)
@@ -3783,6 +3784,80 @@ def retained_preparation_records(args: argparse.Namespace) -> list[str]:
     return retained
 
 
+def claim_group_member_ledger(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Claim the one execution ledger a parent-direct group member may own.
+
+    An ungrouped plan is unaffected. A registered member claims once, before
+    any ledger record exists, so a retained partial setup refuses a second
+    initialization and no new run name, session or checkout replenishes a
+    member budget.
+    """
+
+    module = load_parallel_plan_module()
+    root = repository_root()
+    try:
+        enrolment = module.session_enrolment(root, args.plan)
+    except module.GroupError as exc:
+        raise StateError(str(exc)) from exc
+    if enrolment is None:
+        return None
+    group_state = getattr(args, "group_state", None)
+    if group_state is None:
+        raise StateError(
+            f"{args.plan} is a parent-direct session group member; its preparation "
+            "requires the live session group state that records its one-use "
+            "execution ledger claim"
+        )
+    try:
+        return module.claim_member_ledger(
+            root,
+            Path(group_state),
+            args.plan,
+            run_id=args.run_id,
+            state_path=Path(args.state),
+            lifecycle_path=Path(args.lifecycle_state),
+            session_id=getattr(args, "session_id", None),
+        )
+    except module.GroupError as exc:
+        raise StateError(str(exc)) from exc
+
+
+def require_group_member_ledger_binding(args: argparse.Namespace) -> None:
+    """Admit a fresh member ledger only where its one-use claim already names it.
+
+    An ungrouped plan is unaffected. A registered parent-direct member reaches
+    this path through every fresh initialization, so the claim taken during
+    preparation is the only ledger it can ever own.
+    """
+
+    module = load_parallel_plan_module()
+    root = repository_root()
+    try:
+        enrolment = module.session_enrolment(root, args.plan)
+    except module.GroupError as exc:
+        raise StateError(str(exc)) from exc
+    if enrolment is None:
+        return
+    group_state = getattr(args, "group_state", None)
+    if group_state is None:
+        raise StateError(
+            f"{args.plan} is a parent-direct session group member; initializing its "
+            "execution ledger requires the live session group state that records "
+            "its one-use ledger claim"
+        )
+    try:
+        module.require_member_ledger_binding(
+            root,
+            Path(group_state),
+            args.plan,
+            run_id=args.run_id,
+            state_path=Path(args.state),
+            lifecycle_path=Path(args.lifecycle_state),
+        )
+    except module.GroupError as exc:
+        raise StateError(str(exc)) from exc
+
+
 def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
     """Compose fresh epoch-zero parent-direct setup into one refusable operation.
 
@@ -3803,6 +3878,7 @@ def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
     destinations = preparation_destinations(args)
     require_free_preparation_destinations(destinations)
     plan = require_committed_active_plan(args.plan, args.source_head)
+    ledger_claim = claim_group_member_ledger(args)
     created: list[str] = []
     try:
         initialize_reviewer_registry(
@@ -3819,7 +3895,7 @@ def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
                 run_id=args.run_id,
                 plan=plan["path"],
                 group_permit=None,
-                group_state=None,
+                group_state=getattr(args, "group_state", None),
                 plan_digest=plan["plan_digest"],
                 source_head=args.source_head,
                 primary_invariant_digest=plan["primary_invariant_digest"],
@@ -3835,6 +3911,7 @@ def prepare_parent_direct_execution(args: argparse.Namespace) -> None:
         )
         created.append(str(Path(args.state).absolute()))
         report = verify_parent_direct_preparation(args, plan)
+        report["group_member_ledger_claim"] = ledger_claim
     except (OSError, UnicodeError, StateError) as exc:
         retained = retained_preparation_records(args)
         emit_preparation_report(
@@ -5173,12 +5250,62 @@ def record_adversarial_preflight(args: argparse.Namespace) -> None:
         atomic_write(path, state)
 
 
+def spend_group_member_review(args: argparse.Namespace) -> None:
+    """Spend the group review budget before this ledger records a member review.
+
+    The execution ledger and the group authority must describe one review
+    history, so a member cannot take a second pre-handoff review by recording
+    it only here. The group budget is taken first, which keeps the documented
+    lock order and leaves an interrupted review spent rather than repeatable.
+    """
+
+    module = load_parallel_plan_module()
+    root = repository_root()
+    state = read_state(Path(args.state))
+    plan_path = state["plan_path"]
+    try:
+        enrolment = module.session_enrolment(root, plan_path)
+    except module.GroupError as exc:
+        raise StateError(str(exc)) from exc
+    if enrolment is None:
+        return
+    group_state = getattr(args, "group_state", None)
+    if group_state is None:
+        raise StateError(
+            f"{plan_path} is a parent-direct session group member; recording its "
+            "formal review requires the live session group state that owns its "
+            "review budget"
+        )
+    receipt = validate_review_receipt(
+        read_bounded_json(
+            Path(args.review_receipt), "review receipt", outside_repository=True
+        ),
+        state["plan_digest"],
+    )
+    registry = reviewer_registry_reference(
+        read_reviewer_registry(Path(args.reviewer_registry))
+    )
+    try:
+        module.spend_member_review(
+            root,
+            Path(group_state),
+            plan_path,
+            assembly_record_digest=receipt["review_target_digest"],
+            registry_path_digest=registry["path_digest"],
+            registry_event_count=registry["event_count"],
+            registry_event_chain_digest=registry["event_chain_digest"],
+        )
+    except module.GroupError as exc:
+        raise StateError(str(exc)) from exc
+
+
 def record_bounded_review(args: argparse.Namespace) -> None:
     if args.implementation_mode == "candidate":
         if not args.candidate_manifest:
             raise StateError("candidate review requires the admitted candidate manifest")
     elif args.candidate_manifest:
         raise StateError("parent-direct review cannot use a candidate manifest")
+    spend_group_member_review(args)
     record_event(argparse.Namespace(
         state=args.state,
         run_id=args.run_id,
@@ -6294,6 +6421,7 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("--finding-severity", action="append", choices=("High", "Medium", "Low"))
     review.add_argument("--lifecycle-state", required=True)
     review.add_argument("--elapsed-seconds", type=float, default=0.0)
+    review.add_argument("--group-state")
     review.set_defaults(handler=record_bounded_review)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("state")
@@ -6314,6 +6442,8 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--lifecycle-state", required=True)
     prepare.add_argument("--reviewer-registry", required=True)
     prepare.add_argument("--continuation-registry", required=True)
+    prepare.add_argument("--group-state")
+    prepare.add_argument("--session-id")
     prepare.set_defaults(handler=prepare_parent_direct_execution)
     return root
 

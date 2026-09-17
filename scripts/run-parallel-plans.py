@@ -182,6 +182,29 @@ def write_private_artifact(path: Path, value: dict[str, Any], *, mode: int = 0o6
     return digest_bytes(payload)
 
 
+def write_private_bytes(path: Path, data: bytes, *, mode: int = 0o600) -> str:
+    """Write one bounded parent-owned binary artifact outside the repository."""
+
+    authority().require_outside_repository(path, "adapter artifact", repository_root())
+    authority().reject_symlink_ancestors(path, include_target=True)
+    if path.exists() or path.is_symlink():
+        raise AdapterError(f"adapter artifact already exists: {path}")
+    if len(data) > MAX_PATCH_BYTES:
+        raise AdapterError("adapter artifact exceeds its byte bound")
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".adapter-")
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    return digest_bytes(data)
+
+
 def read_private_artifact(path: Path, label: str) -> dict[str, Any]:
     raw = require_private_regular_file(path, label, MAX_RECORD_BYTES)
     try:
@@ -282,9 +305,43 @@ def stage_worktree(root: Path) -> None:
     git(root, "add", "--all")
 
 
+def freeze_worktree_tree(root: Path) -> str:
+    """Freeze the staged member result into one immutable Git tree object.
+
+    Both the scope check and the handoff patch must describe exactly the same
+    bytes. Reading the index twice would let a concurrent stage in the same
+    live session widen the patch after the scope check already passed.
+    """
+
+    return git_text(root, "write-tree")
+
+
 def changed_paths_in(root: Path, base: str) -> list[str]:
     output = git_text(root, "diff", "--cached", "--name-only", "-z", base)
     return sorted(entry for entry in output.split("\0") if entry)
+
+
+def changed_paths_in_tree(root: Path, base: str, tree: str) -> list[str]:
+    output = git_text(root, "diff", "--name-only", "-z", base, tree)
+    return sorted(entry for entry in output.split("\0") if entry)
+
+
+def tree_diff(root: Path, base: str, tree: str) -> bytes:
+    completed = git(
+        root,
+        "-c",
+        "core.abbrev=40",
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-color",
+        "--no-ext-diff",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        base,
+        tree,
+    )
+    return completed.stdout
 
 
 def worktree_diff(root: Path, base: str) -> bytes:
@@ -1003,6 +1060,260 @@ def command_publish_recover(args: argparse.Namespace) -> None:
     )
 
 
+HANDOFF_SCHEMA_VERSION = 1
+HANDOFF_MODE = "parent_direct"
+
+
+def verified_session_member(state_path: Path, plan: str) -> dict[str, Any]:
+    """Recheck the committed schema-2 group and resolve one parent-direct member."""
+
+    module = authority()
+    root = repository_root()
+    try:
+        enrolled = module.session_enrolment(root, plan)
+    except module.GroupError as exc:
+        raise AdapterError(str(exc)) from exc
+    if enrolled is None:
+        raise AdapterError(
+            f"{plan} is not enrolled in a committed schema-2 parent-direct group"
+        )
+    try:
+        state = module.read_state(state_path)
+        module.require_session_state(root, state_path, state)
+        member = module.require_member(state, plan)
+        module.require_active_member(member)
+    except module.GroupError as exc:
+        raise AdapterError(str(exc)) from exc
+    if state["group_id"] != enrolled["group_id"]:
+        raise AdapterError("the member session state belongs to a different group")
+    return {"state": state, "member": member, "root": root, "enrolled": enrolled}
+
+
+def require_open_member_writing(member: dict[str, Any], plan: str) -> None:
+    if member["handoff"] is not None:
+        raise AdapterError(
+            f"member {plan} closed its writing claim with a submitted handoff; "
+            "integration owns the result and members never publish"
+        )
+
+
+def require_bound_member_session(
+    member: dict[str, Any], session_id: str, session_pid: int
+) -> dict[str, Any]:
+    """Require the exact live session and process this member is bound to."""
+
+    module = authority()
+    binding = member["session_binding"]
+    if binding is None or binding["state"] != "bound":
+        raise AdapterError("member session has no completed live worktree binding")
+    try:
+        if binding["session_digest"] != module.session_identity(session_id):
+            raise AdapterError("member operation belongs to a different session")
+        observed = module.require_session_process(session_pid)
+        if observed != binding["process_identity"]:
+            raise AdapterError("member operation belongs to a stale session process")
+    except module.GroupError as exc:
+        raise AdapterError(str(exc)) from exc
+    return binding
+
+
+def run_member_preparation(args: argparse.Namespace, *, operation: str) -> None:
+    """Bind or rebind one operator-started member session to its exact checkout.
+
+    The adapter never starts an agent. It delegates to the managed worktree
+    command, rechecks the resulting binding against the group record, and
+    returns the exact checkout that operator-started session must write in.
+    """
+
+    state_path = Path(args.state)
+    context = verified_session_member(state_path, args.plan)
+    member = context["member"]
+    require_open_member_writing(member, args.plan)
+    binding = member["session_binding"]
+    if operation == "prepare" and binding is not None and binding["state"] == "bound":
+        raise AdapterError(
+            "member session already started; use member-resume after the prior "
+            "session stopped writing"
+        )
+    if operation == "resume" and binding is None:
+        raise AdapterError("member has no prior session to resume")
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve().with_name("manage-plan-worktrees.py")),
+        operation,
+        args.plan,
+        "--session-id",
+        args.session_id,
+        "--session-pid",
+        str(args.session_pid),
+    ]
+    if args.allowed_root:
+        command += ["--allowed-root", args.allowed_root]
+    if operation == "resume":
+        # The managed command requires an owner identifier, and the session
+        # path replaces it with the group-derived member owner.
+        command += ["--owner-id", "parent"]
+    completed = subprocess.run(
+        command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise AdapterError(detail or "member session preparation was refused")
+    try:
+        result = json.loads(completed.stdout.decode("utf-8", "replace"))
+    except json.JSONDecodeError as exc:
+        raise AdapterError("member session preparation returned no usable record") from exc
+    refreshed = verified_session_member(state_path, args.plan)
+    bound = require_bound_member_session(
+        refreshed["member"], args.session_id, args.session_pid
+    )
+    worktree = Path(bound["worktree_path"])
+    if not isinstance(result, dict) or result.get("worktree") != str(worktree):
+        raise AdapterError(
+            "the prepared worktree differs from the recorded member session binding"
+        )
+    require_member_worktree(worktree, args.plan)
+    print(json.dumps({
+        "operation": operation,
+        "adapter_version": ADAPTER_VERSION,
+        "group_id": refreshed["state"]["group_id"],
+        "plan_path": args.plan,
+        "logical_member_id": refreshed["member"]["logical_member_id"],
+        "worktree": str(worktree),
+        "branch_ref": bound["branch_ref"],
+        "base_commit": refreshed["member"]["base_commit"],
+        "session_generation": bound["generation"],
+        "member_writing_open": True,
+        "review_authority": "integration",
+        "publication_enabled": False,
+    }, sort_keys=True))
+
+
+def command_member_start(args: argparse.Namespace) -> None:
+    run_member_preparation(args, operation="prepare")
+
+
+def command_member_resume(args: argparse.Namespace) -> None:
+    run_member_preparation(args, operation="resume")
+
+
+def command_member_ready(args: argparse.Namespace) -> None:
+    """Freeze one member result into a parent-direct handoff and close writing.
+
+    The handoff carries the member's plan identity, ownership generation,
+    admitted baseline, and the full Git diff of its checkout against that
+    baseline, including staged, unstaged, added, and deleted product paths. It
+    is evidence for integration only: it is not acceptance, not review, not
+    validation, and it never authorizes member publication.
+    """
+
+    state_path = Path(args.state)
+    output = Path(args.output).resolve()
+    context = verified_session_member(state_path, args.plan)
+    state = context["state"]
+    member = context["member"]
+    root = context["root"]
+    require_open_member_writing(member, args.plan)
+    binding = require_bound_member_session(member, args.session_id, args.session_pid)
+    worktree = Path(args.worktree).resolve()
+    if binding["worktree_path"] != str(worktree):
+        raise AdapterError(
+            "member readiness names a different worktree than its session binding"
+        )
+    if not (worktree / ".git").exists():
+        raise AdapterError("member worktree is not a Git working tree")
+    require_member_worktree(worktree, args.plan)
+    base = member["base_commit"]
+    head = git_text(worktree, "rev-parse", "HEAD")
+    require_ancestor(worktree, base, head, "the member baseline")
+    # Staging is what makes new and deleted files part of one frozen
+    # description. It changes no file content in the member checkout.
+    stage_worktree(worktree)
+    tree = freeze_worktree_tree(worktree)
+    changed = changed_paths_in_tree(worktree, base, tree)
+    if not changed:
+        raise AdapterError("the member result changes nothing")
+    scope = plan_write_scope(root, args.plan)
+    require_paths_in_scope(changed, scope, "the member result")
+    patch = tree_diff(worktree, base, tree)
+    if not patch:
+        raise AdapterError("the member result produced an empty patch")
+    patch_path = output.with_name(output.name + ".patch")
+    patch_digest = write_private_bytes(patch_path, patch)
+    record = {
+        "schema_version": HANDOFF_SCHEMA_VERSION,
+        "adapter_version": ADAPTER_VERSION,
+        "handoff_mode": HANDOFF_MODE,
+        "group_id": state["group_id"],
+        "group_description_digest": state["group_description_digest"],
+        "plan_path": args.plan,
+        "plan_digest": member["plan_digest"],
+        "logical_member_id": member["logical_member_id"],
+        "base_commit": base,
+        "member_head": head,
+        "result_tree": tree,
+        "session_digest": binding["session_digest"],
+        "session_generation": binding["generation"],
+        "worktree_path": binding["worktree_path"],
+        "branch_ref": binding["branch_ref"],
+        "patch_path": str(patch_path),
+        "patch_digest": patch_digest,
+        "changed_paths": changed,
+        "changed_paths_digest": canonical_digest(changed),
+        "write_scope": scope,
+        "result_author": "member",
+        "review_required": True,
+        "validation_required": True,
+        "acceptance": "not_accepted",
+        "record_digest": "",
+    }
+    record["record_digest"] = canonical_digest(
+        {key: value for key, value in record.items() if key != "record_digest"}
+    )
+    write_private_artifact(output, record)
+    try:
+        run_authority(state_path, [
+            "session-handoff",
+            str(state_path),
+            "--member",
+            args.plan,
+            "--session-id",
+            args.session_id,
+            "--generation",
+            str(binding["generation"]),
+            "--base-commit",
+            base,
+            "--plan-digest",
+            member["plan_digest"],
+            "--patch-digest",
+            patch_digest,
+            "--changed-paths-digest",
+            record["changed_paths_digest"],
+            "--record-digest",
+            record["record_digest"],
+            "--record",
+            str(output),
+        ])
+    except BaseException:
+        # The authority refused, so no handoff exists. Remove the artifacts this
+        # call just created instead of leaving a record nothing can consume.
+        output.unlink(missing_ok=True)
+        patch_path.unlink(missing_ok=True)
+        raise
+    print(json.dumps({
+        "operation": "member-ready",
+        "adapter_version": ADAPTER_VERSION,
+        "plan_path": args.plan,
+        "handoff_record": str(output),
+        "record_digest": record["record_digest"],
+        "patch_digest": patch_digest,
+        "changed_paths": changed,
+        "member_writing_open": False,
+        "acceptance": "not_accepted",
+        "publication_enabled": False,
+    }, sort_keys=True))
+
+
 # ---------------------------------------------------------------------------
 # group-status
 # ---------------------------------------------------------------------------
@@ -1098,6 +1409,29 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("group-status", help="report bounded group publication state")
     status.add_argument("--state", required=True)
     status.set_defaults(handler=command_group_status)
+
+    for name, handler, summary in (
+        ("member-start", command_member_start, "bind one operator-started member session"),
+        ("member-resume", command_member_resume, "rebind one stopped member session"),
+    ):
+        member = sub.add_parser(name, help=summary)
+        member.add_argument("--state", required=True)
+        member.add_argument("--plan", required=True)
+        member.add_argument("--session-id", required=True)
+        member.add_argument("--session-pid", type=int, required=True)
+        member.add_argument("--allowed-root")
+        member.set_defaults(handler=handler)
+
+    ready = sub.add_parser(
+        "member-ready", help="freeze one member result and close its writing claim"
+    )
+    ready.add_argument("--state", required=True)
+    ready.add_argument("--plan", required=True)
+    ready.add_argument("--session-id", required=True)
+    ready.add_argument("--session-pid", type=int, required=True)
+    ready.add_argument("--worktree", required=True)
+    ready.add_argument("--output", required=True)
+    ready.set_defaults(handler=command_member_ready)
 
     return parser
 

@@ -1320,6 +1320,272 @@ class ManagedPlanWorktreesTest(unittest.TestCase):
         self.assertIn("bound commits", result.stderr)
 
 
+class ParentDirectMemberHandoffTest(unittest.TestCase):
+    """A frozen member handoff must close member writing in one exact checkout.
+
+    Every scenario uses a disposable local repository and locally started
+    Python processes that stand in for operator-started sessions. No live
+    external agent, network, model or credential is used.
+    """
+
+    PLAN = "docs/plan/active/278-example.md"
+    PARTNER = "docs/plan/active/279-partner.md"
+    LABEL = "docs/plan/execution-groups/session-pair.json"
+    ADAPTER = ROOT / "scripts/run-parallel-plans.py"
+    AUTHORITY = ROOT / "scripts/parallel-plan-state.py"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.repository = self.base / "repository"
+        self.allowed_root = self.base / "managed"
+        self.repository.mkdir()
+        self.allowed_root.mkdir(mode=0o700)
+        git(self.repository, "init", "-q", "-b", "dev")
+        git(self.repository, "config", "user.name", "Worktree Test")
+        git(self.repository, "config", "user.email", "worktree@example.invalid")
+        git(self.repository, "remote", "add", "origin", "git@github.com:example/project.git")
+        (self.repository / "file.txt").write_text("baseline\n", encoding="utf-8")
+        self.group = GUARD_MODULE.parallel_group_module()
+        members = []
+        for path, scope in ((self.PLAN, "file.txt"), (self.PARTNER, "src/partner.py")):
+            content = (
+                "status: in_progress\nplan_purpose: implementation\n"
+                f"primary_invariant: invariant {Path(path).name[:3]}\n"
+                f"write_scope:\n  - {scope}\nrequired_specs:\n  - none\n"
+                f"execution_group: {self.LABEL}\n"
+            )
+            target = self.repository / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            members.append({
+                "plan_id": Path(path).name[:3], "plan_path": path,
+                "plan_digest": self.group.digest(content),
+                "write_scope_digest": self.group.canonical_digest([scope]),
+                "implementation_mode": "parent_direct",
+            })
+        description = self.repository / self.LABEL
+        description.parent.mkdir(parents=True, exist_ok=True)
+        description.write_text(json.dumps({
+            "schema_version": 2, "group_id": "session-pair", "target_ref": SOURCE_REF,
+            "declared_independence": "independent product changes with reviewed input scopes",
+            "members": members,
+        }, indent=2) + "\n", encoding="utf-8")
+        git(self.repository, "add", "-A")
+        git(self.repository, "commit", "-qm", "session fixture")
+        self.head = git(self.repository, "rev-parse", "HEAD").stdout.strip()
+        self.state = self.group.session_state_path(self.repository, "session-pair")
+        for path in (self.state, self.state.with_name(self.state.name + ".lock")):
+            self.addCleanup(path.unlink, missing_ok=True)
+        for plan in (self.PLAN, self.PARTNER):
+            paths = WORKTREE_MODULE.metadata_paths(
+                WORKTREE_MODULE.repository_identity(self.repository), plan_selector(plan),
+            )
+            for key in ("record", "journal", "lock", "publication"):
+                self.addCleanup(paths[key].unlink, missing_ok=True)
+        initialized = self.run_tool(
+            self.AUTHORITY, "group-init", str(self.state), "--group-description", self.LABEL,
+            "--target-ref", SOURCE_REF, "--start-commit", self.head,
+            "--integration-session-id", "integration-session",
+            "--integration-session-pid", str(os.getpid()),
+        )
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        self.probe = self.base / "guard_probe.py"
+        self.probe.write_text(
+            "import importlib.util, sys\n"
+            "from pathlib import Path\n"
+            f"spec = importlib.util.spec_from_file_location('probe_guard', {str(ROOT / 'scripts/project_workflow/worktree_guard.py')!r})\n"
+            "guard = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(guard)\n"
+            "try:\n"
+            "    guard.assert_task_worktree(\n"
+            "        Path(sys.argv[1]), kind=guard.PLAN_TASK, plan=sys.argv[2],\n"
+            "        action='member product write', session_id=sys.argv[3],\n"
+            "    )\n"
+            "except guard.GuardError as error:\n"
+            "    print(str(error))\n"
+            "    raise SystemExit(1)\n"
+            "print('member product write is allowed')\n",
+            encoding="utf-8",
+        )
+
+    # -- fixture helpers ------------------------------------------------
+
+    def run_tool(self, script: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(script), *arguments],
+            cwd=self.repository, text=True, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def session(self, identity: str) -> subprocess.Popen:
+        process = subprocess.Popen(
+            [
+                sys.executable, "-u", "-c",
+                "import json,os,subprocess,sys\n"
+                "for line in sys.stdin:\n"
+                " request=json.loads(line)\n"
+                " command=[sys.executable,request['script'],*request['arguments']]\n"
+                " if request.get('owner',True):\n"
+                "  command+=['--session-id',sys.argv[1],'--session-pid',str(os.getpid())]\n"
+                " result=subprocess.run(command,cwd=request['cwd'],text=True,"
+                "stdout=subprocess.PIPE,stderr=subprocess.PIPE)\n"
+                " print(json.dumps({'returncode':result.returncode,"
+                "'stdout':result.stdout,'stderr':result.stderr}),flush=True)\n",
+                identity,
+            ],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(lambda: process.communicate(timeout=30))
+        return process
+
+    def in_session(
+        self, process: subprocess.Popen, script: Path, *arguments: str,
+        owner: bool = True, cwd: Path | None = None,
+    ) -> dict:
+        process.stdin.write(json.dumps({
+            "script": str(script), "arguments": list(arguments),
+            "cwd": str(cwd or self.repository), "owner": owner,
+        }) + "\n")
+        process.stdin.flush()
+        return json.loads(process.stdout.readline())
+
+    def payload(self) -> dict:
+        return json.loads(self.state.read_text(encoding="utf-8"))
+
+    def start_member(self, process: subprocess.Popen) -> Path:
+        started = self.in_session(
+            process, self.ADAPTER, "member-start", "--state", str(self.state),
+            "--plan", self.PLAN, "--allowed-root", str(self.allowed_root),
+        )
+        self.assertEqual(started["returncode"], 0, started)
+        return Path(json.loads(started["stdout"])["worktree"])
+
+    def guard_probe(self, process: subprocess.Popen, worktree: Path, identity: str) -> dict:
+        return self.in_session(
+            process, self.probe, str(worktree), self.PLAN, identity,
+            owner=False, cwd=worktree,
+        )
+
+    # -- cases ----------------------------------------------------------
+
+    def test_handoff_freezes_the_result_and_closes_member_writing(self) -> None:
+        member = self.session("session-278")
+        worktree = self.start_member(member)
+        open_write = self.guard_probe(member, worktree, "session-278")
+        self.assertEqual(open_write["returncode"], 0, open_write)
+        self.assertIn("allowed", open_write["stdout"])
+        (worktree / "file.txt").write_text("member result\n", encoding="utf-8")
+        output = self.base / "handoff.json"
+        ready = self.in_session(
+            member, self.ADAPTER, "member-ready", "--state", str(self.state),
+            "--plan", self.PLAN, "--worktree", str(worktree), "--output", str(output),
+        )
+        self.assertEqual(ready["returncode"], 0, ready)
+        report = json.loads(ready["stdout"])
+        self.assertEqual(report["changed_paths"], ["file.txt"])
+        self.assertFalse(report["member_writing_open"])
+        self.assertEqual(report["acceptance"], "not_accepted")
+        self.assertFalse(report["publication_enabled"])
+        record = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(record["base_commit"], self.head)
+        self.assertIn(b"member result", Path(record["patch_path"]).read_bytes())
+        # The exact submitted bytes stay frozen: the worktree keeps its own
+        # commits and files, and the recorded digests keep naming them.
+        self.assertEqual((worktree / "file.txt").read_text(encoding="utf-8"), "member result\n")
+        stored = self.payload()["members"][self.PLAN]["handoff"]
+        self.assertEqual(stored["record_digest"], record["record_digest"])
+        self.assertEqual(stored["patch_digest"], record["patch_digest"])
+        closed = self.guard_probe(member, worktree, "session-278")
+        self.assertNotEqual(closed["returncode"], 0, closed)
+        self.assertIn("closed its writing claim", closed["stdout"])
+        self.assertIn("integration owns the result", closed["stdout"])
+
+    def test_duplicate_member_ledger_and_publication_refuse(self) -> None:
+        member = self.session("session-278")
+        self.start_member(member)
+        claim = ("session-ledger-claim", str(self.state), "--member", self.PLAN)
+        destinations = ("--execution-state", "--lifecycle-state")
+        first = self.in_session(
+            member, self.AUTHORITY, *claim, "--session-id", "session-278",
+            "--run-id", "plan-278-run-001",
+            *[item for pair in zip(destinations, (
+                str(self.base / "execution.json"), str(self.base / "lifecycle.json"),
+            )) for item in pair],
+            owner=False,
+        )
+        self.assertEqual(first["returncode"], 0, first)
+        before = self.state.read_bytes()
+        duplicate = self.in_session(
+            member, self.AUTHORITY, *claim, "--session-id", "session-278",
+            "--run-id", "plan-278-run-002",
+            *[item for pair in zip(destinations, (
+                str(self.base / "second-execution.json"),
+                str(self.base / "second-lifecycle.json"),
+            )) for item in pair],
+            owner=False,
+        )
+        self.assertNotEqual(duplicate["returncode"], 0, duplicate)
+        self.assertIn("a second initialization is refused", duplicate["stderr"])
+        self.assertEqual(before, self.state.read_bytes())
+        for operation in ("publish", "retire"):
+            refused = self.run_tool(
+                Path(SCRIPT), operation, self.PLAN, "--allowed-root", str(self.allowed_root),
+                *(("--owner-id", "parent") if operation == "publish" else ()),
+            )
+            self.assertNotEqual(refused.returncode, 0, refused.stdout)
+            self.assertIn("Members never publish, accept or retire", refused.stderr)
+            self.assertIn("member-ready", refused.stderr)
+        bypass = self.in_session(
+            member,
+            str(ROOT / "scripts" / "plan-execution-state.py"),
+            "init", str(self.base / "second-execution.json"),
+            "--run-id", "plan-278-run-002",
+            "--plan", self.PLAN,
+            "--plan-digest", "sha256:" + "0" * 64,
+            "--source-head", "0" * 40,
+            "--primary-invariant-digest", "sha256:" + "0" * 64,
+            "--lifecycle-state", str(self.base / "second-lifecycle.json"),
+            "--implementation-mode", "parent_direct",
+            "--group-state", str(self.state),
+            owner=False,
+        )
+        self.assertNotEqual(bypass["returncode"], 0, bypass)
+        self.assertIn("never replenishes its budget", bypass["stderr"])
+
+    def test_root_and_generated_instructions_state_the_same_member_rules(self) -> None:
+        for statement, sources in (
+            (
+                "members never publish",
+                ("scripts/parallel-plan-state.py",
+                 "template/.project-agent-workflow/scripts/parallel-plan-state.py"),
+            ),
+            (
+                "Members never publish, accept or retire their own result.",
+                ("scripts/manage-plan-worktrees.py",
+                 "template/.project-agent-workflow/scripts/manage-plan-worktrees.py"),
+            ),
+            (
+                "member-ready",
+                ("AGENTS.md", "template/AGENTS.md.jinja",
+                 "template/.project-agent-workflow/AGENTS.md.jinja",
+                 "docs/agent/SPEC_PLAN_WORKFLOW.md",
+                 "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+                 "references/orchestration.md",
+                 "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"),
+            ),
+            (
+                "closes member writing",
+                ("docs/agent/SPEC_PLAN_WORKFLOW.md",
+                 "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"),
+            ),
+        ):
+            for source in sources:
+                with self.subTest(statement=statement, source=source):
+                    self.assertIn(statement, (ROOT / source).read_text(encoding="utf-8"))
+
+
 class TaskWorktreeGuardTest(unittest.TestCase):
     """Disposable-repository tests for the shared task-worktree assertion."""
 

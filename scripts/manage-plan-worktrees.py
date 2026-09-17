@@ -1027,8 +1027,10 @@ def refuse_session_operation(args: argparse.Namespace, operation: str) -> None:
         raise WorktreeError(str(exc)) from exc
     if enrolled is not None:
         raise WorktreeError(
-            f"schema-2 member {operation} is closed; use session-bound prepare/resume "
-            "and retain the worktree until the integration adapter is installed"
+            f"schema-2 member {operation} is closed; a member session implements in "
+            "its session-bound worktree and hands its frozen result to integration "
+            "through the adapter member-ready operation. "
+            "Members never publish, accept or retire their own result."
         )
 
 

@@ -49,6 +49,10 @@ def digest(value: str | bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def canonical_digest(value: object) -> str:
+    return digest(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
 class PlanExecutionStateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -8330,7 +8334,7 @@ class ParallelPlanGroupTest(unittest.TestCase):
         self.assertEqual(beta["returncode"], 0, beta)
         a, b = json.loads(alpha["stdout"]), json.loads(beta["stdout"])
         self.assertNotEqual(a["worktree"], b["worktree"])
-        self.assertFalse(a["execution_enabled"])
+        self.assertTrue(a["execution_enabled"])
         self.assertFalse(b["publication_enabled"])
         before = self.state.read_bytes()
         duplicate = self.session_request(first, self.alpha_path)
@@ -8510,7 +8514,7 @@ class ParallelPlanGroupTest(unittest.TestCase):
         self.assertEqual(before, self.state.read_bytes())
         self.assertFalse((self.base / "second-state.json").exists())
 
-    def test_session_group_does_not_enable_candidate_permits_or_execution(self) -> None:
+    def test_session_group_does_not_enable_candidate_permits_or_publication(self) -> None:
         self.enable_session_group()
         before = self.state.read_bytes()
         rejected = self.run_group(
@@ -8520,13 +8524,20 @@ class ParallelPlanGroupTest(unittest.TestCase):
         )
         self.assertNotEqual(rejected.returncode, 0)
         self.assertEqual(before, self.state.read_bytes())
-        for operation in ("run", "correct", "validate", "apply", "completion", "archive"):
+        for operation, message in (
+            ("run", "no live member session binding"),
+            ("correct", "no live member session binding"),
+            ("validate", "no live member session binding"),
+            ("apply", "no live member session binding"),
+            ("completion", "members never publish or accept"),
+            ("archive", "members never publish or accept"),
+        ):
             rejected = self.run_group(
                 "check-enrollment", "--plan", self.alpha_path, "--operation", operation,
                 "--group-state", str(self.state),
             )
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("later session adapter", rejected.stderr)
+            self.assertIn(message, rejected.stderr)
 
     def test_session_group_refuses_legacy_terminal_stop_of_either_member(self) -> None:
         self.enable_session_group()
@@ -8560,6 +8571,367 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "publication_lease_released",
             [event["event_type"] for event in self.payload()["events"]],
         )
+
+    # -- parent-direct member execution ---------------------------------
+
+    def group_request(
+        self, process: subprocess.Popen, arguments: list[str], *, session_id: str | None = None,
+    ) -> dict:
+        """Run one group authority command from inside a live member session."""
+
+        if session_id is not None:
+            arguments = [*arguments, "--session-id", session_id]
+        process.stdin.write(json.dumps({
+            "script": str(GROUP_SCRIPT), "owner": False,
+            "cwd": str(self.repo), "arguments": arguments,
+        }) + "\n")
+        process.stdin.flush()
+        return json.loads(process.stdout.readline())
+
+    def bound_member_session(self, identity: str = "session-alpha") -> subprocess.Popen:
+        self.enable_session_group()
+        process = self.session_process(identity)
+        prepared = self.session_request(process, self.alpha_path)
+        self.assertEqual(prepared["returncode"], 0, prepared)
+        self.assertTrue(json.loads(prepared["stdout"])["execution_enabled"])
+        return process
+
+    def handoff_artifacts(
+        self, *, record: str = "handoff-record", generation: int = 0,
+        changed: list[str] | None = None, scope: list[str] | None = None,
+    ) -> dict:
+        """Write the private artifacts a real member readiness would produce."""
+
+        state = self.payload()
+        member = state["members"][self.alpha_path]
+        binding = member["session_binding"]
+        changed = changed or ["docs/plan/active/alpha.md"]
+        scope = scope if scope is not None else list(changed)
+        patch_path = self.base / f"{record}.patch"
+        patch = b"diff --git a/docs/plan/active/alpha.md b/docs/plan/active/alpha.md\n"
+        patch_path.write_bytes(patch)
+        patch_path.chmod(0o600)
+        document = {
+            "group_id": state["group_id"],
+            "group_description_digest": state["group_description_digest"],
+            "plan_path": self.alpha_path,
+            "plan_digest": member["plan_digest"],
+            "base_commit": member["base_commit"],
+            "session_digest": binding["session_digest"],
+            "session_generation": generation,
+            "worktree_path": binding["worktree_path"],
+            "patch_path": str(patch_path),
+            "patch_digest": digest(patch),
+            "changed_paths": changed,
+            "changed_paths_digest": canonical_digest(changed),
+            "write_scope": scope,
+            "acceptance": "not_accepted",
+            "record_digest": "",
+        }
+        document["record_digest"] = canonical_digest(
+            {key: value for key, value in document.items() if key != "record_digest"}
+        )
+        record_path = self.base / record
+        record_path.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+        record_path.chmod(0o600)
+        document["record_path"] = str(record_path)
+        return document
+
+    def submit_handoff(
+        self, process: subprocess.Popen, *, identity: str = "session-alpha",
+        record: str = "handoff-record", generation: int = 0,
+        document: dict | None = None,
+    ) -> dict:
+        member = self.payload()["members"][self.alpha_path]
+        document = document or self.handoff_artifacts(
+            record=record, generation=generation
+        )
+        return self.group_request(process, [
+            "session-handoff", str(self.state), "--member", self.alpha_path,
+            "--generation", str(generation),
+            "--base-commit", member["base_commit"],
+            "--plan-digest", member["plan_digest"],
+            "--patch-digest", document["patch_digest"],
+            "--changed-paths-digest", document["changed_paths_digest"],
+            "--record-digest", document["record_digest"],
+            "--record", document["record_path"],
+        ], session_id=identity)
+
+    def test_member_execution_opens_only_inside_its_own_bound_live_session(self) -> None:
+        self.enable_session_group()
+        for operation in ("run", "correct", "validate", "apply"):
+            unbound = self.run_group(
+                "check-enrollment", "--plan", self.alpha_path, "--operation", operation,
+                "--group-state", str(self.state),
+            )
+            self.assertNotEqual(unbound.returncode, 0, unbound.stdout)
+            self.assertIn("no live member session binding", unbound.stderr)
+        worker = self.session_process("session-alpha")
+        self.assertEqual(self.session_request(worker, self.alpha_path)["returncode"], 0)
+        for operation in ("run", "correct", "validate", "apply"):
+            admitted = self.group_request(worker, [
+                "check-enrollment", "--plan", self.alpha_path,
+                "--operation", operation, "--group-state", str(self.state),
+            ])
+            self.assertEqual(admitted["returncode"], 0, admitted)
+        # A member never reaches a lifecycle path: integration owns the
+        # published and accepted result.
+        for operation in ("completion", "finalization", "archive"):
+            refused = self.group_request(worker, [
+                "check-enrollment", "--plan", self.alpha_path,
+                "--operation", operation, "--group-state", str(self.state),
+            ])
+            self.assertNotEqual(refused["returncode"], 0, refused)
+            self.assertIn("members never publish or accept", refused["stderr"])
+
+    def test_member_handoff_closes_writing_and_refuses_stale_or_foreign_submissions(self) -> None:
+        worker = self.bound_member_session()
+        member = self.payload()["members"][self.alpha_path]
+        document = self.handoff_artifacts()
+        for label, overrides, message in (
+            ("stale-generation", {"--generation": "1"}, "stale ownership generation"),
+            ("foreign-base", {"--base-commit": "0" * 40}, "superseded member baseline"),
+            ("foreign-plan", {"--plan-digest": digest("other")}, "different plan bytes"),
+        ):
+            with self.subTest(label=label):
+                arguments = {
+                    "--generation": "0",
+                    "--base-commit": member["base_commit"],
+                    "--plan-digest": member["plan_digest"],
+                    "--patch-digest": document["patch_digest"],
+                    "--changed-paths-digest": document["changed_paths_digest"],
+                    "--record-digest": document["record_digest"],
+                    "--record": document["record_path"],
+                }
+                arguments.update(overrides)
+                before = self.state.read_bytes()
+                flat = [item for pair in arguments.items() for item in pair]
+                refused = self.group_request(worker, [
+                    "session-handoff", str(self.state), "--member", self.alpha_path, *flat,
+                ], session_id="session-alpha")
+                self.assertNotEqual(refused["returncode"], 0, refused)
+                self.assertIn(message, refused["stderr"])
+                self.assertEqual(before, self.state.read_bytes())
+        foreign = self.submit_handoff(
+            worker, identity="session-beta", document=document
+        )
+        self.assertNotEqual(foreign["returncode"], 0, foreign)
+        self.assertIn("only the current member session", foreign["stderr"])
+        accepted = self.submit_handoff(worker, document=document)
+        self.assertEqual(accepted["returncode"], 0, accepted)
+        report = json.loads(accepted["stdout"])
+        self.assertFalse(report["member_writing_open"])
+        self.assertFalse(report["publication_enabled"])
+        self.assertEqual(report["acceptance"], "not_accepted")
+        state = self.payload()["members"][self.alpha_path]
+        self.assertEqual(state["session_binding"]["state"], "stopped")
+        self.assertEqual(state["handoff"]["record_digest"], document["record_digest"])
+        repeated = self.submit_handoff(worker, record="second-record")
+        self.assertNotEqual(repeated["returncode"], 0, repeated)
+        self.assertIn("closed its writing claim", repeated["stderr"])
+
+    def test_member_reviews_once_and_reserves_the_integration_review(self) -> None:
+        worker = self.bound_member_session()
+        first = self.run_group(
+            "record-review", str(self.state), "--member", self.alpha_path,
+            "--assembly-record-digest", digest("member-candidate"),
+            "--registry-path-digest", digest("registry"),
+            "--registry-event-count", "1",
+            "--registry-event-chain-digest", digest("chain-1"),
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(self.payload()["members"][self.alpha_path]["counters"]["reviews"], 1)
+        before = self.state.read_bytes()
+        second = self.run_group(
+            "record-review", str(self.state), "--member", self.alpha_path,
+            "--assembly-record-digest", digest("member-candidate-2"),
+            "--registry-path-digest", digest("registry"),
+            "--registry-event-count", "2",
+            "--registry-event-chain-digest", digest("chain-2"),
+        )
+        self.assertNotEqual(second.returncode, 0, second.stdout)
+        self.assertIn("reserved for integration", second.stderr)
+        self.assertEqual(before, self.state.read_bytes())
+        self.assertEqual(self.submit_handoff(worker)["returncode"], 0)
+        integration = self.run_group(
+            "record-review", str(self.state), "--member", self.alpha_path,
+            "--assembly-record-digest", digest("integration-assembly"),
+            "--registry-path-digest", digest("registry"),
+            "--registry-event-count", "2",
+            "--registry-event-chain-digest", digest("chain-2"),
+        )
+        self.assertEqual(integration.returncode, 0, integration.stderr)
+        self.assertEqual(self.payload()["members"][self.alpha_path]["counters"]["reviews"], 2)
+        exhausted = self.run_group(
+            "record-review", str(self.state), "--member", self.alpha_path,
+            "--assembly-record-digest", digest("integration-assembly-2"),
+            "--registry-path-digest", digest("registry"),
+            "--registry-event-count", "3",
+            "--registry-event-chain-digest", digest("chain-3"),
+        )
+        self.assertNotEqual(exhausted.returncode, 0, exhausted.stdout)
+        self.assertIn("exhausted its independent review budget", exhausted.stderr)
+
+    def test_member_reviews_must_use_one_canonical_reviewer_registry(self) -> None:
+        self.bound_member_session()
+        first = self.run_group(
+            "record-review", str(self.state), "--member", self.alpha_path,
+            "--assembly-record-digest", digest("member-candidate"),
+            "--registry-path-digest", digest("registry"),
+            "--registry-event-count", "1",
+            "--registry-event-chain-digest", digest("chain-1"),
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        before = self.state.read_bytes()
+        reused = self.run_group(
+            "record-review", str(self.state), "--member", self.alpha_path,
+            "--assembly-record-digest", digest("member-candidate"),
+            "--registry-path-digest", digest("registry"),
+            "--registry-event-count", "1",
+            "--registry-event-chain-digest", digest("chain-1"),
+        )
+        self.assertNotEqual(reused.returncode, 0, reused.stdout)
+        self.assertEqual(before, self.state.read_bytes())
+
+    def test_member_correction_and_parent_adjustment_share_one_allowance(self) -> None:
+        worker = self.bound_member_session()
+        spent = self.group_request(worker, [
+            "session-correction", str(self.state), "--member", self.alpha_path,
+        ], session_id="session-alpha")
+        self.assertEqual(spent["returncode"], 0, spent)
+        self.assertEqual(
+            self.payload()["members"][self.alpha_path]["counters"]["corrections"], 1
+        )
+        before = self.state.read_bytes()
+        repeated = self.group_request(worker, [
+            "session-correction", str(self.state), "--member", self.alpha_path,
+        ], session_id="session-alpha")
+        self.assertNotEqual(repeated["returncode"], 0, repeated)
+        self.assertIn("share one allowance", repeated["stderr"])
+        self.assertEqual(before, self.state.read_bytes())
+        document = self.handoff_artifacts()
+        self.assertEqual(
+            self.submit_handoff(worker, document=document)["returncode"], 0
+        )
+        before = self.state.read_bytes()
+        adjustment = self.run_group(
+            "adjust-reserve", str(self.state), "--member", self.alpha_path,
+            "--permit-id", document["record_digest"],
+            "--incoming-candidate-digest", digest("incoming"),
+            "--base-digest", digest("base"),
+        )
+        self.assertNotEqual(adjustment.returncode, 0, adjustment.stdout)
+        self.assertIn("already spent its single correction slot", adjustment.stderr)
+        self.assertEqual(before, self.state.read_bytes())
+
+    def test_member_budgets_and_ledger_claim_survive_a_session_restart(self) -> None:
+        first = self.bound_member_session()
+        spent = self.group_request(first, [
+            "session-correction", str(self.state), "--member", self.alpha_path,
+        ], session_id="session-alpha")
+        self.assertEqual(spent["returncode"], 0, spent)
+        claimed = self.group_request(first, [
+            "session-ledger-claim", str(self.state), "--member", self.alpha_path,
+            "--run-id", "plan-284-run-001",
+            "--execution-state", str(self.base / "execution.json"),
+            "--lifecycle-state", str(self.base / "lifecycle.json"),
+        ], session_id="session-alpha")
+        self.assertEqual(claimed["returncode"], 0, claimed)
+        first.stdin.close()
+        first.stdin = None
+        first.wait(timeout=10)
+        second = self.session_process("session-alpha")
+        resumed = self.session_request(second, self.alpha_path, "resume")
+        self.assertEqual(resumed["returncode"], 0, resumed)
+        self.assertEqual(json.loads(resumed["stdout"])["session_generation"], 1)
+        member = self.payload()["members"][self.alpha_path]
+        self.assertEqual(member["counters"]["corrections"], 1)
+        self.assertEqual(member["ledger_binding"]["run_id"], "plan-284-run-001")
+        self.assertEqual(member["ledger_binding"]["generation"], 0)
+        before = self.state.read_bytes()
+        replenished = self.group_request(second, [
+            "session-correction", str(self.state), "--member", self.alpha_path,
+        ], session_id="session-alpha")
+        self.assertNotEqual(replenished["returncode"], 0, replenished)
+        self.assertEqual(before, self.state.read_bytes())
+
+    def test_member_ledger_claim_is_one_use_across_run_names_and_destinations(self) -> None:
+        worker = self.bound_member_session()
+        claimed = self.group_request(worker, [
+            "session-ledger-claim", str(self.state), "--member", self.alpha_path,
+            "--run-id", "plan-284-run-001",
+            "--execution-state", str(self.base / "execution.json"),
+            "--lifecycle-state", str(self.base / "lifecycle.json"),
+        ], session_id="session-alpha")
+        self.assertEqual(claimed["returncode"], 0, claimed)
+        before = self.state.read_bytes()
+        duplicate = self.group_request(worker, [
+            "session-ledger-claim", str(self.state), "--member", self.alpha_path,
+            "--run-id", "plan-284-run-002",
+            "--execution-state", str(self.base / "second-execution.json"),
+            "--lifecycle-state", str(self.base / "second-lifecycle.json"),
+        ], session_id="session-alpha")
+        self.assertNotEqual(duplicate["returncode"], 0, duplicate)
+        self.assertIn("a second initialization is refused", duplicate["stderr"])
+        self.assertEqual(before, self.state.read_bytes())
+
+    def test_a_claimed_ledger_and_a_submitted_handoff_stay_readable(self) -> None:
+        worker = self.bound_member_session()
+        claimed = self.group_request(worker, [
+            "session-ledger-claim", str(self.state), "--member", self.alpha_path,
+            "--run-id", "plan-284-run-001",
+            "--execution-state", str(self.base / "execution.json"),
+            "--lifecycle-state", str(self.base / "lifecycle.json"),
+        ], session_id="session-alpha")
+        self.assertEqual(claimed["returncode"], 0, claimed)
+        self.assertEqual(self.submit_handoff(worker)["returncode"], 0)
+        member = self.payload()["members"][self.alpha_path]
+        self.assertIsNotNone(member["ledger_binding"])
+        self.assertIsNotNone(member["handoff"])
+        shown = self.run_group("show", str(self.state))
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+
+    def test_handoff_digests_must_describe_real_private_artifacts(self) -> None:
+        worker = self.bound_member_session()
+        member = self.payload()["members"][self.alpha_path]
+        forged = self.group_request(worker, [
+            "session-handoff", str(self.state), "--member", self.alpha_path,
+            "--generation", "0",
+            "--base-commit", member["base_commit"],
+            "--plan-digest", member["plan_digest"],
+            "--patch-digest", digest("patch"),
+            "--changed-paths-digest", digest("changed"),
+            "--record-digest", digest("handoff-record"),
+            "--record", str(self.base / "absent-record"),
+        ], session_id="session-alpha")
+        self.assertNotEqual(forged["returncode"], 0, forged)
+        document = self.handoff_artifacts()
+        altered = self.group_request(worker, [
+            "session-handoff", str(self.state), "--member", self.alpha_path,
+            "--generation", "0",
+            "--base-commit", member["base_commit"],
+            "--plan-digest", member["plan_digest"],
+            "--patch-digest", digest("another patch"),
+            "--changed-paths-digest", document["changed_paths_digest"],
+            "--record-digest", document["record_digest"],
+            "--record", document["record_path"],
+        ], session_id="session-alpha")
+        self.assertNotEqual(altered["returncode"], 0, altered)
+        self.assertIn("different patch digest", altered["stderr"])
+        Path(document["patch_path"]).unlink()
+        missing = self.submit_handoff(worker, document=document)
+        self.assertNotEqual(missing["returncode"], 0, missing)
+        self.assertIsNone(self.payload()["members"][self.alpha_path]["handoff"])
+
+    def test_a_handoff_record_cannot_leave_the_declared_member_write_scope(self) -> None:
+        worker = self.bound_member_session()
+        document = self.handoff_artifacts(
+            changed=["scripts/lint-project-workflow.sh"], scope=["docs/plan/active/alpha.md"]
+        )
+        refused = self.submit_handoff(worker, document=document)
+        self.assertNotEqual(refused["returncode"], 0, refused)
+        self.assertIn("outside its declared write scope", refused["stderr"])
+        self.assertIsNone(self.payload()["members"][self.alpha_path]["handoff"])
 
 
 

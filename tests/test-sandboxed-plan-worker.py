@@ -6140,7 +6140,6 @@ class GroupedExecutionAdapterTests(unittest.TestCase):
 
 ROOT_GUARD = ROOT / "scripts/project_workflow/worktree_guard.py"
 ROOT_WORKTREE_MANAGER = ROOT / "scripts/manage-plan-worktrees.py"
-
 PENDING_RECORDS: set[Path] = set()
 
 
@@ -6153,6 +6152,290 @@ def remove_pending_records() -> None:
 
 
 atexit.register(remove_pending_records)
+
+
+class ParentDirectMemberSessionTests(unittest.TestCase):
+    """Member start, resume and ready inside operator-started sessions.
+
+    Every scenario uses isolated local Git repositories and locally started
+    Python processes that stand in for operator-started agent sessions. No live
+    external agent, network, model or credential is used.
+    """
+
+    ALPHA = "docs/plan/active/284-alpha.md"
+    BETA = "docs/plan/active/285-beta.md"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.repo = self.base / "repo"
+        (self.repo / "docs/plan/active").mkdir(parents=True)
+        (self.repo / "docs/plan/execution-groups").mkdir(parents=True)
+        (self.repo / "src").mkdir(parents=True)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.invalid")
+        self.git("remote", "add", "origin", "https://example.invalid/owner/repo.git")
+        (self.repo / "AGENTS.md").write_text("fixture\n", encoding="utf-8")
+        (self.repo / "src/alpha.py").write_text("def alpha():\n    return 0\n", encoding="utf-8")
+        (self.repo / "src/beta.py").write_text("def beta():\n    return 0\n", encoding="utf-8")
+        self.write_plan("284", "alpha", ["src/alpha.py", "src/alpha_extra.py"])
+        self.write_plan("285", "beta", ["src/beta.py"])
+        self.write_description()
+        self.start_commit = self.commit("baseline")
+        self.managed = self.base / "managed"
+        self.managed.mkdir(mode=0o700)
+        spec = importlib.util.spec_from_file_location(
+            "member_session_group", GROUP_AUTHORITY_SCRIPT
+        )
+        self.group = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.group)
+        self.state = self.group.session_state_path(self.repo, "alpha-beta")
+        for path in (self.state, self.state.with_name(self.state.name + ".lock")):
+            PENDING_RECORDS.add(path)
+            self.addCleanup(PENDING_RECORDS.discard, path)
+            self.addCleanup(path.unlink, missing_ok=True)
+        manager = self.group.worktree_manager()
+        identity = manager.repository_identity(self.repo)
+        for plan in (self.ALPHA, self.BETA):
+            paths = manager.metadata_paths(
+                identity, {"kind": "plan", "identity": {"path": plan}}
+            )
+            for key in ("record", "journal", "lock", "publication"):
+                PENDING_RECORDS.add(paths[key])
+                self.addCleanup(PENDING_RECORDS.discard, paths[key])
+                self.addCleanup(paths[key].unlink, missing_ok=True)
+        completed = self.run_group(
+            "group-init", str(self.state), "--group-description",
+            "docs/plan/execution-groups/alpha-beta.json", "--target-ref",
+            "refs/heads/main", "--start-commit", self.start_commit,
+            "--integration-session-id", "integration-session",
+            "--integration-session-pid", str(os.getpid()),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    # -- fixture helpers ------------------------------------------------
+
+    def git(self, *arguments: str, cwd: Path | None = None) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd or self.repo), *arguments],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        return completed.stdout.strip()
+
+    def write_plan(self, plan_id: str, slug: str, write_scope: list[str]) -> None:
+        body = (
+            f"# Plan {plan_id}\n\n"
+            "status: in_progress\n"
+            "plan_purpose: implementation\n"
+            f"primary_invariant: invariant {plan_id}\n"
+            "write_scope:\n"
+            + "".join(f"  - {entry}\n" for entry in write_scope)
+            + "context_files:\n  - AGENTS.md\n"
+            "\n## Tasks\n\n- [ ] implement\n"
+        )
+        (self.repo / f"docs/plan/active/{plan_id}-{slug}.md").write_text(
+            body, encoding="utf-8"
+        )
+
+    def write_description(self) -> None:
+        document = {
+            "schema_version": 2,
+            "group_id": "alpha-beta",
+            "target_ref": "refs/heads/main",
+            "declared_independence": "disjoint product modules with no shared interface",
+            "members": [
+                {
+                    "plan_id": "284", "plan_path": self.ALPHA,
+                    "plan_digest": adapter_digest((self.repo / self.ALPHA).read_bytes()),
+                    "write_scope_digest": adapter_digest(json.dumps(
+                        ["src/alpha.py", "src/alpha_extra.py"],
+                        sort_keys=True, separators=(",", ":"),
+                    )),
+                    "implementation_mode": "parent_direct",
+                },
+                {
+                    "plan_id": "285", "plan_path": self.BETA,
+                    "plan_digest": adapter_digest((self.repo / self.BETA).read_bytes()),
+                    "write_scope_digest": adapter_digest(json.dumps(
+                        ["src/beta.py"], sort_keys=True, separators=(",", ":"),
+                    )),
+                    "implementation_mode": "parent_direct",
+                },
+            ],
+        }
+        (self.repo / "docs/plan/execution-groups/alpha-beta.json").write_text(
+            json.dumps(document, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def run_group(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(GROUP_AUTHORITY_SCRIPT), *arguments],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def payload(self) -> dict:
+        return json.loads(self.state.read_text(encoding="utf-8"))
+
+    def session(self, identity: str) -> subprocess.Popen:
+        """Start one local process that stands in for an operator-started session."""
+
+        process = subprocess.Popen(
+            [
+                sys.executable, "-u", "-c",
+                "import json,os,subprocess,sys\n"
+                "for line in sys.stdin:\n"
+                " request=json.loads(line)\n"
+                " command=[sys.executable,request['script'],*request['arguments'],\n"
+                "  '--session-id',sys.argv[1],'--session-pid',str(os.getpid())]\n"
+                " result=subprocess.run(command,cwd=request['cwd'],text=True,"
+                "stdout=subprocess.PIPE,stderr=subprocess.PIPE)\n"
+                " print(json.dumps({'returncode':result.returncode,"
+                "'stdout':result.stdout,'stderr':result.stderr}),flush=True)\n",
+                identity,
+            ],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(lambda: process.communicate(timeout=30))
+        return process
+
+    def member_command(self, process: subprocess.Popen, *arguments: str) -> dict:
+        process.stdin.write(json.dumps({
+            "script": str(ADAPTER_SCRIPT), "cwd": str(self.repo),
+            "arguments": list(arguments),
+        }) + "\n")
+        process.stdin.flush()
+        return json.loads(process.stdout.readline())
+
+    def start_member(
+        self, process: subprocess.Popen, plan: str, operation: str = "member-start",
+    ) -> dict:
+        return self.member_command(
+            process, operation, "--state", str(self.state), "--plan", plan,
+            "--allowed-root", str(self.managed),
+        )
+
+    def ready_member(
+        self, process: subprocess.Popen, plan: str, worktree: Path, output: Path,
+    ) -> dict:
+        return self.member_command(
+            process, "member-ready", "--state", str(self.state), "--plan", plan,
+            "--worktree", str(worktree), "--output", str(output),
+        )
+
+    # -- cases ----------------------------------------------------------
+
+    def test_member_start_binds_its_exact_worktree_and_resume_returns_the_same_one(self) -> None:
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        report = json.loads(started["stdout"])
+        self.assertTrue(report["member_writing_open"])
+        self.assertFalse(report["publication_enabled"])
+        self.assertEqual(report["review_authority"], "integration")
+        self.assertEqual(report["base_commit"], self.start_commit)
+        self.assertEqual(report["session_generation"], 0)
+        worktree = Path(report["worktree"])
+        self.assertTrue((worktree / ".git").exists())
+        duplicate = self.start_member(alpha, self.ALPHA)
+        self.assertNotEqual(duplicate["returncode"], 0, duplicate)
+        self.assertIn("already started", duplicate["stderr"])
+        foreign = self.start_member(alpha, self.BETA)
+        self.assertNotEqual(foreign["returncode"], 0, foreign)
+        alpha.stdin.close()
+        alpha.stdin = None
+        alpha.wait(timeout=30)
+        successor = self.session("session-alpha")
+        resumed = self.start_member(successor, self.ALPHA, "member-resume")
+        self.assertEqual(resumed["returncode"], 0, resumed)
+        again = json.loads(resumed["stdout"])
+        self.assertEqual(again["worktree"], str(worktree))
+        self.assertEqual(again["session_generation"], 1)
+        self.assertEqual(again["base_commit"], self.start_commit)
+
+    def test_member_ready_freezes_the_full_git_diff_and_closes_member_writing(self) -> None:
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        # One committed change, one staged change and one untracked addition
+        # must all reach the frozen result.
+        (worktree / "src/alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+        self.git("add", "src/alpha.py", cwd=worktree)
+        self.git("-c", "user.name=Member", "-c", "user.email=member@example.invalid",
+                 "commit", "-q", "-m", "member commit", cwd=worktree)
+        (worktree / "src/alpha_extra.py").write_text("EXTRA = 1\n", encoding="utf-8")
+        output = self.base / "handoff.json"
+        result = self.ready_member(alpha, self.ALPHA, worktree, output)
+        self.assertEqual(result["returncode"], 0, result)
+        report = json.loads(result["stdout"])
+        self.assertFalse(report["member_writing_open"])
+        self.assertFalse(report["publication_enabled"])
+        self.assertEqual(report["acceptance"], "not_accepted")
+        self.assertEqual(report["changed_paths"], ["src/alpha.py", "src/alpha_extra.py"])
+        record = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+        self.assertEqual(record["handoff_mode"], "parent_direct")
+        self.assertEqual(record["base_commit"], self.start_commit)
+        self.assertEqual(record["result_author"], "member")
+        self.assertTrue(record["review_required"])
+        self.assertTrue(record["validation_required"])
+        self.assertEqual(record["acceptance"], "not_accepted")
+        patch = Path(record["patch_path"]).read_bytes()
+        self.assertIn(b"src/alpha_extra.py", patch)
+        self.assertIn(b"return 1", patch)
+        member = self.payload()["members"][self.ALPHA]
+        self.assertEqual(member["handoff"]["record_digest"], record["record_digest"])
+        self.assertEqual(member["handoff"]["patch_digest"], record["patch_digest"])
+        self.assertEqual(member["session_binding"]["state"], "stopped")
+        # Writing is closed: no second submission and no resumed session.
+        repeated = self.ready_member(alpha, self.ALPHA, worktree, self.base / "second.json")
+        self.assertNotEqual(repeated["returncode"], 0, repeated)
+        self.assertIn("closed its writing claim", repeated["stderr"])
+        self.assertFalse((self.base / "second.json").exists())
+        resumed = self.start_member(alpha, self.ALPHA, "member-resume")
+        self.assertNotEqual(resumed["returncode"], 0, resumed)
+        self.assertIn("closed its writing claim", resumed["stderr"])
+
+    def test_member_ready_refuses_empty_out_of_scope_and_foreign_submissions(self) -> None:
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        before = self.state.read_bytes()
+        empty = self.ready_member(alpha, self.ALPHA, worktree, self.base / "empty.json")
+        self.assertNotEqual(empty["returncode"], 0, empty)
+        self.assertIn("changes nothing", empty["stderr"])
+        (worktree / "src/beta.py").write_text("def beta():\n    return 2\n", encoding="utf-8")
+        outside = self.ready_member(alpha, self.ALPHA, worktree, self.base / "outside.json")
+        self.assertNotEqual(outside["returncode"], 0, outside)
+        self.assertIn("outside the member write scope", outside["stderr"])
+        self.git("checkout", "HEAD", "--", "src/beta.py", cwd=worktree)
+        (worktree / "src/alpha_extra.py").write_text("EXTRA = 1\n", encoding="utf-8")
+        stranger = self.session("session-stranger")
+        foreign = self.ready_member(stranger, self.ALPHA, worktree, self.base / "foreign.json")
+        self.assertNotEqual(foreign["returncode"], 0, foreign)
+        self.assertIn("different session", foreign["stderr"])
+        mismatched = self.ready_member(
+            alpha, self.ALPHA, self.repo, self.base / "mismatched.json"
+        )
+        self.assertNotEqual(mismatched["returncode"], 0, mismatched)
+        self.assertIn("different worktree", mismatched["stderr"])
+        self.assertEqual(before, self.state.read_bytes())
+        for name in ("empty.json", "outside.json", "foreign.json", "mismatched.json"):
+            self.assertFalse((self.base / name).exists())
+
+    def test_root_and_generated_member_adapter_stay_identical(self) -> None:
+        generated = ROOT / "template/.project-agent-workflow/scripts/run-parallel-plans.py"
+        self.assertTrue(generated.exists())
+        self.assertEqual(ADAPTER_SCRIPT.read_bytes(), generated.read_bytes())
 
 
 class RunnerTaskWorktreeBoundaryTests(unittest.TestCase):

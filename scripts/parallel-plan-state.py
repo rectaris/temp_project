@@ -113,6 +113,33 @@ SESSION_BINDING_KEYS = {
     "worktree_path", "branch_ref", "worktree_identity",
 }
 
+# handoff means the frozen parent-direct result one member submits to
+# integration. It closes that member's writing claim and carries only bounded
+# identity and digests; the full Git diff stays in the adapter artifact the
+# record_digest binds. Submitting a handoff is not acceptance, not review, not
+# validation and never authorizes publication.
+PARENT_DIRECT_HANDOFF_SCHEMA_VERSION = 1
+PARENT_DIRECT_HANDOFF_MODE = "parent_direct"
+SESSION_HANDOFF_KEYS = {
+    "schema_version", "handoff_mode", "plan_digest", "base_commit",
+    "session_digest", "generation", "patch_digest", "changed_paths_digest",
+    "record_digest",
+}
+# A member takes at most one formal review before it hands off. The remaining
+# slot of MEMBER_REVIEW_LIMIT stays reserved for the integration review of the
+# assembled result at the final base, so an early member review can never
+# consume it and a restarted session cannot replenish it.
+SESSION_MEMBER_REVIEW_LIMIT = 1
+
+# ledger_binding means the single external execution ledger one member may ever
+# own. It is claimed once under the group lock, so a retained partial setup, a
+# new run name, a new session or a fresh checkout cannot obtain a second ledger
+# and thereby replenish a spent member budget.
+SESSION_LEDGER_KEYS = {
+    "run_id", "state_path_digest", "lifecycle_path_digest", "session_digest",
+    "generation",
+}
+
 # A delegated worker never owns validation or specification authority, so a
 # member write scope that reaches one of these paths is refused before the group
 # can be admitted. Both the root and generated namespaces are listed because the
@@ -297,6 +324,17 @@ def read_bounded_bytes(path: Path, label: str, maximum: int = MAX_BYTES) -> byte
     if len(data) > maximum:
         raise GroupError(f"{label} exceeds size limit")
     return data
+
+
+def read_private_bounded_bytes(path: Path, label: str, maximum: int = MAX_BYTES) -> bytes:
+    """Read a bounded artifact that must still be private to its owner."""
+
+    metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode):
+        raise GroupError(f"{label} must not be a symbolic link")
+    if metadata.st_mode & 0o777 != 0o600:
+        raise GroupError(f"{label} must be mode 0600")
+    return read_bounded_bytes(path, label, maximum)
 
 
 def read_bounded_json(path: Path, label: str, maximum: int = MAX_BYTES) -> Any:
@@ -931,10 +969,8 @@ def require_group_permit(
     if enrolment is None:
         return
     if enrolment["schema_version"] == 2:
-        raise GroupError(
-            "parent-direct session registration grants no execution or publication "
-            f"authority; the {operation} path requires the later session adapter"
-        )
+        require_session_member_operation(root, plan_path, operation, enrolment, state)
+        return
     if grouped_adapter_version() is None:
         raise GroupError(
             f"{plan_path} requires the grouped execution adapter, which is not "
@@ -960,6 +996,61 @@ def require_group_permit(
             "execution state record"
         )
     require_permit_is_current(root, Path(state), verified)
+
+
+def require_session_member_operation(
+    root: Path,
+    plan_path: str,
+    operation: str,
+    enrolment: dict[str, Any],
+    state: str | None,
+) -> None:
+    """Admit one parent-direct member operation inside its own live session.
+
+    Registration alone still grants nothing. The member passes only with the
+    session adapter installed, its canonical group state, an active member whose
+    writing claim is still open, and the exact live session process that owns
+    its worktree. Publication stays refused in every case: a member hands its
+    frozen result to integration and never publishes or accepts it.
+    """
+
+    if operation in LIFECYCLE_OPERATIONS:
+        raise GroupError(
+            f"{plan_path} is a parent-direct session group member; the "
+            f"{operation} path is refused because members never publish or accept "
+            "their own result and integration owns the published outcome"
+        )
+    if grouped_adapter_version() is None:
+        raise GroupError(
+            f"{plan_path} requires the parent-direct session adapter, which is not "
+            f"installed; the {operation} path stays closed"
+        )
+    if state is None:
+        raise GroupError(
+            f"{plan_path} is enrolled in parent-direct session group "
+            f"{enrolment['group_id']}; the {operation} path requires the live "
+            "session group state that records its member session binding"
+        )
+    path = Path(state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        document = read_state(path)
+        require_session_state(root, path, document)
+        if document["group_id"] != enrolment["group_id"]:
+            raise GroupError("session group state names a different execution group")
+        member = require_member(document, plan_path)
+        require_active_member(member)
+        require_open_member_writing(member, plan_path)
+        binding = member["session_binding"]
+        if binding is None or binding["state"] != "bound":
+            raise GroupError(
+                f"{plan_path} has no live member session binding; the {operation} "
+                "path stays closed outside its own bound member session"
+            )
+        if require_session_process(binding["process_identity"]["pid"]) != binding[
+            "process_identity"
+        ]:
+            raise GroupError("member operation belongs to a stale session process")
 
 
 def require_published_member(
@@ -1248,6 +1339,92 @@ def read_state(path: Path, *, root: Path | None = None) -> dict[str, Any]:
     return state
 
 
+def validate_member_handoff(
+    state: dict[str, Any], plan: str, member: dict[str, Any]
+) -> None:
+    """Validate one member's frozen parent-direct handoff against its history.
+
+    The handoff is bounded identity and digests only. The full Git diff lives in
+    the adapter artifact that ``record_digest`` binds, so a replaced, foreign or
+    stale artifact cannot pass as this member's submitted result.
+    """
+
+    handoff = member["handoff"]
+    recorded = [
+        event["detail"]["handoff"]
+        for event in state["events"]
+        if event["event_type"] == "member_handoff_submitted"
+        and event["detail"].get("plan_path") == plan
+    ]
+    if handoff != (recorded[-1] if recorded else None):
+        raise GroupError("member handoff differs from its recorded history")
+    if handoff is None:
+        return
+    exact_object(handoff, SESSION_HANDOFF_KEYS, "member handoff")
+    if handoff["schema_version"] != PARENT_DIRECT_HANDOFF_SCHEMA_VERSION:
+        raise GroupError("member handoff must declare schema_version 1")
+    if handoff["handoff_mode"] != PARENT_DIRECT_HANDOFF_MODE:
+        raise GroupError("member handoff must declare the parent-direct mode")
+    if handoff["plan_digest"] != member["plan_digest"]:
+        raise GroupError("member handoff is bound to different plan bytes")
+    if handoff["base_commit"] != member["base_commit"]:
+        raise GroupError("member handoff is bound to a superseded member baseline")
+    require_commit(handoff["base_commit"], "member handoff base commit")
+    for key in (
+        "session_digest", "patch_digest", "changed_paths_digest", "record_digest",
+    ):
+        require_digest(handoff[key], f"member handoff {key}")
+    if type(handoff["generation"]) is not int or handoff["generation"] < 0:
+        raise GroupError("member handoff ownership generation is invalid")
+    binding = member["session_binding"]
+    if binding is None or binding["state"] != "stopped":
+        raise GroupError("a submitted member handoff must close its writing claim")
+    if (
+        binding["session_digest"] != handoff["session_digest"]
+        or binding["generation"] != handoff["generation"]
+    ):
+        raise GroupError("member handoff is bound to a different session owner")
+
+
+def require_open_member_writing(member: dict[str, Any], plan: str) -> None:
+    """Refuse a member operation once its frozen handoff closed member writing."""
+
+    if member["handoff"] is not None:
+        raise GroupError(
+            f"member {plan} closed its writing claim with a submitted handoff; "
+            "integration owns the result and members never publish"
+        )
+
+
+def validate_member_ledger(
+    state: dict[str, Any], plan: str, member: dict[str, Any]
+) -> None:
+    """Validate one member's one-use execution ledger claim against its history."""
+
+    ledger = member["ledger_binding"]
+    recorded = [
+        event["detail"]["ledger_binding"]
+        for event in state["events"]
+        if event["event_type"] == "member_ledger_claimed"
+        and event["detail"].get("plan_path") == plan
+    ]
+    if ledger != (recorded[-1] if recorded else None):
+        raise GroupError("member ledger claim differs from its recorded history")
+    if ledger is None:
+        return
+    exact_object(ledger, SESSION_LEDGER_KEYS, "member ledger claim")
+    if not isinstance(ledger["run_id"], str) or not IDENTIFIER_RE.fullmatch(
+        ledger["run_id"]
+    ):
+        raise GroupError("member ledger claim names an invalid run id")
+    for key in ("state_path_digest", "lifecycle_path_digest", "session_digest"):
+        require_digest(ledger[key], f"member ledger {key}")
+    if ledger["state_path_digest"] == ledger["lifecycle_path_digest"]:
+        raise GroupError("member ledger claim reuses one path for two records")
+    if type(ledger["generation"]) is not int or ledger["generation"] < 0:
+        raise GroupError("member ledger ownership generation is invalid")
+
+
 def validate_session_state(state: dict[str, Any]) -> None:
     exact_object(state, {
         "schema_version", "group_id", "group_description_path",
@@ -1272,10 +1449,12 @@ def validate_session_state(state: dict[str, Any]) -> None:
         if not isinstance(plan, str) or not PLAN_PATH_RE.fullmatch(plan):
             raise GroupError("session group member path is invalid")
         keys = set(empty_member_state(plan, "", "")) | {
-            "session_binding", "obligations_digest",
+            "session_binding", "obligations_digest", "handoff", "ledger_binding",
         }
         exact_object(member, keys, "session group member")
         require_digest(member["obligations_digest"], "member obligations digest")
+        validate_member_handoff(state, plan, member)
+        validate_member_ledger(state, plan, member)
         binding = member["session_binding"]
         latest = [
             event["detail"]["session_binding"]
@@ -1464,6 +1643,7 @@ def session_member_prepare(manager, args: argparse.Namespace, *, resume: bool) -
             raise GroupError("integration and member sessions and processes must be distinct")
         member = require_member(state, args.plan)
         require_active_member(member)
+        require_open_member_writing(member, args.plan)
         for other_path, other in state["members"].items():
             binding = other["session_binding"]
             if other_path != args.plan and binding and (
@@ -1562,7 +1742,8 @@ def session_member_prepare(manager, args: argparse.Namespace, *, resume: bool) -
         atomic_write(path, state)
     print(json.dumps({
         **result, "session_generation": binding["generation"],
-        "execution_enabled": False, "publication_enabled": False,
+        "execution_enabled": grouped_adapter_version() is not None,
+        "publication_enabled": False,
     }, sort_keys=True))
     return True
 
@@ -1583,6 +1764,7 @@ def require_session_binding(
         require_session_state(root, path, state)
         member = require_member(state, plan)
         require_active_member(member)
+        require_open_member_writing(member, plan)
         owner = member["session_binding"]
         if owner is None or owner["state"] != "bound":
             raise GroupError("member session has no completed live worktree binding")
@@ -1596,10 +1778,11 @@ def require_session_binding(
             raise GroupError("grouped write belongs to a different worktree")
         if require_session_process(owner["process_identity"]["pid"]) != owner["process_identity"]:
             raise GroupError("grouped write belongs to a stale session process")
-    raise GroupError(
-        "session binding is valid, but member execution remains closed until "
-        "the parent-direct session adapter is installed"
-    )
+    if grouped_adapter_version() is None:
+        raise GroupError(
+            "session binding is valid, but member execution remains closed until "
+            "the parent-direct session adapter is installed"
+        )
 
 
 def session_stop(args: argparse.Namespace) -> None:
@@ -1610,6 +1793,7 @@ def session_stop(args: argparse.Namespace) -> None:
         state = read_state(path)
         require_session_state(root, path, state)
         member = require_member(state, args.member)
+        require_open_member_writing(member, args.member)
         binding = member["session_binding"]
         if binding is None or binding["state"] != "bound":
             raise GroupError("only a bound session can issue a stopped handoff")
@@ -1623,6 +1807,309 @@ def session_stop(args: argparse.Namespace) -> None:
         })
         atomic_write(path, state)
     print("member session stopped; execution budgets and worktree are retained")
+
+
+def verify_handoff_artifacts(
+    root: Path,
+    args: argparse.Namespace,
+    state: dict[str, Any],
+    member: dict[str, Any],
+    binding: dict[str, Any],
+) -> None:
+    """Refuse a handoff whose claimed digests do not describe real artifacts.
+
+    The submitted digests are evidence only when the bounded private record and
+    its patch exist, agree with each other, and agree with the member identity
+    this authority already holds. Recording a digest that describes nothing
+    would let a member close its writing claim without producing a result.
+    """
+
+    record_path = Path(args.record)
+    require_outside_repository(record_path, "member handoff record", root)
+    data = read_private_bounded_bytes(record_path, "member handoff record")
+    try:
+        record = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GroupError("member handoff record is invalid JSON") from exc
+    if not isinstance(record, dict) or "record_digest" not in record:
+        raise GroupError("member handoff record is not a handoff record")
+    recomputed = canonical_digest(
+        {key: value for key, value in record.items() if key != "record_digest"}
+    )
+    if recomputed != record["record_digest"] or recomputed != args.record_digest:
+        raise GroupError("member handoff record does not match its recorded digest")
+    for label, observed, expected in (
+        ("group", record.get("group_id"), state["group_id"]),
+        (
+            "group description",
+            record.get("group_description_digest"),
+            state["group_description_digest"],
+        ),
+        ("plan path", record.get("plan_path"), args.member),
+        ("plan digest", record.get("plan_digest"), member["plan_digest"]),
+        ("baseline", record.get("base_commit"), member["base_commit"]),
+        ("session", record.get("session_digest"), binding["session_digest"]),
+        ("ownership generation", record.get("session_generation"), binding["generation"]),
+        ("worktree", record.get("worktree_path"), binding["worktree_path"]),
+        ("patch digest", record.get("patch_digest"), args.patch_digest),
+        (
+            "changed paths digest",
+            record.get("changed_paths_digest"),
+            args.changed_paths_digest,
+        ),
+    ):
+        if observed != expected:
+            raise GroupError(f"member handoff record names a different {label}")
+    if record.get("acceptance") != "not_accepted":
+        raise GroupError("member handoff record claims acceptance it cannot hold")
+    changed = record.get("changed_paths")
+    scope = record.get("write_scope")
+    if not isinstance(changed, list) or not changed:
+        raise GroupError("member handoff record describes no changed path")
+    if not isinstance(scope, list) or not scope:
+        raise GroupError("member handoff record declares no write scope")
+    if canonical_digest(changed) != args.changed_paths_digest:
+        raise GroupError("member handoff record contradicts its changed-path digest")
+    outside = sorted(path for path in changed if path not in set(scope))
+    if outside:
+        raise GroupError(
+            "member handoff record changes paths outside its declared write scope: "
+            + ", ".join(outside)
+        )
+    patch_path = Path(str(record.get("patch_path", "")))
+    if not patch_path.is_absolute():
+        raise GroupError("member handoff record names no absolute patch path")
+    require_outside_repository(patch_path, "member handoff patch", root)
+    patch = read_private_bounded_bytes(patch_path, "member handoff patch")
+    if not patch:
+        raise GroupError("member handoff patch is empty")
+    if digest(patch) != args.patch_digest:
+        raise GroupError("member handoff patch does not match its recorded digest")
+
+
+def session_handoff_record(args: argparse.Namespace) -> None:
+    """Freeze one member result and close that member's writing claim.
+
+    The adapter derives the full Git diff and writes the bounded handoff
+    artifact; this authority records only its identity and digests under the
+    group lock. Recording a handoff is not acceptance, not review, not
+    validation and never authorizes member publication.
+    """
+
+    root = repository_root()
+    path = Path(args.state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        require_session_state(root, path, state)
+        member = require_member(state, args.member)
+        require_active_member(member)
+        require_open_member_writing(member, args.member)
+        binding = member["session_binding"]
+        if binding is None or binding["state"] != "bound":
+            raise GroupError("only a bound member session can submit a handoff")
+        if binding["session_digest"] != session_identity(args.session_id):
+            raise GroupError("only the current member session can submit its handoff")
+        if require_session_process(binding["process_identity"]["pid"]) != binding[
+            "process_identity"
+        ]:
+            raise GroupError("a submitted handoff requires the exact live session process")
+        if args.generation != binding["generation"]:
+            raise GroupError("member handoff names a stale ownership generation")
+        if args.base_commit != member["base_commit"]:
+            raise GroupError("member handoff is bound to a superseded member baseline")
+        if args.plan_digest != member["plan_digest"]:
+            raise GroupError("member handoff is bound to different plan bytes")
+        verify_handoff_artifacts(root, args, state, member, binding)
+        handoff = {
+            "schema_version": PARENT_DIRECT_HANDOFF_SCHEMA_VERSION,
+            "handoff_mode": PARENT_DIRECT_HANDOFF_MODE,
+            "plan_digest": require_digest(args.plan_digest, "plan_digest"),
+            "base_commit": require_commit(args.base_commit, "base_commit"),
+            "session_digest": binding["session_digest"],
+            "generation": binding["generation"],
+            "patch_digest": require_digest(args.patch_digest, "patch_digest"),
+            "changed_paths_digest": require_digest(
+                args.changed_paths_digest, "changed_paths_digest"
+            ),
+            "record_digest": require_digest(args.record_digest, "record_digest"),
+        }
+        binding["state"] = "stopped"
+        append_event(state, "member_session_stopped", {
+            "plan_path": args.member, "session_binding": binding.copy(),
+        })
+        member["handoff"] = handoff
+        append_event(state, "member_handoff_submitted", {
+            "plan_path": args.member, "handoff": handoff.copy(),
+        })
+        atomic_write(path, state)
+    print(json.dumps({
+        "member": args.member,
+        "handoff_record_digest": handoff["record_digest"],
+        "member_writing_open": False,
+        "acceptance": "not_accepted",
+        "publication_enabled": False,
+    }, sort_keys=True))
+
+
+def session_correction(args: argparse.Namespace) -> None:
+    """Spend the single allowance shared by member correction and adjustment.
+
+    A member's substantive correction and the integration parent-adjustment slot
+    are one logical allowance. Spending it here leaves the later adjustment
+    refused, and a new session, worktree or ownership generation never
+    replenishes it.
+    """
+
+    root = repository_root()
+    path = Path(args.state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        require_session_state(root, path, state)
+        member = require_member(state, args.member)
+        require_active_member(member)
+        require_open_member_writing(member, args.member)
+        binding = member["session_binding"]
+        if binding is None or binding["state"] != "bound":
+            raise GroupError("only a bound member session can spend its correction allowance")
+        if binding["session_digest"] != session_identity(args.session_id):
+            raise GroupError("only the current member session can spend its correction allowance")
+        if require_session_process(binding["process_identity"]["pid"]) != binding[
+            "process_identity"
+        ]:
+            raise GroupError("a member correction requires the exact live session process")
+        if member["counters"]["corrections"] >= MEMBER_CORRECTION_LIMIT:
+            raise GroupError(
+                f"member {args.member} already spent its single correction slot; "
+                "the member correction and the parent adjustment share one allowance"
+            )
+        member["counters"]["corrections"] += 1
+        append_event(state, "member_correction_reserved", {
+            "plan_path": args.member,
+            "corrections": member["counters"]["corrections"],
+            "generation": binding["generation"],
+        })
+        atomic_write(path, state)
+    print(member["counters"]["corrections"])
+
+
+def claim_member_ledger(
+    root: Path,
+    path: Path,
+    plan: str,
+    *,
+    run_id: str,
+    state_path: Path,
+    lifecycle_path: Path,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Claim the single execution ledger this member may ever own.
+
+    The claim is recorded before the ledger records exist, so an interrupted
+    preparation retains it and a second initialization is refused. A new run
+    name, a new session or a fresh checkout therefore cannot obtain a second
+    ledger and replenish a spent member budget.
+    """
+
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        require_session_state(root, path, state)
+        member = require_member(state, plan)
+        require_active_member(member)
+        require_open_member_writing(member, plan)
+        binding = member["session_binding"]
+        if binding is None or binding["state"] != "bound":
+            raise GroupError(
+                f"{plan} has no live member session binding; its execution ledger "
+                "is claimed from inside its own bound session"
+            )
+        if binding["session_digest"] != session_identity(session_id):
+            raise GroupError("only the current member session can claim its ledger")
+        if require_session_process(binding["process_identity"]["pid"]) != binding[
+            "process_identity"
+        ]:
+            raise GroupError("a ledger claim requires the exact live session process")
+        existing = member["ledger_binding"]
+        if existing is not None:
+            raise GroupError(
+                f"member {plan} already claimed execution ledger run "
+                f"{existing['run_id']}; a second initialization is refused and a "
+                "new run name, session or checkout never replenishes its budget"
+            )
+        ledger = {
+            "run_id": run_id,
+            "state_path_digest": canonical_digest(str(state_path.absolute())),
+            "lifecycle_path_digest": canonical_digest(str(lifecycle_path.absolute())),
+            "session_digest": binding["session_digest"],
+            "generation": binding["generation"],
+        }
+        member["ledger_binding"] = ledger
+        append_event(state, "member_ledger_claimed", {
+            "plan_path": plan, "ledger_binding": ledger.copy(),
+        })
+        atomic_write(path, state)
+    return ledger
+
+
+def require_member_ledger_binding(
+    root: Path,
+    path: Path,
+    plan: str,
+    *,
+    run_id: str,
+    state_path: Path,
+    lifecycle_path: Path,
+) -> dict[str, Any]:
+    """Refuse a member ledger record its one-use group claim does not name.
+
+    The claim is what makes the ledger single-use. Without this check a member
+    could initialize a fresh ledger under another run name or destination and
+    obtain replenished budgets and a cleared stop state.
+    """
+
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        state = read_state(path)
+        require_session_state(root, path, state)
+        member = require_member(state, plan)
+        require_active_member(member)
+        ledger = member["ledger_binding"]
+    if ledger is None:
+        raise GroupError(
+            f"member {plan} has no execution ledger claim; claim it with "
+            "plan-execution-state.py prepare-parent-direct --group-state before "
+            "any ledger record exists"
+        )
+    if ledger["run_id"] != run_id:
+        raise GroupError(
+            f"member {plan} claimed execution ledger run {ledger['run_id']}; a new "
+            "run name never replenishes its budget"
+        )
+    for label, key, observed in (
+        ("execution state", "state_path_digest", state_path),
+        ("candidate lifecycle state", "lifecycle_path_digest", lifecycle_path),
+    ):
+        if ledger[key] != canonical_digest(str(observed.absolute())):
+            raise GroupError(
+                f"member {plan} claimed a different {label} destination; a new "
+                "ledger destination never replenishes its budget"
+            )
+    return ledger
+
+
+def session_ledger_claim(args: argparse.Namespace) -> None:
+    ledger = claim_member_ledger(
+        repository_root(),
+        Path(args.state),
+        args.member,
+        run_id=args.run_id,
+        state_path=Path(args.execution_state),
+        lifecycle_path=Path(args.lifecycle_state),
+        session_id=args.session_id,
+    )
+    print(json.dumps(ledger, sort_keys=True))
 
 
 def print_session_state_path(args: argparse.Namespace) -> None:
@@ -1759,6 +2246,8 @@ def group_init(args: argparse.Namespace) -> None:
                 for relative in manifest["required_specs"] if relative != "none"
             }
             member["session_binding"] = None
+            member["handoff"] = None
+            member["ledger_binding"] = None
             member["obligations_digest"] = canonical_digest({
                 "acceptance": manifest["acceptance"],
                 "validation": manifest["validation"],
@@ -1929,65 +2418,96 @@ def lease_release(args: argparse.Namespace) -> None:
     print(owner)
 
 
-def record_review(args: argparse.Namespace) -> None:
-    path = Path(args.state)
+def spend_member_review(
+    root: Path,
+    path: Path,
+    plan: str,
+    *,
+    assembly_record_digest: str,
+    registry_path_digest: str,
+    registry_event_count: int,
+    registry_event_chain_digest: str,
+) -> int:
+    """Spend one review from the budget this member owns.
+
+    The execution ledger and this authority must describe one review history,
+    so every formal review of a member reaches this budget. A member session
+    reviews at most once before it hands off: the remaining slot belongs to the
+    integration review of the assembled result at the final base, so neither a
+    restarted session nor a second member round can consume it.
+    """
+
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
-        require_live_group(repository_root(), state)
-        member = require_member(state, args.member)
+        sessions = state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION
+        require_live_group(root, state, allow_sessions=sessions)
+        member = require_member(state, plan)
         require_active_member(member)
-        if member["counters"]["reviews"] >= MEMBER_REVIEW_LIMIT:
-            raise GroupError(
-                f"member {args.member} exhausted its independent review budget"
-            )
+        reserved = sessions and member["handoff"] is None
+        limit = SESSION_MEMBER_REVIEW_LIMIT if reserved else MEMBER_REVIEW_LIMIT
+        if member["counters"]["reviews"] >= limit:
+            if reserved:
+                raise GroupError(
+                    f"member {plan} already took its single pre-handoff review; "
+                    "the remaining review is reserved for integration at the final base"
+                )
+            raise GroupError(f"member {plan} exhausted its independent review budget")
         # A review is evidence about one exact assembled artifact. Recording the
         # artifact identity is what lets publication refuse a different result
         # that merely happens to follow a review of an earlier candidate.
-        review_target = require_digest(
-            args.assembly_record_digest, "assembly_record_digest"
+        review_target = require_digest(assembly_record_digest, "assembly_record_digest")
+        path_digest = require_digest(registry_path_digest, "registry_path_digest")
+        chain_digest = require_digest(
+            registry_event_chain_digest, "registry_event_chain_digest"
         )
-        registry_path_digest = require_digest(
-            args.registry_path_digest, "registry_path_digest"
-        )
-        registry_chain_digest = require_digest(
-            args.registry_event_chain_digest, "registry_event_chain_digest"
-        )
-        if not isinstance(args.registry_event_count, int) or args.registry_event_count < 1:
+        if not isinstance(registry_event_count, int) or registry_event_count < 1:
             raise GroupError("registry_event_count must be a positive integer")
         prior = member["reviewer_registry_proof"]
         if prior["registry_path_digest"]:
             # Both reviews of one member must come from the same canonical
             # reviewer registry, advancing along its own append-only chain.
-            if prior["registry_path_digest"] != registry_path_digest:
+            if prior["registry_path_digest"] != path_digest:
                 raise GroupError(
-                    f"member {args.member} reviews must use one canonical reviewer registry"
+                    f"member {plan} reviews must use one canonical reviewer registry"
                 )
-            if args.registry_event_count <= prior["event_count"]:
+            if registry_event_count <= prior["event_count"]:
                 raise GroupError(
                     "reviewer registry event count must advance for each recorded review"
                 )
-            if registry_chain_digest == prior["event_chain_digest"]:
+            if chain_digest == prior["event_chain_digest"]:
                 raise GroupError(
                     "reviewer registry event chain must advance for each recorded review"
                 )
         member["counters"]["reviews"] += 1
         member["reviewer_registry_proof"] = {
-            "registry_path_digest": registry_path_digest,
-            "event_count": args.registry_event_count,
-            "event_chain_digest": registry_chain_digest,
+            "registry_path_digest": path_digest,
+            "event_count": registry_event_count,
+            "event_chain_digest": chain_digest,
         }
         append_event(
             state,
             "member_review_recorded",
             {
-                "plan_path": args.member,
+                "plan_path": plan,
                 "reviews": member["counters"]["reviews"],
                 "assembly_record_digest": review_target,
             },
         )
         atomic_write(path, state)
-    print(member["counters"]["reviews"])
+    return member["counters"]["reviews"]
+
+
+def record_review(args: argparse.Namespace) -> None:
+    print(spend_member_review(
+        repository_root(),
+        Path(args.state),
+        args.member,
+        assembly_record_digest=args.assembly_record_digest,
+        registry_path_digest=args.registry_path_digest,
+        registry_event_count=args.registry_event_count,
+        registry_event_chain_digest=args.registry_event_chain_digest,
+    ))
 
 
 def adjust_reserve(args: argparse.Namespace) -> None:
@@ -1995,10 +2515,23 @@ def adjust_reserve(args: argparse.Namespace) -> None:
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
-        require_live_group(repository_root(), state)
+        sessions = state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION
+        require_live_group(repository_root(), state, allow_sessions=sessions)
         member = require_member(state, args.member)
         require_active_member(member)
-        if member["permit"]["permit_id"] != args.permit_id or not member["permit"]["open"]:
+        if sessions:
+            # A parent-direct member holds no candidate permit. Its submitted
+            # handoff is the exact artifact an integration adjustment reworks.
+            handoff = member["handoff"]
+            if handoff is None:
+                raise GroupError(
+                    "a parent adjustment requires the member's submitted handoff"
+                )
+            if args.permit_id != handoff["record_digest"]:
+                raise GroupError(
+                    "parent adjustment requires the exact submitted member handoff"
+                )
+        elif member["permit"]["permit_id"] != args.permit_id or not member["permit"]["open"]:
             raise GroupError(
                 "parent adjustment requires the exact open member permit"
             )
@@ -2035,7 +2568,8 @@ def adjust_close(args: argparse.Namespace) -> None:
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
-        require_live_group(repository_root(), state)
+        sessions = state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION
+        require_live_group(repository_root(), state, allow_sessions=sessions)
         member = require_member(state, args.member)
         require_active_member(member)
         adjustment = member["parent_adjustment"]
@@ -2339,6 +2873,34 @@ def parser() -> argparse.ArgumentParser:
     stop_session.add_argument("--member", required=True)
     stop_session.add_argument("--session-id")
     stop_session.set_defaults(handler=session_stop)
+
+    handoff = sub.add_parser("session-handoff")
+    handoff.add_argument("state")
+    handoff.add_argument("--member", required=True)
+    handoff.add_argument("--session-id")
+    handoff.add_argument("--generation", type=int, required=True)
+    handoff.add_argument("--base-commit", required=True)
+    handoff.add_argument("--plan-digest", required=True)
+    handoff.add_argument("--patch-digest", required=True)
+    handoff.add_argument("--changed-paths-digest", required=True)
+    handoff.add_argument("--record-digest", required=True)
+    handoff.add_argument("--record", required=True)
+    handoff.set_defaults(handler=session_handoff_record)
+
+    correction = sub.add_parser("session-correction")
+    correction.add_argument("state")
+    correction.add_argument("--member", required=True)
+    correction.add_argument("--session-id")
+    correction.set_defaults(handler=session_correction)
+
+    ledger = sub.add_parser("session-ledger-claim")
+    ledger.add_argument("state")
+    ledger.add_argument("--member", required=True)
+    ledger.add_argument("--session-id")
+    ledger.add_argument("--run-id", required=True)
+    ledger.add_argument("--execution-state", required=True)
+    ledger.add_argument("--lifecycle-state", required=True)
+    ledger.set_defaults(handler=session_ledger_claim)
 
     upstream = sub.add_parser("claim-upstream")
     upstream.add_argument("state")

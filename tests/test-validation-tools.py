@@ -24,6 +24,7 @@ from validation_tools.selector_agreement import SelectorAgreementTest
 from validation_tools.smoke_source import SmokeCopySelectionTest, SmokeSourceTest
 from validation_tools.worktrees import (
     ManagedPlanWorktreesTest,
+    ParentDirectMemberHandoffTest,
     PlanIdentifierReservationTest,
     TaskPublicationTest,
     TaskWorktreeGuardTest,

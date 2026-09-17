@@ -1,6 +1,6 @@
 # Run and hand off parent-direct implementation in each member session
 
-status: in_progress
+status: checked
 primary_invariant: Each member changes only its scope under the same logical execution budget and hands off independently derived Git evidence without acceptance or publication.
 task_types:
   - template_workflow
@@ -47,6 +47,7 @@ write_scope:
   - references/orchestration.md
   - template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md
   - tests/validation_tools/worktrees.py
+  - tests/test-validation-tools.py
   - scripts/check-copier-template.py
 preservation_scope:
   - none
@@ -100,12 +101,12 @@ checked_summary_ja: 各セッションで実装と修正を進め、実行記録
 
 ## Tasks
 
-- [ ] Implement member entrypoints with exact owner/worktree/group checks before effects.
-- [ ] Cross-bind execution and review registries with crash-safe one-use group claims.
-- [ ] Implement full-Git-diff parent-direct handoff while preserving worker-manifest processing.
-- [ ] Close member writing and test duplicate initialization, post-handoff mutation, forged evidence, spent budgets and stopped runs.
-- [ ] Align instructions, obtain independent review, run focused tests and unchanged lint/smoke before serial publication.
-- [ ] Test one early formal review plus member correction and a reserved current-base integration review; refuse a member rereview that would consume the reserved slot and refuse separate correction/adjustment spending.
+- [x] Implement member entrypoints with exact owner/worktree/group checks before effects.
+- [x] Cross-bind execution and review registries with crash-safe one-use group claims.
+- [x] Implement full-Git-diff parent-direct handoff while preserving worker-manifest processing.
+- [x] Close member writing and test duplicate initialization, post-handoff mutation, forged evidence, spent budgets and stopped runs.
+- [x] Align instructions, obtain independent review, run focused tests and unchanged lint/smoke before serial publication.
+- [x] Test one early formal review plus member correction and a reserved current-base integration review; refuse a member rereview that would consume the reserved slot and refuse separate correction/adjustment spending.
 
 ## Validation Notes
 
@@ -118,3 +119,8 @@ checked_summary_ja: 各セッションで実装と修正を進め、実行記録
 - Local evidence: .agent-artifacts/parallel-session-planning/. The disposable Git prototype and prior 16 passing GroupedExecutionAdapterTests prove bounded mechanics only; actual two-session runtime acceptance is not yet established.
 - Independent plan review identified review-slot exhaustion and an optional-live-report bypass. The plans reserve integration review capacity and bind live evidence before implementation; primary runtime transcript evidence remains required. Parent accepted these bounded corrections without changing the user outcome.
 - A bounded independent rereview confirmed all three document findings closed. The main session owns final scope, dependency checks, validation and publication; helpers held no write scope.
+- Implementation baseline: a6ef2613c11a940ed30eb7809901174551f7bb23 in the task worktree bound to this plan. Execution ran parent-direct under external ledger run plan-373-parent-direct-001 at epoch 0. Writable sandboxed delegation stayed refused for `implementation_risk: high`; read-only helpers mapped the adapter, group authority, ledger and test harnesses and held no write scope.
+- Focused validation passed at this candidate: `python3 tests/test-sandboxed-plan-worker.py` (206 tests), `python3 tests/test-plan-execution-state.py` (236 tests) and `python3 tests/test-validation-tools.py` (383 tests). The worker suite runs without the repository `.venv` on PATH because Bubblewrap cannot resolve an interpreter outside the sandbox; the lint-driven suites need that `.venv` for the pinned Ruff.
+- One bounded independent review of the full candidate diff returned five High findings, all closed in this candidate: a stray predicate that rejected a member holding both a ledger claim and a handoff; a handoff recorded from digests that described no artifact; a scope check and patch derived from two separate index reads; a legacy `init` path that could mint a second member ledger; and an execution ledger review that never spent the group review budget. The parent owns acceptance, validation and publication.
+- Scope correction: `tests/test-validation-tools.py` was added to `write_scope`. The aggregate entrypoint imports its test classes explicitly, so registering the declared witness class in `tests/validation_tools/worktrees.py` requires that one line. No requirement, acceptance item or validation authority changed.
+- The root agent entrypoint and its generated counterpart stay inside their routed size budgets, so the detailed member rules live in SPEC_PLAN_WORKFLOW and the entrypoints route to them.
