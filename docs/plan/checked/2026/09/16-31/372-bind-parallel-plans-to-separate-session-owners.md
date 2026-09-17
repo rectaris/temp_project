@@ -1,6 +1,6 @@
 # Bind independent plans to separate session owners and worktrees
 
-status: in_progress
+status: checked
 primary_invariant: Each admitted member has one exclusive session/worktree binding, without transferring shared integration or validation authority.
 task_types:
   - template_workflow
@@ -107,11 +107,11 @@ checked_summary_ja: 独立した2件のプランを別セッションと専用 w
 
 ## Tasks
 
-- [ ] Extend exact schemas and private state with member mode, session ownership, integration owner and generations.
-- [ ] Compose group admission with managed worktree preparation/resume, lock ordering and crash recovery.
-- [ ] Implement mode-specific scope/dependency admission and supported write-entrypoint checks.
-- [ ] Add concurrent distinct-member/same-plan races, stale/live owners, wrong worktrees, symlink/common-Git mismatch and partial-creation fixtures.
-- [ ] Align policies and generated enforcement, obtain independent review, run focused checks and template alignment, then unchanged lint/smoke before serial publication.
+- [x] Extend exact schemas and private state with member mode, session ownership, integration owner and generations.
+- [x] Compose group admission with managed worktree preparation/resume, lock ordering and crash recovery.
+- [x] Implement mode-specific scope/dependency admission and supported write-entrypoint checks.
+- [x] Add concurrent distinct-member/same-plan races, stale/live owners, wrong worktrees, symlink/common-Git mismatch and partial-creation fixtures.
+- [x] Align policies and generated enforcement, obtain independent review, run focused checks and template alignment, then unchanged lint/smoke before serial publication.
 
 ## Validation Notes
 
@@ -123,3 +123,13 @@ checked_summary_ja: 独立した2件のプランを別セッションと専用 w
 - Local evidence: .agent-artifacts/parallel-session-planning/. The disposable Git prototype and prior 16 passing GroupedExecutionAdapterTests prove bounded mechanics only; actual two-session runtime acceptance is not yet established.
 - Independent plan review identified review-slot exhaustion and an optional-live-report bypass. The plans reserve integration review capacity and bind live evidence before implementation; primary runtime transcript evidence remains required. Parent accepted these bounded corrections without changing the user outcome.
 - A bounded independent rereview confirmed all three document findings closed. The main session owns final scope, dependency checks, validation and publication; helpers held no write scope.
+- Implementation ran as bounded parent-direct work in the task worktree bound to this plan, from baseline 0dae76afa6ad1323ca57b6288029b08b7c454513 on dev. No execution ledger exists for this plan, so review rounds are evidenced by the `.agent-logs/plan-372-51ec04c4-*` run manifests and the recorded outcomes below rather than by ledger receipts.
+- Review rounds 1 to 3 ran in earlier sessions (`plan-372-51ec04c4-review1`, `-e1-review1`, `-e2-review1`). Round 3 requested changes with one Medium: legacy `lease-release` accepted schema-2 state and an empty `--owner`, so an unheld publication lease could be released repeatedly into the bounded event chain. Round 3 also recorded the earlier `member-stop` and serial-control findings as resolved.
+- Round 4 confirmed the `lease-release` Medium closed and reported one new Medium: the file-edit gate derived targets from `arguments` or `tool_input` alone, so an envelope carrying a different top-level `input` left that second target unguarded. Reproduced directly before accepting the report.
+- Owner authorization for the fifth review: 「所見を修正し、5 回目のレビューを実施する（累積上限の超過をオーナーとして承認）」 The cumulative four-review maximum was already reached at round 4, so execution stopped for the owner and resumed only on this explicit authorization. No repair, descope or reconstruction successor was created to reset review.
+- Round 5 cleared High 0 and Medium 0 against diff digest f8b222ea62b426c01b4156b61639f4e9736e840a8fbd03aa761d1c70916bd03e and reported one Low: `check-copier-template.py` never compared the two `SPEC_SECURITY.md` copies. Closed by aligning the whole `Task Worktree Boundary` section, verified by a negative probe that the new check fails on injected drift and passes after exact restoration.
+- Round 4 also reported that an unparseable JSON payload yields the allow-shaped `{}`. That behavior is unchanged from `HEAD`, and this gate is a reporting surface whose fail-closed counterparts are the lifecycle commands and the pre-commit hook. The `SPEC_SECURITY.md` bullet now states that boundary instead of promising more than the gate does. Round 5 accepted this position.
+- Bounded scope extension: editing `docs/agent/SPEC_SECURITY.md`, which is in `write_scope`, invalidated the `security-policy` digest pinned in `docs/agent/harness-instructions.json` and its generated counterpart. Both files were outside the declared scope, so the change is recorded here: only the pinned `content_digest` values were refreshed, matching the precedent in commit aaab685, with `revision` and every other field unchanged. No requirement, authority or security boundary changed.
+- Focused validation on the accepted target: `python3 tests/test-plan-execution-state.py` 226 tests OK, `python3 tests/test-validation-tools.py` 380 tests OK, `python3 tests/test-hooks.py` 219 tests OK. Regression checks beyond the focused set: `python3 tests/test-sandboxed-plan-worker.py` 202 tests OK for the `lease-release` callers, and `python3 scripts/check-copier-template.py` passed.
+- Authoritative validation ran once on the accepted target: `scripts/lint-project-workflow.sh` reported `workflow package lint passed` and `tests/smoke.sh` reported `smoke test passed`. Both need the repository `.venv` on `PATH`, because the pinned Ruff is installed there rather than in the system interpreter.
+- Helpers: two bounded read-only independent reviewers (rounds 4 and 5). Neither held write scope, ran validation, or made a lifecycle decision. The main session owns every edit, the acceptance decision, validation and publication.

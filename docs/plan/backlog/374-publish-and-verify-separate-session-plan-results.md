@@ -78,7 +78,7 @@ context_files:
   - docs/agent/spec-index.yaml
   - scripts/plan_validation_commands.py
   - docs/plan/checked/2026/09/01-15/108-orchestrate-supervised-orca-workers.md
-  - docs/plan/active/372-bind-parallel-plans-to-separate-session-owners.md
+  - docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md
   - docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md

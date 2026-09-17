@@ -285,3 +285,4 @@ id	path
 352	docs/plan/checked/2026/09/16-31/352-admit-only-the-unused-fourth-review.md
 353	docs/plan/checked/2026/09/16-31/353-enforce-bounded-python-lint.md
 342	docs/plan/checked/2026/09/16-31/342-check-tool-and-system-assumptions-before-implementation.md
+372	docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md

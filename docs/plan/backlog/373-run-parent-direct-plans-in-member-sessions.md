@@ -55,7 +55,7 @@ context_files:
   - tests/AGENTS.md
   - docs/agent/spec-index.yaml
   - scripts/plan_validation_commands.py
-  - docs/plan/active/372-bind-parallel-plans-to-separate-session-owners.md
+  - docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
