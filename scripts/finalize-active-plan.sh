@@ -30,6 +30,16 @@ fi
 src=$1
 case "$src" in docs/plan/active/[0-9][0-9][0-9]-*.md) ;; *) echo "expected active plan path" >&2; exit 2 ;; esac
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
+# A plan that declares a live-evidence contract is refused here as well, so no
+# finalization or archive path can outrun its verified real-session report.
+_live_contract=$(awk -F': ' '$1 == "live_evidence_contract" { print $2; exit }' "$src")
+if [ -n "$_live_contract" ]; then
+  [ -f scripts/verify-parallel-plan-sessions.py ] || {
+    echo "plan declares $_live_contract but the live-evidence verifier is missing: scripts/verify-parallel-plan-sessions.py" >&2
+    exit 1
+  }
+  python3 scripts/verify-parallel-plan-sessions.py require --plan "$src" >/dev/null || exit 1
+fi
 # An enrolled parallel execution group member is finalized through the grouped
 # adapter, never through this legacy serial entrypoint.
 [ -f scripts/parallel-plan-state.py ] || {

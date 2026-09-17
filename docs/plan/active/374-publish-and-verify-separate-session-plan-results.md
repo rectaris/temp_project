@@ -107,6 +107,8 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:4f7453fc0e59e3ccda836275d66739d8568b487ff2def2db542e550e784841cd","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411","stage":"focused","witness":"tests/root-plan-lifecycle.sh"}
   - {"acceptance_sha256":"sha256:405a824fe0f24376c2ce7a8275ef41575cc19ddb95b3d66029a3600aba97a1d2","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+live_evidence_contract: parallel_sessions_v1
+live_evidence_acceptance_sha256: sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411
 integration_gates:
   - Start only after docs/plan/checked/2026/09/16-31/373-run-parent-direct-plans-in-member-sessions.md is checked; that archive is the exact resolved predecessor.
   - Start only after docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md is checked; that archive is the exact resolved predecessor.
@@ -137,17 +139,22 @@ checked_summary_ja: 別セッションの変更を順番に取り込み、実セ
 
 ## Tasks
 
-- [ ] Extend assembly for mode-discriminated handoffs and original-versus-final evidence.
+- [x] Extend assembly for mode-discriminated handoffs and original-versus-final evidence.
 - [ ] Bind inherited accounting and one-use transfer to exact final validation/publication.
-- [ ] Connect checked publication, lifecycle and task retirement with full-change preservation and crash recovery.
+- [x] Connect checked publication, lifecycle and task retirement with full-change preservation and crash recovery.
 - [ ] Implement bounded private-report verification and completion binding, rejecting fake sessions, missing evidence, non-overlap, stale revision or incomplete retirement.
 - [ ] Add deterministic concurrent-member, conflict, target-race, dirty-source, replay, partial-failure and crash-boundary tests.
 - [ ] Align policies, inventory, generated smoke and actual Copier update fixtures.
 - [ ] After static review/preflight run real member sessions in an isolated generated project, retain and independently verify evidence, then run focused checks with the required report and unchanged authoritative suites.
 - [ ] Complete and publish only after independent review clears High/Medium findings and deterministic plus real-session acceptance pass.
-- [ ] Initialize and preserve the plan/acceptance-bound required-evidence record before implementation; test absent/replaced records, unset report environment and direct completion bypasses. Obtain primary transcript evidence for the real-session run or report the acceptance blocker.
+- [x] Initialize and preserve the plan/acceptance-bound required-evidence record before implementation; test absent/replaced records, unset report environment and direct completion bypasses. Obtain primary transcript evidence for the real-session run or report the acceptance blocker.
 
 ## Validation Notes
+
+- Integration path implemented: `assemble` is mode-discriminated (`--manifest` with `--permit`, or `--handoff` with no permit), `publish` selects its mode from the assembly record's own `handoff_mode`, the group authority records a parent-direct publication against the exact submitted handoff record digest instead of an open candidate permit, and publication now invokes the integration-authorized retirement of the member worktree. `ParentDirectMemberSessionTests` covers the full assemble, review, publish and retire path plus the assembly and retirement refusals; `tests/test-sandboxed-plan-worker.py` passes 209 tests.
+- Member retirement authority: the member session owns its worktree and never releases it, so the authorization written by `scripts/run-parallel-plans.py publish` replaces both the owner lease and ordinary cleanliness. `scripts/manage-plan-worktrees.py retire --integration-authorization` rechecks repository identity, group, plan, worktree, branch, frozen member head, frozen result tree and target reachability, and preserves any worktree that changed after the freeze.
+- Live-evidence gate: `scripts/verify-parallel-plan-sessions.py` owns the required-evidence record at a fixed private path keyed by repository identity, plan path and record type. The obligation comes from the committed `live_evidence_contract` and `live_evidence_acceptance_sha256` manifest fields, so dropping the acceptance item or the contract makes the gate refuse rather than pass. `complete-plan.sh`, `finalize-active-plan.sh` and `check-agent-completion.sh` all refuse this plan while the demonstration is reserved.
+- Outstanding at this commit: acceptance item 3 (the live two-session demonstration) and the remaining alignment work for `references/orchestration.md`, `SPEC_AGENT_LOGGING.md`, `tests/smoke.sh`, `tests/validation_tools/generated.py` and a `tests/copier-update.sh` preservation fixture. This plan stays `in_progress`.
 
 - Implementation authorization: 「@docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md @docs/plan/backlog/374-publish-and-verify-separate-session-plan-results.md の実装作業をせよ。本セッションはオーケストレーターとして動き、作業はサブエージェントを用意して作業させよ。」 After plan 373 reached its checked archive the owner reviewed a corrected assessment of this plan and chose to run activation, implementation and validation now, stopping before the live two-session demonstration.
 - Activation baseline: 7fa0c91aa5104ab0353554641a6e7c5918363b21 on dev in temp_project. The active index was empty and predecessor 373 resolves to docs/plan/checked/2026/09/16-31/373-run-parent-direct-plans-in-member-sessions.md, so both integration gates now name exact checked archives. Promotion changes no approved scope, decision or acceptance text.

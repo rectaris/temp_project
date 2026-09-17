@@ -2371,7 +2371,13 @@ def lease_acquire(args: argparse.Namespace) -> None:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
         root = repository_root()
-        require_live_group(root, state)
+        if state["schema_version"] == SESSION_GROUP_SCHEMA_VERSION:
+            # Integration, not the member session, holds this lease. Admitting
+            # it here is what lets a parent-direct result reach the target at
+            # all; member publication stays closed by its own gates.
+            require_session_state(root, path, state)
+        else:
+            require_live_group(root, state)
         member = require_member(state, args.member)
         require_active_member(member)
         current = state["publication_lease"]
@@ -2740,13 +2746,21 @@ def publication_record(args: argparse.Namespace) -> None:
     """
 
     path = Path(args.state)
+    if bool(args.permit_id) == bool(args.handoff_digest):
+        raise GroupError(
+            "record one publication identity: --permit-id for a sandboxed "
+            "candidate, or --handoff-digest for a parent-direct member handoff"
+        )
     commit = require_commit(args.commit, "commit")
     assembly_digest = require_digest(args.assembly_digest, "assembly_digest")
     with with_lock(path) as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = read_state(path)
         root = repository_root()
-        require_live_group(root, state)
+        if args.handoff_digest:
+            require_session_state(root, path, state)
+        else:
+            require_live_group(root, state)
         member = require_member(state, args.member)
         require_active_member(member)
         if state["publication_lease"]["owner"] == "":
@@ -2757,7 +2771,20 @@ def publication_record(args: argparse.Namespace) -> None:
             raise GroupError(
                 f"member {args.member} already published its accepted result"
             )
-        if (
+        if args.handoff_digest:
+            handoff = member["handoff"]
+            if handoff is None:
+                raise GroupError(
+                    "a parent-direct publication requires the member's submitted "
+                    "handoff record"
+                )
+            if handoff["record_digest"] != require_digest(
+                args.handoff_digest, "handoff_digest"
+            ):
+                raise GroupError(
+                    "a publication must consume the exact submitted member handoff"
+                )
+        elif (
             member["permit"]["permit_id"] != args.permit_id
             or not member["permit"]["open"]
         ):
@@ -2784,7 +2811,8 @@ def publication_record(args: argparse.Namespace) -> None:
                 "the published commit is not reachable from the group target ref"
             )
         member["publication"] = {"published": True, "commit": commit}
-        member["permit"]["open"] = False
+        if not args.handoff_digest:
+            member["permit"]["open"] = False
         append_event(
             state,
             "member_published",
@@ -2975,7 +3003,8 @@ def parser() -> argparse.ArgumentParser:
     publication = sub.add_parser("publication-record")
     publication.add_argument("state")
     publication.add_argument("--member", required=True)
-    publication.add_argument("--permit-id", required=True)
+    publication.add_argument("--permit-id")
+    publication.add_argument("--handoff-digest")
     publication.add_argument("--commit", required=True)
     publication.add_argument("--assembly-digest", required=True)
     publication.set_defaults(handler=publication_record)

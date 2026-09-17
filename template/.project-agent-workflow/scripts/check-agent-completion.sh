@@ -149,9 +149,21 @@ PY
     [ "$status" = "in_progress" ] || continue
     [ "$lifecycle" = "in_progress" ] || continue
     if sh .project-agent-workflow/scripts/complete-plan.sh --check-completion-evidence "$plan" </dev/null; then
-      blocked=1
-      echo "completed plan is not marked ready: $plan (status: $lifecycle)" >&2
-      echo "Next: .project-agent-workflow/scripts/complete-plan.sh $plan" >&2
+      live_contract=$(awk -F': ' '$1 == "live_evidence_contract" { print $2; exit }' "$plan")
+      if [ -n "$live_contract" ] && [ ! -f .project-agent-workflow/scripts/verify-parallel-plan-sessions.py ]; then
+        blocked=1
+        echo "plan declares $live_contract but the live-evidence verifier is missing: $plan" >&2
+        echo "Next: restore .project-agent-workflow/scripts/verify-parallel-plan-sessions.py." >&2
+      elif [ -n "$live_contract" ] && ! live_refusal=$(python3 .project-agent-workflow/scripts/verify-parallel-plan-sessions.py require --plan "$plan" 2>&1 >/dev/null); then
+        blocked=1
+        echo "outstanding live-session evidence blocks completion: $plan" >&2
+        echo "$live_refusal" >&2
+        echo "Next: run the demonstration, bind its verified report, then .project-agent-workflow/scripts/complete-plan.sh $plan" >&2
+      else
+        blocked=1
+        echo "completed plan is not marked ready: $plan (status: $lifecycle)" >&2
+        echo "Next: .project-agent-workflow/scripts/complete-plan.sh $plan" >&2
+      fi
     fi
   done < docs/plan/plan.md
 fi

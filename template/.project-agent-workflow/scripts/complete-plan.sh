@@ -39,6 +39,22 @@ completion_evidence() {
   return 0
 }
 
+# A plan that declares a live-evidence contract carries an obligation that only
+# a verified real-session report can discharge. The obligation comes from the
+# committed manifest field, so unsetting an environment variable or deleting the
+# private record cannot remove it; both make this gate refuse instead.
+require_live_evidence() {
+  _contract=$(awk -F': ' '$1 == "live_evidence_contract" { print $2; exit }' "$1")
+  [ -n "$_contract" ] || return 0
+  if [ ! -f .project-agent-workflow/scripts/verify-parallel-plan-sessions.py ]; then
+    echo "plan declares $_contract but the live-evidence verifier is missing: .project-agent-workflow/scripts/verify-parallel-plan-sessions.py" >&2
+    return 1
+  fi
+  python3 .project-agent-workflow/scripts/verify-parallel-plan-sessions.py \
+    require --plan "$1" >/dev/null || return 1
+  return 0
+}
+
 check_only=0
 group_state=
 while [ "$#" -gt 0 ]; do
@@ -69,6 +85,12 @@ if [ "$check_only" -eq 1 ]; then
   completion_evidence "$src" || exit 1
   exit 0
 fi
+
+# The live-evidence gate guards the mutating transition. The read-only probe
+# above reports task and note evidence only, so check-agent-completion.sh
+# resolves the same obligation itself instead of inferring it from this exit
+# status.
+require_live_evidence "$src" || exit 1
 
 # --check-completion-evidence above reports state and writes nothing, so the
 # boundary applies only from here, where completion starts changing the plan.

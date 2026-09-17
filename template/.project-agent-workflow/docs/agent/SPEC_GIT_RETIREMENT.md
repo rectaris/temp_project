@@ -35,6 +35,8 @@ A worktree prepared by `.project-agent-workflow/scripts/manage-plan-worktrees.py
 
 `.project-agent-workflow/scripts/manage-plan-worktrees.py retire` removes a task worktree this transaction did not publish. It refuses unpublished commits, and `--stopped` removes only an effect-free stopped checkout.
 
+`.project-agent-workflow/scripts/manage-plan-worktrees.py retire --integration-authorization <record>` removes a schema-2 parallel-group member worktree whose result integration already published. The authorization is written by the grouped integration publication command from facts it verified itself, and this command rechecks all of them: repository identity, group, plan, member worktree, member branch, frozen member head, frozen result tree, and a published commit reachable from the group target. It replaces the owner lease, because the member session owns that worktree and never releases it, and it replaces ordinary cleanliness, because the published result includes work the member never committed. A member worktree that advanced, changed, or gained untracked work after the freeze is preserved and retirement is refused. Without that verified authorization, member retirement stays closed.
+
 Every other worktree stays under this specification: retirement remains an explicit operator action for any worktree not proven to be the exact successfully published current task.
 
 ## Command Boundary

@@ -653,23 +653,78 @@ def apply_patch(clone: Path, patch: bytes, label: str) -> None:
         raise AdapterError(f"{label} failed to apply: {detail}")
 
 
-def command_assemble(args: argparse.Namespace) -> None:
-    state_path = Path(args.state)
-    permit_path = Path(args.permit)
-    context = verified_member(state_path, permit_path, args.plan, "execution")
+def load_member_handoff(path: Path, plan: str) -> dict[str, Any]:
+    """Read one immutable parent-direct member handoff record.
+
+    A member session freezes its result with ``member-ready``. The private
+    record it leaves behind is the only description integration accepts: it
+    names the exact member baseline, result tree, session identity and patch,
+    and it declares that nothing has been accepted yet.
+    """
+
+    record = read_private_artifact(path, "member handoff record")
+    if record.get("schema_version") != HANDOFF_SCHEMA_VERSION:
+        raise AdapterError("member handoff record must declare schema_version 1")
+    if record.get("handoff_mode") != HANDOFF_MODE:
+        raise AdapterError("member handoff record names another handoff mode")
+    if record.get("plan_path") != plan:
+        raise AdapterError("member handoff record names a different plan")
+    if record.get("acceptance") != "not_accepted":
+        raise AdapterError(
+            "a member handoff record never carries acceptance; members report "
+            "readiness and integration owns acceptance"
+        )
+    for field in (
+        "base_commit",
+        "member_head",
+        "result_tree",
+        "session_digest",
+        "session_generation",
+        "patch_path",
+        "patch_digest",
+        "changed_paths",
+        "changed_paths_digest",
+        "write_scope",
+        "record_digest",
+    ):
+        if field not in record:
+            raise AdapterError(f"member handoff record is missing {field}")
+    expected = canonical_digest(
+        {key: value for key, value in record.items() if key != "record_digest"}
+    )
+    if expected != record["record_digest"]:
+        raise AdapterError("member handoff record digest verification failed")
+    return record
+
+
+def handoff_patch_bytes(record_path: Path, record: dict[str, Any]) -> bytes:
+    patch_path = Path(str(record["patch_path"])).expanduser()
+    if not patch_path.is_absolute():
+        patch_path = (record_path.parent / patch_path).absolute()
+    patch = require_private_regular_file(patch_path, "member patch", MAX_PATCH_BYTES)
+    if not patch:
+        raise AdapterError("member patch is empty")
+    if digest_bytes(patch) != record["patch_digest"]:
+        raise AdapterError("member patch digest no longer matches its handoff record")
+    return patch
+
+
+def resolve_candidate_input(args: argparse.Namespace) -> dict[str, Any]:
+    """Resolve the sandboxed-worker candidate handoff mode."""
+
+    context = verified_member(
+        Path(args.state), Path(args.permit), args.plan, "execution"
+    )
     state = context["state"]
     member = context["member"]
     permit = context["permit"]
     root = context["root"]
-
-    target_ref = state["target_ref"]
-    current_target = resolve_commit(root, target_ref, "group target ref")
+    current_target = resolve_commit(root, state["target_ref"], "group target ref")
     if permit["base_commit"] != current_target:
         raise AdapterError(
             "the member permit is bound to a superseded baseline; transfer the "
             "member baseline to the current target before assembling"
         )
-
     manifest_path = Path(args.manifest)
     manifest = load_candidate_manifest(manifest_path, args.plan)
     original_head = str(manifest["source_head"])
@@ -681,7 +736,155 @@ def command_assemble(args: argparse.Namespace) -> None:
         "the candidate baseline is not an ancestor of the current target; the "
         "candidate cannot be assembled onto this target",
     )
-    patch = candidate_patch_bytes(manifest_path, manifest)
+    return {
+        "handoff_mode": "candidate",
+        "state": state,
+        "member": member,
+        "root": root,
+        "current_target": current_target,
+        "patch": candidate_patch_bytes(manifest_path, manifest),
+        "adjustment_permit_id": permit["permit_id"],
+        "incoming_digest": manifest["_manifest_digest"],
+        "provenance": {
+            "permit_id": permit["permit_id"],
+            "baseline_generation": permit["baseline_generation"],
+            "original_source_head": original_head,
+            "original_manifest_path": str(manifest_path),
+            "original_manifest_digest": manifest["_manifest_digest"],
+            "original_patch_digest": "sha256:" + str(manifest["patch_digest"]),
+            "original_worker_receipt_digest": (
+                "sha256:" + str(manifest["worker_completion_receipt_digest"])
+                if isinstance(manifest.get("worker_completion_receipt_digest"), str)
+                else ""
+            ),
+            "original_member_head": "",
+            "original_result_tree": "",
+            "original_session_digest": "",
+            "original_session_generation": -1,
+            "original_worktree_path": "",
+            "original_branch_ref": "",
+            "original_handoff_path": "",
+            "original_handoff_record_digest": "",
+            "original_changed_paths_digest": "",
+        },
+        "group_id": permit["group_id"],
+        "group_description_digest": permit["group_description_digest"],
+    }
+
+
+def resolve_handoff_input(args: argparse.Namespace) -> dict[str, Any]:
+    """Resolve the parent-direct member-session handoff mode."""
+
+    context = verified_session_member(Path(args.state), args.plan)
+    state = context["state"]
+    member = context["member"]
+    root = context["root"]
+    submitted = member["handoff"]
+    if submitted is None:
+        raise AdapterError(
+            f"member {args.plan} has submitted no handoff; run member-ready in "
+            "the member session before integration assembles its result"
+        )
+    record_path = Path(args.handoff)
+    record = load_member_handoff(record_path, args.plan)
+    # Stale evidence: the private record must still be the exact artifact the
+    # authority accepted, and the authority binding must still describe the
+    # member's current baseline and plan bytes.
+    for field, label in (
+        ("record_digest", "record digest"),
+        ("patch_digest", "patch digest"),
+        ("changed_paths_digest", "changed-path digest"),
+        ("base_commit", "baseline"),
+        ("plan_digest", "plan digest"),
+    ):
+        if submitted[field] != record[field]:
+            raise AdapterError(
+                f"the submitted member handoff names another {label}; the private "
+                "record is stale or was replaced"
+            )
+    if submitted["generation"] != record["session_generation"]:
+        raise AdapterError(
+            "the submitted member handoff names another session generation"
+        )
+    if submitted["session_digest"] != record["session_digest"]:
+        raise AdapterError("the submitted member handoff names another session")
+    if member["base_commit"] != record["base_commit"]:
+        raise AdapterError(
+            "the member baseline moved after this handoff; transfer the baseline "
+            "and take a fresh handoff before assembling"
+        )
+    if record["group_id"] != state["group_id"]:
+        raise AdapterError("the member handoff record names another group")
+    if record["group_description_digest"] != state["group_description_digest"]:
+        raise AdapterError(
+            "the member handoff record names another committed group description"
+        )
+    current_target = resolve_commit(root, state["target_ref"], "group target ref")
+    resolve_commit(root, record["base_commit"], "member handoff baseline")
+    require_ancestor(
+        root,
+        record["base_commit"],
+        current_target,
+        "the member baseline is not an ancestor of the current target; transfer "
+        "the member baseline to the current target before assembling",
+    )
+    return {
+        "handoff_mode": HANDOFF_MODE,
+        "state": state,
+        "member": member,
+        "root": root,
+        "current_target": current_target,
+        "patch": handoff_patch_bytes(record_path, record),
+        "adjustment_permit_id": record["record_digest"],
+        "incoming_digest": record["record_digest"],
+        "provenance": {
+            "permit_id": "",
+            "baseline_generation": member["baseline_generation"],
+            "original_source_head": record["base_commit"],
+            "original_manifest_path": "",
+            "original_manifest_digest": "",
+            "original_patch_digest": record["patch_digest"],
+            "original_worker_receipt_digest": "",
+            "original_member_head": record["member_head"],
+            "original_result_tree": record["result_tree"],
+            "original_session_digest": record["session_digest"],
+            "original_session_generation": record["session_generation"],
+            "original_worktree_path": str(record["worktree_path"]),
+            "original_branch_ref": str(record["branch_ref"]),
+            "original_handoff_path": str(record_path.absolute()),
+            "original_handoff_record_digest": record["record_digest"],
+            "original_changed_paths_digest": record["changed_paths_digest"],
+        },
+        "group_id": record["group_id"],
+        "group_description_digest": record["group_description_digest"],
+    }
+
+
+def command_assemble(args: argparse.Namespace) -> None:
+    if bool(args.manifest) == bool(args.handoff):
+        raise AdapterError(
+            "assemble one handoff mode: pass --manifest with --permit for a "
+            "sandboxed candidate, or --handoff for a parent-direct member result"
+        )
+    if args.manifest and not args.permit:
+        raise AdapterError("a candidate assembly requires its member permit")
+    if args.handoff and args.permit:
+        raise AdapterError(
+            "a parent-direct member handoff carries no candidate permit"
+        )
+    source = (
+        resolve_candidate_input(args)
+        if args.manifest
+        else resolve_handoff_input(args)
+    )
+    state_path = Path(args.state)
+    state = source["state"]
+    member = source["member"]
+    root = source["root"]
+
+    target_ref = state["target_ref"]
+    current_target = source["current_target"]
+    patch = source["patch"]
     scope = plan_write_scope(root, args.plan)
 
     resolution_patch: bytes | None = None
@@ -717,11 +920,11 @@ def command_assemble(args: argparse.Namespace) -> None:
                     "a substantive parent conflict edit requires the reserved "
                     "parent adjustment slot from the group authority"
                 )
-            if adjustment["permit_id"] != permit["permit_id"]:
+            if adjustment["permit_id"] != source["adjustment_permit_id"]:
                 raise AdapterError(
-                    "the reserved parent adjustment names a different member permit"
+                    "the reserved parent adjustment names a different member result"
                 )
-            if adjustment["incoming_candidate_digest"] != manifest["_manifest_digest"]:
+            if adjustment["incoming_candidate_digest"] != source["incoming_digest"]:
                 raise AdapterError(
                     "the reserved parent adjustment is bound to a different "
                     "incoming candidate"
@@ -759,23 +962,14 @@ def command_assemble(args: argparse.Namespace) -> None:
     record = {
         "schema_version": ASSEMBLY_SCHEMA_VERSION,
         "adapter_version": ADAPTER_VERSION,
-        "group_id": permit["group_id"],
-        "group_description_digest": permit["group_description_digest"],
+        "handoff_mode": source["handoff_mode"],
+        "group_id": source["group_id"],
+        "group_description_digest": source["group_description_digest"],
         "plan_path": args.plan,
         "logical_member_id": member["logical_member_id"],
-        "permit_id": permit["permit_id"],
-        "baseline_generation": permit["baseline_generation"],
         "target_ref": target_ref,
         "base_commit": current_target,
-        "original_source_head": original_head,
-        "original_manifest_path": str(manifest_path),
-        "original_manifest_digest": manifest["_manifest_digest"],
-        "original_patch_digest": "sha256:" + str(manifest["patch_digest"]),
-        "original_worker_receipt_digest": (
-            "sha256:" + str(manifest["worker_completion_receipt_digest"])
-            if isinstance(manifest.get("worker_completion_receipt_digest"), str)
-            else ""
-        ),
+        **source["provenance"],
         "resolution_kind": resolution_kind,
         # A parent-resolved result is parent-authored evidence. It never claims
         # that the worker produced or validated these revised bytes.
@@ -799,9 +993,9 @@ def command_assemble(args: argparse.Namespace) -> None:
                 "--member",
                 args.plan,
                 "--permit-id",
-                permit["permit_id"],
+                source["adjustment_permit_id"],
                 "--incoming-candidate-digest",
-                manifest["_manifest_digest"],
+                source["incoming_digest"],
                 "--patch-digest",
                 record["assembled_patch_digest"],
             ],
@@ -811,6 +1005,7 @@ def command_assemble(args: argparse.Namespace) -> None:
             {
                 "assembly_record": str(output),
                 "assembled_patch": str(patch_output),
+                "handoff_mode": source["handoff_mode"],
                 "resolution_kind": resolution_kind,
                 "base_commit": current_target,
             },
@@ -864,11 +1059,22 @@ def reviews_of_assembly(state: dict[str, Any], plan: str, record_digest: str) ->
 
 def command_publish(args: argparse.Namespace) -> None:
     state_path = Path(args.state)
-    permit_path = Path(args.permit)
-    context = verified_member(state_path, permit_path, args.plan, "apply")
+    record = load_assembly_record(Path(args.assembly), args.plan)
+    parent_direct = record.get("handoff_mode") == HANDOFF_MODE
+    if parent_direct:
+        if args.permit:
+            raise AdapterError(
+                "a parent-direct member publication carries no candidate permit"
+            )
+        context = verified_session_member(state_path, args.plan)
+        permit = None
+    else:
+        if not args.permit:
+            raise AdapterError("a candidate publication requires its member permit")
+        context = verified_member(state_path, Path(args.permit), args.plan, "apply")
+        permit = context["permit"]
     state = context["state"]
     member = context["member"]
-    permit = context["permit"]
     root = context["root"]
 
     if state["publication_lease"]["owner"] != args.owner:
@@ -880,8 +1086,16 @@ def command_publish(args: argparse.Namespace) -> None:
     if member["publication"]["published"]:
         raise AdapterError("this member already published its accepted result")
 
-    record = load_assembly_record(Path(args.assembly), args.plan)
-    if record["permit_id"] != permit["permit_id"]:
+    if parent_direct:
+        submitted = member["handoff"]
+        if submitted is None:
+            raise AdapterError(
+                "the member withdrew its handoff; integration publishes only a "
+                "submitted member result"
+            )
+        if record["original_handoff_record_digest"] != submitted["record_digest"]:
+            raise AdapterError("the assembly record names another member handoff")
+    elif record["permit_id"] != permit["permit_id"]:
         raise AdapterError("the assembly record names a superseded member permit")
     if reviews_of_assembly(state, args.plan, record["record_digest"]) < 1:
         raise AdapterError(
@@ -926,7 +1140,17 @@ def command_publish(args: argparse.Namespace) -> None:
         "state": "intended",
         "group_id": state["group_id"],
         "plan_path": args.plan,
-        "permit_id": permit["permit_id"],
+        "handoff_mode": record.get("handoff_mode", "candidate"),
+        "permit_id": permit["permit_id"] if permit is not None else "",
+        "handoff_record_digest": (
+            record["original_handoff_record_digest"] if parent_direct else ""
+        ),
+        "member_worktree_path": (
+            record["original_worktree_path"] if parent_direct else ""
+        ),
+        "member_branch_ref": record["original_branch_ref"] if parent_direct else "",
+        "member_head": record["original_member_head"] if parent_direct else "",
+        "member_result_tree": record["original_result_tree"] if parent_direct else "",
         "owner": args.owner,
         "target_ref": target_ref,
         "expected_old_commit": expected_old,
@@ -942,12 +1166,79 @@ def command_publish(args: argparse.Namespace) -> None:
 
     advance_target(root, journal)
     finalize_publication(state_path, journal_path, journal, root)
+    retirement = retire_member_worktree(root, journal_path, journal)
     print(
         json.dumps(
-            {"published_commit": new_commit, "target_ref": target_ref, "plan_path": args.plan},
+            {
+                "published_commit": new_commit,
+                "target_ref": target_ref,
+                "plan_path": args.plan,
+                "member_retirement": retirement,
+            },
             sort_keys=True,
         )
     )
+
+
+def retire_member_worktree(
+    root: Path, journal_path: Path, journal: dict[str, Any]
+) -> str:
+    """Retire the member worktree only after its result reached the target.
+
+    The member session owns no retirement authority, so integration writes the
+    exact evidence it verified — group, plan, worktree, branch, frozen member
+    head, and the published commit — and the worktree manager rechecks every
+    one of those facts before it removes anything. A failed retirement leaves a
+    published result and a preserved worktree, which the same authorization
+    finishes on the next attempt.
+    """
+
+    if journal.get("handoff_mode") != HANDOFF_MODE:
+        return "not_applicable"
+    authorization = {
+        "schema_version": 1,
+        "adapter_version": ADAPTER_VERSION,
+        "authorization_kind": "parallel_group_member_retirement",
+        "repository_identity": authority()
+        .worktree_manager()
+        .guard.repository_identity(root),
+        "group_id": journal["group_id"],
+        "plan_path": journal["plan_path"],
+        "member_worktree_path": journal["member_worktree_path"],
+        "member_branch_ref": journal["member_branch_ref"],
+        "member_head": journal["member_head"],
+        "member_result_tree": journal["member_result_tree"],
+        "target_ref": journal["target_ref"],
+        "published_commit": journal["new_commit"],
+        "assembly_record_digest": journal["assembly_record_digest"],
+        "assembled_patch_digest": journal["assembled_patch_digest"],
+        "handoff_record_digest": journal["handoff_record_digest"],
+    }
+    authorization["authorization_digest"] = canonical_digest(authorization)
+    authorization_path = journal_path.parent / f"{journal_path.name}.retirement"
+    if authorization_path.exists() or authorization_path.is_symlink():
+        authorization_path.unlink()
+    write_private_artifact(authorization_path, authorization, mode=0o600)
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve().with_name("manage-plan-worktrees.py")),
+        "retire",
+        journal["plan_path"],
+        "--owner-id",
+        journal["owner"],
+        "--integration-authorization",
+        str(authorization_path),
+    ]
+    completed = subprocess.run(
+        command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        raise AdapterError(
+            "the member result is published, but its worktree retirement was "
+            f"refused and the worktree is preserved: {detail}"
+        )
+    return "retired"
 
 
 def advance_target(root: Path, journal: dict[str, Any]) -> None:
@@ -999,6 +1290,11 @@ def rewrite_journal(path: Path, journal: dict[str, Any], new_state: str) -> None
 def finalize_publication(
     state_path: Path, journal_path: Path, journal: dict[str, Any], root: Path
 ) -> None:
+    identity = (
+        ["--handoff-digest", journal["handoff_record_digest"]]
+        if journal.get("handoff_mode") == HANDOFF_MODE
+        else ["--permit-id", journal["permit_id"]]
+    )
     run_authority(
         state_path,
         [
@@ -1006,8 +1302,7 @@ def finalize_publication(
             str(state_path),
             "--member",
             journal["plan_path"],
-            "--permit-id",
-            journal["permit_id"],
+            *identity,
             "--commit",
             journal["new_commit"],
             "--assembly-digest",
@@ -1048,7 +1343,17 @@ def command_publish_recover(args: argparse.Namespace) -> None:
                     "checkout; the target is preserved and completion is refused"
                 )
         finalize_publication(state_path, journal_path, journal, root)
-        print(json.dumps({"recovery": "finalized", "commit": journal["new_commit"]}, sort_keys=True))
+        retirement = retire_member_worktree(root, journal_path, journal)
+        print(
+            json.dumps(
+                {
+                    "recovery": "finalized",
+                    "commit": journal["new_commit"],
+                    "member_retirement": retirement,
+                },
+                sort_keys=True,
+            )
+        )
         return
     if current == journal["expected_old_commit"]:
         rewrite_journal(journal_path, journal, "aborted")
@@ -1381,9 +1686,10 @@ def build_parser() -> argparse.ArgumentParser:
         "assemble", help="assemble one admitted candidate against the current target"
     )
     assemble.add_argument("--state", required=True)
-    assemble.add_argument("--permit", required=True)
+    assemble.add_argument("--permit")
     assemble.add_argument("--plan", required=True)
-    assemble.add_argument("--manifest", required=True)
+    assemble.add_argument("--manifest")
+    assemble.add_argument("--handoff")
     assemble.add_argument("--output", required=True)
     assemble.add_argument("--resolution")
     assemble.set_defaults(handler=command_assemble)
@@ -1392,7 +1698,7 @@ def build_parser() -> argparse.ArgumentParser:
         "publish", help="publish one reviewed commit to the still-current target"
     )
     publish.add_argument("--state", required=True)
-    publish.add_argument("--permit", required=True)
+    publish.add_argument("--permit")
     publish.add_argument("--plan", required=True)
     publish.add_argument("--assembly", required=True)
     publish.add_argument("--commit", required=True)

@@ -120,6 +120,11 @@ EVENT_TYPES = {
     "execution_epoch_started",
     "adversarial_preflight",
     "review_route_checked",
+    # One parent-owned required-evidence record identity, bound here so that a
+    # replaced or missing record stays detectable from execution evidence
+    # alone. The record digest travels as this event's single invariant digest,
+    # which keeps existing ledgers valid without an event schema migration.
+    "required_evidence_reserved",
 }
 RECORD_EVENT_TYPES = EVENT_TYPES - {
     "writable_attempt_started",
@@ -5418,6 +5423,16 @@ def record_event(args: argparse.Namespace) -> None:
             severity not in {"High", "Medium", "Low"} for severity in severities
         ):
             raise StateError("invalid finding severities")
+        if args.event_type == "required_evidence_reserved":
+            if len(invariants) != 1:
+                raise StateError(
+                    "a required-evidence reservation carries exactly one invariant "
+                    "digest, the record digest it binds"
+                )
+            if severities:
+                raise StateError(
+                    "a required-evidence reservation records no review findings"
+                )
         if (
             not isinstance(args.elapsed_seconds, (int, float))
             or isinstance(args.elapsed_seconds, bool)

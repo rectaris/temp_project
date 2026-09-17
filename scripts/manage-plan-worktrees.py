@@ -1146,6 +1146,38 @@ def worktree_is_clean(worktree: Path) -> bool:
     return payload.strip(b"\0") == b""
 
 
+def require_frozen_result(worktree: Path, tree: str) -> None:
+    """Require the worktree to still hold exactly one frozen result tree.
+
+    A member session hands off staged and untracked work that its integration
+    published without ever committing it here, so ordinary cleanliness would
+    refuse a worktree whose content is already safe. Matching the frozen tree
+    is the stronger fact: it proves nothing was added or changed after the
+    freeze integration verified and published.
+    """
+
+    index = git(worktree, "diff-index", "--cached", "--quiet", tree, check=False)
+    if index.returncode != 0:
+        raise WorktreeError(
+            "the member worktree index no longer matches its frozen result; the "
+            "worktree is preserved"
+        )
+    working = git(worktree, "diff-files", "--quiet", check=False)
+    if working.returncode != 0:
+        raise WorktreeError(
+            "the member worktree changed after its frozen result; the worktree "
+            "is preserved"
+        )
+    untracked = git(
+        worktree, "ls-files", "--others", "--exclude-standard", "-z"
+    ).stdout
+    if untracked.strip(b"\0") != b"":
+        raise WorktreeError(
+            "the member worktree gained untracked work after its frozen result; "
+            "the worktree is preserved"
+        )
+
+
 def load_restructure_module():
     path = Path(__file__).resolve().with_name("restructure-plan.py")
     spec = importlib.util.spec_from_file_location("managed_restructure_plan", path)
@@ -1410,6 +1442,7 @@ def retire_worktree(
     *,
     anchor: Path | None = None,
     published: bool = False,
+    frozen_result_tree: str | None = None,
 ) -> None:
     """Remove the exact task worktree and its temporary local branch.
 
@@ -1430,9 +1463,17 @@ def retire_worktree(
     if anchor == target:
         raise WorktreeError("refusing to retire the pre-existing checkout")
     if target.exists():
-        if not worktree_is_clean(target):
-            raise WorktreeError("task worktree still holds uncommitted or untracked work")
-        git(anchor, "worktree", "remove", str(target))
+        if frozen_result_tree is not None:
+            require_frozen_result(target, frozen_result_tree)
+            # The frozen result is already published, so removal discards a
+            # verified copy rather than unreviewed work.
+            git(anchor, "worktree", "remove", "--force", str(target))
+        else:
+            if not worktree_is_clean(target):
+                raise WorktreeError(
+                    "task worktree still holds uncommitted or untracked work"
+                )
+            git(anchor, "worktree", "remove", str(target))
     git(anchor, "worktree", "prune")
     if target.exists() or target.is_symlink():
         raise WorktreeError("task worktree directory remains after removal")
@@ -1650,8 +1691,115 @@ def recover_stranded_record(
     paths["record"].unlink(missing_ok=True)
 
 
+INTEGRATION_AUTHORIZATION_SCHEMA_VERSION = 1
+INTEGRATION_AUTHORIZATION_KIND = "parallel_group_member_retirement"
+
+
+def canonical_digest(value: Any) -> str:
+    """Digest one record exactly as the parallel-plan adapter digests it."""
+
+    import hashlib
+
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def load_integration_authorization(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Read one integration-authored member retirement authorization.
+
+    A member session never retires its own worktree. Integration proves, with
+    bytes it verified itself, that this exact member result already reached the
+    group target, and only that proof reopens retirement for the member.
+    """
+
+    selected = getattr(args, "integration_authorization", None)
+    if not selected:
+        return None
+    path = Path(selected).expanduser().absolute()
+    if path.is_symlink() or not path.is_file():
+        raise WorktreeError("integration authorization must be a private regular file")
+    stat_result = path.stat()
+    if stat_result.st_uid != os.getuid():
+        raise WorktreeError("integration authorization belongs to another account")
+    if stat_result.st_mode & 0o077:
+        raise WorktreeError("integration authorization is group or world accessible")
+    try:
+        authorization = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorktreeError("integration authorization is not valid UTF-8 JSON") from exc
+    if not isinstance(authorization, dict):
+        raise WorktreeError("integration authorization must contain a JSON object")
+    if authorization.get("schema_version") != INTEGRATION_AUTHORIZATION_SCHEMA_VERSION:
+        raise WorktreeError("integration authorization must declare schema_version 1")
+    if authorization.get("authorization_kind") != INTEGRATION_AUTHORIZATION_KIND:
+        raise WorktreeError("integration authorization names another authorization kind")
+    expected = canonical_digest(
+        {
+            key: value
+            for key, value in authorization.items()
+            if key != "authorization_digest"
+        }
+    )
+    if expected != authorization.get("authorization_digest"):
+        raise WorktreeError("integration authorization digest verification failed")
+    return authorization
+
+
+def verify_integration_authorization(
+    repository: Path,
+    args: argparse.Namespace,
+    record: dict[str, Any],
+    tip: str,
+    authorization: dict[str, Any],
+) -> None:
+    group = guard.parallel_group_module()
+    if group is None:
+        raise WorktreeError(
+            "integration authorization requires the installed parallel group authority"
+        )
+    try:
+        enrolled = group.session_enrolment(repository, args.plan)
+    except group.GroupError as exc:
+        raise WorktreeError(str(exc)) from exc
+    if enrolled is None:
+        raise WorktreeError(
+            "integration authorization applies only to a committed schema-2 member"
+        )
+    if authorization["group_id"] != enrolled["group_id"]:
+        raise WorktreeError("integration authorization names another execution group")
+    if authorization["plan_path"] != args.plan:
+        raise WorktreeError("integration authorization names another member plan")
+    if authorization["repository_identity"] != repository_identity(repository):
+        raise WorktreeError("integration authorization names another repository or clone")
+    if authorization["member_worktree_path"] != record["worktree_path"]:
+        raise WorktreeError("integration authorization names another member worktree")
+    if authorization["member_branch_ref"] != record["branch_ref"]:
+        raise WorktreeError("integration authorization names another member branch")
+    if authorization["member_head"] != tip:
+        # The member worktree moved after integration verified it, so the
+        # published descendant no longer describes everything this branch holds.
+        raise WorktreeError(
+            "the member worktree advanced after integration verified its result; "
+            "retirement is refused and the work is preserved"
+        )
+    published_commit = authorization["published_commit"]
+    if not authorization["member_result_tree"]:
+        raise WorktreeError("integration authorization names no frozen member result")
+    if exact_ref_tip(repository, authorization["target_ref"]) is None:
+        raise WorktreeError("integration authorization names an unknown target ref")
+    if not is_ancestor(repository, published_commit, authorization["target_ref"]):
+        raise WorktreeError(
+            "the authorized publication is not reachable from the group target; "
+            "the member worktree is preserved"
+        )
+
+
 def retire(args: argparse.Namespace) -> None:
-    refuse_session_operation(args, "retirement")
+    authorization = load_integration_authorization(args)
+    if authorization is None:
+        refuse_session_operation(args, "retirement")
     """Retire a task worktree the current transaction did not publish.
 
     Retirement outside a successful publication stays explicit. A stopped
@@ -1669,7 +1817,12 @@ def retire(args: argparse.Namespace) -> None:
     )
     with locked_file(paths["lock"]):
         record = read_task_record(paths)
-        validate_lease(record["owner"], args.owner_id, int(time.time()))
+        if authorization is None:
+            validate_lease(record["owner"], args.owner_id, int(time.time()))
+        # An integration-authorized retirement replaces the owner lease with
+        # verified publication evidence: the member session owns this worktree
+        # and never releases it, so the authorization is the only fact that may
+        # remove it.
         if record["repository_identity"] != repository_identity(repository):
             raise WorktreeError("ownership record belongs to another repository or clone")
         if record["allowed_root"] != str(allowed_root):
@@ -1696,8 +1849,14 @@ def retire(args: argparse.Namespace) -> None:
         target, tip = verify_record_context(repository, allowed_root, record)
         branch_ref = record["branch_ref"]
         branch_short = branch_ref.removeprefix("refs/heads/")
-        source_tip = exact_ref_tip(repository, record["source_ref"])
-        published = source_tip is not None and is_ancestor(repository, tip, source_tip)
+        if authorization is not None:
+            verify_integration_authorization(
+                repository, args, record, tip, authorization
+            )
+            published = True
+        else:
+            source_tip = exact_ref_tip(repository, record["source_ref"])
+            published = source_tip is not None and is_ancestor(repository, tip, source_tip)
         if not published and not args.stopped:
             raise WorktreeError(
                 f"{branch_ref} is not reachable from {record['source_ref']}; publish it "
@@ -1715,7 +1874,15 @@ def retire(args: argparse.Namespace) -> None:
         relocated = relocate_evidence(
             target, checkout, PurePosixPath(record["worktree_path"]).name
         )
-        retire_worktree(repository, target, branch_ref, branch_short)
+        retire_worktree(
+            repository,
+            target,
+            branch_ref,
+            branch_short,
+            frozen_result_tree=(
+                authorization["member_result_tree"] if authorization else None
+            ),
+        )
         paths["journal"].unlink(missing_ok=True)
         paths["publication"].unlink(missing_ok=True)
         paths["record"].unlink(missing_ok=True)
@@ -1791,6 +1958,7 @@ def parser() -> argparse.ArgumentParser:
     add_task_arguments(retire_parser)
     retire_parser.add_argument("--owner-id", default="parent")
     retire_parser.add_argument("--stopped", action="store_true")
+    retire_parser.add_argument("--integration-authorization")
     retire_parser.set_defaults(handler=retire)
     return root
 

@@ -5174,6 +5174,8 @@ def evaluate_selected_worker_contract_fixture(
 
 ADAPTER_SCRIPT = ROOT / "scripts/run-parallel-plans.py"
 GROUP_AUTHORITY_SCRIPT = ROOT / "scripts/parallel-plan-state.py"
+WORKTREE_SCRIPT = ROOT / "scripts/manage-plan-worktrees.py"
+VERIFIER_SCRIPT = ROOT / "scripts/verify-parallel-plan-sessions.py"
 TEMPLATE_ADAPTER_SCRIPT = (
     ROOT / "template/.project-agent-workflow/scripts/run-parallel-plans.py"
 )
@@ -6432,10 +6434,317 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         for name in ("empty.json", "outside.json", "foreign.json", "mismatched.json"):
             self.assertFalse((self.base / name).exists())
 
+    def test_integration_assembles_publishes_and_retires_one_member_result(self) -> None:
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        member_head = self.git("rev-parse", "HEAD", cwd=worktree)
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        handoff_path = self.base / "handoff.json"
+        ready = self.ready_member(alpha, self.ALPHA, worktree, handoff_path)
+        self.assertEqual(ready["returncode"], 0, ready)
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+
+        assembly_path = self.base / "assembly.json"
+        assembled = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(handoff_path), "--output", str(assembly_path),
+        )
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        self.assertEqual(json.loads(assembled.stdout)["handoff_mode"], "parent_direct")
+        record = json.loads(assembly_path.read_text(encoding="utf-8"))
+        self.assertEqual(record["handoff_mode"], "parent_direct")
+        self.assertEqual(record["permit_id"], "")
+        self.assertEqual(record["original_handoff_record_digest"], handoff["record_digest"])
+        self.assertEqual(record["original_member_head"], member_head)
+        self.assertEqual(record["original_worktree_path"], str(worktree))
+        self.assertEqual(record["changed_paths"], ["src/alpha.py"])
+        self.assertTrue(record["review_required"])
+        self.assertTrue(record["validation_required"])
+
+        # Publication requires the integration review of this exact assembly.
+        lease = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.ALPHA,
+            "--owner", "integration",
+        )
+        self.assertEqual(lease.returncode, 0, lease.stderr)
+        commit = self.apply_assembled_commit(record)
+        unreviewed = self.publish_member(record, commit, self.base / "journal-1.json")
+        self.assertNotEqual(unreviewed.returncode, 0, unreviewed.stderr)
+        self.assertIn("one qualifying independent review", unreviewed.stderr)
+        review = self.run_group(
+            "record-review", str(self.state), "--member", self.ALPHA,
+            "--registry-path-digest", adapter_digest("registry"),
+            "--registry-event-count", "1",
+            "--registry-event-chain-digest", adapter_digest("chain"),
+            "--assembly-record-digest", record["record_digest"],
+        )
+        self.assertEqual(review.returncode, 0, review.stderr)
+
+        published = self.publish_member(record, commit, self.base / "journal.json")
+        self.assertEqual(published.returncode, 0, published.stderr)
+        report = json.loads(published.stdout)
+        self.assertEqual(report["published_commit"], commit)
+        self.assertEqual(report["member_retirement"], "retired")
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), commit)
+        member = self.payload()["members"][self.ALPHA]
+        self.assertTrue(member["publication"]["published"])
+        self.assertEqual(member["publication"]["commit"], commit)
+        # The member worktree, its temporary branch and its bound record are gone.
+        self.assertFalse(worktree.exists())
+        self.assertNotIn(
+            "plan/284-alpha", self.git("branch", "--format=%(refname:short)")
+        )
+
+    def test_member_retirement_requires_verified_integration_authority(self) -> None:
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        # A member session never retires its own worktree.
+        refused = subprocess.run(
+            [
+                sys.executable, str(WORKTREE_SCRIPT), "retire", self.ALPHA,
+                "--owner-id", "parent",
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("schema-2 member retirement is closed", refused.stderr)
+        self.assertTrue(worktree.exists())
+
+        handoff_path = self.base / "handoff.json"
+        ready = self.ready_member(alpha, self.ALPHA, worktree, handoff_path)
+        self.assertEqual(ready["returncode"], 0, ready)
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        assembly_path = self.base / "assembly.json"
+        assembled = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(handoff_path), "--output", str(assembly_path),
+        )
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        record = json.loads(assembly_path.read_text(encoding="utf-8"))
+        forged = self.base / "forged.json"
+        authorization = {
+            "schema_version": 1,
+            "adapter_version": record["adapter_version"],
+            "authorization_kind": "parallel_group_member_retirement",
+            "repository_identity": self.group.repository_identity(self.repo),
+            "group_id": "alpha-beta",
+            "plan_path": self.ALPHA,
+            "member_worktree_path": str(worktree),
+            "member_branch_ref": "refs/heads/plan/284-alpha",
+            "member_head": record["original_member_head"],
+            "target_ref": "refs/heads/main",
+            # Nothing was published, so this names the unchanged target.
+            "published_commit": self.start_commit,
+            "assembly_record_digest": record["record_digest"],
+            "assembled_patch_digest": record["assembled_patch_digest"],
+            "handoff_record_digest": handoff["record_digest"],
+        }
+        authorization["authorization_digest"] = "sha256:" + "0" * 64
+        forged.write_text(json.dumps(authorization), encoding="utf-8")
+        forged.chmod(0o600)
+        tampered = subprocess.run(
+            [
+                sys.executable, str(WORKTREE_SCRIPT), "retire", self.ALPHA,
+                "--owner-id", "parent", "--integration-authorization", str(forged),
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(tampered.returncode, 0, tampered.stdout)
+        self.assertIn("digest verification failed", tampered.stderr)
+        self.assertTrue(worktree.exists())
+
+    def test_assembly_refuses_stale_mixed_and_unsubmitted_member_evidence(self) -> None:
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        assembly_path = self.base / "assembly.json"
+        missing = self.base / "missing.json"
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        handoff_path = self.base / "handoff.json"
+        # Before a submitted handoff there is nothing integration may assemble.
+        premature = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(missing), "--output", str(assembly_path),
+        )
+        self.assertNotEqual(premature.returncode, 0, premature.stdout)
+        self.assertIn("submitted no handoff", premature.stderr)
+        ready = self.ready_member(alpha, self.ALPHA, worktree, handoff_path)
+        self.assertEqual(ready["returncode"], 0, ready)
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+
+        both = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(handoff_path), "--manifest", str(handoff_path),
+            "--output", str(assembly_path),
+        )
+        self.assertNotEqual(both.returncode, 0, both.stdout)
+        self.assertIn("assemble one handoff mode", both.stderr)
+
+        stale_path = self.base / "stale.json"
+        stale = dict(handoff)
+        stale["changed_paths"] = ["src/alpha.py", "src/alpha_extra.py"]
+        stale["record_digest"] = adapter_digest(json.dumps(
+            {key: value for key, value in stale.items() if key != "record_digest"},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ))
+        stale_path.write_text(json.dumps(stale), encoding="utf-8")
+        stale_path.chmod(0o600)
+        replaced = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(stale_path), "--output", str(assembly_path),
+        )
+        self.assertNotEqual(replaced.returncode, 0, replaced.stdout)
+        self.assertIn("stale or was replaced", replaced.stderr)
+        self.assertFalse(assembly_path.exists())
+
+    # -- integration helpers --------------------------------------------
+
+    def run_adapter(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(ADAPTER_SCRIPT), *arguments],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def apply_assembled_commit(self, record: dict) -> str:
+        """Commit the assembled patch beside the target, as integration does.
+
+        The target itself must not move before publication, so the reviewed
+        commit is built on its own branch and publication is the only step that
+        advances the target.
+        """
+
+        patch = Path(record["assembled_patch_path"]).read_bytes()
+        self.git("checkout", "-q", "-b", "integration", record["base_commit"])
+        subprocess.run(
+            ["git", "-C", str(self.repo), "apply", "--whitespace=nowarn", "-"],
+            input=patch, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "integration: assembled member result")
+        commit = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "main")
+        return commit
+
+    def publish_member(
+        self, record: dict, commit: str, journal: Path
+    ) -> subprocess.CompletedProcess[str]:
+        return self.run_adapter(
+            "publish", "--state", str(self.state), "--plan", self.ALPHA,
+            "--assembly", str(self.base / "assembly.json"), "--commit", commit,
+            "--owner", "integration", "--journal", str(journal),
+        )
+
     def test_root_and_generated_member_adapter_stay_identical(self) -> None:
         generated = ROOT / "template/.project-agent-workflow/scripts/run-parallel-plans.py"
         self.assertTrue(generated.exists())
         self.assertEqual(ADAPTER_SCRIPT.read_bytes(), generated.read_bytes())
+
+
+class LiveEvidenceGateTests(unittest.TestCase):
+    """The live-evidence gate refuses until a real demonstration is bound.
+
+    Every scenario uses an isolated local Git repository. The required-evidence
+    record is keyed by repository identity, so these cases never reach the
+    record of any real plan, and each case removes the record it created.
+    """
+
+    PLAN = "docs/plan/active/374-live.md"
+    UNGATED = "docs/plan/active/375-plain.md"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.repo = Path(self.temporary.name) / "repo"
+        (self.repo / "docs/plan/active").mkdir(parents=True)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.name", "Test")
+        git(self.repo, "config", "user.email", "test@example.invalid")
+        git(self.repo, "remote", "add", "origin", "https://example.invalid/owner/repo.git")
+        self.write_plan(self.PLAN, gated=True)
+        self.write_plan(self.UNGATED, gated=False)
+        (self.repo / "AGENTS.md").write_text("fixture\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "baseline")
+        module = importlib.util.spec_from_file_location(
+            "live_evidence_verifier", VERIFIER_SCRIPT
+        )
+        self.verifier = importlib.util.module_from_spec(module)
+        module.loader.exec_module(self.verifier)
+        for plan in (self.PLAN, self.UNGATED):
+            path = self.verifier.requirement_path(self.repo, plan)
+            PENDING_RECORDS.add(path)
+            self.addCleanup(PENDING_RECORDS.discard, path)
+            self.addCleanup(path.unlink, missing_ok=True)
+
+    def write_plan(self, selector: str, *, gated: bool) -> None:
+        item = "two operator-started sessions publish and retire their results"
+        digest = "sha256:" + hashlib.sha256(item.encode("utf-8")).hexdigest()
+        contract = (
+            "live_evidence_contract: parallel_sessions_v1\n"
+            f"live_evidence_acceptance_sha256: {digest}\n"
+            if gated
+            else ""
+        )
+        (self.repo / selector).write_text(
+            "# Plan\n\nstatus: in_progress\n"
+            "plan_purpose: implementation\n"
+            f"{contract}"
+            "acceptance:\n"
+            f"  - {item}\n"
+            "  - the assembled result stays inside its declared write scope\n"
+            "write_scope:\n  - AGENTS.md\n"
+            "\n## Tasks\n\n- [ ] implement\n",
+            encoding="utf-8",
+        )
+
+    def run_verifier(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(VERIFIER_SCRIPT), *arguments],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def test_require_refuses_a_gated_plan_with_no_reserved_demonstration(self) -> None:
+        refused = self.run_verifier("require", "--plan", self.PLAN)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("required-evidence record", refused.stderr)
+
+    def test_require_passes_a_plan_that_declares_no_live_evidence_contract(self) -> None:
+        allowed = self.run_verifier("require", "--plan", self.UNGATED)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        self.assertEqual(json.loads(allowed.stdout)["obligation"], "none")
+
+    def test_lifecycle_paths_refuse_a_gated_plan(self) -> None:
+        for script in ("complete-plan.sh", "finalize-active-plan.sh"):
+            with self.subTest(script=script):
+                refused = subprocess.run(
+                    ["bash", str(ROOT / "scripts" / script), self.PLAN],
+                    cwd=self.repo, check=False, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                self.assertNotEqual(refused.returncode, 0, refused.stdout)
+
+    def test_root_and_generated_verifier_stay_identical(self) -> None:
+        generated = (
+            ROOT / "template/.project-agent-workflow/scripts/verify-parallel-plan-sessions.py"
+        )
+        self.assertTrue(generated.exists())
+        self.assertEqual(VERIFIER_SCRIPT.read_bytes(), generated.read_bytes())
 
 
 class RunnerTaskWorktreeBoundaryTests(unittest.TestCase):

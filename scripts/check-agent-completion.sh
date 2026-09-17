@@ -135,6 +135,22 @@ PY
     [ "$status" = "in_progress" ] || continue
     [ "$lifecycle" = "in_progress" ] || continue
     sh scripts/complete-plan.sh --check-completion-evidence "$plan" </dev/null || continue
+    live_contract=$(awk -F': ' '$1 == "live_evidence_contract" { print $2; exit }' "$plan")
+    if [ -n "$live_contract" ]; then
+      if [ ! -f scripts/verify-parallel-plan-sessions.py ]; then
+        blocked=1
+        echo "plan declares $live_contract but the live-evidence verifier is missing: $plan" >&2
+        echo "Next: restore scripts/verify-parallel-plan-sessions.py." >&2
+        continue
+      fi
+      if ! live_refusal=$(python3 scripts/verify-parallel-plan-sessions.py require --plan "$plan" 2>&1 >/dev/null); then
+        blocked=1
+        echo "outstanding live-session evidence blocks completion: $plan" >&2
+        echo "$live_refusal" >&2
+        echo "Next: run the demonstration, bind its verified report, then scripts/complete-plan.sh $plan" >&2
+        continue
+      fi
+    fi
     blocked=1
     echo "completed plan is not marked ready: $plan (status: $lifecycle)" >&2
     echo "Next: scripts/complete-plan.sh $plan" >&2
