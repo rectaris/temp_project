@@ -226,6 +226,15 @@ Individual model statements stay on the records that reported them, as `metadata
 - Bind each statement to what its own source shape can observe. A shape reports only its declared evidence classes and its declared execution identities, so a runtime context statement can never arrive as a requested or provider-confirmed one, and a session-scoped shape can never name a turn. A statement that claims either is rejected.
 - `resource_observations` version 1 totals, provenance, maxima, coverage, and input limits stay exactly as they were. A model statement names an observed model, never its resource usage, so `per_model_token_totals`, `per_model_billed_cost`, and `per_model_completed_task_counts` are reported as unavailable rather than derived by dividing a run-wide total across model names.
 
+## Parallel Session Evidence
+
+A parallel two-session demonstration proves that two member sessions overlapped while implementing, so its evidence is bound per session rather than per run.
+
+- Keep each member session's transcript outside the demonstrated project and record its absolute path and SHA-256 digest in the private live report. The verifier re-reads those bytes, refuses a digest that no longer matches, and refuses a transcript held inside the project it claims to describe.
+- Name exactly two transcript sources covering two distinct member sessions. Two sources naming one session, or a source naming no reported member, are refused.
+- Each transcript must prove at least one tool record carrying that member's session digest and a timestamp inside that member's declared implementation interval. Terminal lifetimes alone do not establish overlap.
+- State unavailable sources explicitly. Missing primary transcript evidence leaves the demonstration incomplete; a self-authored summary or a synthetic event fixture never substitutes for it.
+
 ## Retention
 
 Keep raw logs by default. Do not add an automatic retention deadline.

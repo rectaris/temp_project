@@ -191,6 +191,41 @@ class GeneratedCiTest(unittest.TestCase):
             inventory.GENERATED_REQUIRED,
         )
 
+    def test_generated_parallel_session_tools_match_the_root_tools(self) -> None:
+        for name in ("run-parallel-plans.py", "verify-parallel-plan-sessions.py"):
+            root_tool = ROOT / "scripts" / name
+            generated = ROOT / "template/.project-agent-workflow/scripts" / name
+            self.assertEqual(root_tool.read_bytes(), generated.read_bytes(), name)
+            self.assertTrue(os.access(root_tool, os.X_OK), name)
+            self.assertTrue(os.access(generated, os.X_OK), name)
+
+    def test_parallel_session_tools_are_registered_in_the_install_inventory(self) -> None:
+        inventory = load_module(
+            ROOT / "scripts/project_workflow/copier_inventory.py", "session_inventory"
+        )
+        for name in ("run-parallel-plans.py", "verify-parallel-plan-sessions.py"):
+            self.assertIn(f"scripts/{name}", inventory.SOURCE_REQUIRED)
+            self.assertIn(
+                f"template/.project-agent-workflow/scripts/{name}",
+                inventory.SOURCE_REQUIRED,
+            )
+            self.assertIn(
+                f".project-agent-workflow/scripts/{name}", inventory.GENERATED_REQUIRED
+            )
+
+    def test_generated_lifecycle_gates_consult_the_live_evidence_verifier(self) -> None:
+        for name in (
+            "complete-plan.sh",
+            "finalize-active-plan.sh",
+            "check-agent-completion.sh",
+        ):
+            text = (ROOT / "template/.project-agent-workflow/scripts" / name).read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(
+                ".project-agent-workflow/scripts/verify-parallel-plan-sessions.py", text, name
+            )
+
     def test_default_generated_lint_checks_execution_groups(self) -> None:
         text = self.GENERATED_LINT.read_text(encoding="utf-8")
         self.assertIn("--check-execution-groups", text)

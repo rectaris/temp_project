@@ -2065,6 +2065,19 @@ test -f "$tmp/typescript/.project-agent-workflow/scripts/parallel-plan-state.py"
 test -x "$tmp/typescript/.project-agent-workflow/scripts/parallel-plan-state.py"
 test -f "$tmp/typescript/.project-agent-workflow/scripts/orca-coordinator.py"
 test -x "$tmp/typescript/.project-agent-workflow/scripts/orca-coordinator.py"
+# Integration owns assembly, publication and member retirement, so the adapter
+# and the live-evidence verifier install alongside the group authority and every
+# lifecycle gate consults the verifier rather than the plan's own manifest.
+for parallel_tool in run-parallel-plans.py verify-parallel-plan-sessions.py; do
+  test -f "$tmp/typescript/.project-agent-workflow/scripts/$parallel_tool"
+  test -x "$tmp/typescript/.project-agent-workflow/scripts/$parallel_tool"
+done
+for parallel_gate in complete-plan.sh finalize-active-plan.sh check-agent-completion.sh; do
+  grep -q '\.project-agent-workflow/scripts/verify-parallel-plan-sessions\.py' \
+    "$tmp/typescript/.project-agent-workflow/scripts/$parallel_gate"
+done
+grep -q 'under an integration authorization' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+grep -q 'Parallel Session Evidence' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md"
 grep -q 'optional `.project-agent-workflow/scripts/orca-coordinator.py ensure-worker` bridge' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Parallel Execution Groups' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-execution-groups >/dev/null)

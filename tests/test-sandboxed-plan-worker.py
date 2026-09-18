@@ -7051,6 +7051,24 @@ class LiveEvidenceGateTests(unittest.TestCase):
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
         self.assertEqual(json.loads(allowed.stdout)["obligation"], "none")
 
+    def test_an_originless_repository_stays_outside_enforcement(self) -> None:
+        """A required-evidence record is keyed by the repository identity.
+
+        A repository with no canonical origin can hold no such record, so an
+        ungated plan reserves nothing and must pass. Generated projects commonly
+        have no origin, and turning that into a lifecycle failure for every plan
+        would break them. A plan that still declares a contract must refuse,
+        because the gate cannot verify what it cannot key.
+        """
+
+        git(self.repo, "remote", "remove", "origin")
+        allowed = self.run_verifier("require", "--plan", self.UNGATED)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        self.assertEqual(json.loads(allowed.stdout)["obligation"], "none")
+        refused = self.run_verifier("require", "--plan", self.PLAN)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("remote.origin.url", refused.stderr)
+
     def test_lifecycle_paths_refuse_a_gated_plan(self) -> None:
         for script in ("complete-plan.sh", "finalize-active-plan.sh"):
             with self.subTest(script=script):
