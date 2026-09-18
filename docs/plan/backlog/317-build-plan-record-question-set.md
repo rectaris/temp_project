@@ -73,6 +73,8 @@ checked_summary_ja: 計画記録から実装リスク分類のラベル付き問
 - Record the question construction rules in tests/fixtures/question-set/construction-protocol.md, beside the fixtures, in the shape already used by the harness comparison protocol.
 - Keep held-out labels out of the repository. Only tuning cases are committed, and they are marked as used for tuning.
 - Defer external model execution and scoring to a separate plan. This plan produces the question set and its statistics only.
+- Treat the emitted set as fitting data, not only as a measurement set. Its consumer scores named feature dimensions and fits weights, so the tuning partition must carry enough records to fit on and the held-out partition must stay unused until those weights are frozen.
+- Keep the emitted question input reusable as the state of a later scoring call, so the same bytes that were checked for leaked fields are the bytes a feature score is computed from.
 
 ## Tasks
 
@@ -83,6 +85,7 @@ checked_summary_ja: 計画記録から実装リスク分類のラベル付き問
 - [ ] Implement lineage-aware time-split partitions and per-question provenance covering the source plan path and source commit.
 - [ ] Write the construction protocol document and the committed tuning cases, marking the cases as used for tuning.
 - [ ] Register the command in copier_inventory.SOURCE_REQUIRED and the tests in tests/test-validation-tools.py.
+- [ ] Report the tuning partition's per-class record counts separately, so a later weight fitting can tell before it starts whether a class has enough records to fit on.
 - [ ] Run the focused test, then the full validation suite, and commit the change through the ordinary lifecycle.
 
 ## Validation Notes
