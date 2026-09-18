@@ -7132,6 +7132,112 @@ class LiveEvidenceGateTests(unittest.TestCase):
         self.assertEqual(VERIFIER_SCRIPT.read_bytes(), generated.read_bytes())
 
 
+class MemberRetentionBindingTests(unittest.TestCase):
+    """Retention is the exact accepted bytes, not a pathname that still differs.
+
+    A member's result is accepted once, at one baseline, as one frozen tree. The
+    live report may claim retention only for bytes it can reproduce from those
+    immutable Git objects, so a later commit that rewrites the member's content
+    or mode is refused even though the path still differs from that member's
+    own baseline.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.repo = Path(self.temporary.name) / "project"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.name", "Test")
+        git(self.repo, "config", "user.email", "test@example.invalid")
+        (self.repo / "keep.txt").write_text("baseline\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "baseline")
+        self.base = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        (self.repo / "member.txt").write_text("member result\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "member result")
+        self.published = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        self.result_tree = git(
+            self.repo, "rev-parse", "HEAD^{tree}"
+        ).stdout.strip()
+        module = importlib.util.spec_from_file_location(
+            "retention_verifier", VERIFIER_SCRIPT
+        )
+        self.verifier = importlib.util.module_from_spec(module)
+        module.loader.exec_module(self.verifier)
+
+    def member(self, **overrides: object) -> dict:
+        patch = self.verifier.git_bytes(
+            self.repo,
+            "-c",
+            "core.abbrev=40",
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            self.base,
+            self.result_tree,
+        )
+        record = {
+            "base_commit": self.base,
+            "published_commit": self.published,
+            "result_tree": self.result_tree,
+            "changed_paths": ["member.txt"],
+            "patch_digest": self.verifier.digest_bytes(patch),
+        }
+        record.update(overrides)
+        return record
+
+    def retained(self, final_tip: str, **overrides: object) -> None:
+        self.verifier.verify_changes_retained(self.repo, self.member(**overrides), final_tip)
+
+    def test_an_exactly_retained_member_result_passes(self) -> None:
+        self.retained(self.published)
+
+    def test_a_valid_but_wrong_patch_digest_is_refused(self) -> None:
+        wrong = "sha256:" + "0" * 64
+        with self.assertRaises(self.verifier.EvidenceError) as refusal:
+            self.retained(self.published, patch_digest=wrong)
+        self.assertIn("reproduce the reported patch digest", str(refusal.exception))
+
+    def test_reported_changed_paths_must_be_exactly_the_result_paths(self) -> None:
+        with self.assertRaises(self.verifier.EvidenceError) as refusal:
+            self.retained(self.published, changed_paths=["member.txt", "keep.txt"])
+        self.assertIn("not exactly the paths", str(refusal.exception))
+
+    def test_a_later_commit_that_overwrites_the_member_content_is_refused(self) -> None:
+        """The name-only proof accepted this: the path still differs from base."""
+
+        (self.repo / "member.txt").write_text("overwritten\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "overwrite the member result")
+        final_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        name_only = git(
+            self.repo, "diff", "--name-only", f"{self.base}..{final_tip}"
+        ).stdout.split()
+        self.assertIn("member.txt", name_only)
+        with self.assertRaises(self.verifier.EvidenceError) as refusal:
+            self.retained(final_tip)
+        self.assertIn("accepted member work was overwritten", str(refusal.exception))
+
+    def test_a_later_mode_change_is_refused(self) -> None:
+        git(self.repo, "update-index", "--chmod=+x", "member.txt")
+        git(self.repo, "commit", "-q", "-m", "make the member result executable")
+        final_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        with self.assertRaises(self.verifier.EvidenceError) as refusal:
+            self.retained(final_tip)
+        self.assertIn("accepted member work was overwritten", str(refusal.exception))
+
+    def test_a_result_tree_that_is_not_a_tree_is_refused(self) -> None:
+        with self.assertRaises(self.verifier.EvidenceError) as refusal:
+            self.retained(self.published, result_tree=self.published)
+        self.assertIn("must name one Git tree", str(refusal.exception))
+
+
 class RunnerTaskWorktreeBoundaryTests(unittest.TestCase):
     """The runner and the grouped adapter must start from their bound worktree.
 

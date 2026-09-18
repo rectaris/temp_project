@@ -125,6 +125,7 @@ MEMBER_KEYS = (
     "base_commit",
     "task_tip",
     "published_commit",
+    "result_tree",
     "changed_paths",
     "patch_digest",
     "review_receipt_digests",
@@ -198,6 +199,25 @@ def git_text(repository: Path, *arguments: str) -> str:
 
 def git_succeeds(repository: Path, *arguments: str) -> bool:
     return git_run(repository, *arguments).returncode == 0
+
+
+def git_bytes(repository: Path, *arguments: str) -> bytes:
+    """Run one git command and return its raw stdout.
+
+    Patch bytes carry binary hunks and exact line endings, so they are never
+    decoded before they are digested.
+    """
+
+    completed = subprocess.run(
+        ("git", "-C", str(repository), *arguments),
+        capture_output=True,
+        check=False,
+        env=git_environment(),
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise EvidenceError(f"git {' '.join(arguments)} failed: {detail}")
+    return completed.stdout
 
 
 def repository_root(start: Path | None = None) -> Path:
@@ -697,6 +717,11 @@ def verify_member_shape(member: Any, index: int) -> dict[str, Any]:
     require_commit(member["base_commit"], "member base_commit")
     require_commit(member["task_tip"], "member task_tip")
     require_commit(member["published_commit"], "member published_commit")
+    if (
+        not isinstance(member["result_tree"], str)
+        or COMMIT_RE.fullmatch(member["result_tree"]) is None
+    ):
+        raise EvidenceError("member result_tree must be one full Git object id")
     require_digest(member["patch_digest"], "member patch_digest")
     changed = member["changed_paths"]
     if not isinstance(changed, list) or not changed:
@@ -764,23 +789,91 @@ def verify_retirement(project: Path, member: dict[str, Any], final_tip: str) -> 
         )
 
 
+def member_patch_bytes(project: Path, member: dict[str, Any]) -> bytes:
+    """Regenerate the member patch from immutable Git objects.
+
+    The report never supplies these bytes. They are derived from the member's
+    admitted baseline and the frozen result tree, using the same canonical
+    flags the adapter used to freeze the handoff, so a report cannot assert a
+    patch digest it cannot reproduce.
+    """
+
+    return git_bytes(
+        project,
+        "-c",
+        "core.abbrev=40",
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-color",
+        "--no-ext-diff",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        member["base_commit"],
+        member["result_tree"],
+    )
+
+
+def tree_entry(project: Path, revision: str, path: str) -> str:
+    """Return one path's exact ``mode type object`` entry, or absence.
+
+    Absence is reported as the empty string so a path the member deleted is
+    compared as strictly as a path it wrote.
+    """
+
+    line = git_text(project, "ls-tree", "--full-tree", revision, "--", path)
+    if not line:
+        return ""
+    fields = line.split("\t", 1)[0].split()
+    if len(fields) != 3:
+        raise EvidenceError(f"git ls-tree returned an unreadable entry for {path}")
+    return " ".join(fields)
+
+
 def verify_changes_retained(
     project: Path, member: dict[str, Any], final_tip: str
 ) -> None:
-    changed = set(
-        git_text(
+    if git_text(project, "cat-file", "-t", member["result_tree"]) != "tree":
+        raise EvidenceError("member result_tree must name one Git tree")
+    patch = member_patch_bytes(project, member)
+    if not patch:
+        raise EvidenceError("the member result tree changes nothing at its baseline")
+    if digest_bytes(patch) != member["patch_digest"]:
+        raise EvidenceError(
+            "the member result tree does not reproduce the reported patch digest"
+        )
+    produced = sorted(
+        entry
+        for entry in git_text(
             project,
             "diff",
             "--name-only",
-            f"{member['base_commit']}..{final_tip}",
-        ).splitlines()
+            "-z",
+            member["base_commit"],
+            member["result_tree"],
+        ).split("\0")
+        if entry
     )
-    missing = [path for path in member["changed_paths"] if path not in changed]
-    if missing:
+    reported = list(member["changed_paths"])
+    if len(set(reported)) != len(reported) or sorted(reported) != produced:
         raise EvidenceError(
-            "the published history no longer carries every member change: "
-            f"{sorted(missing)}"
+            "the reported changed paths are not exactly the paths this member "
+            f"result changes: {produced}"
         )
+    # Retention is the exact entry, not the pathname. A later commit that
+    # rewrites a member's content or mode still leaves that path different from
+    # the member's own baseline, so a name-only comparison would accept it.
+    for path in produced:
+        expected = tree_entry(project, member["result_tree"], path)
+        for revision, label in (
+            (member["published_commit"], "the member's published commit"),
+            (final_tip, "the final published history"),
+        ):
+            if tree_entry(project, revision, path) != expected:
+                raise EvidenceError(
+                    f"{label} no longer carries the exact member result for "
+                    f"{path}; accepted member work was overwritten"
+                )
 
 
 def verify_transcripts(

@@ -233,6 +233,7 @@ A parallel two-session demonstration proves that two member sessions overlapped 
 - Keep each member session's transcript outside the demonstrated project and record its absolute path and SHA-256 digest in the private live report. The verifier re-reads those bytes, refuses a digest that no longer matches, and refuses a transcript held inside the project it claims to describe.
 - Name exactly two transcript sources covering two distinct member sessions. Two sources naming one session, or a source naming no reported member, are refused.
 - Each transcript must prove at least one tool record carrying that member's session digest and a timestamp inside that member's declared implementation interval. Terminal lifetimes alone do not establish overlap.
+- Bind each member's retained result to the frozen tree that member handed off. The report names that member's baseline commit, its immutable result tree and its handoff patch digest; the verifier regenerates the patch from those Git objects, refuses a digest it cannot reproduce, requires the reported changed paths to be exactly the paths that patch touches, and requires both the member's published commit and the final published tip to carry that member's exact blob, mode and absence for each of them. A pathname that merely still differs from the member's baseline is not retention.
 - State unavailable sources explicitly. Missing primary transcript evidence leaves the demonstration incomplete; a self-authored summary or a synthetic event fixture never substitutes for it.
 
 ## Retention
