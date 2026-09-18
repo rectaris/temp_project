@@ -2406,10 +2406,12 @@ def require_integration_session(
     """Authenticate the integration session that admitted this schema-2 group.
 
     A member session can read the group state and knows its own handoff digest,
-    so neither fact is publication authority. The group records the integration
-    session identity and its process incarnation at admission, and the process
-    check requires the caller to actually run inside that process tree, which a
-    separately started member session cannot do.
+    so neither fact is publication authority. This requires the caller to run
+    inside the exact process incarnation the group recorded at admission: the
+    ancestry walk alone would admit any member-owned ancestor from the same
+    boot, so the recorded pid and its start ticks must match too. A restarted
+    integration session therefore cannot publish, which is deliberate; the
+    supported route is a fresh group rather than a weaker identity check.
     """
 
     if session_id is None or session_pid is None:
@@ -2422,9 +2424,10 @@ def require_integration_session(
             "this operation requires the integration session that admitted the group"
         )
     identity = require_session_process(session_pid)
-    if identity["boot_digest"] != state["integration_process_identity"]["boot_digest"]:
+    if identity != state["integration_process_identity"]:
         raise GroupError(
-            "the integration session process evidence comes from another boot"
+            "this operation requires the exact integration process the group "
+            "recorded at admission"
         )
 
 
@@ -2464,6 +2467,8 @@ def spend_member_review(
     registry_path_digest: str,
     registry_event_count: int,
     registry_event_chain_digest: str,
+    integration_session_id: str | None = None,
+    integration_session_pid: int | None = None,
 ) -> int:
     """Spend one review from the budget this member owns.
 
@@ -2482,6 +2487,13 @@ def spend_member_review(
         member = require_member(state, plan)
         require_active_member(member)
         reserved = sessions and member["handoff"] is None
+        if sessions and not reserved:
+            # The reserved post-handoff review is the one publication consumes,
+            # so a member must not be able to record it for its own result.
+            require_session_state(root, path, state)
+            require_integration_session(
+                state, integration_session_id, integration_session_pid
+            )
         limit = SESSION_MEMBER_REVIEW_LIMIT if reserved else MEMBER_REVIEW_LIMIT
         if member["counters"]["reviews"] >= limit:
             if reserved:
@@ -2544,6 +2556,8 @@ def record_review(args: argparse.Namespace) -> None:
         registry_path_digest=args.registry_path_digest,
         registry_event_count=args.registry_event_count,
         registry_event_chain_digest=args.registry_event_chain_digest,
+        integration_session_id=args.integration_session_id,
+        integration_session_pid=args.integration_session_pid,
     ))
 
 
@@ -3028,6 +3042,8 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("--registry-event-count", type=int, required=True)
     review.add_argument("--registry-event-chain-digest", required=True)
     review.add_argument("--assembly-record-digest", required=True)
+    review.add_argument("--integration-session-id")
+    review.add_argument("--integration-session-pid", type=int)
     review.set_defaults(handler=record_review)
 
     reserve = sub.add_parser("adjust-reserve")

@@ -6481,6 +6481,7 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
             "--registry-event-count", "1",
             "--registry-event-chain-digest", adapter_digest("chain"),
             "--assembly-record-digest", record["record_digest"],
+            *self.integration_identity(),
         )
         self.assertEqual(review.returncode, 0, review.stderr)
 
@@ -6557,6 +6558,7 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
             "--registry-event-count", "1",
             "--registry-event-chain-digest", adapter_digest("chain"),
             "--assembly-record-digest", record["record_digest"],
+            *self.integration_identity(),
         )
         self.assertEqual(review.returncode, 0, review.stderr)
         commit = self.apply_assembled_commit(record)
@@ -6574,6 +6576,116 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         )
         self.assertEqual(released.returncode, 0, released.stderr)
         self.assertEqual(self.payload()["publication_lease"]["owner"], "")
+
+    def test_a_member_owned_process_cannot_impersonate_integration(self) -> None:
+        """Naming the integration session is not enough; the process must match.
+
+        The ancestry walk alone accepts any ancestor of the caller, so a member
+        that learns the integration session identifier could otherwise pass its
+        own process. The group recorded one exact incarnation, so only that one
+        is admitted.
+        """
+
+        state = self.payload()
+        recorded = state["integration_process_identity"]
+        self.assertEqual(recorded["pid"], os.getpid())
+        impostor = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.ALPHA,
+            "--owner", "integration",
+            "--integration-session-id", "integration-session",
+            "--integration-session-pid", str(os.getppid()),
+        )
+        self.assertNotEqual(impostor.returncode, 0, impostor.stdout)
+        self.assertIn("exact integration process", impostor.stderr)
+        self.assertEqual(self.payload()["publication_lease"]["owner"], "")
+
+    def test_a_member_cannot_record_the_reserved_integration_review(self) -> None:
+        """The review publication consumes belongs to integration alone.
+
+        Before the handoff a member spends its own review; afterwards the
+        remaining slot is the integration review of the assembled result, so
+        recording it must require the authenticated integration session.
+        """
+
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        handoff_path = self.base / "handoff.json"
+        ready = self.ready_member(alpha, self.ALPHA, worktree, handoff_path)
+        self.assertEqual(ready["returncode"], 0, ready)
+        assembly_path = self.base / "assembly.json"
+        assembled = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(handoff_path), "--output", str(assembly_path),
+        )
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        record = json.loads(assembly_path.read_text(encoding="utf-8"))
+        refused = self.run_group(
+            "record-review", str(self.state), "--member", self.ALPHA,
+            "--registry-path-digest", adapter_digest("registry"),
+            "--registry-event-count", "1",
+            "--registry-event-chain-digest", adapter_digest("chain"),
+            "--assembly-record-digest", record["record_digest"],
+        )
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("integration session identity", refused.stderr)
+        self.assertEqual(
+            self.payload()["members"][self.ALPHA]["counters"]["reviews"], 0
+        )
+
+    def test_publication_authenticates_integration_before_the_target_moves(self) -> None:
+        """An unauthenticated publication must not advance the target first.
+
+        Authenticating only when the authority records the publication would
+        leave the group target already moved by a caller the authority then
+        refuses, which is exactly the effect the lease exists to prevent.
+        """
+
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        handoff_path = self.base / "handoff.json"
+        ready = self.ready_member(alpha, self.ALPHA, worktree, handoff_path)
+        self.assertEqual(ready["returncode"], 0, ready)
+        assembly_path = self.base / "assembly.json"
+        assembled = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(handoff_path), "--output", str(assembly_path),
+        )
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        record = json.loads(assembly_path.read_text(encoding="utf-8"))
+        lease = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.ALPHA,
+            "--owner", "integration", *self.integration_identity(),
+        )
+        self.assertEqual(lease.returncode, 0, lease.stderr)
+        review = self.run_group(
+            "record-review", str(self.state), "--member", self.ALPHA,
+            "--registry-path-digest", adapter_digest("registry"),
+            "--registry-event-count", "1",
+            "--registry-event-chain-digest", adapter_digest("chain"),
+            "--assembly-record-digest", record["record_digest"],
+            *self.integration_identity(),
+        )
+        self.assertEqual(review.returncode, 0, review.stderr)
+        commit = self.apply_assembled_commit(record)
+        refused = self.run_adapter(
+            "publish", "--state", str(self.state), "--plan", self.ALPHA,
+            "--assembly", str(assembly_path), "--commit", commit,
+            "--owner", "integration", "--journal", str(self.base / "journal.json"),
+        )
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("integration session identity", refused.stderr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), self.start_commit)
+        self.assertFalse(self.payload()["members"][self.ALPHA]["publication"]["published"])
 
     def test_member_retirement_requires_verified_integration_authority(self) -> None:
         alpha = self.session("session-alpha")
@@ -6666,6 +6778,100 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         self.assertNotEqual(unpublished.returncode, 0, unpublished.stdout)
         self.assertIn("records no publication", unpublished.stderr)
         self.assertTrue(worktree.exists())
+
+    def test_retirement_refuses_a_result_tree_the_authority_never_published(self) -> None:
+        """Retirement approves removal of exactly the published bytes.
+
+        The authorization names the tree that `require_frozen_result` will
+        accept, so a member that freezes extra work after publication could
+        otherwise have those unpublished bytes deleted.
+        """
+
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        handoff_path = self.base / "handoff.json"
+        ready = self.ready_member(alpha, self.ALPHA, worktree, handoff_path)
+        self.assertEqual(ready["returncode"], 0, ready)
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        assembly_path = self.base / "assembly.json"
+        assembled = self.run_adapter(
+            "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+            "--handoff", str(handoff_path), "--output", str(assembly_path),
+        )
+        self.assertEqual(assembled.returncode, 0, assembled.stderr)
+        record = json.loads(assembly_path.read_text(encoding="utf-8"))
+        lease = self.run_group(
+            "lease-acquire", str(self.state), "--member", self.ALPHA,
+            "--owner", "integration", *self.integration_identity(),
+        )
+        self.assertEqual(lease.returncode, 0, lease.stderr)
+        review = self.run_group(
+            "record-review", str(self.state), "--member", self.ALPHA,
+            "--registry-path-digest", adapter_digest("registry"),
+            "--registry-event-count", "1",
+            "--registry-event-chain-digest", adapter_digest("chain"),
+            "--assembly-record-digest", record["record_digest"],
+            *self.integration_identity(),
+        )
+        self.assertEqual(review.returncode, 0, review.stderr)
+        commit = self.apply_assembled_commit(record)
+        self.git("update-ref", "refs/heads/main", commit)
+        # Publish without letting the adapter retire the worktree, so the
+        # member survives to stage work the publication never described.
+        recorded = self.run_group(
+            "publication-record", str(self.state), "--member", self.ALPHA,
+            "--commit", commit, "--assembly-digest", record["record_digest"],
+            "--handoff-digest", handoff["record_digest"],
+            *self.integration_identity(),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        (worktree / "src/secret.py").write_text("SECRET = 1\n", encoding="utf-8")
+        self.git("add", "-A", cwd=worktree)
+        widened = self.git("write-tree", cwd=worktree)
+        manager = self.group.worktree_manager()
+        authorization = {
+            "schema_version": 1,
+            "adapter_version": record["adapter_version"],
+            "authorization_kind": "parallel_group_member_retirement",
+            "repository_identity": manager.repository_identity(self.repo),
+            "group_id": "alpha-beta",
+            "plan_path": self.ALPHA,
+            "member_worktree_path": str(worktree),
+            "member_branch_ref": "refs/heads/plan/284-alpha",
+            "member_head": record["original_member_head"],
+            "member_result_tree": widened,
+            "target_ref": "refs/heads/main",
+            "published_commit": commit,
+            "assembly_record_digest": record["record_digest"],
+            "assembled_patch_digest": record["assembled_patch_digest"],
+            "handoff_record_digest": handoff["record_digest"],
+        }
+        authorization["authorization_digest"] = manager.canonical_digest(
+            {
+                key: value
+                for key, value in authorization.items()
+                if key != "authorization_digest"
+            }
+        )
+        forged = self.base / "widened.json"
+        forged.write_text(json.dumps(authorization), encoding="utf-8")
+        forged.chmod(0o600)
+        refused = subprocess.run(
+            [
+                sys.executable, str(WORKTREE_SCRIPT), "retire", self.ALPHA,
+                "--owner-id", "parent", "--integration-authorization", str(forged),
+            ],
+            cwd=self.repo, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("another member result", refused.stderr)
+        self.assertTrue((worktree / "src/secret.py").exists())
 
     def test_assembly_refuses_stale_mixed_and_unsubmitted_member_evidence(self) -> None:
         alpha = self.session("session-alpha")
@@ -6889,6 +7095,16 @@ class LiveEvidenceGateTests(unittest.TestCase):
         refused = self.run_verifier("require", "--plan", self.PLAN)
         self.assertNotEqual(refused.returncode, 0, refused.stdout)
         self.assertIn("no longer declares", refused.stderr)
+        # The lifecycle entrypoints must reach the same conclusion, so removing
+        # the manifest fields cannot skip the gate by skipping the verifier.
+        for script in ("complete-plan.sh", "finalize-active-plan.sh"):
+            with self.subTest(script=script):
+                blocked = subprocess.run(
+                    ["bash", str(ROOT / "scripts" / script), self.PLAN],
+                    cwd=self.repo, check=False, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                self.assertNotEqual(blocked.returncode, 0, blocked.stdout)
 
     def test_root_and_generated_verifier_stay_identical(self) -> None:
         generated = (

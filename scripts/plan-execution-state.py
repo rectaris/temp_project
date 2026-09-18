@@ -5299,6 +5299,8 @@ def spend_group_member_review(args: argparse.Namespace) -> None:
             registry_path_digest=registry["path_digest"],
             registry_event_count=registry["event_count"],
             registry_event_chain_digest=registry["event_chain_digest"],
+            integration_session_id=getattr(args, "integration_session_id", None),
+            integration_session_pid=getattr(args, "integration_session_pid", None),
         )
     except module.GroupError as exc:
         raise StateError(str(exc)) from exc
@@ -6437,6 +6439,8 @@ def parser() -> argparse.ArgumentParser:
     review.add_argument("--lifecycle-state", required=True)
     review.add_argument("--elapsed-seconds", type=float, default=0.0)
     review.add_argument("--group-state")
+    review.add_argument("--integration-session-id")
+    review.add_argument("--integration-session-pid", type=int)
     review.set_defaults(handler=record_bounded_review)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("state")

@@ -1087,6 +1087,16 @@ def command_publish(args: argparse.Namespace) -> None:
         raise AdapterError("this member already published its accepted result")
 
     if parent_direct:
+        # Authenticate integration before anything moves. The lease, the review
+        # and the target update all follow from this, so checking it only when
+        # the authority records the publication would let an unauthenticated
+        # caller advance the target first and be refused afterwards.
+        try:
+            authority().require_integration_session(
+                state, args.integration_session_id, args.integration_session_pid
+            )
+        except authority().GroupError as exc:
+            raise AdapterError(str(exc)) from exc
         submitted = member["handoff"]
         if submitted is None:
             raise AdapterError(

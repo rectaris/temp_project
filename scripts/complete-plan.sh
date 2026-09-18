@@ -40,13 +40,13 @@ completion_evidence() {
 }
 
 # A plan that declares a live-evidence contract carries an obligation that only
-# a verified real-session report can discharge. The obligation comes from the
-# committed manifest field, so unsetting an environment variable or deleting the
-# private record cannot remove it; both make this gate refuse instead.
+# a verified real-session report can discharge. The verifier is consulted for
+# every plan, not only for one that still declares the contract, so deleting
+# the manifest fields after reserving a demonstration refuses here too.
 require_live_evidence() {
   _contract=$(awk -F': ' '$1 == "live_evidence_contract" { print $2; exit }' "$1")
-  [ -n "$_contract" ] || return 0
   if [ ! -f scripts/verify-parallel-plan-sessions.py ]; then
+    [ -n "$_contract" ] || return 0
     echo "plan declares $_contract but the live-evidence verifier is missing: scripts/verify-parallel-plan-sessions.py" >&2
     return 1
   fi

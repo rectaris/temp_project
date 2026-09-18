@@ -45,8 +45,8 @@ completion_evidence() {
 # private record cannot remove it; both make this gate refuse instead.
 require_live_evidence() {
   _contract=$(awk -F': ' '$1 == "live_evidence_contract" { print $2; exit }' "$1")
-  [ -n "$_contract" ] || return 0
   if [ ! -f .project-agent-workflow/scripts/verify-parallel-plan-sessions.py ]; then
+    [ -n "$_contract" ] || return 0
     echo "plan declares $_contract but the live-evidence verifier is missing: .project-agent-workflow/scripts/verify-parallel-plan-sessions.py" >&2
     return 1
   fi

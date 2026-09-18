@@ -1838,6 +1838,25 @@ def verify_integration_authorization(
             "integration authorization names another member handoff than the "
             "group authority published"
         )
+    # The authorization names the tree that retirement will approve for
+    # removal, so a self-selected tree would let a member freeze extra work
+    # after publication and have it deleted. The recorded handoff patch digest
+    # is the authority's own description of the published bytes, so the named
+    # tree must reproduce exactly that diff against the admitted baseline.
+    frozen = git(
+        repository,
+        "-c", "core.abbrev=40", "diff", "--binary", "--full-index", "--no-color",
+        "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/",
+        member["base_commit"], authorization["member_result_tree"],
+        check=False,
+    )
+    if frozen.returncode != 0 or digest_bytes(frozen.stdout) != (
+        member["handoff"]["patch_digest"]
+    ):
+        raise WorktreeError(
+            "integration authorization names another member result than the "
+            "group authority published; the worktree is preserved"
+        )
     recorded = any(
         event["event_type"] == "member_published"
         and event["detail"].get("plan_path") == args.plan

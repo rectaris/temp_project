@@ -39,16 +39,16 @@ case "$src" in
 esac
 [ -f "$src" ] || { echo "missing plan: $src" >&2; exit 1; }
 
-# A plan that declares a live-evidence contract is refused here as well, so no
-# finalization or archive path can outrun its verified real-session report.
+# A plan that reserved a live-evidence demonstration is refused here as well, so
+# no finalization or archive path can outrun its verified real-session report.
+# The verifier decides, so removing the manifest fields cannot skip this gate.
 _live_contract=$(awk -F': ' '$1 == "live_evidence_contract" { print $2; exit }' "$src")
-if [ -n "$_live_contract" ]; then
-  [ -f .project-agent-workflow/scripts/verify-parallel-plan-sessions.py ] || {
-    echo "plan declares $_live_contract but the live-evidence verifier is missing: .project-agent-workflow/scripts/verify-parallel-plan-sessions.py" >&2
-    exit 1
-  }
+if [ -f .project-agent-workflow/scripts/verify-parallel-plan-sessions.py ]; then
   python3 .project-agent-workflow/scripts/verify-parallel-plan-sessions.py \
     require --plan "$src" >/dev/null || exit 1
+elif [ -n "$_live_contract" ]; then
+  echo "plan declares $_live_contract but the live-evidence verifier is missing: .project-agent-workflow/scripts/verify-parallel-plan-sessions.py" >&2
+  exit 1
 fi
 
 # An enrolled parallel execution group member is finalized through the grouped
