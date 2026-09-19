@@ -6410,8 +6410,16 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
             ],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-        self.addCleanup(lambda: process.communicate(timeout=30))
+        self.addCleanup(self.end_session, process)
         return process
+
+    def end_session(self, process: subprocess.Popen) -> None:
+        """Let one member session exit, the way retirement now requires."""
+
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        process.wait(timeout=30)
 
     def member_command(self, process: subprocess.Popen, *arguments: str) -> dict:
         process.stdin.write(json.dumps({
@@ -6570,6 +6578,10 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         self.assertTrue(record["review_required"])
         self.assertTrue(record["validation_required"])
 
+        # Retirement destroys whatever the member session still holds, so the
+        # session must be gone before its worktree can be removed.
+        self.end_session(alpha)
+
         # Publication requires the integration review of this exact assembly.
         lease = self.run_group(
             "lease-acquire", str(self.state), "--member", self.ALPHA,
@@ -6709,6 +6721,89 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         self.assertEqual(refused.returncode, 1)
         self.assertIn("does not reconstruct the recorded intent", refused.stderr)
 
+    def test_retirement_preserves_ignored_member_work_and_restores_the_worktree(
+        self,
+    ) -> None:
+        """Forced removal destroys ignored files, so they must be visible.
+
+        Excluding ignored paths hid exactly the bytes a forced removal cannot
+        give back: a local environment, credentials, an editor's state. The
+        check also has to survive its own refusal, so the quarantine it moves
+        the worktree into is returned intact.
+        """
+
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        handoff_path = self.base / "handoff.json"
+        self.assertEqual(
+            self.ready_member(alpha, self.ALPHA, worktree, handoff_path)["returncode"],
+            0,
+        )
+        assembly_path = self.base / "assembly.json"
+        self.assertEqual(
+            self.run_adapter(
+                "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+                "--handoff", str(handoff_path), "--output", str(assembly_path),
+            ).returncode,
+            0,
+        )
+        record = json.loads(assembly_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            self.run_group(
+                "lease-acquire", str(self.state), "--member", self.ALPHA,
+                "--owner", "integration", *self.integration_identity(),
+            ).returncode,
+            0,
+        )
+        self.assertEqual(
+            self.run_group(
+                "record-review", str(self.state), "--member", self.ALPHA,
+                "--registry-path-digest", adapter_digest("registry"),
+                "--registry-event-count", "1",
+                "--registry-event-chain-digest", adapter_digest("chain"),
+                "--assembly-record-digest", record["record_digest"],
+                *self.integration_identity(),
+            ).returncode,
+            0,
+        )
+        commit = self.apply_assembled_commit(record)
+        self.end_session(alpha)
+
+        common = Path(self.git("rev-parse", "--path-format=absolute", "--git-common-dir"))
+        (common / "info").mkdir(exist_ok=True)
+        (common / "info/exclude").write_text(".env\n", encoding="utf-8")
+        secret = worktree / ".env"
+        secret.write_text("TOKEN=unrecoverable\n", encoding="utf-8")
+        self.assertNotIn(
+            ".env", self.git("status", "--porcelain", cwd=worktree),
+            "the fixture must make this file genuinely ignored",
+        )
+
+        journal = self.base / "journal.json"
+        refused = self.publish_member(record, commit, journal)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("untracked or ignored work", refused.stderr)
+        self.assertTrue(worktree.exists())
+        self.assertEqual(secret.read_text(encoding="utf-8"), "TOKEN=unrecoverable\n")
+        # The refusal leaves no quarantine behind and the worktree still works.
+        self.assertEqual(
+            sorted(entry.name for entry in worktree.parent.iterdir() if entry.name.startswith(".")),
+            [],
+        )
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=worktree), record["original_member_head"])
+
+        # Removing it lets the same authorization finish.
+        secret.unlink()
+        resumed = self.run_adapter("publish-recover", "--journal", str(journal))
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(json.loads(resumed.stdout)["recovery"], "retired")
+        self.assertFalse(worktree.exists())
+
     def test_member_cannot_take_the_publication_lease_without_integration(self) -> None:
         """A member knows the owner string; it does not know integration.
 
@@ -6771,9 +6866,27 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         )
         self.assertEqual(review.returncode, 0, review.stderr)
         commit = self.apply_assembled_commit(record)
-        published = self.publish_member(record, commit, self.base / "journal.json")
-        self.assertEqual(published.returncode, 0, published.stderr)
+
+        # Retirement is the last effect of publication, and it refuses a live
+        # member session. The result still reaches the target, so what is
+        # outstanding is the retirement, which the journal resumes once the
+        # session is gone.
+        journal = self.base / "journal.json"
+        live = self.publish_member(record, commit, journal)
+        self.assertNotEqual(live.returncode, 0, live.stdout)
+        self.assertIn("still running", live.stderr)
+        self.assertTrue(worktree.exists())
+        self.assertEqual(self.git("rev-parse", "refs/heads/main"), commit)
+        self.assertEqual(
+            json.loads(journal.read_text(encoding="utf-8"))["state"], "published"
+        )
         self.assertEqual(self.payload()["publication_lease"]["owner"], "")
+
+        self.end_session(alpha)
+        resumed = self.run_adapter("publish-recover", "--journal", str(journal))
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(json.loads(resumed.stdout)["recovery"], "retired")
+        self.assertFalse(worktree.exists())
         partner = self.run_group(
             "lease-acquire", str(self.state), "--member", self.BETA,
             "--owner", "integration", *self.integration_identity(),

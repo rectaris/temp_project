@@ -1154,28 +1154,61 @@ def require_frozen_result(worktree: Path, tree: str) -> None:
     refuse a worktree whose content is already safe. Matching the frozen tree
     is the stronger fact: it proves nothing was added or changed after the
     freeze integration verified and published.
+
+    Every comparison here is made total, because what this check admits is
+    then destroyed. Ignored files are enumerated rather than excluded, since a
+    local environment, credentials or an editor's state are exactly the
+    unrecoverable bytes an exclusion would hide. Submodules are forced visible
+    for the same reason: a dirty submodule is work, not noise.
     """
 
-    index = git(worktree, "diff-index", "--cached", "--quiet", tree, check=False)
+    index = git(
+        worktree,
+        "diff-index",
+        "--cached",
+        "--ignore-submodules=none",
+        "--quiet",
+        tree,
+        check=False,
+    )
     if index.returncode != 0:
         raise WorktreeError(
             "the member worktree index no longer matches its frozen result; the "
             "worktree is preserved"
         )
-    working = git(worktree, "diff-files", "--quiet", check=False)
+    working = git(
+        worktree, "diff-files", "--ignore-submodules=none", "--quiet", check=False
+    )
     if working.returncode != 0:
         raise WorktreeError(
             "the member worktree changed after its frozen result; the worktree "
             "is preserved"
         )
-    untracked = git(
-        worktree, "ls-files", "--others", "--exclude-standard", "-z"
-    ).stdout
+    untracked = git(worktree, "ls-files", "--others", "-z").stdout
     if untracked.strip(b"\0") != b"":
         raise WorktreeError(
-            "the member worktree gained untracked work after its frozen result; "
-            "the worktree is preserved"
+            "the member worktree gained untracked or ignored work after its "
+            "frozen result; the worktree is preserved"
         )
+    nested = git(
+        worktree,
+        "submodule",
+        "foreach",
+        "--recursive",
+        "git status --porcelain --ignored",
+        check=False,
+    )
+    if nested.returncode != 0:
+        raise WorktreeError(
+            "the member worktree submodules cannot be inspected; the worktree "
+            "is preserved"
+        )
+    for line in nested.stdout.decode("utf-8", "replace").splitlines():
+        if line.strip() and not line.startswith("Entering "):
+            raise WorktreeError(
+                "a member worktree submodule holds work after its frozen "
+                "result; the worktree is preserved"
+            )
 
 
 def load_restructure_module():
@@ -1434,6 +1467,46 @@ def read_publication_journal(path: Path) -> dict[str, Any]:
     return unsigned
 
 
+def quarantine_worktree(target: Path) -> Path:
+    """Move one worktree to a private sibling path Git still resolves.
+
+    Removal needs the worktree registered, so the quarantine stays inside the
+    same parent and is re-registered by path. The name is private to this
+    transaction, so a concurrent preparation for the same task finds the
+    original path absent rather than usable.
+    """
+
+    quarantine = target.with_name(f".{target.name}.retiring-{os.getpid()}")
+    if quarantine.exists() or quarantine.is_symlink():
+        raise WorktreeError("a previous retirement quarantine is still present")
+    target.rename(quarantine)
+    moved = git(quarantine, "worktree", "repair", check=False)
+    if moved.returncode != 0:
+        release_quarantine(quarantine, target)
+        raise WorktreeError(
+            "the member worktree could not be quarantined for removal; the "
+            "worktree is preserved"
+        )
+    return quarantine
+
+
+def release_quarantine(quarantine: Path, target: Path) -> None:
+    """Return a quarantined worktree to the exact path it was registered at.
+
+    Preserving the directory is not enough: the quarantine re-registered it by
+    its temporary path, so restoring the bytes without repairing that
+    registration would leave the task unusable after a refusal.
+    """
+
+    quarantine.rename(target)
+    repaired = git(target, "worktree", "repair", check=False)
+    if repaired.returncode != 0:
+        raise WorktreeError(
+            "the preserved member worktree could not be re-registered at its "
+            f"bound path {target}; repair it before retrying retirement"
+        )
+
+
 def retire_worktree(
     repository: Path,
     target: Path,
@@ -1464,10 +1537,22 @@ def retire_worktree(
         raise WorktreeError("refusing to retire the pre-existing checkout")
     if target.exists():
         if frozen_result_tree is not None:
-            require_frozen_result(target, frozen_result_tree)
+            # Checking and then forcing are two operations on a live path, and
+            # only the second is destructive. Moving the exact checked
+            # directory aside first closes that window: whatever arrives at the
+            # original path afterwards is no longer what gets removed, and the
+            # quarantined copy is rechecked where nothing else can reach it.
+            quarantine = quarantine_worktree(target)
+            try:
+                require_frozen_result(quarantine, frozen_result_tree)
+            except BaseException:
+                release_quarantine(quarantine, target)
+                raise
             # The frozen result is already published, so removal discards a
             # verified copy rather than unreviewed work.
-            git(anchor, "worktree", "remove", "--force", str(target))
+            git(anchor, "worktree", "remove", "--force", str(quarantine))
+            if quarantine.exists() or quarantine.is_symlink():
+                raise WorktreeError("quarantined member worktree remains after removal")
         else:
             if not worktree_is_clean(target):
                 raise WorktreeError(
@@ -1875,6 +1960,27 @@ def verify_integration_authorization(
         raise WorktreeError(
             "the authorized publication is not reachable from the group target; "
             "the member worktree is preserved"
+        )
+    # A handoff records the binding as stopped the moment it proves the session
+    # process live, so the recorded state alone says nothing about now. Forced
+    # removal destroys whatever that process still holds open, so retirement
+    # requires the exact recorded incarnation to be gone.
+    binding = member["session_binding"]
+    if binding is None:
+        raise WorktreeError(
+            "the group authority records no member session for this worktree; "
+            "the worktree is preserved"
+        )
+    try:
+        exited = group.session_process_has_exited(binding["process_identity"])
+    except group.GroupError as exc:
+        raise WorktreeError(
+            f"the member session process cannot be verified: {exc}"
+        ) from exc
+    if not exited:
+        raise WorktreeError(
+            "the member session process is still running; stop it before "
+            "retirement and the worktree is preserved"
         )
 
 

@@ -1608,6 +1608,24 @@ def require_session_process(pid: int) -> dict[str, Any]:
     raise GroupError("session process is not an ancestor of this command")
 
 
+def session_process_has_exited(identity: dict[str, Any]) -> bool:
+    """Report whether one recorded session incarnation is definitely gone.
+
+    Only the exact incarnation counts. A reused pid carries different start
+    ticks, and evidence from another boot describes no process on this one, so
+    both read as exited. An identity that still resolves exactly is live, and
+    the caller must preserve whatever that process still owns.
+    """
+
+    validate_process_identity(identity)
+    if identity["boot_digest"] != digest(
+        Path("/proc/sys/kernel/random/boot_id").read_bytes()
+    ):
+        return True
+    current = process_identity(identity["pid"])
+    return current is None or current["start_ticks"] != identity["start_ticks"]
+
+
 def require_session_state(root: Path, path: Path, state: dict[str, Any]) -> None:
     if state["schema_version"] != SESSION_GROUP_SCHEMA_VERSION:
         raise GroupError("session ownership requires a schema-2 group")
