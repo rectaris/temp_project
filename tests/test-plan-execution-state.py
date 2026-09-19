@@ -8730,6 +8730,14 @@ class ParallelPlanGroupTest(unittest.TestCase):
         self.assertNotEqual(repeated["returncode"], 0, repeated)
         self.assertIn("closed its writing claim", repeated["stderr"])
 
+    def integration_identity(self) -> list[str]:
+        """This test process is the integration session the group admitted."""
+
+        return [
+            "--integration-session-id", "integration-session",
+            "--integration-session-pid", str(os.getpid()),
+        ]
+
     def test_member_reviews_once_and_reserves_the_integration_review(self) -> None:
         worker = self.bound_member_session()
         first = self.run_group(
@@ -8753,12 +8761,25 @@ class ParallelPlanGroupTest(unittest.TestCase):
         self.assertIn("reserved for integration", second.stderr)
         self.assertEqual(before, self.state.read_bytes())
         self.assertEqual(self.submit_handoff(worker)["returncode"], 0)
+        # The post-handoff review is the one publication consumes, so it is
+        # reserved for the authenticated integration session.
+        unnamed = self.run_group(
+            "record-review", str(self.state), "--member", self.alpha_path,
+            "--assembly-record-digest", digest("integration-assembly"),
+            "--registry-path-digest", digest("registry"),
+            "--registry-event-count", "2",
+            "--registry-event-chain-digest", digest("chain-2"),
+        )
+        self.assertNotEqual(unnamed.returncode, 0, unnamed.stdout)
+        self.assertIn("integration session identity", unnamed.stderr)
+        self.assertEqual(self.payload()["members"][self.alpha_path]["counters"]["reviews"], 1)
         integration = self.run_group(
             "record-review", str(self.state), "--member", self.alpha_path,
             "--assembly-record-digest", digest("integration-assembly"),
             "--registry-path-digest", digest("registry"),
             "--registry-event-count", "2",
             "--registry-event-chain-digest", digest("chain-2"),
+            *self.integration_identity(),
         )
         self.assertEqual(integration.returncode, 0, integration.stderr)
         self.assertEqual(self.payload()["members"][self.alpha_path]["counters"]["reviews"], 2)
@@ -8768,6 +8789,7 @@ class ParallelPlanGroupTest(unittest.TestCase):
             "--registry-path-digest", digest("registry"),
             "--registry-event-count", "3",
             "--registry-event-chain-digest", digest("chain-3"),
+            *self.integration_identity(),
         )
         self.assertNotEqual(exhausted.returncode, 0, exhausted.stdout)
         self.assertIn("exhausted its independent review budget", exhausted.stderr)

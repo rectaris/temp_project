@@ -12,7 +12,8 @@ operations so no model completion callback can reach the source target:
   commit inside a disposable clone and emits a parent-owned assembly record.
 * ``publish`` performs one serialized, journalled, expected-target
   fast-forward of the reviewed commit under the publication lease.
-* ``publish-recover`` finalizes or refuses an interrupted publication.
+* ``publish-recover`` resumes or refuses an interrupted publication from the
+  phase its journal reached.
 
 Mutable group authority stays in ``parallel-plan-state.py``. This adapter only
 reads and advances that record through its published operations.
@@ -38,14 +39,14 @@ from typing import Any
 ADAPTER_VERSION = 1
 READINESS_SCHEMA_VERSION = 1
 ASSEMBLY_SCHEMA_VERSION = 1
-PUBLICATION_JOURNAL_SCHEMA_VERSION = 1
+PUBLICATION_JOURNAL_SCHEMA_VERSION = 2
 
 MAX_RECORD_BYTES = 1024 * 1024
 MAX_PATCH_BYTES = 128 * 1024 * 1024
 
 RESOLUTION_KINDS = ("unchanged_application", "parent_adjusted")
 
-JOURNAL_STATES = ("intended", "completed", "aborted")
+JOURNAL_STATES = ("intended", "published", "retired", "aborted")
 
 
 class AdapterError(RuntimeError):
@@ -1175,12 +1176,23 @@ def command_publish(args: argparse.Namespace) -> None:
         "target_checkout": str(checkout) if checkout is not None else "",
         "state_path": str(state_path.absolute()),
     }
+    # The intent is authenticated by the live integration session and recorded
+    # before the target moves, so a crash in the window the journal describes
+    # leaves one authority-side fact a later recovery can consume.
+    journal["publication_intent_digest"] = run_authority(
+        state_path,
+        [
+            "publication-intend",
+            str(state_path),
+            *intent_arguments(journal, live_session=True),
+        ],
+    )
     journal["journal_digest"] = canonical_digest(journal)
     write_private_artifact(journal_path, journal, mode=0o600)
 
     advance_target(root, journal)
     finalize_publication(state_path, journal_path, journal, root)
-    retirement = retire_member_worktree(root, journal_path, journal)
+    retirement = complete_retirement(root, journal_path, journal)
     print(
         json.dumps(
             {
@@ -1192,6 +1204,53 @@ def command_publish(args: argparse.Namespace) -> None:
             sort_keys=True,
         )
     )
+
+
+def intent_arguments(
+    journal: dict[str, Any], *, live_session: bool = False
+) -> list[str]:
+    """The exact transition facts both the intent and its recovery reconstruct.
+
+    Only recording the intent proves the live integration session. The recovery
+    deliberately omits it, because the process that recorded the intent is the
+    one the recovered crash killed.
+    """
+
+    identity = (
+        ["--handoff-digest", journal["handoff_record_digest"]]
+        if journal.get("handoff_mode") == HANDOFF_MODE
+        else ["--permit-id", journal["permit_id"]]
+    )
+    if live_session and journal.get("handoff_mode") == HANDOFF_MODE:
+        identity += [
+            "--integration-session-id",
+            journal["integration_session_id"],
+            "--integration-session-pid",
+            str(journal["integration_session_pid"]),
+        ]
+    return [
+        "--member",
+        journal["plan_path"],
+        "--owner",
+        journal["owner"],
+        *identity,
+        "--expected-old-commit",
+        journal["expected_old_commit"],
+        "--commit",
+        journal["new_commit"],
+        "--assembly-digest",
+        journal["assembly_record_digest"],
+    ]
+
+
+def complete_retirement(
+    root: Path, journal_path: Path, journal: dict[str, Any]
+) -> str:
+    """Retire the member worktree and close the journal only once it is gone."""
+
+    retirement = retire_member_worktree(root, journal_path, journal)
+    rewrite_journal(journal_path, journal, "retired")
+    return retirement
 
 
 def retire_member_worktree(
@@ -1330,14 +1389,27 @@ def finalize_publication(
             journal["assembly_record_digest"],
         ],
     )
-    rewrite_journal(journal_path, journal, "completed")
+    rewrite_journal(journal_path, journal, "published")
 
 
 def command_publish_recover(args: argparse.Namespace) -> None:
+    """Resume one interrupted publication from the phase it actually reached.
+
+    Publication crosses three durable effects: the target ref moves, the
+    authority records the publication, and the member worktree is retired. Each
+    one is a separate crash window, so the journal names the phase it reached
+    and this command resumes exactly the remainder. The authority side replays
+    through the recorded intent, which is idempotent and does not require the
+    integration process that recorded it to still be alive.
+    """
+
     journal_path = Path(args.journal)
     journal = read_private_artifact(journal_path, "publication journal")
     if journal.get("schema_version") != PUBLICATION_JOURNAL_SCHEMA_VERSION:
-        raise AdapterError("publication journal must declare schema_version 1")
+        raise AdapterError(
+            "publication journal must declare schema_version "
+            f"{PUBLICATION_JOURNAL_SCHEMA_VERSION}"
+        )
     expected = canonical_digest(
         {
             **{key: value for key, value in journal.items() if key != "journal_digest"},
@@ -1346,12 +1418,25 @@ def command_publish_recover(args: argparse.Namespace) -> None:
     )
     if expected != journal.get("journal_digest"):
         raise AdapterError("publication journal identity verification failed")
-    if journal["state"] != "intended":
+    if journal["state"] in {"retired", "aborted"}:
         print(json.dumps({"recovery": "noop", "state": journal["state"]}, sort_keys=True))
         return
 
     root = repository_root()
     state_path = Path(journal["state_path"])
+    if journal["state"] == "published":
+        # The result reached the target and the authority recorded it. Only the
+        # member worktree is outstanding, and leaving it is what stranded the
+        # previous attempt.
+        retirement = complete_retirement(root, journal_path, journal)
+        print(
+            json.dumps(
+                {"recovery": "retired", "member_retirement": retirement},
+                sort_keys=True,
+            )
+        )
+        return
+
     current = resolve_commit(root, journal["target_ref"], "group target ref")
     if current == journal["new_commit"]:
         checkout = journal["target_checkout"]
@@ -1363,8 +1448,8 @@ def command_publish_recover(args: argparse.Namespace) -> None:
                     "the interrupted publication left an inconsistent target "
                     "checkout; the target is preserved and completion is refused"
                 )
-        finalize_publication(state_path, journal_path, journal, root)
-        retirement = retire_member_worktree(root, journal_path, journal)
+        recover_publication(state_path, journal_path, journal)
+        retirement = complete_retirement(root, journal_path, journal)
         print(
             json.dumps(
                 {
@@ -1384,6 +1469,24 @@ def command_publish_recover(args: argparse.Namespace) -> None:
         "the target is neither the expected old commit nor the planned new "
         "commit; the target is preserved and publication is not replayed"
     )
+
+
+def recover_publication(
+    state_path: Path, journal_path: Path, journal: dict[str, Any]
+) -> None:
+    """Record the interrupted publication, or confirm the authority has it.
+
+    The ordinary record refuses a second publication and demands the live
+    integration process, so replaying it here would strand exactly the crash it
+    exists to repair. The recovery consumes the recorded intent instead, which
+    authorizes this one transition and no other.
+    """
+
+    run_authority(
+        state_path,
+        ["publication-recover", str(state_path), *intent_arguments(journal)],
+    )
+    rewrite_journal(journal_path, journal, "published")
 
 
 HANDOFF_SCHEMA_VERSION = 1

@@ -6015,6 +6015,75 @@ class GroupedExecutionAdapterTests(unittest.TestCase):
         self.assertEqual(replayed.returncode, 0, replayed.stderr)
         self.assertEqual(json.loads(replayed.stdout)["recovery"], "noop")
 
+    def test_a_published_journal_retries_only_the_outstanding_retirement(
+        self,
+    ) -> None:
+        """A publication that reached the target but not the end must resume.
+
+        Retirement is the last of three durable effects. When it fails, the
+        journal already records the published target, and treating any state
+        but `intended` as nothing to do left that member permanently stranded.
+        """
+
+        permit = self.issue_permit(self.ALPHA, "permit-a1")
+        manifest = self.candidate(
+            self.ALPHA,
+            self.start_commit,
+            {"src/alpha.py": "def alpha(value):\n    return value + 1\n"},
+            "alpha",
+        )
+        self.assertEqual(
+            self.assemble(self.ALPHA, permit, manifest, "alpha").returncode, 0
+        )
+        record = self.assembly_record("alpha")
+        commit = self.reviewed_commit(record, "review-alpha")
+        self.record_review(self.ALPHA, record)
+        self.run_group(
+            "lease-acquire", str(self.state), "--member", self.ALPHA,
+            "--owner", "parent-alpha",
+        )
+        self.addCleanup(
+            self.run_group, "lease-release", str(self.state), "--owner", "parent-alpha"
+        )
+        journal = self.base / "journal-published.json"
+        self.write_journal(journal, self.ALPHA, "permit-a1", commit, record)
+        self.git("merge", "--ff-only", commit)
+        finalized = self.run_adapter("publish-recover", "--journal", str(journal))
+        self.assertEqual(finalized.returncode, 0, finalized.stderr)
+        self.assertEqual(
+            json.loads(journal.read_text(encoding="utf-8"))["state"], "retired"
+        )
+
+        # A journal stopped at `published` resumes the retirement it owes.
+        stranded = json.loads(journal.read_text(encoding="utf-8"))
+        stranded["state"] = "published"
+        journal.write_text(json.dumps(stranded, indent=2) + "\n", encoding="utf-8")
+        journal.chmod(0o600)
+        resumed = self.run_adapter("publish-recover", "--journal", str(journal))
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(json.loads(resumed.stdout)["recovery"], "retired")
+        self.assertEqual(
+            json.loads(journal.read_text(encoding="utf-8"))["state"], "retired"
+        )
+
+        # A crash between the recorded publication and the journal rewrite
+        # leaves `intended` behind. Replaying the ordinary record would be
+        # refused as a duplicate, so the recovery must confirm it instead.
+        unwritten = json.loads(journal.read_text(encoding="utf-8"))
+        unwritten["state"] = "intended"
+        journal.write_text(json.dumps(unwritten, indent=2) + "\n", encoding="utf-8")
+        journal.chmod(0o600)
+        replayed = self.run_adapter("publish-recover", "--journal", str(journal))
+        self.assertEqual(replayed.returncode, 0, replayed.stderr)
+        self.assertEqual(json.loads(replayed.stdout)["recovery"], "finalized")
+
+        published = [
+            event
+            for event in json.loads(self.state.read_text(encoding="utf-8"))["events"]
+            if event["event_type"] == "member_published"
+        ]
+        self.assertEqual(len(published), 1)
+
     def test_ambiguous_crash_evidence_preserves_the_target(self) -> None:
         permit = self.issue_permit(self.ALPHA, "permit-a1")
         manifest = self.candidate(
@@ -6029,6 +6098,17 @@ class GroupedExecutionAdapterTests(unittest.TestCase):
         record = self.assembly_record("alpha")
         commit = self.reviewed_commit(record, "review-alpha")
         journal = self.base / "journal-ambiguous.json"
+        self.run_group(
+            "lease-acquire",
+            str(self.state),
+            "--member",
+            self.ALPHA,
+            "--owner",
+            "parent-alpha",
+        )
+        self.addCleanup(
+            self.run_group, "lease-release", str(self.state), "--owner", "parent-alpha"
+        )
         self.write_journal(journal, self.ALPHA, "permit-a1", commit, record)
         moved = self.commit("unrelated target movement")
         recovered = self.run_adapter("publish-recover", "--journal", str(journal))
@@ -6039,8 +6119,15 @@ class GroupedExecutionAdapterTests(unittest.TestCase):
     def write_journal(
         self, path: Path, member: str, permit_id: str, commit: str, record: dict
     ) -> None:
+        """Reproduce one interrupted publication, intent included.
+
+        Recovery consumes the intent the authority records before the target
+        moves, so a journal written without one describes a crash that could
+        not have happened.
+        """
+
         journal = {
-            "schema_version": 1,
+            "schema_version": 2,
             "adapter_version": 1,
             "state": "intended",
             "group_id": "alpha-beta",
@@ -6056,6 +6143,24 @@ class GroupedExecutionAdapterTests(unittest.TestCase):
             "target_checkout": str(self.repo),
             "state_path": str(self.state),
         }
+        intended = self.run_group(
+            "publication-intend",
+            str(self.state),
+            "--member",
+            member,
+            "--owner",
+            "parent-alpha",
+            "--permit-id",
+            permit_id,
+            "--expected-old-commit",
+            record["base_commit"],
+            "--commit",
+            commit,
+            "--assembly-digest",
+            record["record_digest"],
+        )
+        self.assertEqual(intended.returncode, 0, intended.stderr)
+        journal["publication_intent_digest"] = intended.stdout.strip()
         journal["journal_digest"] = adapter_digest(
             json.dumps(journal, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         )
@@ -6499,6 +6604,110 @@ class ParentDirectMemberSessionTests(unittest.TestCase):
         self.assertNotIn(
             "plan/284-alpha", self.git("branch", "--format=%(refname:short)")
         )
+
+    def test_recovery_consumes_the_intent_without_the_dead_integration_process(
+        self,
+    ) -> None:
+        """The crash a recovery repairs is the loss of that exact process.
+
+        Publication demands the live integration incarnation, so replaying it
+        after a crash can never succeed. The intent recorded before the target
+        moved carries that authority forward, once, for this one transition.
+        """
+
+        alpha = self.session("session-alpha")
+        started = self.start_member(alpha, self.ALPHA)
+        self.assertEqual(started["returncode"], 0, started)
+        worktree = Path(json.loads(started["stdout"])["worktree"])
+        (worktree / "src/alpha.py").write_text(
+            "def alpha():\n    return 1\n", encoding="utf-8"
+        )
+        handoff_path = self.base / "handoff.json"
+        self.assertEqual(
+            self.ready_member(alpha, self.ALPHA, worktree, handoff_path)["returncode"],
+            0,
+        )
+        assembly_path = self.base / "assembly.json"
+        self.assertEqual(
+            self.run_adapter(
+                "assemble", "--state", str(self.state), "--plan", self.ALPHA,
+                "--handoff", str(handoff_path), "--output", str(assembly_path),
+            ).returncode,
+            0,
+        )
+        record = json.loads(assembly_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            self.run_group(
+                "lease-acquire", str(self.state), "--member", self.ALPHA,
+                "--owner", "integration", *self.integration_identity(),
+            ).returncode,
+            0,
+        )
+        self.assertEqual(
+            self.run_group(
+                "record-review", str(self.state), "--member", self.ALPHA,
+                "--registry-path-digest", adapter_digest("registry"),
+                "--registry-event-count", "1",
+                "--registry-event-chain-digest", adapter_digest("chain"),
+                "--assembly-record-digest", record["record_digest"],
+                *self.integration_identity(),
+            ).returncode,
+            0,
+        )
+        expected_old = self.git("rev-parse", "refs/heads/main")
+        commit = self.apply_assembled_commit(record)
+        transition = [
+            "--member", self.ALPHA, "--owner", "integration",
+            "--handoff-digest", record["original_handoff_record_digest"],
+            "--expected-old-commit", expected_old, "--commit", commit,
+            "--assembly-digest", record["record_digest"],
+        ]
+        intended = self.run_group(
+            "publication-intend", str(self.state), *transition,
+            *self.integration_identity(),
+        )
+        self.assertEqual(intended.returncode, 0, intended.stderr)
+        intent = self.payload()["members"][self.ALPHA]["publication_intent"]
+        self.assertEqual(intent["state"], "open")
+        self.assertEqual(intent["intent_digest"], intended.stdout.strip())
+
+        # The target moves, then the integration session is gone.
+        self.git("merge", "--ff-only", commit)
+        replayed = self.run_group(
+            "publication-record", str(self.state), "--member", self.ALPHA,
+            "--handoff-digest", record["original_handoff_record_digest"],
+            "--commit", commit, "--assembly-digest", record["record_digest"],
+        )
+        self.assertEqual(replayed.returncode, 1)
+        self.assertIn("live process", replayed.stderr)
+
+        recovered = self.run_group(
+            "publication-recover", str(self.state), *transition
+        )
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(json.loads(recovered.stdout)["publication"], "recorded")
+        member = self.payload()["members"][self.ALPHA]
+        self.assertTrue(member["publication"]["published"])
+        self.assertEqual(member["publication"]["commit"], commit)
+        self.assertEqual(member["publication_intent"]["state"], "published")
+        self.assertEqual(self.payload()["publication_lease"]["owner"], "")
+
+        # Replaying the same recovery confirms the record instead of repeating it.
+        again = self.run_group("publication-recover", str(self.state), *transition)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(json.loads(again.stdout)["publication"], "already_recorded")
+        published = [
+            event for event in self.payload()["events"]
+            if event["event_type"] == "member_published"
+        ]
+        self.assertEqual(len(published), 1)
+
+        # A recovery may perform only the transition its intent names.
+        forged = list(transition)
+        forged[forged.index("--commit") + 1] = expected_old
+        refused = self.run_group("publication-recover", str(self.state), *forged)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("does not reconstruct the recorded intent", refused.stderr)
 
     def test_member_cannot_take_the_publication_lease_without_integration(self) -> None:
         """A member knows the owner string; it does not know integration.

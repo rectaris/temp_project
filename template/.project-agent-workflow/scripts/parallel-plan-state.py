@@ -1280,6 +1280,7 @@ def empty_member_state(
             "patch_digest": "",
         },
         "publication": {"published": False, "commit": ""},
+        "publication_intent": None,
     }
 
 
@@ -2782,20 +2783,171 @@ def transfer_baseline(args: argparse.Namespace) -> None:
     print(member["baseline_generation"])
 
 
-def publication_record(args: argparse.Namespace) -> None:
-    """Record one verified member publication under the publication lease.
+PUBLICATION_INTENT_SCHEMA_VERSION = 1
 
-    Acceptance follows publication, never a worker completion claim: this call
-    requires the exclusive lease, the exact member permit, and a commit already
-    reachable from the admitted group target ref.
+
+def publication_intent_facts(
+    state: dict[str, Any], args: argparse.Namespace, commit: str, assembly_digest: str
+) -> dict[str, Any]:
+    """The exact target transition one publication intent authorizes.
+
+    The digest is derived here rather than accepted from the caller, so a
+    recovery may present the journal it holds and nothing else: an intent it
+    cannot reconstruct field for field is not the intent this authority
+    recorded.
     """
 
-    path = Path(args.state)
+    return {
+        "schema_version": PUBLICATION_INTENT_SCHEMA_VERSION,
+        "record_type": "parallel_group_publication_intent",
+        "group_id": state["group_id"],
+        "plan_path": args.member,
+        "owner": require_identifier(args.owner, "owner"),
+        "target_ref": state["target_ref"],
+        "expected_old_commit": require_commit(
+            args.expected_old_commit, "expected_old_commit"
+        ),
+        "new_commit": commit,
+        "assembly_record_digest": assembly_digest,
+        "handoff_record_digest": args.handoff_digest or "",
+        "permit_id": args.permit_id or "",
+    }
+
+
+def require_publication_identity(args: argparse.Namespace) -> None:
     if bool(args.permit_id) == bool(args.handoff_digest):
         raise GroupError(
             "record one publication identity: --permit-id for a sandboxed "
             "candidate, or --handoff-digest for a parent-direct member handoff"
         )
+
+
+def require_publication_authority(
+    root: Path,
+    path: Path,
+    state: dict[str, Any],
+    args: argparse.Namespace,
+    assembly_digest: str,
+) -> dict[str, Any]:
+    """Recheck every fact that lets this caller move a member's result.
+
+    Shared by the intent, the ordinary record, and the recovery so the three
+    cannot drift apart. The live integration process is checked by the caller,
+    not here: a recovery runs after that process is gone and authenticates
+    through the intent the live process already recorded.
+    """
+
+    member = require_member(state, args.member)
+    require_active_member(member)
+    if state["publication_lease"]["owner"] == "":
+        raise GroupError("recording a publication requires the publication lease")
+    if state["publication_lease"]["plan_path"] != args.member:
+        raise GroupError("the publication lease was acquired for another member")
+    if member["publication"]["published"]:
+        # Named before the permit and the handoff, because publication consumes
+        # both: a replay must report the duplicate rather than its consequence.
+        raise GroupError(
+            f"member {args.member} already published its accepted result"
+        )
+    if args.handoff_digest:
+        handoff = member["handoff"]
+        if handoff is None:
+            raise GroupError(
+                "a parent-direct publication requires the member's submitted "
+                "handoff record"
+            )
+        if handoff["record_digest"] != require_digest(
+            args.handoff_digest, "handoff_digest"
+        ):
+            raise GroupError(
+                "a publication must consume the exact submitted member handoff"
+            )
+        # The adapter checks the review too, but the authority must not
+        # depend on its caller for that fact: a member knows its own
+        # handoff digest and could otherwise record a publication directly.
+        reviewed = any(
+            event["event_type"] == "member_review_recorded"
+            and event["detail"].get("plan_path") == args.member
+            and event["detail"].get("assembly_record_digest") == assembly_digest
+            for event in state["events"]
+        )
+        if not reviewed:
+            raise GroupError(
+                "a parent-direct publication requires one recorded independent "
+                "review of this exact assembled result"
+            )
+    elif (
+        member["permit"]["permit_id"] != args.permit_id
+        or not member["permit"]["open"]
+    ):
+        raise GroupError("a publication must consume the exact open member permit")
+    return member
+
+
+def require_reachable_commit(root: Path, state: dict[str, Any], commit: str) -> None:
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "merge-base",
+            "--is-ancestor",
+            commit,
+            state["target_ref"],
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=sanitized_git_environment(),
+    )
+    if completed.returncode != 0:
+        raise GroupError(
+            "the published commit is not reachable from the group target ref"
+        )
+
+
+def apply_publication(
+    state: dict[str, Any],
+    member: dict[str, Any],
+    args: argparse.Namespace,
+    commit: str,
+    assembly_digest: str,
+) -> None:
+    """Move one member to published and free what the publication consumes."""
+
+    member["publication"] = {"published": True, "commit": commit}
+    if args.handoff_digest:
+        # The lease is one-use per member: leaving it held would lock the
+        # partner out of its own publication.
+        state["publication_lease"] = {"owner": "", "plan_path": ""}
+    else:
+        member["permit"]["open"] = False
+    intent = member.get("publication_intent")
+    if intent is not None and intent["state"] == "open":
+        intent["state"] = "published"
+    append_event(
+        state,
+        "member_published",
+        {
+            "plan_path": args.member,
+            "commit": commit,
+            "assembly_digest": assembly_digest,
+        },
+    )
+
+
+def publication_intend(args: argparse.Namespace) -> None:
+    """Record the publication this integration session is about to perform.
+
+    The target moves outside this authority, so a crash between the ref update
+    and the recorded publication would otherwise leave no authenticated fact a
+    later recovery could consume. Writing the intent first, under the same
+    checks the publication itself requires, makes that window recoverable
+    without weakening the live-process identity the publication demands.
+    """
+
+    path = Path(args.state)
+    require_publication_identity(args)
     commit = require_commit(args.commit, "commit")
     assembly_digest = require_digest(args.assembly_digest, "assembly_digest")
     with with_lock(path) as lock:
@@ -2809,85 +2961,129 @@ def publication_record(args: argparse.Namespace) -> None:
             )
         else:
             require_live_group(root, state)
-        member = require_member(state, args.member)
-        require_active_member(member)
-        if state["publication_lease"]["owner"] == "":
-            raise GroupError("recording a publication requires the publication lease")
-        if state["publication_lease"]["plan_path"] != args.member:
-            raise GroupError("the publication lease was acquired for another member")
-        if member["publication"]["published"]:
+        member = require_publication_authority(root, path, state, args, assembly_digest)
+        facts = publication_intent_facts(state, args, commit, assembly_digest)
+        current = git_output(
+            root, "rev-parse", "--verify", f"{state['target_ref']}^{{commit}}"
+        ).decode("utf-8").strip()
+        if current != facts["expected_old_commit"]:
             raise GroupError(
-                f"member {args.member} already published its accepted result"
+                "the group target ref is not at the commit this publication "
+                "expects to advance"
             )
-        if args.handoff_digest:
-            handoff = member["handoff"]
-            if handoff is None:
-                raise GroupError(
-                    "a parent-direct publication requires the member's submitted "
-                    "handoff record"
-                )
-            if handoff["record_digest"] != require_digest(
-                args.handoff_digest, "handoff_digest"
-            ):
-                raise GroupError(
-                    "a publication must consume the exact submitted member handoff"
-                )
-            # The adapter checks the review too, but the authority must not
-            # depend on its caller for that fact: a member knows its own
-            # handoff digest and could otherwise record a publication directly.
-            reviewed = any(
-                event["event_type"] == "member_review_recorded"
-                and event["detail"].get("plan_path") == args.member
-                and event["detail"].get("assembly_record_digest") == assembly_digest
-                for event in state["events"]
-            )
-            if not reviewed:
-                raise GroupError(
-                    "a parent-direct publication requires one recorded independent "
-                    "review of this exact assembled result"
-                )
-        elif (
-            member["permit"]["permit_id"] != args.permit_id
-            or not member["permit"]["open"]
-        ):
+        recorded = dict(facts)
+        recorded["intent_digest"] = canonical_digest(facts)
+        recorded["state"] = "open"
+        previous = member.get("publication_intent")
+        if previous is not None and previous["state"] != "open":
             raise GroupError(
-                "a publication must consume the exact open member permit"
+                "this member already consumed a publication intent; a further "
+                "publication is refused"
             )
-        completed = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(root),
-                "merge-base",
-                "--is-ancestor",
-                commit,
-                state["target_ref"],
-            ],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=sanitized_git_environment(),
-        )
-        if completed.returncode != 0:
-            raise GroupError(
-                "the published commit is not reachable from the group target ref"
-            )
-        member["publication"] = {"published": True, "commit": commit}
-        if args.handoff_digest:
-            # The lease is one-use per member: leaving it held would lock the
-            # partner out of its own publication.
-            state["publication_lease"] = {"owner": "", "plan_path": ""}
-        else:
-            member["permit"]["open"] = False
+        member["publication_intent"] = recorded
         append_event(
             state,
-            "member_published",
+            "member_publication_intended",
             {
                 "plan_path": args.member,
-                "commit": commit,
-                "assembly_digest": assembly_digest,
+                "intent_digest": recorded["intent_digest"],
+                "superseded": previous["intent_digest"] if previous else "",
             },
         )
+        atomic_write(path, state)
+    print(recorded["intent_digest"])
+
+
+def publication_recover(args: argparse.Namespace) -> None:
+    """Complete or confirm the exact publication an intent already authorized.
+
+    This is the only publication path that does not require the live
+    integration process, because the process that recorded the intent may have
+    died in the recovered window. It buys that with a narrower authority: it
+    can perform no transition the recorded intent does not already name, and a
+    publication the authority already recorded is confirmed rather than
+    repeated, so an interrupted journal replays exactly once.
+    """
+
+    path = Path(args.state)
+    require_publication_identity(args)
+    commit = require_commit(args.commit, "commit")
+    assembly_digest = require_digest(args.assembly_digest, "assembly_digest")
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        root = repository_root()
+        if args.handoff_digest:
+            require_session_state(root, path, state)
+        else:
+            require_live_group(root, state)
+        member = require_member(state, args.member)
+        intent = member.get("publication_intent")
+        if intent is None:
+            raise GroupError(
+                "recovering a publication requires the intent this authority "
+                "recorded before the target moved"
+            )
+        facts = publication_intent_facts(state, args, commit, assembly_digest)
+        if canonical_digest(facts) != intent["intent_digest"]:
+            raise GroupError(
+                "the presented publication does not reconstruct the recorded intent"
+            )
+        if intent["state"] == "published":
+            if member["publication"] != {"published": True, "commit": commit}:
+                raise GroupError(
+                    "the recorded intent was consumed by a different publication"
+                )
+            outcome = "already_recorded"
+        else:
+            require_publication_authority(
+                root, path, state, args, assembly_digest
+            )
+            require_reachable_commit(root, state, commit)
+            apply_publication(state, member, args, commit, assembly_digest)
+            outcome = "recorded"
+            atomic_write(path, state)
+    print(json.dumps({"publication": outcome, "commit": commit}, sort_keys=True))
+
+
+def publication_record(args: argparse.Namespace) -> None:
+    """Record one verified member publication under the publication lease.
+
+    Acceptance follows publication, never a worker completion claim: this call
+    requires the exclusive lease, the exact member permit, and a commit already
+    reachable from the admitted group target ref.
+    """
+
+    path = Path(args.state)
+    require_publication_identity(args)
+    commit = require_commit(args.commit, "commit")
+    assembly_digest = require_digest(args.assembly_digest, "assembly_digest")
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        root = repository_root()
+        if args.handoff_digest:
+            require_session_state(root, path, state)
+            require_integration_session(
+                state, args.integration_session_id, args.integration_session_pid
+            )
+        else:
+            require_live_group(root, state)
+        member = require_publication_authority(root, path, state, args, assembly_digest)
+        intent = member.get("publication_intent")
+        if intent is not None and intent["state"] == "open":
+            # An intent names one exact transition. Publishing something else
+            # while it stands would leave a recovery able to replay a target
+            # movement this call never made.
+            if intent["new_commit"] != commit or intent["assembly_record_digest"] != (
+                assembly_digest
+            ):
+                raise GroupError(
+                    "this member holds an open publication intent for a different "
+                    "result; recover or supersede it before publishing"
+                )
+        require_reachable_commit(root, state, commit)
+        apply_publication(state, member, args, commit, assembly_digest)
         atomic_write(path, state)
     print(commit)
 
@@ -3087,6 +3283,30 @@ def parser() -> argparse.ArgumentParser:
     publication.add_argument("--commit", required=True)
     publication.add_argument("--assembly-digest", required=True)
     publication.set_defaults(handler=publication_record)
+
+    intend = sub.add_parser("publication-intend")
+    intend.add_argument("state")
+    intend.add_argument("--member", required=True)
+    intend.add_argument("--owner", required=True)
+    intend.add_argument("--permit-id")
+    intend.add_argument("--handoff-digest")
+    intend.add_argument("--integration-session-id")
+    intend.add_argument("--integration-session-pid", type=int)
+    intend.add_argument("--expected-old-commit", required=True)
+    intend.add_argument("--commit", required=True)
+    intend.add_argument("--assembly-digest", required=True)
+    intend.set_defaults(handler=publication_intend)
+
+    recover = sub.add_parser("publication-recover")
+    recover.add_argument("state")
+    recover.add_argument("--member", required=True)
+    recover.add_argument("--owner", required=True)
+    recover.add_argument("--permit-id")
+    recover.add_argument("--handoff-digest")
+    recover.add_argument("--expected-old-commit", required=True)
+    recover.add_argument("--commit", required=True)
+    recover.add_argument("--assembly-digest", required=True)
+    recover.set_defaults(handler=publication_recover)
 
     complete = sub.add_parser("group-complete")
     complete.add_argument("state")
