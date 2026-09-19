@@ -2051,6 +2051,139 @@ if ! fixture_git "$wrapper_conflict_out" ls-files -u | grep -q .; then
   exit 1
 fi
 
+# A supported Copier update must preserve project-owned plans, parallel
+# execution groups, agent configuration and archived plan history byte for
+# byte, including the directories this template never ships. The fixture
+# updates the released v1.4.1 boundary to the synthetic v1.4.2 tag of this
+# revision, so the managed core is genuinely rewritten while the
+# project-owned bytes are compared.
+preserved_project_out="$tmp/v141-to-current-project-preservation"
+run_copier copy -q -f --trust --defaults --vcs-ref v1.4.1 \
+  --data-file "$root/tests/fixtures/docs.answers.yml" "$update_source" "$preserved_project_out" >/dev/null
+fixture_git "$preserved_project_out" init -b main >/dev/null
+fixture_git "$preserved_project_out" config user.email "ci@example.invalid"
+fixture_git "$preserved_project_out" config user.name "CI"
+mkdir -p "$preserved_project_out/docs/plan/active" \
+  "$preserved_project_out/docs/plan/backlog" \
+  "$preserved_project_out/docs/plan/execution-groups" \
+  "$preserved_project_out/docs/plan/checked/2026/08/01-15"
+cat >"$preserved_project_out/docs/plan/active/900-project-owned-work.md" <<'EOF_PRESERVED_ACTIVE'
+# Keep the project-owned active plan across a template update
+
+status: deferred
+primary_invariant: A template update never rewrites project-owned plan bytes.
+implementation_tier: 1
+
+## Tasks
+
+- [ ] Keep this plan readable after the update.
+EOF_PRESERVED_ACTIVE
+cat >"$preserved_project_out/docs/plan/backlog/901-project-owned-member-a.md" <<'EOF_PRESERVED_MEMBER_A'
+# Project-owned parallel member A
+
+status: backlog
+primary_invariant: Member A keeps its own plan bytes across a template update.
+implementation_tier: 1
+
+## Tasks
+
+- [ ] Run member A in its own session.
+EOF_PRESERVED_MEMBER_A
+cat >"$preserved_project_out/docs/plan/backlog/902-project-owned-member-b.md" <<'EOF_PRESERVED_MEMBER_B'
+# Project-owned parallel member B
+
+status: backlog
+primary_invariant: Member B keeps its own plan bytes across a template update.
+implementation_tier: 1
+
+## Tasks
+
+- [ ] Run member B in its own session.
+EOF_PRESERVED_MEMBER_B
+cat >"$preserved_project_out/docs/plan/execution-groups/900-project-owned-group.json" <<'EOF_PRESERVED_GROUP'
+{
+  "schema": 1,
+  "group_id": "900-project-owned-group",
+  "members": [
+    {"owner": "member-a", "plan": "docs/plan/backlog/901-project-owned-member-a.md"},
+    {"owner": "member-b", "plan": "docs/plan/backlog/902-project-owned-member-b.md"}
+  ]
+}
+EOF_PRESERVED_GROUP
+cat >"$preserved_project_out/docs/plan/checked/2026/08/01-15/899-project-owned-history.md" <<'EOF_PRESERVED_HISTORY'
+# Project-owned archived plan
+
+status: checked
+primary_invariant: Archived plan history survives a template update unchanged.
+implementation_tier: 1
+
+## Tasks
+
+- [x] Record the archived result.
+EOF_PRESERVED_HISTORY
+printf '%s\n' \
+  'version: 1' \
+  'enabled: true' \
+  'merge_target_refs:' \
+  '  - refs/heads/release' \
+  'protected_local_branch_refs:' \
+  '  - refs/heads/main' \
+  '  - refs/heads/release' \
+  >"$preserved_project_out/docs/agent/git-retirement.yaml"
+preserved_manifest="$tmp/v141-project-preservation-manifest.txt"
+cat >"$preserved_manifest" <<'EOF_PRESERVED_MANIFEST'
+docs/plan/active/900-project-owned-work.md
+docs/plan/backlog/901-project-owned-member-a.md
+docs/plan/backlog/902-project-owned-member-b.md
+docs/plan/execution-groups/900-project-owned-group.json
+docs/plan/checked/2026/08/01-15/899-project-owned-history.md
+docs/agent/git-retirement.yaml
+EOF_PRESERVED_MANIFEST
+fixture_git "$preserved_project_out" add -A
+fixture_git "$preserved_project_out" commit -m "Create project-owned plans, groups, configuration and history" >/dev/null
+preserved_before="$tmp/v141-project-preservation-before.txt"
+: >"$preserved_before"
+while IFS= read -r preserved_path || [ -n "$preserved_path" ]; do
+  if ! fixture_git "$preserved_project_out" ls-files --error-unmatch -- "$preserved_path" >/dev/null 2>&1; then
+    echo "project-owned preservation fixture did not track: $preserved_path" >&2
+    exit 1
+  fi
+  fixture_git "$preserved_project_out" hash-object -- "$preserved_path" >>"$preserved_before"
+done <"$preserved_manifest"
+grep -q '^_commit: v1.4.1$' "$preserved_project_out/.copier-answers.yml"
+run_copier update -q --trust --defaults --vcs-ref v1.4.2 "$preserved_project_out" >/dev/null
+preserved_after="$tmp/v141-project-preservation-after.txt"
+: >"$preserved_after"
+while IFS= read -r preserved_path || [ -n "$preserved_path" ]; do
+  if [ ! -f "$preserved_project_out/$preserved_path" ]; then
+    echo "Copier update removed a project-owned file: $preserved_path" >&2
+    exit 1
+  fi
+  fixture_git "$preserved_project_out" hash-object -- "$preserved_path" >>"$preserved_after"
+done <"$preserved_manifest"
+if ! cmp -s "$preserved_before" "$preserved_after"; then
+  echo "Copier update changed project-owned plan, group, configuration or history bytes" >&2
+  exit 1
+fi
+if [ -n "$(find "$preserved_project_out/docs/plan/execution-groups" -mindepth 1 ! -name '900-project-owned-group.json' -print -quit)" ]; then
+  echo "Copier update wrote into the project-owned execution-group directory" >&2
+  exit 1
+fi
+if find "$preserved_project_out" -name '*.rej' -print -quit | grep -q .; then
+  echo "the project-preservation update produced rejection files" >&2
+  exit 1
+fi
+if grep -q '^_commit: v1.4.1$' "$preserved_project_out/.copier-answers.yml"; then
+  echo "the project-preservation update did not advance the template revision" >&2
+  exit 1
+fi
+grep -q '^_commit: v1.4.2$' "$preserved_project_out/.copier-answers.yml"
+cmp "$root/template/.project-agent-workflow/scripts/run-parallel-plans.py" \
+  "$preserved_project_out/.project-agent-workflow/scripts/run-parallel-plans.py"
+cmp "$root/template/.project-agent-workflow/scripts/verify-parallel-plan-sessions.py" \
+  "$preserved_project_out/.project-agent-workflow/scripts/verify-parallel-plan-sessions.py"
+fixture_git "$preserved_project_out" diff --check
+
 # The synthetic v1.4.4 boundary is this template without the installed
 # validation-witness policy marker, so the before migration reads the
 # committed downstream project as pre-schema.
