@@ -1,6 +1,6 @@
 # Complete parent-direct execution lifecycle records
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Every lifecycle-bound execution-ledger event names the bound lifecycle record, and parent-direct lifecycle digests remain reachable without rewriting historical ledgers.
 replan_sources:
@@ -91,15 +91,18 @@ checked_summary_ja: plan 369 の保持済み差分を現行 baseline に意味�
 
 ## Tasks
 
-- [ ] Initialize the successor parent-direct execution at the published current baseline and pass its review-route and execution gates before product writes.
-- [ ] Apply the retained plan 369 patch and resolve its overlap with plan 362 and 1f8d1b3 while keeping root and generated scripts byte-aligned.
-- [ ] Reconcile the plan-workflow specification and regression tests so both terminal owner resolution and parent-direct lifecycle recovery remain enforced.
-- [ ] Run the focused lifecycle tests and template alignment check, then bind exact-target adversarial preflight and independent review.
-- [ ] Run authoritative lint and smoke once after review clears High and Medium findings.
-- [ ] Commit and publish the reviewed implementation, archive the successor as checked, and retire both the successor task worktree and the obsolete retained plan 369 worktree without deleting the preserved patch evidence.
+- [x] Initialize the successor parent-direct execution at the published current baseline and pass its review-route and execution gates before product writes.
+- [x] Apply the retained plan 369 patch and resolve its overlap with plan 362 and 1f8d1b3 while keeping root and generated scripts byte-aligned.
+- [x] Reconcile the plan-workflow specification and regression tests so both terminal owner resolution and parent-direct lifecycle recovery remain enforced.
+- [x] Run the focused lifecycle tests and template alignment check, then bind exact-target adversarial preflight and independent review.
+- [x] Run authoritative lint and smoke once after review clears High and Medium findings.
+- [x] Commit and publish the reviewed implementation, archive the successor as checked, and retire both the successor task worktree and the obsolete retained plan 369 worktree without deleting the preserved patch evidence.
 
 ## Validation Notes
 
 - Source failure: the epoch-4 owner acceptance bound only scripts/plan-execution-state.py and its generated mirror; the original five-file plan 369 implementation remained in the retained worktree and was absent from dev.
 - Owner continuation authorization: 「提案の方針で進めよ。」
 - Dirty-byte policy change authorized by owner response: `authorize_semantic_transplant`. The retained patch digest is sha256:8d2b396b6129dd55938d7c45c3c8aaa3a3c118c61d411ae1e0d8956a55f5da31.
+- Fresh execution gates passed in epochs 0 through 3. Four formal reviews were recorded; the fourth left one Medium finding, so the terminal owner-resolution path made one bounded correction without a fifth review.
+- Focused validation passed with 259 lifecycle tests and `scripts/check-copier-template.py`. Authoritative `scripts/lint-project-workflow.sh` and `tests/smoke.sh` passed once for the accepted correction.
+- Owner accepted the exact correction after validation. Implementation commit: `6eea563`.
