@@ -1,19 +1,7 @@
 # Repair parent-direct execution lifecycle records
 
-status: in_progress
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: Every lifecycle-bound execution-ledger event names the bound lifecycle record, and parent-direct lifecycle digests remain reachable without rewriting historical ledgers.
-replan_sources:
-  - docs/plan/active/367-repair-parent-direct-lifecycle-records.md
-replan_contract: docs/plan/replanned/contracts/367-repair-parent-direct-lifecycle-records.json
-successor_plans:
-  - docs/plan/active/369-repair-parent-direct-lifecycle-records-successor.md
-inherited_acceptance_digests:
-  - sha256:79f9eb1703f67a4a53106c7ad256420bcf80b362b5d214382c97972e68dd1498
-  - sha256:10a34048c59d774cb3a0415270bff365a52c2e05b8cd25eb57ab5e1a69e9de81
-  - sha256:d7c50fe41b82ed8b2044cf542e6bf0bd679d6fadcfa9c38e07b828c700e03f9d
-integration_source_ids:
-  - 367
 task_types:
   - template_workflow
   - planning_docs
@@ -77,10 +65,18 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:79f9eb1703f67a4a53106c7ad256420bcf80b362b5d214382c97972e68dd1498","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
   - {"acceptance_sha256":"sha256:10a34048c59d774cb3a0415270bff365a52c2e05b8cd25eb57ab5e1a69e9de81","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
   - {"acceptance_sha256":"sha256:d7c50fe41b82ed8b2044cf542e6bf0bd679d6fadcfa9c38e07b828c700e03f9d","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/369-repair-parent-direct-lifecycle-records-successor.md
+replan_contract: docs/plan/replanned/contracts/369-repair-parent-direct-lifecycle-records-successor.json
 integration_gates:
-  - Do not modify plan 374, its stopped execution ledger, or any parent-owned execution record held outside the repository.
-  - Do not add a migration that rewrites historical execution-ledger bytes; preserve archived and stopped ledgers as readable records.
-  - Do not change parallel-session assembly, publication, or retirement code owned by plan 374.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/363-complete-parent-direct-lifecycle-records.md
+inherited_acceptance_digests:
+  - sha256:79f9eb1703f67a4a53106c7ad256420bcf80b362b5d214382c97972e68dd1498
+  - sha256:10a34048c59d774cb3a0415270bff365a52c2e05b8cd25eb57ab5e1a69e9de81
+  - sha256:d7c50fe41b82ed8b2044cf542e6bf0bd679d6fadcfa9c38e07b828c700e03f9d
 checked_summary_ja: parent-direct 実行の lifecycle 記録を束縛パス上に実体化し、record にも check と同じ束縛同一性検査を課して、停止中の gate を到達可能にする。
 
 ## Decisions
