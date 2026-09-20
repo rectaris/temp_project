@@ -460,6 +460,135 @@ def lifecycle_identity_digest(run_id: str, lifecycle_path: Path) -> str:
     return digest(f"{run_id}\0{lifecycle_path.resolve()}")
 
 
+def parent_direct_lifecycle_bytes(value: dict[str, str]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def validate_parent_direct_lifecycle(
+    raw: bytes, state: dict[str, Any]
+) -> dict[str, str]:
+    try:
+        value = json.loads(raw)
+    except ValueError as exc:
+        raise StateError("parent-direct lifecycle record is invalid JSON") from exc
+    expected_keys = {
+        "implementation_mode", "source_head", "admitted_diff_digest"
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise StateError("parent-direct lifecycle record has an invalid exact shape")
+    if (
+        value["implementation_mode"] != "parent_direct"
+        or value["source_head"] != state["source_head"]
+    ):
+        raise StateError("parent-direct lifecycle record differs from the execution baseline")
+    require_digest(value["admitted_diff_digest"], "parent-direct admitted diff digest")
+    if raw != parent_direct_lifecycle_bytes(value):
+        raise StateError("parent-direct lifecycle record is not canonical")
+    return value
+
+
+def validate_legacy_parent_direct_lifecycle(
+    raw: bytes, state: dict[str, Any]
+) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    for line in raw.splitlines(keepends=True):
+        if len(line) > MAX_REGISTRY_RECORD_BYTES or not line.endswith(b"\n"):
+            raise StateError("legacy parent-direct lifecycle registry is truncated")
+        try:
+            record = json.loads(line)
+        except ValueError as exc:
+            raise StateError(
+                "legacy parent-direct lifecycle record is invalid JSON"
+            ) from exc
+        if not isinstance(record, dict) or canonical_registry_record(record) != line:
+            raise StateError(
+                "legacy parent-direct lifecycle registry record is not canonical"
+            )
+        records.append(record)
+    if not records:
+        raise StateError("legacy parent-direct lifecycle registry is empty")
+    header = records[0]
+    if set(header) != CONTINUATION_REGISTRY_HEADER_KEYS:
+        raise StateError(
+            "legacy parent-direct lifecycle registry header has an invalid exact shape"
+        )
+    if (
+        header["record_type"] != "continuation_registry"
+        or header["schema_version"] != CONTINUATION_REGISTRY_SCHEMA_VERSION
+    ):
+        raise StateError("legacy parent-direct lifecycle record is unsupported")
+    for field in ("registry_id", "path_digest", "genesis_digest"):
+        require_digest(header[field], f"legacy parent-direct {field}")
+    identity = {
+        key: header[key]
+        for key in CONTINUATION_REGISTRY_HEADER_KEYS - {"genesis_digest"}
+    }
+    if header["genesis_digest"] != canonical_digest(identity):
+        raise StateError("legacy parent-direct lifecycle registry digest mismatch")
+    previous = header["genesis_digest"]
+    consumed: set[str] = set()
+    for sequence, event in enumerate(records[1:], start=1):
+        if set(event) != CONTINUATION_REGISTRY_EVENT_KEYS:
+            raise StateError(
+                "legacy parent-direct lifecycle registry event has an invalid exact shape"
+            )
+        if (
+            event["record_type"] != "continuation_consumed"
+            or event["schema_version"] != CONTINUATION_REGISTRY_SCHEMA_VERSION
+            or event["sequence"] != sequence
+            or event["registry_id"] != header["registry_id"]
+            or event["previous_event_digest"] != previous
+        ):
+            raise StateError(
+                "legacy parent-direct lifecycle registry event identity mismatch"
+            )
+        for field in (
+            "plan_digest",
+            "predecessor_state_digest",
+            "predecessor_genesis_digest",
+            "predecessor_event_chain_digest",
+            "authorization_digest",
+            "child_state_path_digest",
+            "child_genesis_digest",
+            "event_digest",
+        ):
+            require_digest(event[field], f"legacy parent-direct {field}")
+        if (
+            not ID_RE.fullmatch(event["predecessor_run_id"])
+            or not ID_RE.fullmatch(event["child_run_id"])
+        ):
+            raise StateError(
+                "legacy parent-direct lifecycle registry run id is invalid"
+            )
+        expected = canonical_digest(
+            {key: event[key] for key in event if key != "event_digest"}
+        )
+        if event["event_digest"] != expected:
+            raise StateError(
+                "legacy parent-direct lifecycle registry event digest mismatch"
+            )
+        continuation_identity = canonical_digest({
+            "plan_digest": event["plan_digest"],
+            "predecessor_run_id": event["predecessor_run_id"],
+            "predecessor_genesis_digest": event["predecessor_genesis_digest"],
+        })
+        if continuation_identity in consumed:
+            raise StateError(
+                "legacy parent-direct lifecycle registry contains a replay"
+            )
+        consumed.add(continuation_identity)
+        previous = event["event_digest"]
+    epoch = execution_epoch(state)
+    if (
+        epoch is None
+        or epoch["continuation_registry_identity_digest"] != header["genesis_digest"]
+    ):
+        raise StateError(
+            "legacy parent-direct lifecycle registry differs from the execution epoch"
+        )
+    return header
+
+
 def reject_symlink_ancestors(path: Path, *, include_target: bool) -> None:
     absolute = path.absolute()
     parts = absolute.parts
@@ -3165,6 +3294,52 @@ def atomic_write(path: Path, value: dict[str, Any], create_new: bool = False) ->
         os.close(directory_descriptor)
 
 
+def atomic_write_private_bytes(path: Path, data: bytes, *, create_new: bool) -> None:
+    reject_symlink_ancestors(path, include_target=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    directory_descriptor = os.open(
+        path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    temporary_name = f".{path.name}.{secrets.token_hex(16)}.tmp"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if create_new:
+            try:
+                os.link(
+                    temporary_name, path.name,
+                    src_dir_fd=directory_descriptor, dst_dir_fd=directory_descriptor,
+                )
+            except FileExistsError as exc:
+                raise StateError("parent-direct lifecycle record already exists") from exc
+        else:
+            os.replace(
+                temporary_name, path.name,
+                src_dir_fd=directory_descriptor, dst_dir_fd=directory_descriptor,
+            )
+        os.fsync(directory_descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_name, dir_fd=directory_descriptor)
+        except FileNotFoundError:
+            pass
+        os.close(directory_descriptor)
+
+
 def with_lock(path: Path):
     lock_path = path.with_name(path.name + ".lock")
     reject_symlink_ancestors(lock_path, include_target=True)
@@ -5459,7 +5634,7 @@ def review_candidate_identity_digest(
 
 def parent_direct_review_identity(
     state: dict[str, Any],
-) -> tuple[str, str]:
+) -> tuple[str, str, bytes]:
     root = repository_root()
     require_repository_baseline(state)
     patch = git_output(
@@ -5474,12 +5649,167 @@ def parent_direct_review_identity(
     if not patch:
         raise StateError("parent-direct review requires an admitted write-scope diff")
     target = digest(patch)
-    identity = canonical_digest({
+    lifecycle = {
         "implementation_mode": "parent_direct",
         "source_head": state["source_head"],
         "admitted_diff_digest": target,
-    })
-    return target, identity
+    }
+    raw = parent_direct_lifecycle_bytes(lifecycle)
+    return target, digest(raw), raw
+
+
+def materialize_parent_direct_lifecycle(
+    state: dict[str, Any],
+    lifecycle_path: Path,
+    *,
+    expected_identity: str,
+    expected: bytes,
+    allow_update: bool,
+) -> str:
+    require_lifecycle_identity(state, state["run_id"], lifecycle_path)
+    require_outside_repository(lifecycle_path, "parent-direct lifecycle state")
+    require_digest(expected_identity, "parent-direct lifecycle identity")
+    validate_parent_direct_lifecycle(expected, state)
+    if digest(expected) != expected_identity:
+        raise StateError("parent-direct lifecycle identity mismatch")
+    _target, current_identity, current = parent_direct_review_identity(state)
+    if current_identity != expected_identity or current != expected:
+        raise StateError(
+            "parent-direct write-scope diff changed before lifecycle publication"
+        )
+    if lifecycle_path.exists() or lifecycle_path.is_symlink():
+        raw = read_external_artifact(
+            lifecycle_path, "parent-direct lifecycle state"
+        )
+        if raw == expected:
+            return expected_identity
+        validate_parent_direct_lifecycle(raw, state)
+        if not allow_update:
+            raise StateError(
+                "parent-direct lifecycle record differs from the current reviewed target"
+            )
+        atomic_write_private_bytes(lifecycle_path, expected, create_new=False)
+    else:
+        atomic_write_private_bytes(lifecycle_path, expected, create_new=True)
+    if file_digest(lifecycle_path) != expected_identity:
+        raise StateError("parent-direct lifecycle record publication mismatch")
+    return expected_identity
+
+
+def verify_parent_direct_lifecycle(
+    state: dict[str, Any], lifecycle_path: Path
+) -> str:
+    require_lifecycle_identity(state, state["run_id"], lifecycle_path)
+    if not lifecycle_path.exists() and not lifecycle_path.is_symlink():
+        raise StateError("parent-direct lifecycle state is unavailable")
+    raw = read_external_artifact(
+        lifecycle_path, "parent-direct lifecycle state"
+    )
+    validate_parent_direct_lifecycle(raw, state)
+    return digest(raw)
+
+
+def latest_recorded_lifecycle_digest(state: dict[str, Any]) -> str:
+    latest_start = max(
+        (
+            index for index, event in enumerate(state["events"])
+            if event["event_type"] == "writable_attempt_started"
+        ),
+        default=-1,
+    )
+    recorded = [
+        event["candidate_lifecycle_digest"]
+        for event in state["events"][latest_start + 1:]
+        if event["candidate_lifecycle_digest"]
+    ]
+    return recorded[-1] if recorded else ""
+
+
+def latest_parent_direct_review_digest(state: dict[str, Any]) -> str:
+    reviewed = [
+        event["candidate_lifecycle_digest"]
+        for event in state["events"]
+        if (
+            event["event_type"] == "parent_review"
+            and event["implementation_mode"] == "parent_direct"
+            and event["candidate_lifecycle_digest"]
+        )
+    ]
+    if not reviewed:
+        raise StateError(
+            "legacy parent-direct lifecycle recovery requires a recorded parent review"
+        )
+    return reviewed[-1]
+
+
+def latest_formal_parent_direct_review_digest(state: dict[str, Any]) -> str:
+    reviewed = [
+        event["candidate_lifecycle_digest"]
+        for event in state["events"]
+        if (
+            event["event_type"] == "parent_review"
+            and event["implementation_mode"] == "parent_direct"
+            and event["candidate_lifecycle_digest"]
+            and event["review_target_digest"]
+        )
+    ]
+    if not reviewed:
+        raise StateError(
+            "current parent-direct diff lacks a matching recorded formal review"
+        )
+    return reviewed[-1]
+
+
+def recover_parent_direct_lifecycle(args: argparse.Namespace) -> None:
+    state_path = Path(args.state)
+    lifecycle_path = Path(args.lifecycle_state)
+    source_path = Path(args.continuation_registry)
+    with with_lock(state_path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(state_path)
+        if state["run_id"] != args.run_id:
+            raise StateError("run_id mismatch")
+        if state["implementation_mode"] != "parent_direct":
+            raise StateError("lifecycle recovery requires parent-direct execution")
+        if state["state"] == "active":
+            raise StateError("lifecycle recovery requires a stopped historical execution")
+        require_lifecycle_identity(state, args.run_id, lifecycle_path)
+        if lifecycle_path.exists() or lifecycle_path.is_symlink():
+            raise StateError("bound lifecycle state is already occupied")
+        registry = read_continuation_registry(source_path)
+        epoch = execution_epoch(state)
+        if (
+            epoch is None
+            or epoch["continuation_registry_identity_digest"]
+            != registry["identity_digest"]
+        ):
+            raise StateError(
+                "continuation registry differs from the execution epoch"
+            )
+        raw = read_external_artifact(
+            source_path, "legacy continuation registry"
+        )
+        validate_legacy_parent_direct_lifecycle(raw, state)
+        latest = latest_recorded_lifecycle_digest(state)
+        if not latest or digest(raw) != latest:
+            raise StateError(
+                "continuation registry digest does not match the latest lifecycle event"
+            )
+        latest_parent_direct_review_digest(state)
+        atomic_write_private_bytes(lifecycle_path, raw, create_new=True)
+        if file_digest(lifecycle_path) != latest:
+            raise StateError("legacy parent-direct lifecycle recovery mismatch")
+        print(json.dumps({
+            "record_type": "legacy_parent_direct_lifecycle_recovery",
+            "schema_version": 1,
+            "run_id": state["run_id"],
+            "lifecycle_identity_digest": state[
+                "candidate_lifecycle_identity_digest"
+            ],
+            "recovered_lifecycle_digest": latest,
+            "continuation_registry_identity_digest": registry["identity_digest"],
+            "ledger_rewritten": False,
+        }, sort_keys=True))
 
 
 def candidate_review_identity(
@@ -5646,7 +5976,9 @@ def record_adversarial_preflight(args: argparse.Namespace) -> None:
         else:
             if args.candidate_manifest:
                 raise StateError("parent-direct preflight cannot use a candidate manifest")
-            review_target, review_identity = parent_direct_review_identity(state)
+            review_target, review_identity, lifecycle_bytes = (
+                parent_direct_review_identity(state)
+            )
             attempt_id = ""
             candidate_digest = ""
         evidence, _evidence_digest = read_private_json(
@@ -5687,6 +6019,16 @@ def record_adversarial_preflight(args: argparse.Namespace) -> None:
         for key, value in derive_summary(state["events"]).items():
             state[key] = value
         validate_state(state)
+        if args.implementation_mode == "parent_direct":
+            materialized = materialize_parent_direct_lifecycle(
+                state,
+                Path(args.lifecycle_state),
+                expected_identity=review_identity,
+                expected=lifecycle_bytes,
+                allow_update=True,
+            )
+            if materialized != review_identity:
+                raise StateError("parent-direct lifecycle identity mismatch")
         atomic_write(path, state)
 
 
@@ -5745,7 +6087,6 @@ def record_bounded_review(args: argparse.Namespace) -> None:
             raise StateError("candidate review requires the admitted candidate manifest")
     elif args.candidate_manifest:
         raise StateError("parent-direct review cannot use a candidate manifest")
-    spend_group_member_review(args)
     record_event(argparse.Namespace(
         state=args.state,
         run_id=args.run_id,
@@ -5771,6 +6112,7 @@ def record_bounded_review(args: argparse.Namespace) -> None:
         reviewer_registry=args.reviewer_registry,
         lifecycle_state=args.lifecycle_state,
         elapsed_seconds=args.elapsed_seconds,
+        group_state=getattr(args, "group_state", None),
     ))
 
 
@@ -5855,6 +6197,16 @@ def record_event(args: argparse.Namespace) -> None:
             raise StateError("invalid event_id")
         if len(state["events"]) >= MAX_EVENTS:
             raise StateError("event budget exhausted")
+        if (
+            args.event_type == "parent_review"
+            and args.implementation_mode == "parent_direct"
+            and execution_epoch(state) is not None
+            and not getattr(args, "bounded_review", False)
+            and not args.candidate_lifecycle_digest
+        ):
+            raise StateError(
+                "epoch-enabled parent-direct review requires a bound lifecycle digest"
+            )
         invariants = args.invariant_digest or []
         if len(invariants) != len(set(invariants)):
             raise StateError("invariant digests must be unique")
@@ -5893,6 +6245,21 @@ def record_event(args: argparse.Namespace) -> None:
                 review_receipt["packet_digest"],
                 review_receipt["inheritance_evidence_digest"],
             )
+            require_lifecycle_identity(
+                state, args.run_id, Path(args.lifecycle_state)
+            )
+            if (
+                args.implementation_mode == "parent_direct"
+                and execution_epoch(state) is None
+                and Path(args.lifecycle_state).exists()
+            ):
+                validate_parent_direct_lifecycle(
+                    read_external_artifact(
+                        Path(args.lifecycle_state),
+                        "parent-direct lifecycle state",
+                    ),
+                    state,
+                )
             if args.implementation_mode == "candidate":
                 (
                     review_target,
@@ -5921,7 +6288,9 @@ def record_event(args: argparse.Namespace) -> None:
                         "writable attempt is already bound to another admitted candidate"
                     )
             else:
-                review_target, review_identity = parent_direct_review_identity(state)
+                review_target, review_identity, lifecycle_bytes = (
+                    parent_direct_review_identity(state)
+                )
                 review_attempt_id = ""
                 review_candidate_digest = ""
                 expected_worker_receipts = []
@@ -6031,6 +6400,11 @@ def record_event(args: argparse.Namespace) -> None:
                     )
                 predecessor_reference = checkpoint["reviewer_registry"]
             receipt_digest = file_digest(receipt_path)
+            if any(
+                event["independent_review_receipt_digest"] == receipt_digest
+                for event in state["events"]
+            ):
+                raise StateError("independent review receipt replay is not allowed")
             admit_reviewer_session(
                 Path(args.reviewer_registry),
                 reviewer_session_digest=review_receipt["reviewer_session_digest"],
@@ -6041,6 +6415,7 @@ def record_event(args: argparse.Namespace) -> None:
                 review_receipt_digest=receipt_digest,
                 predecessor_reference=predecessor_reference,
             )
+            spend_group_member_review(args)
             args.independent_review_receipt_digest = receipt_digest
             args.candidate_lifecycle_digest = review_identity
             args.review_target_digest = review_target
@@ -6062,12 +6437,54 @@ def record_event(args: argparse.Namespace) -> None:
         descope_evidence_digest = ""
         descope_evidence_file = getattr(args, "descope_evidence_file", None)
         lifecycle = args.candidate_lifecycle_digest or ""
+        if lifecycle:
+            lifecycle_path = Path(args.lifecycle_state)
+            require_lifecycle_identity(state, args.run_id, lifecycle_path)
+            if args.implementation_mode == "parent_direct":
+                if execution_epoch(state) is None:
+                    if args.event_type == "parent_review":
+                        _target, current_identity, lifecycle_bytes = (
+                            parent_direct_review_identity(state)
+                        )
+                        if lifecycle != current_identity:
+                            raise StateError(
+                                "parent-direct lifecycle content digest mismatch"
+                            )
+                    else:
+                        if (
+                            not lifecycle_path.exists()
+                            and not lifecycle_path.is_symlink()
+                        ):
+                            raise StateError(
+                                "parent-direct lifecycle state is unavailable"
+                            )
+                        if file_digest(lifecycle_path) != lifecycle:
+                            raise StateError(
+                                "parent-direct lifecycle content digest mismatch"
+                            )
+                elif owner_resolution_epoch(state) is not None:
+                    if file_digest(lifecycle_path) != lifecycle:
+                        raise StateError(
+                            "parent-direct lifecycle content digest mismatch"
+                        )
+                else:
+                    _target, current_identity, lifecycle_bytes = (
+                        parent_direct_review_identity(state)
+                    )
+                    if lifecycle != current_identity:
+                        raise StateError("parent-direct lifecycle content digest mismatch")
+                    if args.event_type != "parent_review":
+                        recorded_identity = verify_parent_direct_lifecycle(
+                            state, lifecycle_path
+                        )
+                        if lifecycle != recorded_identity:
+                            raise StateError(
+                                "parent-direct lifecycle content digest mismatch"
+                            )
         if args.event_type == "parent_review" and (
             args.implementation_mode == "parent_direct" or receipt
         ):
             require_digest(receipt, "independent_review_receipt_digest")
-            if any(event["independent_review_receipt_digest"] == receipt for event in state["events"]):
-                raise StateError("independent review receipt replay is not allowed")
         if args.event_type == "repair_classification":
             if not invariants:
                 raise StateError("repair classification requires at least one affected invariant")
@@ -6221,6 +6638,20 @@ def record_event(args: argparse.Namespace) -> None:
         for key, value in derive_summary(state["events"]).items():
             state[key] = value
         validate_state(state)
+        if (
+            args.event_type == "parent_review"
+            and args.implementation_mode == "parent_direct"
+            and lifecycle
+        ):
+            materialized = materialize_parent_direct_lifecycle(
+                state,
+                Path(args.lifecycle_state),
+                expected_identity=lifecycle,
+                expected=lifecycle_bytes,
+                allow_update=True,
+            )
+            if materialized != lifecycle:
+                raise StateError("parent-direct lifecycle identity mismatch")
         atomic_write(path, state)
 
 
@@ -6744,22 +7175,72 @@ def check_gate_locked(args: argparse.Namespace, state: dict[str, Any]) -> None:
         args.run_id, Path(args.lifecycle_state)
     ):
         raise StateError("candidate lifecycle identity mismatch")
-    latest_start = max(
-        (
-            index for index, event in enumerate(state["events"])
-            if event["event_type"] == "writable_attempt_started"
-        ),
-        default=-1,
-    )
-    recorded_lifecycle_digests = [
-        event["candidate_lifecycle_digest"]
-        for event in state["events"][latest_start + 1:]
-        if event["candidate_lifecycle_digest"]
-    ]
-    if recorded_lifecycle_digests:
+    epoch = execution_epoch(state)
+    if (
+        state["implementation_mode"] == "parent_direct"
+        and epoch is not None
+        and resolution_epoch is None
+        and args.operation in {
+            "completion", "archive", "repair_plan", "descope_plan"
+        }
+    ):
+        reviewed_identity = latest_formal_parent_direct_review_digest(state)
+        current_identity = parent_direct_review_identity(state)[1]
+        if current_identity != reviewed_identity:
+            raise StateError(
+                "current parent-direct diff lacks a matching recorded formal review"
+            )
+    latest_lifecycle = latest_recorded_lifecycle_digest(state)
+    if latest_lifecycle:
         if not args.lifecycle_state:
             raise StateError("candidate lifecycle is required after a lifecycle-bound event")
-        if file_digest(Path(args.lifecycle_state)) != recorded_lifecycle_digests[-1]:
+        lifecycle_path = Path(args.lifecycle_state)
+        if state["implementation_mode"] == "parent_direct":
+            if epoch is None:
+                lifecycle_digest = file_digest(lifecycle_path)
+                if lifecycle_digest != latest_lifecycle:
+                    raise StateError(
+                        "candidate lifecycle changed after the latest budget event"
+                    )
+                return
+            if resolution_epoch is not None:
+                lifecycle_digest = file_digest(lifecycle_path)
+                if lifecycle_digest != latest_lifecycle:
+                    raise StateError(
+                        "candidate lifecycle changed after the latest budget event"
+                    )
+                return
+            raw = read_external_artifact(
+                lifecycle_path, "parent-direct lifecycle state"
+            )
+            lifecycle_digest = digest(raw)
+            if lifecycle_digest != latest_lifecycle:
+                raise StateError(
+                    "candidate lifecycle changed after the latest budget event"
+                )
+            try:
+                validate_parent_direct_lifecycle(raw, state)
+            except StateError as canonical_error:
+                if epoch is None:
+                    return
+                try:
+                    validate_legacy_parent_direct_lifecycle(raw, state)
+                except StateError:
+                    raise canonical_error
+                current_identity = parent_direct_review_identity(state)[1]
+                if current_identity != latest_parent_direct_review_digest(state):
+                    raise StateError(
+                        "current parent-direct diff differs from the recorded review"
+                    )
+            else:
+                current_identity = parent_direct_review_identity(state)[1]
+                if current_identity != latest_lifecycle:
+                    raise StateError(
+                        "current parent-direct diff differs from the recorded lifecycle"
+                    )
+        else:
+            lifecycle_digest = file_digest(lifecycle_path)
+        if lifecycle_digest != latest_lifecycle:
             raise StateError("candidate lifecycle changed after the latest budget event")
 
 
@@ -6785,6 +7266,12 @@ def parser() -> argparse.ArgumentParser:
     route.add_argument("--probe-manifest", required=True)
     route.add_argument("--inheritance-evidence-digest", required=True)
     route.set_defaults(handler=record_review_route_check)
+    recover = sub.add_parser("recover-parent-direct-lifecycle")
+    recover.add_argument("state")
+    recover.add_argument("--run-id", required=True)
+    recover.add_argument("--lifecycle-state", required=True)
+    recover.add_argument("--continuation-registry", required=True)
+    recover.set_defaults(handler=recover_parent_direct_lifecycle)
     init = sub.add_parser("init")
     init.add_argument("state")
     init.add_argument("--run-id", required=True)

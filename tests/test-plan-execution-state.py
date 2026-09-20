@@ -509,15 +509,567 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertIn("implementation mode differs", mismatched.stderr)
         self.assertEqual(self.payload()["events"], [])
 
+    def test_lifecycle_bound_record_rejects_an_unbound_path(self) -> None:
+        content = "candidate generation\n"
+        self.lifecycle.write_text(content, encoding="utf-8")
+        unbound = self.base / "unbound-lifecycle.json"
+        unbound.write_text(content, encoding="utf-8")
+        before = self.state.read_bytes()
+        rejected = self.run_cli(
+            "record", str(self.state), "--run-id", "run-1",
+            "--event-id", "unbound-generation",
+            "--event-type", "candidate_generation",
+            "--implementation-mode", "candidate",
+            "--candidate-lifecycle-digest", digest(content),
+            "--lifecycle-state", str(unbound),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("candidate lifecycle identity mismatch", rejected.stderr)
+        self.assertEqual(self.state.read_bytes(), before)
+
+        state, lifecycle, run_id = self.initialize_execution(
+            "unbound-parent-lifecycle", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text(
+            "unbound parent lifecycle\n", encoding="utf-8"
+        )
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
+        unbound_parent = self.base / "unbound-parent.json"
+        unbound_parent.write_bytes(lifecycle.read_bytes())
+        parent_before = state.read_bytes()
+        parent_rejected = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "unbound-parent-validation",
+            "--event-type", "focused_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", lifecycle_digest,
+            "--lifecycle-state", str(unbound_parent),
+        )
+        self.assertNotEqual(parent_rejected.returncode, 0)
+        self.assertIn("candidate lifecycle identity mismatch", parent_rejected.stderr)
+        self.assertEqual(state.read_bytes(), parent_before)
+
+    def test_parent_direct_review_materializes_bound_lifecycle_for_all_gates(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "materialized-parent-lifecycle", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text(
+            "materialized parent lifecycle\n", encoding="utf-8"
+        )
+        payload = STATE_MODULE.read_state(state)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            _target, lifecycle_digest, expected = (
+                STATE_MODULE.parent_direct_review_identity(payload)
+            )
+        self.assertFalse(lifecycle.exists())
+        before = state.read_bytes()
+        missing = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "parent-authoritative",
+            "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", lifecycle_digest,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("parent-direct lifecycle state", missing.stderr)
+        self.assertEqual(state.read_bytes(), before)
+        self.assertFalse(lifecycle.exists())
+
+        receipt = self.review_receipt(
+            "materialized-parent-lifecycle",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        unbound_lifecycle = self.base / "unbound-review-lifecycle.json"
+        registry_before = self.registry.read_bytes()
+        rejected_review = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "unbound-parent-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(unbound_lifecycle),
+        )
+        self.assertNotEqual(rejected_review.returncode, 0)
+        self.assertIn("candidate lifecycle identity mismatch", rejected_review.stderr)
+        self.assertEqual(self.registry.read_bytes(), registry_before)
+        self.assertEqual(state.read_bytes(), before)
+        self.assertFalse(unbound_lifecycle.exists())
+        reviewed = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "materialized-parent-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        self.assertEqual(lifecycle.read_bytes(), expected)
+        self.assertEqual(stat.S_IMODE(lifecycle.stat().st_mode), 0o600)
+        recorded = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "parent-authoritative",
+            "--event-type", "authoritative_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", lifecycle_digest,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+
+        base_args = {
+            "run_id": run_id,
+            "plan": None,
+            "group_permit": None,
+            "group_state": None,
+            "lifecycle_state": str(lifecycle),
+            "open_attempt_id": None,
+        }
+        active = STATE_MODULE.read_state(state)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            for operation in ("execution", "completion", "archive"):
+                STATE_MODULE.check_gate_locked(
+                    SimpleNamespace(operation=operation, **base_args), active
+                )
+            repair = json.loads(json.dumps(active))
+            repair["state"] = "repair_required"
+            STATE_MODULE.check_gate_locked(
+                SimpleNamespace(operation="repair_plan", **base_args), repair
+            )
+            descope = json.loads(json.dumps(active))
+            descope["state"] = "descope_required"
+            STATE_MODULE.check_gate_locked(
+                SimpleNamespace(operation="descope_plan", **base_args), descope
+            )
+
+        before_lifecycle = lifecycle.read_bytes()
+        (self.repo / "allowed.txt").write_text(
+            "changed after lifecycle recording\n", encoding="utf-8"
+        )
+        changed = self.run_cli(
+            "check", str(state), "--run-id", run_id,
+            "--operation", "completion",
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(changed.returncode, 0, changed.stderr)
+        self.assertEqual(lifecycle.read_bytes(), before_lifecycle)
+
+        lifecycle.write_text("legacy lifecycle bytes\n", encoding="utf-8")
+        self.assertEqual(STATE_MODULE.read_state(state)["run_id"], run_id)
+
+    def test_rejected_parent_direct_record_preserves_the_bound_lifecycle(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "rejected-parent-record",
+            mode="parent_direct",
+            require_preflight=True,
+        )
+        target = self.repo / "allowed.txt"
+        target.write_text("first parent target\n", encoding="utf-8")
+        first_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
+        before = lifecycle.read_bytes()
+        target.write_text("second parent target\n", encoding="utf-8")
+        rejected = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "stale-parent-validation",
+            "--event-type", "focused_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", first_digest,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("parent-direct lifecycle content digest mismatch", rejected.stderr)
+        self.assertEqual(lifecycle.read_bytes(), before)
+
+        payload = STATE_MODULE.read_state(state)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            _target, stale_identity, stale_bytes = (
+                STATE_MODULE.parent_direct_review_identity(payload)
+            )
+        target.write_text("third parent target\n", encoding="utf-8")
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            self.assertRaisesRegex(
+                STATE_MODULE.StateError,
+                "diff changed before lifecycle publication",
+            ),
+        ):
+            STATE_MODULE.materialize_parent_direct_lifecycle(
+                payload,
+                lifecycle,
+                expected_identity=stale_identity,
+                expected=stale_bytes,
+                allow_update=True,
+            )
+        self.assertEqual(lifecycle.read_bytes(), before)
+
+    def test_rejected_parent_direct_preflight_and_review_preserve_lifecycle(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "rejected-parent-preflight", mode="parent_direct", require_preflight=True
+        )
+        target = self.repo / "allowed.txt"
+        target.write_text("first parent target\n", encoding="utf-8")
+        payload = STATE_MODULE.read_state(state)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            review_target, review_identity, _raw = (
+                STATE_MODULE.parent_direct_review_identity(payload)
+            )
+            specifications = STATE_MODULE.applicable_specification_digests(payload)
+        self.materialize_parent_direct_lifecycle(state, lifecycle)
+        before = lifecycle.read_bytes()
+        evidence = self.base / "stale-parent-preflight.json"
+        evidence.write_text(json.dumps({
+            "schema_version": 1,
+            "plan_digest": payload["plan_digest"],
+            "review_target_digest": review_target,
+            "review_identity_digest": review_identity,
+            "applicable_specification_digests": specifications,
+            "cases": [{
+                "id": "stale-parent-preflight",
+                "result": "passed",
+                "evidence_digest": digest("stale preflight evidence"),
+            }],
+        }))
+        evidence.chmod(0o600)
+        receipt = self.review_receipt(
+            "stale-parent-review",
+            payload["plan_digest"],
+            round_value=1,
+        )
+        target.write_text("second parent target\n", encoding="utf-8")
+
+        preflight = self.run_cli(
+            "preflight", str(state), "--run-id", run_id,
+            "--event-id", "stale-parent-preflight",
+            "--implementation-mode", "parent_direct",
+            "--preflight-evidence", str(evidence),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(preflight.returncode, 0)
+        self.assertIn("differs from the current review target", preflight.stderr)
+        self.assertEqual(lifecycle.read_bytes(), before)
+
+        review = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "stale-parent-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(review.returncode, 0)
+        self.assertEqual(lifecycle.read_bytes(), before)
+
+    def test_stopped_parent_direct_ledger_recovers_legacy_registry_digest(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "legacy-parent-recovery", mode="parent_direct", require_preflight=True
+        )
+        (self.repo / "allowed.txt").write_text(
+            "legacy parent recovery\n", encoding="utf-8"
+        )
+        reviewed = self.staged_parent_review_fixture(
+            state, lifecycle, "legacy-parent-review"
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        payload = STATE_MODULE.read_state(state)
+        review_digest = payload["events"][-1]["candidate_lifecycle_digest"]
+        registry = STATE_MODULE.read_continuation_registry(self.continuation_registry)
+        consumed = {
+            "record_type": "continuation_consumed",
+            "schema_version": STATE_MODULE.CONTINUATION_REGISTRY_SCHEMA_VERSION,
+            "sequence": 1,
+            "registry_id": registry["header"]["registry_id"],
+            "plan_digest": payload["plan_digest"],
+            "predecessor_state_digest": digest("legacy predecessor state"),
+            "predecessor_run_id": "legacy-predecessor",
+            "predecessor_genesis_digest": digest("legacy predecessor genesis"),
+            "predecessor_event_chain_digest": digest("legacy predecessor leaf"),
+            "authorization_digest": digest("legacy authorization"),
+            "child_run_id": run_id,
+            "child_state_path_digest": digest(str(state.absolute())),
+            "child_genesis_digest": payload["genesis_digest"],
+            "previous_event_digest": registry["event_chain_digest"],
+            "event_digest": "",
+        }
+        consumed["event_digest"] = STATE_MODULE.canonical_digest(
+            {key: consumed[key] for key in consumed if key != "event_digest"}
+        )
+        with self.continuation_registry.open("ab") as handle:
+            handle.write(STATE_MODULE.canonical_registry_record(consumed))
+        STATE_MODULE.read_continuation_registry(self.continuation_registry)
+        continuation_digest = digest(self.continuation_registry.read_bytes())
+        legacy_event = STATE_MODULE.empty_execution_event(
+            payload,
+            event_id="legacy-lifecycle-record",
+            event_type="elapsed_checkpoint",
+            candidate_lifecycle_digest=continuation_digest,
+        )
+        legacy_event["event_digest"] = STATE_MODULE.canonical_digest(
+            {key: legacy_event[key] for key in legacy_event if key != "event_digest"}
+        )
+        payload["events"].append(legacy_event)
+        payload["last_monotonic_ns"] = legacy_event["monotonic_ns"]
+        payload["event_chain_digest"] = legacy_event["event_digest"]
+        for key, value in STATE_MODULE.derive_summary(payload["events"]).items():
+            payload[key] = value
+        STATE_MODULE.validate_state(payload)
+        STATE_MODULE.atomic_write(state, payload)
+        stopped = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "legacy-parent-stop",
+            "--event-type", "scope_drift",
+            "--implementation-mode", "parent_direct",
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        before_ledger = state.read_bytes()
+        lifecycle.unlink()
+
+        recovered = self.run_cli(
+            "recover-parent-direct-lifecycle", str(state),
+            "--run-id", run_id,
+            "--lifecycle-state", str(lifecycle),
+            "--continuation-registry", str(self.continuation_registry),
+        )
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        report = json.loads(recovered.stdout)
+        self.assertFalse(report["ledger_rewritten"])
+        self.assertEqual(report["recovered_lifecycle_digest"], continuation_digest)
+        self.assertEqual(lifecycle.read_bytes(), self.continuation_registry.read_bytes())
+        self.assertEqual(state.read_bytes(), before_ledger)
+
+        active = STATE_MODULE.read_state(state)
+        active["state"] = "active"
+        active["replan_reason_codes"] = []
+        self.assertEqual(
+            STATE_MODULE.latest_parent_direct_review_digest(active), review_digest
+        )
+        args = SimpleNamespace(
+            run_id=run_id,
+            operation="completion",
+            plan=None,
+            group_permit=None,
+            group_state=None,
+            lifecycle_state=str(lifecycle),
+            open_attempt_id=None,
+        )
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            STATE_MODULE.check_gate_locked(args, active)
+
+    def test_legacy_parent_direct_gate_accepts_digest_bound_opaque_lifecycle(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "legacy-opaque-lifecycle", mode="parent_direct"
+        )
+        raw = b"x" * (STATE_MODULE.MAX_BYTES + 1)
+        lifecycle.write_bytes(raw)
+        payload = STATE_MODULE.read_state(state)
+        event = STATE_MODULE.empty_execution_event(
+            payload,
+            event_id="legacy-opaque-record",
+            event_type="elapsed_checkpoint",
+            candidate_lifecycle_digest=digest(raw),
+        )
+        event["event_digest"] = STATE_MODULE.canonical_digest(
+            {key: event[key] for key in event if key != "event_digest"}
+        )
+        payload["events"].append(event)
+        payload["last_monotonic_ns"] = event["monotonic_ns"]
+        payload["event_chain_digest"] = event["event_digest"]
+        for key, value in STATE_MODULE.derive_summary(payload["events"]).items():
+            payload[key] = value
+        STATE_MODULE.validate_state(payload)
+        args = SimpleNamespace(
+            run_id=run_id,
+            plan=None,
+            group_permit=None,
+            group_state=None,
+            lifecycle_state=str(lifecycle),
+            open_attempt_id=None,
+        )
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            for operation in ("completion", "archive"):
+                args.operation = operation
+                STATE_MODULE.check_gate_locked(args, payload)
+
+    def test_legacy_parent_direct_record_accepts_digest_bound_opaque_lifecycle(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "legacy-opaque-record", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text(
+            "legacy opaque record\n", encoding="utf-8"
+        )
+        lifecycle.write_text("historical opaque lifecycle\n", encoding="utf-8")
+        recorded = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "legacy-opaque-validation",
+            "--event-type", "focused_validation",
+            "--implementation-mode", "parent_direct",
+            "--candidate-lifecycle-digest", digest(lifecycle.read_bytes()),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+
+    def test_legacy_opaque_review_rejects_before_reviewer_admission(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "legacy-opaque-review", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text(
+            "legacy opaque review\n", encoding="utf-8"
+        )
+        lifecycle.write_text("historical opaque lifecycle\n", encoding="utf-8")
+        receipt = self.review_receipt(
+            "legacy-opaque-review",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        registry_before = self.registry.read_bytes()
+        rejected = self.run_cli(
+            "review", str(state), "--run-id", run_id,
+            "--event-id", "legacy-opaque-review",
+            "--implementation-mode", "parent_direct",
+            "--review-receipt", str(receipt),
+            "--review-resource-manifest", str(self.review_manifests[receipt]),
+            "--invariant-digest", digest("one invariant"),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("invalid JSON", rejected.stderr)
+        self.assertEqual(self.registry.read_bytes(), registry_before)
+
+    def test_legacy_parent_direct_gate_does_not_reinterpret_canonical_json(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "legacy-canonical-looking-lifecycle", mode="parent_direct"
+        )
+        raw = STATE_MODULE.parent_direct_lifecycle_bytes({
+            "implementation_mode": "parent_direct",
+            "source_head": self.head,
+            "admitted_diff_digest": digest("historical opaque bytes"),
+        })
+        lifecycle.write_bytes(raw)
+        payload = STATE_MODULE.read_state(state)
+        event = STATE_MODULE.empty_execution_event(
+            payload,
+            event_id="legacy-canonical-looking-record",
+            event_type="elapsed_checkpoint",
+            candidate_lifecycle_digest=digest(raw),
+        )
+        event["event_digest"] = STATE_MODULE.canonical_digest(
+            {key: event[key] for key in event if key != "event_digest"}
+        )
+        payload["events"].append(event)
+        payload["last_monotonic_ns"] = event["monotonic_ns"]
+        payload["event_chain_digest"] = event["event_digest"]
+        for key, value in STATE_MODULE.derive_summary(payload["events"]).items():
+            payload[key] = value
+        STATE_MODULE.validate_state(payload)
+        args = SimpleNamespace(
+            run_id=run_id,
+            operation="completion",
+            plan=None,
+            group_permit=None,
+            group_state=None,
+            lifecycle_state=str(lifecycle),
+            open_attempt_id=None,
+        )
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            STATE_MODULE.check_gate_locked(args, payload)
+
+    def test_parent_direct_lifecycle_parsers_wrap_plain_value_errors(self) -> None:
+        state, _lifecycle, _run_id = self.initialize_execution(
+            "lifecycle-large-integer", mode="parent_direct"
+        )
+        payload = STATE_MODULE.read_state(state)
+        old_limit = sys.get_int_max_str_digits()
+        try:
+            sys.set_int_max_str_digits(640)
+            oversized_integer = b"9" * 700
+            current = (
+                b'{"admitted_diff_digest":'
+                + oversized_integer
+                + b',"implementation_mode":"parent_direct","source_head":"'
+                + self.head.encode()
+                + b'"}'
+            )
+            legacy = b'{"registry_id":' + oversized_integer + b"}\n"
+            with self.assertRaisesRegex(STATE_MODULE.StateError, "invalid JSON"):
+                STATE_MODULE.validate_parent_direct_lifecycle(current, payload)
+            with self.assertRaisesRegex(STATE_MODULE.StateError, "invalid JSON"):
+                STATE_MODULE.validate_legacy_parent_direct_lifecycle(legacy, payload)
+        finally:
+            sys.set_int_max_str_digits(old_limit)
+
+    def test_epoch_completion_requires_formal_review_without_lifecycle_events(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "epoch-no-lifecycle-review", mode="parent_direct", require_preflight=True
+        )
+        rejected = self.run_cli(
+            "check", str(state), "--run-id", run_id,
+            "--operation", "completion",
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("lacks a matching recorded formal review", rejected.stderr)
+
+    def test_parent_direct_completion_requires_review_of_the_current_diff(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "current-review-gate", mode="parent_direct", require_preflight=True
+        )
+        target = self.repo / "allowed.txt"
+        target.write_text("reviewed target\n", encoding="utf-8")
+        reviewed = self.staged_parent_review_fixture(
+            state, lifecycle, "current-review-a"
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+
+        target.write_text("preflight-only target\n", encoding="utf-8")
+        payload = STATE_MODULE.read_state(state)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            review_target, review_identity, _raw = (
+                STATE_MODULE.parent_direct_review_identity(payload)
+            )
+            specifications = STATE_MODULE.applicable_specification_digests(payload)
+        evidence = self.base / "current-review-b-preflight.json"
+        evidence.write_text(json.dumps({
+            "schema_version": 1,
+            "plan_digest": payload["plan_digest"],
+            "review_target_digest": review_target,
+            "review_identity_digest": review_identity,
+            "applicable_specification_digests": specifications,
+            "cases": [{
+                "id": "current-review-b",
+                "result": "passed",
+                "evidence_digest": digest("current review b"),
+            }],
+        }))
+        evidence.chmod(0o600)
+        preflight = self.run_cli(
+            "preflight", str(state), "--run-id", run_id,
+            "--event-id", "current-review-b-preflight",
+            "--implementation-mode", "parent_direct",
+            "--preflight-evidence", str(evidence),
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(preflight.returncode, 0, preflight.stderr)
+        rejected = self.run_cli(
+            "check", str(state), "--run-id", run_id,
+            "--operation", "completion",
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("lacks a matching recorded formal review", rejected.stderr)
+
     def test_session_checkpoint_requires_a_different_observed_root_and_is_claimed_once(self) -> None:
         state, lifecycle, run_id = self.initialize_execution("checkpoint", mode="parent_direct")
         (self.repo / "allowed.txt").write_text("checkpoint candidate\n", encoding="utf-8")
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
         recorded = self.run_cli(
             "record", str(state), "--run-id", run_id,
             "--event-id", "authoritative", "--event-type", "authoritative_validation",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--candidate-lifecycle-digest", lifecycle_digest,
             "--lifecycle-state", str(lifecycle),
         )
         self.assertEqual(recorded.returncode, 0, recorded.stderr)
@@ -693,12 +1245,12 @@ class PlanExecutionStateTest(unittest.TestCase):
 
         state, lifecycle, run_id = self.initialize_execution("unobserved", mode="parent_direct")
         (self.repo / "allowed.txt").write_text("unobserved candidate\n", encoding="utf-8")
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
         self.run_cli(
             "record", str(state), "--run-id", run_id,
             "--event-id", "authoritative", "--event-type", "authoritative_validation",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--candidate-lifecycle-digest", lifecycle_digest,
             "--lifecycle-state", str(lifecycle),
             check=True,
         )
@@ -801,13 +1353,61 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertNotEqual(restarted.returncode, 0)
         self.assertIn("differs from the admitted candidate diff", restarted.stderr)
 
+    def test_group_review_spends_budget_after_reviewer_admission(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "group-review-order", mode="parent_direct"
+        )
+        (self.repo / "allowed.txt").write_text(
+            "group review order\n", encoding="utf-8"
+        )
+        receipt = self.review_receipt(
+            "group-review-order",
+            digest(self.plan.read_text()),
+            round_value=1,
+        )
+        order: list[str] = []
+        args = SimpleNamespace(
+            state=str(state),
+            run_id=run_id,
+            event_id="group-review-order",
+            implementation_mode="parent_direct",
+            review_receipt=str(receipt),
+            review_resource_manifest=str(self.review_manifests[receipt]),
+            candidate_manifest=None,
+            predecessor_state=None,
+            predecessor_checkpoint=None,
+            reviewer_registry=str(self.registry),
+            invariant_digest=[digest("one invariant")],
+            finding_severity=[],
+            lifecycle_state=str(lifecycle),
+            elapsed_seconds=0.0,
+            group_state="group-state.json",
+        )
+        with (
+            mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo),
+            mock.patch.object(
+                STATE_MODULE,
+                "admit_reviewer_session",
+                side_effect=lambda *args, **kwargs: order.append("admit"),
+            ),
+            mock.patch.object(
+                STATE_MODULE,
+                "spend_group_member_review",
+                side_effect=lambda args: order.append(
+                    f"spend:{args.group_state}"
+                ),
+            ),
+        ):
+            STATE_MODULE.record_bounded_review(args)
+        self.assertEqual(order, ["admit", "spend:group-state.json"])
+
     def staged_parent_review_fixture(
         self, state: Path, lifecycle: Path, label: str, *,
         medium: bool = False, session: str | None = None, check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         payload = STATE_MODULE.read_state(state)
         with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
-            target, identity = STATE_MODULE.parent_direct_review_identity(payload)
+            target, identity, _raw = STATE_MODULE.parent_direct_review_identity(payload)
             specifications = STATE_MODULE.applicable_specification_digests(payload)
         if not any(
             event["event_type"] == "adversarial_preflight"
@@ -2668,13 +3268,16 @@ class PlanExecutionStateTest(unittest.TestCase):
         zero_state, zero_lifecycle, zero_run = self.initialize_execution(
             "continuation-zero-review", mode="parent_direct", require_preflight=True
         )
-        zero_lifecycle.write_text("zero-review-stop\n", encoding="utf-8")
+        (self.repo / "allowed.txt").write_text("zero-review-stop\n", encoding="utf-8")
+        zero_lifecycle_digest = self.materialize_parent_direct_lifecycle(
+            zero_state, zero_lifecycle
+        )
         zero_stopped = self.run_cli(
             "record", str(zero_state), "--run-id", zero_run,
             "--event-id", "continuation-zero-review-stop",
             "--event-type", "parent_review",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest("zero-review-stop\n"),
+            "--candidate-lifecycle-digest", zero_lifecycle_digest,
             "--lifecycle-state", str(zero_lifecycle),
             "--invariant-digest", invariant,
             "--finding-severity", "Medium",
@@ -3035,12 +3638,12 @@ class PlanExecutionStateTest(unittest.TestCase):
             "registry-parent", mode="parent_direct"
         )
         (self.repo / "allowed.txt").write_text("registry parent\n", encoding="utf-8")
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
         self.run_cli(
             "record", str(state), "--run-id", run_id,
             "--event-id", "authoritative", "--event-type", "authoritative_validation",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--candidate-lifecycle-digest", lifecycle_digest,
             "--lifecycle-state", str(lifecycle),
             check=True,
         )
@@ -3097,12 +3700,12 @@ class PlanExecutionStateTest(unittest.TestCase):
             "stale-registry-checkpoint", mode="parent_direct"
         )
         (self.repo / "allowed.txt").write_text("stale registry\n", encoding="utf-8")
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
         self.run_cli(
             "record", str(state), "--run-id", run_id,
             "--event-id", "authoritative", "--event-type", "authoritative_validation",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--candidate-lifecycle-digest", lifecycle_digest,
             "--lifecycle-state", str(lifecycle),
             check=True,
         )
@@ -3167,12 +3770,12 @@ class PlanExecutionStateTest(unittest.TestCase):
             "checkpoint-capacity", mode="parent_direct"
         )
         (self.repo / "allowed.txt").write_text("checkpoint capacity\n", encoding="utf-8")
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
         self.run_cli(
             "record", str(state), "--run-id", run_id,
             "--event-id", "authoritative", "--event-type", "authoritative_validation",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--candidate-lifecycle-digest", lifecycle_digest,
             "--lifecycle-state", str(lifecycle),
             check=True,
         )
@@ -3259,12 +3862,12 @@ class PlanExecutionStateTest(unittest.TestCase):
             "legacy-checkpoint", mode="parent_direct"
         )
         (self.repo / "allowed.txt").write_text("legacy checkpoint\n", encoding="utf-8")
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
         self.run_cli(
             "record", str(state), "--run-id", run_id,
             "--event-id", "authoritative", "--event-type", "authoritative_validation",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest("authoritative\n"),
+            "--candidate-lifecycle-digest", lifecycle_digest,
             "--lifecycle-state", str(lifecycle),
             check=True,
         )
@@ -3998,6 +4601,60 @@ class PlanExecutionStateTest(unittest.TestCase):
         self.assertEqual(recorded["events"][0]["review_target_digest"], "")
         self.assertEqual(state.read_bytes(), before)
 
+        epoch_state, epoch_lifecycle, epoch_run = self.initialize_execution(
+            "plain-epoch-review", mode="parent_direct", require_preflight=True
+        )
+        (self.repo / "allowed.txt").write_text(
+            "plain epoch review\n", encoding="utf-8"
+        )
+        epoch_before = epoch_state.read_bytes()
+        rejected = self.run_cli(
+            "record", str(epoch_state), "--run-id", epoch_run,
+            "--event-id", "plain-epoch-review",
+            "--event-type", "parent_review",
+            "--implementation-mode", "parent_direct",
+            "--invariant-digest", digest("one invariant"),
+            "--independent-review-receipt-digest", digest("plain epoch review"),
+            "--lifecycle-state", str(epoch_lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("requires a bound lifecycle digest", rejected.stderr)
+        self.assertEqual(epoch_state.read_bytes(), epoch_before)
+        self.assertFalse(epoch_lifecycle.exists())
+
+    def test_epoch_plain_parent_review_cannot_authorize_completion(self) -> None:
+        state, lifecycle, run_id = self.initialize_execution(
+            "plain-epoch-review-gate", mode="parent_direct", require_preflight=True
+        )
+        (self.repo / "allowed.txt").write_text(
+            "plain epoch review gate\n", encoding="utf-8"
+        )
+        payload = STATE_MODULE.read_state(state)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            _target, lifecycle_digest, lifecycle_bytes = (
+                STATE_MODULE.parent_direct_review_identity(payload)
+            )
+        lifecycle.write_bytes(lifecycle_bytes)
+        recorded = self.run_cli(
+            "record", str(state), "--run-id", run_id,
+            "--event-id", "plain-epoch-review-gate",
+            "--event-type", "parent_review",
+            "--implementation-mode", "parent_direct",
+            "--invariant-digest", digest("one invariant"),
+            "--independent-review-receipt-digest", digest("plain epoch review"),
+            "--candidate-lifecycle-digest", lifecycle_digest,
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+
+        rejected = self.run_cli(
+            "check", str(state), "--run-id", run_id,
+            "--operation", "completion",
+            "--lifecycle-state", str(lifecycle),
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("lacks a matching recorded formal review", rejected.stderr)
+
     def test_review_turn_zero_requires_matching_runtime_packet_evidence(self) -> None:
         state, lifecycle, run_id = self.initialize_execution(
             "runtime-review-evidence", mode="parent_direct"
@@ -4685,14 +5342,14 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--lifecycle-state", str(lifecycle),
         )
         self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = digest(lifecycle.read_bytes())
         self.assertEqual(
             self.run_cli(
                 "record", str(state), "--run-id", run_id,
                 "--event-id", "authoritative",
                 "--event-type", "authoritative_validation",
                 "--implementation-mode", "parent_direct",
-                "--candidate-lifecycle-digest", digest("authoritative\n"),
+                "--candidate-lifecycle-digest", lifecycle_digest,
                 "--lifecycle-state", str(lifecycle),
             ).returncode,
             0,
@@ -4728,14 +5385,14 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--lifecycle-state", str(lifecycle),
         )
         self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = digest(lifecycle.read_bytes())
         self.assertEqual(
             self.run_cli(
                 "record", str(state), "--run-id", run_id,
                 "--event-id", "out-of-scope-authoritative",
                 "--event-type", "authoritative_validation",
                 "--implementation-mode", "parent_direct",
-                "--candidate-lifecycle-digest", digest("authoritative\n"),
+                "--candidate-lifecycle-digest", lifecycle_digest,
                 "--lifecycle-state", str(lifecycle),
             ).returncode,
             0,
@@ -4785,14 +5442,14 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--lifecycle-state", str(lifecycle),
         )
         self.assertEqual(second.returncode, 0, second.stderr)
-        lifecycle.write_text("authoritative\n", encoding="utf-8")
+        lifecycle_digest = digest(lifecycle.read_bytes())
         self.assertEqual(
             self.run_cli(
                 "record", str(state), "--run-id", run_id,
                 "--event-id", "final-parent-authoritative",
                 "--event-type", "authoritative_validation",
                 "--implementation-mode", "parent_direct",
-                "--candidate-lifecycle-digest", digest("authoritative\n"),
+                "--candidate-lifecycle-digest", lifecycle_digest,
                 "--lifecycle-state", str(lifecycle),
             ).returncode,
             0,
@@ -4924,6 +5581,22 @@ class PlanExecutionStateTest(unittest.TestCase):
         initialized = self.run_cli(*arguments)
         self.assertEqual(initialized.returncode, 0, initialized.stderr)
         return state, lifecycle, run_id
+
+    def materialize_parent_direct_lifecycle(
+        self, state: Path, lifecycle: Path, *, allow_update: bool = True
+    ) -> str:
+        payload = STATE_MODULE.read_state(state)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            _target, identity, expected = STATE_MODULE.parent_direct_review_identity(
+                payload
+            )
+            return STATE_MODULE.materialize_parent_direct_lifecycle(
+                payload,
+                lifecycle,
+                expected_identity=identity,
+                expected=expected,
+                allow_update=allow_update,
+            )
 
     def start_writable_attempt(
         self,
@@ -5532,13 +6205,14 @@ class PlanExecutionStateTest(unittest.TestCase):
         state, lifecycle, run_id = self.initialize_execution(
             "parent-budget", mode="parent_direct"
         )
+        (self.repo / "allowed.txt").write_text("parent budget\n", encoding="utf-8")
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
 
         def parent_record(event_id: str, *extra: str) -> subprocess.CompletedProcess[str]:
-            lifecycle.write_text(event_id + "\n", encoding="utf-8")
             return self.run_cli(
                 "record", str(state), "--run-id", run_id, "--event-id", event_id,
                 "--event-type", "parent_review", "--implementation-mode", "parent_direct",
-                "--candidate-lifecycle-digest", digest(event_id + "\n"),
+                "--candidate-lifecycle-digest", lifecycle_digest,
                 "--lifecycle-state", str(lifecycle), *extra,
             )
 
@@ -5690,14 +6364,16 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--implementation-mode", "parent_direct",
         )
         self.assertEqual(initialized.returncode, 0, initialized.stderr)
-        lifecycle_content = "parent-direct-authoritative-failed\n"
-        lifecycle.write_text(lifecycle_content, encoding="utf-8")
+        (self.repo / "allowed.txt").write_text(
+            "parent-direct-authoritative-failed\n", encoding="utf-8"
+        )
+        lifecycle_digest = self.materialize_parent_direct_lifecycle(state, lifecycle)
         authoritative = self.run_cli(
             "record", str(state), "--run-id", run_id,
             "--event-id", "parent-direct-authoritative",
             "--event-type", "authoritative_validation",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest(lifecycle_content),
+            "--candidate-lifecycle-digest", lifecycle_digest,
             "--lifecycle-state", str(lifecycle),
         )
         self.assertEqual(authoritative.returncode, 0, authoritative.stderr)
@@ -5733,7 +6409,7 @@ class PlanExecutionStateTest(unittest.TestCase):
             "--event-id", "parent-direct-failure",
             "--event-type", "authoritative_failure",
             "--implementation-mode", "parent_direct",
-            "--candidate-lifecycle-digest", digest(lifecycle_content),
+            "--candidate-lifecycle-digest", lifecycle_digest,
             "--validation-report", str(report_path),
             "--lifecycle-state", str(lifecycle),
         )
@@ -6370,6 +7046,13 @@ class PlanExecutionStateTest(unittest.TestCase):
                     "--implementation-mode", scenario_mode,
                 )
                 self.assertEqual(initialized.returncode, 0, initialized.stderr)
+                if scenario_mode == "parent_direct":
+                    (self.repo / "allowed.txt").write_text(
+                        f"{scenario['id']} parent-direct\n", encoding="utf-8"
+                    )
+                    parent_lifecycle_digest = self.materialize_parent_direct_lifecycle(
+                        state, lifecycle
+                    )
 
                 event_number = 0
 
@@ -6379,12 +7062,16 @@ class PlanExecutionStateTest(unittest.TestCase):
                     nonlocal event_number
                     event_number += 1
                     event_id = f"{scenario['id']}-{event_number}"
-                    lifecycle.write_text(event_id + "\n", encoding="utf-8")
+                    if scenario_mode == "candidate":
+                        lifecycle.write_text(event_id + "\n", encoding="utf-8")
+                        lifecycle_digest = digest(event_id + "\n")
+                    else:
+                        lifecycle_digest = parent_lifecycle_digest
                     result = self.run_cli(
                         "record", str(state), "--run-id", run_id,
                         "--event-id", event_id, "--event-type", event_type,
                         "--implementation-mode", mode,
-                        "--candidate-lifecycle-digest", digest(event_id + "\n"),
+                        "--candidate-lifecycle-digest", lifecycle_digest,
                         "--lifecycle-state", str(lifecycle), *extra,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
