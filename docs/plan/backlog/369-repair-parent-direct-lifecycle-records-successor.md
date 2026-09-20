@@ -1,6 +1,6 @@
 # Repair parent-direct execution lifecycle records
 
-status: in_progress
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: Every lifecycle-bound execution-ledger event names the bound lifecycle record, and parent-direct lifecycle digests remain reachable without rewriting historical ledgers.
 replan_sources:

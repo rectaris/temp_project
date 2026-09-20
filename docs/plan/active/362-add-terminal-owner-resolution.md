@@ -1,6 +1,6 @@
 # Add bounded owner resolution after the fourth review
 
-status: backlog
+status: in_progress
 primary_invariant: Four formal reviews remain the immutable automated-review maximum; only one exact owner-bound Medium-only terminal resolution may complete without a fifth review, while High findings, replay, forks, and further correction remain blocked.
 task_types:
   - template_workflow
@@ -49,7 +49,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/agent/SPEC_REFERENT_FIRST.md
-  - docs/plan/active/369-repair-parent-direct-lifecycle-records-successor.md
+  - docs/plan/backlog/369-repair-parent-direct-lifecycle-records-successor.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_DECISION_AUDIT.md
@@ -100,3 +100,6 @@ checked_summary_ja: 4回目のレビュー後に自動反復を再開せず、ow
 - Decision audit outcome: the four-review ceiling addresses non-terminating automated review loops and remains unchanged; the missing boundary is a terminal transfer of responsibility to the owner.
 - Owner direction: 「提案の方針で進めるためのプランを作成せよ。」
 - This plan is created in backlog because plan 369 remains the sole in-progress plan. Activation must not rewrite, reopen, or discard plan 369 or its external execution evidence.
+- Activation parked plan 369 through Successor Backlog Deferral rather than rewriting it. `status: in_progress` became `status: backlog` and the file moved to `docs/plan/backlog/`; nothing else changed. A schema-4 successor cannot enter `deferred`, so this is the only admitted park, and reversing it restores the exact bytes whose digest the epoch-0 through epoch-3 ledgers bind. Reactivation must move the file back and restore that one word, with no other edit.
+- Descendant-source adoption compares only the predecessor source commit, the adopted commit, and the working tree. An intermediate commit that moves plan 369 and moves it back therefore leaves it eligible, provided the adopted commit carries the restored path and bytes.
+- This plan's `context_files` entry for plan 369 follows that move and must follow it back on reactivation.
