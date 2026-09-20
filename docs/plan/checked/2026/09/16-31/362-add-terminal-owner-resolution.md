@@ -1,6 +1,6 @@
 # Add bounded owner resolution after the fourth review
 
-status: in_progress
+status: checked
 primary_invariant: Four formal reviews remain the immutable automated-review maximum; only one exact owner-bound Medium-only terminal resolution may complete without a fifth review, while High findings, replay, forks, and further correction remain blocked.
 task_types:
   - template_workflow
@@ -49,7 +49,7 @@ context_files:
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_USER_COMMUNICATION.md
   - docs/agent/SPEC_REFERENT_FIRST.md
-  - docs/plan/backlog/369-repair-parent-direct-lifecycle-records-successor.md
+  - docs/plan/active/369-repair-parent-direct-lifecycle-records-successor.md
 required_specs:
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_DECISION_AUDIT.md
@@ -88,12 +88,12 @@ checked_summary_ja: 4回目のレビュー後に自動反復を再開せず、ow
 
 ## Tasks
 
-- [ ] Specify the owner-resolution state, authorization and acceptance schemas, exact eligibility predicates, retained review ceiling, and failure behavior in root and generated workflow policy.
-- [ ] Implement a one-shot owner-resolution command and ledger events that verify all four review admissions, stopped ancestors, registries, source relationship, allowed paths, finding evidence, and owner authorization before granting one parent correction.
-- [ ] Require post-correction focused and authoritative validation events and record a separate exact-target owner acceptance before completion or archive; reject review, worker, retry, replay, fork, and High-finding paths.
-- [ ] Add regression fixtures for eligible Medium-only resolution, High refusal, missing or altered evidence, oversized or malformed authorization, source adoption, dirty-byte preservation, validation ordering, owner-acceptance mismatch, and all existing continuation routes.
-- [ ] Mirror implementation and policy changes into the generated template and update deterministic root-policy checks.
-- [ ] After the generic policy is published, use its documented adoption path to continue plan 369 without deleting or rewriting its existing ledgers or replenishing its four-review budget.
+- [x] Specify the owner-resolution state, authorization and acceptance schemas, exact eligibility predicates, retained review ceiling, and failure behavior in root and generated workflow policy.
+- [x] Implement a one-shot owner-resolution command and ledger events that verify all four review admissions, stopped ancestors, registries, source relationship, allowed paths, finding evidence, and owner authorization before granting one parent correction.
+- [x] Require post-correction focused and authoritative validation events and record a separate exact-target owner acceptance before completion or archive; reject review, worker, retry, replay, fork, and High-finding paths.
+- [x] Add regression fixtures for eligible Medium-only resolution, High refusal, missing or altered evidence, oversized or malformed authorization, source adoption, dirty-byte preservation, validation ordering, owner-acceptance mismatch, and all existing continuation routes.
+- [x] Mirror implementation and policy changes into the generated template and update deterministic root-policy checks.
+- [x] After the generic policy is published, use its documented adoption path to continue plan 369 without deleting or rewriting its existing ledgers or replenishing its four-review budget.
 
 ## Validation Notes
 
@@ -103,3 +103,6 @@ checked_summary_ja: 4回目のレビュー後に自動反復を再開せず、ow
 - Activation parked plan 369 through Successor Backlog Deferral rather than rewriting it. `status: in_progress` became `status: backlog` and the file moved to `docs/plan/backlog/`; nothing else changed. A schema-4 successor cannot enter `deferred`, so this is the only admitted park, and reversing it restores the exact bytes whose digest the epoch-0 through epoch-3 ledgers bind. Reactivation must move the file back and restore that one word, with no other edit.
 - Descendant-source adoption compares only the predecessor source commit, the adopted commit, and the working tree. An intermediate commit that moves plan 369 and moves it back therefore leaves it eligible, provided the adopted commit carries the restored path and bytes.
 - This plan's `context_files` entry for plan 369 follows that move and must follow it back on reactivation.
+- Implementation landed in `d7ee215`. Focused validation ran `python3 tests/test-plan-execution-state.py` (245 tests), `python3 scripts/check-copier-template.py`, and `python3 scripts/check-root-agent-policy.py`; authoritative validation ran `scripts/lint-project-workflow.sh` and `tests/smoke.sh`. All passed and the diff touched exactly the ten declared `write_scope` paths.
+- One read-only `code-review` helper reviewed the diff with no write scope. It reported one High finding: a directory entry in `allowed_paths` made the correction-identity digest a constant, hiding every write beneath that directory from `owner-accept` and from the completion and archive gate. The main session accepted the finding and now refuses an allowed path that is neither a committed blob at the source head nor a current regular file, binds the current file mode into the identity, and checks the paths at `resolve-owner` admission before any effect. Two regression tests cover the directory refusal and the mode change.
+- Task 6 reactivated plan 369 under the owner instruction 「継続作業をせよ。」. The file moved back to `docs/plan/active/` with `status: backlog` restored to `status: in_progress` and no other byte changed, reproducing `sha256:0d96832e2a6b96f27cf3ca7a165950d2f9a6231ce2be04af6d59694d820afc76`, the digest the epoch-0 through epoch-3 ledgers bind. This plan moved to `checked` first because only one plan may be `in_progress`.
