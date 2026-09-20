@@ -1,6 +1,6 @@
 # Integrate separate-session results in order and verify real-session completion
 
-status: in_progress
+status: deferred
 primary_invariant: Only the exact current-base result accepted by integration is published and completed; preserve both member changes and require real two-session evidence.
 task_types:
   - template_workflow
@@ -21,12 +21,10 @@ feasibility_evidence:
 completion_conditions:
   - Integration assembles either handoff mode at the current target with original evidence retained and one review slot reserved from member execution; incompatible scope, stale evidence, target drift and spent review/correction allowances refuse.
   - Checked publication and serialized lifecycle updates retire only exact completed-member worktrees/branches; interruptions, dirty state or failed B retain accepted A and recoverable B without duplicate publication or false completion.
-  - Two real sessions overlap implementation in distinct task worktrees and publish A then B with both changes retained and completed tasks retired; a pre-implementation plan/acceptance-bound required-evidence record and verified live report gate completion even without the environment variable.
   - Root/generated commands and guidance expose matching start, handoff, integration and retirement behavior and register preservation fixtures for project plans, groups, configuration and history.
 completion_witness_map:
   - {"condition_sha256":"sha256:fa8fd07e674da2c9bc560061a17191a7336705b5f4da25a281060af350aff6e4","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"condition_sha256":"sha256:4f7453fc0e59e3ccda836275d66739d8568b487ff2def2db542e550e784841cd","witness":"python3 tests/test-validation-tools.py"}
-  - {"condition_sha256":"sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411","witness":"tests/root-plan-lifecycle.sh"}
   - {"condition_sha256":"sha256:405a824fe0f24376c2ce7a8275ef41575cc19ddb95b3d66029a3600aba97a1d2","witness":"python3 scripts/check-copier-template.py"}
 write_scope:
   - scripts/run-parallel-plans.py
@@ -99,13 +97,11 @@ validation:
 acceptance:
   - Integration assembles either handoff mode at the current target with original evidence retained and one review slot reserved from member execution; incompatible scope, stale evidence, target drift and spent review/correction allowances refuse.
   - Checked publication and serialized lifecycle updates retire only exact completed-member worktrees/branches; interruptions, dirty state or failed B retain accepted A and recoverable B without duplicate publication or false completion.
-  - Two real sessions overlap implementation in distinct task worktrees and publish A then B with both changes retained and completed tasks retired; a pre-implementation plan/acceptance-bound required-evidence record and verified live report gate completion even without the environment variable.
   - Root/generated commands and guidance expose matching start, handoff, integration and retirement behavior and register preservation fixtures for project plans, groups, configuration and history.
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:fa8fd07e674da2c9bc560061a17191a7336705b5f4da25a281060af350aff6e4","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:4f7453fc0e59e3ccda836275d66739d8568b487ff2def2db542e550e784841cd","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
-  - {"acceptance_sha256":"sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411","stage":"focused","witness":"tests/root-plan-lifecycle.sh"}
   - {"acceptance_sha256":"sha256:405a824fe0f24376c2ce7a8275ef41575cc19ddb95b3d66029a3600aba97a1d2","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 integration_gates:
   - Start only after docs/plan/checked/2026/09/16-31/373-run-parent-direct-plans-in-member-sessions.md is checked; that archive is the exact resolved predecessor.
@@ -143,12 +139,11 @@ checked_summary_ja: 別セッションの変更を順番に取り込み、実セ
 - [ ] Implement bounded private-report verification and completion binding, rejecting fake sessions, missing evidence, non-overlap, stale revision or incomplete retirement.
 - [ ] Add deterministic concurrent-member, conflict, target-race, dirty-source, replay, partial-failure and crash-boundary tests.
 - [ ] Align policies, inventory, generated smoke and actual Copier update fixtures.
-- [ ] After static review/preflight run real member sessions in an isolated generated project, retain and independently verify evidence, then run focused checks with the required report and unchanged authoritative suites.
 - [ ] Complete and publish only after independent review clears High/Medium findings and deterministic plus real-session acceptance pass.
-- [ ] Initialize and preserve the plan/acceptance-bound required-evidence record before implementation; test absent/replaced records, unset report environment and direct completion bypasses. Obtain primary transcript evidence for the real-session run or report the acceptance blocker.
 
 ## Validation Notes
 
+- The owner selected the bounded-descope normalization path after plan 367 confirmed that the legacy parent-direct lifecycle digest can be recovered without rewriting the stopped ledger. The recorded `plan-374-descope-001` partition is now materialized: acceptance item 3, digest `sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411`, moves unchanged to `docs/plan/backlog/378-verify-live-parallel-session-results.md`; items 1, 2, and 4 remain here. This source plan and the active index are deferred while plan 367 occupies the serial runnable slot. The unpublished implementation commits remain preserved on the bound plan 374 branch.
 - Implementation authorization: 「@docs/plan/backlog/373-run-parent-direct-plans-in-member-sessions.md @docs/plan/backlog/374-publish-and-verify-separate-session-plan-results.md の実装作業をせよ。本セッションはオーケストレーターとして動き、作業はサブエージェントを用意して作業させよ。」 After plan 373 reached its checked archive the owner reviewed a corrected assessment of this plan and chose to run activation, implementation and validation now, stopping before the live two-session demonstration.
 - Activation baseline: 7fa0c91aa5104ab0353554641a6e7c5918363b21 on dev in temp_project. The active index was empty and predecessor 373 resolves to docs/plan/checked/2026/09/16-31/373-run-parent-direct-plans-in-member-sessions.md, so both integration gates now name exact checked archives. Promotion changes no approved scope, decision or acceptance text.
 - Corrected start assessment: an earlier report treated this plan as unstartable because the required-evidence record binds "its exact live acceptance digest" before implementation begins. That digest is the SHA-256 of the third acceptance item text, sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411, which the plan already fixes and which the completion witness map already cites. It is therefore available at activation. The group and report digests are the values the same decision defers to a later append. Implementation is not blocked; completion is.
