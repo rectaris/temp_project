@@ -847,6 +847,8 @@ class PlanExecutionStateTest(unittest.TestCase):
     def continuation_authorization_fixture(
         self, state: Path, child: Path, run_id: str, *,
         final: bool = False, fourth: bool = False, source_head: str | None = None,
+        resolution: bool = False, finding_evidence_digest: str | None = None,
+        allowed_paths: list[str] | None = None,
     ) -> Path:
         payload = STATE_MODULE.read_state(state)
         registry = STATE_MODULE.read_continuation_registry(self.continuation_registry)
@@ -873,6 +875,12 @@ class PlanExecutionStateTest(unittest.TestCase):
                 reviewer_registry=STATE_MODULE.reviewer_registry_reference(
                     STATE_MODULE.read_reviewer_registry(self.registry)
                 ),
+            )
+        if resolution:
+            authorization.update(
+                schema_version=4,
+                finding_evidence_digest=finding_evidence_digest,
+                allowed_paths=["allowed.txt"] if allowed_paths is None else allowed_paths,
             )
         path = self.base / f"{run_id}-authorization.json"
         path.write_text(json.dumps(authorization, sort_keys=True, indent=2) + "\n")
@@ -1162,6 +1170,386 @@ class PlanExecutionStateTest(unittest.TestCase):
         generated = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
         with mock.patch.dict(globals(), {"STATE_SCRIPT": generated}):
             self.test_fourth_review_preserves_three_histories_and_has_no_fifth_review()
+
+    def owner_resolution_evidence_fixture(
+        self, predecessor: Path, label: str, *,
+        severities: list[str] | None = None, findings: list[str] | None = None,
+        review_event_id: str | None = None,
+    ) -> Path:
+        payload = STATE_MODULE.read_state(predecessor)
+        review = STATE_MODULE.latest_formal_review(payload)
+        record = {
+            "schema_version": 1,
+            "plan_digest": payload["plan_digest"],
+            "run_id": payload["run_id"],
+            "review_event_id": review["event_id"] if review_event_id is None else review_event_id,
+            "review_receipt_digest": review["independent_review_receipt_digest"],
+            "review_target_digest": review["review_target_digest"],
+            "finding_severities": (
+                review["finding_severities"] if severities is None else severities
+            ),
+            "findings": findings or [
+                "The terminal review left one bounded Medium finding in allowed.txt."
+            ],
+        }
+        path = self.base / f"{label}-finding-evidence.json"
+        path.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
+        path.chmod(0o600)
+        return path
+
+    def owner_resolution_fixture(self, *, adopt_policy: bool = False) -> dict:
+        previous = self.fourth_review_fixture(adopt_policy=adopt_policy)
+        self.run_cli(*previous["arguments"], check=True)
+        self.staged_parent_review_fixture(
+            previous["child"], previous["lifecycle"], "resolution-predecessor-review",
+            medium=True,
+        )
+        if adopt_policy:
+            (self.repo / "AGENTS.md").write_text("accepted owner-resolution policy\n")
+            subprocess.run(["git", "add", "AGENTS.md"], cwd=self.repo, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "adopt owner-resolution policy"],
+                cwd=self.repo, check=True,
+            )
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+        ).strip()
+        evidence = self.owner_resolution_evidence_fixture(previous["child"], "resolution-child")
+        child = self.base / "resolution-child.json"
+        lifecycle = self.base / "resolution-child-lifecycle.json"
+        authorization = self.continuation_authorization_fixture(
+            previous["child"], child, "resolution-child", final=True, resolution=True,
+            source_head=head, finding_evidence_digest=digest(evidence.read_bytes()),
+        )
+        return {
+            "origin": previous["origin"], "first": previous["middle"],
+            "second": previous["stopped"], "stopped": previous["child"],
+            "child": child, "lifecycle": lifecycle, "authorization": authorization,
+            "evidence": evidence, "head": head,
+            "arguments": [
+                "resolve-owner", str(child),
+                "--predecessor-state", str(previous["child"]),
+                "--epoch-zero-state", str(previous["origin"]),
+                "--epoch-one-state", str(previous["middle"]),
+                "--epoch-two-state", str(previous["stopped"]),
+                "--finding-evidence", str(evidence),
+                "--continuation-registry", str(self.continuation_registry),
+                "--reviewer-registry", str(self.registry),
+                "--authorization", str(authorization), "--source-head", head,
+                "--run-id", "resolution-child",
+                "--plan", self.plan.relative_to(self.repo).as_posix(),
+                "--lifecycle-state", str(lifecycle),
+                "--implementation-mode", "parent_direct",
+            ],
+        }
+
+    def owner_acceptance_fixture(
+        self, fixture: dict, label: str, *, overrides: dict | None = None
+    ) -> Path:
+        child = STATE_MODULE.read_state(fixture["child"])
+        epoch = STATE_MODULE.execution_epoch(child)
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            diff = STATE_MODULE.owner_resolution_diff_digest(
+                self.repo, child["source_head"], epoch["allowed_paths"]
+            )
+        events = {event["event_type"]: event for event in child["events"]}
+        record = {
+            "schema_version": 1,
+            "plan_path": child["plan_path"],
+            "plan_digest": child["plan_digest"],
+            "source_head": child["source_head"],
+            "primary_invariant_digest": child["primary_invariant_digest"],
+            "run_id": child["run_id"],
+            "genesis_digest": child["genesis_digest"],
+            "execution_epoch": epoch["epoch"],
+            "finding_evidence_digest": epoch["finding_evidence_digest"],
+            "allowed_paths": epoch["allowed_paths"],
+            "resolution_diff_digest": diff,
+            "focused_validation_event_digest": events["focused_validation"]["event_digest"]
+            if "focused_validation" in events else "",
+            "authoritative_validation_event_digest": (
+                events["authoritative_validation"]["event_digest"]
+                if "authoritative_validation" in events else ""
+            ),
+            "owner_acceptance": (
+                "I accept this bounded terminal correction and close the plan."
+            ),
+        }
+        record.update(overrides or {})
+        path = self.base / f"{label}-acceptance.json"
+        path.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
+        path.chmod(0o600)
+        return path
+
+    def record_resolution_validations(self, fixture: dict) -> None:
+        for event_type in ("focused_validation", "authoritative_validation"):
+            fixture["lifecycle"].write_text(event_type + "\n", encoding="utf-8")
+            self.run_cli(
+                "record", str(fixture["child"]), "--run-id", "resolution-child",
+                "--event-id", f"resolution-{event_type.replace('_', '-')}",
+                "--event-type", event_type, "--implementation-mode", "parent_direct",
+                "--candidate-lifecycle-digest",
+                digest(fixture["lifecycle"].read_text(encoding="utf-8")),
+                "--lifecycle-state", str(fixture["lifecycle"]), check=True,
+            )
+
+    def test_owner_resolution_closes_a_medium_only_stop_without_another_review(self) -> None:
+        fixture = self.owner_resolution_fixture(adopt_policy=True)
+        before = {
+            name: fixture[name].read_bytes()
+            for name in ("origin", "first", "second", "stopped")
+        }
+        self.run_cli(*fixture["arguments"], check=True)
+        registry_after = self.continuation_registry.read_bytes()
+        child_after = fixture["child"].read_bytes()
+        self.run_cli(*fixture["arguments"], check=True)
+        self.assertEqual(self.continuation_registry.read_bytes(), registry_after)
+        self.assertEqual(fixture["child"].read_bytes(), child_after)
+        child = STATE_MODULE.read_state(fixture["child"])
+        epoch = STATE_MODULE.execution_epoch(child)
+        self.assertEqual((epoch["schema_version"], epoch["epoch"]), (4, 4))
+        self.assertEqual(
+            (epoch["predecessor_review_count"], epoch["cumulative_review_limit"]), (4, 4)
+        )
+        self.assertEqual(epoch["allowed_paths"], ["allowed.txt"])
+        for name, content in before.items():
+            self.assertEqual(fixture[name].read_bytes(), content)
+
+        refused = self.staged_parent_review_fixture(
+            fixture["child"], fixture["lifecycle"], "resolution-forbidden-review", check=False
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("owner resolution admits no review", refused.stderr)
+        worker = self.start_writable_attempt(
+            fixture["child"], fixture["lifecycle"], "resolution-child", "forbidden-worker"
+        )
+        self.assertNotEqual(worker.returncode, 0)
+        self.assertIn("owner resolution admits no writable candidate attempt", worker.stderr)
+
+        (self.repo / "allowed.txt").write_text("bounded terminal correction\n")
+        self.record_resolution_validations(fixture)
+        acceptance = self.owner_acceptance_fixture(fixture, "resolution")
+        self.run_cli(
+            "owner-accept", str(fixture["child"]), "--run-id", "resolution-child",
+            "--event-id", "resolution-owner-acceptance", "--acceptance", str(acceptance),
+            check=True,
+        )
+        for operation in ("completion", "archive"):
+            self.run_cli(
+                "check", str(fixture["child"]), "--run-id", "resolution-child",
+                "--operation", operation, "--plan", self.plan.relative_to(self.repo).as_posix(),
+                "--lifecycle-state", str(fixture["lifecycle"]), check=True,
+            )
+        (self.repo / "allowed.txt").write_text("a later unaccepted edit\n")
+        drifted = self.run_cli(
+            "check", str(fixture["child"]), "--run-id", "resolution-child",
+            "--operation", "completion", "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--lifecycle-state", str(fixture["lifecycle"]),
+        )
+        self.assertNotEqual(drifted.returncode, 0)
+        self.assertIn("changed after the owner acceptance", drifted.stderr)
+
+    def test_generated_owner_resolution_closes_a_medium_only_stop(self) -> None:
+        generated = ROOT / "template/.project-agent-workflow/scripts/plan-execution-state.py"
+        with mock.patch.dict(globals(), {"STATE_SCRIPT": generated}):
+            self.test_owner_resolution_closes_a_medium_only_stop_without_another_review()
+
+    def test_owner_resolution_refuses_a_high_finding_and_altered_evidence(self) -> None:
+        fixture = self.owner_resolution_fixture()
+        registry_before = self.continuation_registry.read_bytes()
+        for severities, expected in (
+            (["High", "Medium"], "Medium findings and no High finding"),
+            (["Low"], "Medium findings and no High finding"),
+        ):
+            evidence = self.owner_resolution_evidence_fixture(
+                fixture["stopped"], f"resolution-{severities[0].lower()}",
+                severities=severities,
+            )
+            authorization = self.continuation_authorization_fixture(
+                fixture["stopped"],
+                fixture["child"], "resolution-child", final=True, resolution=True,
+                source_head=fixture["head"],
+                finding_evidence_digest=digest(evidence.read_bytes()),
+            )
+            arguments = list(fixture["arguments"])
+            arguments[arguments.index("--finding-evidence") + 1] = str(evidence)
+            arguments[arguments.index("--authorization") + 1] = str(authorization)
+            refused = self.run_cli(*arguments)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn(expected, refused.stderr)
+            self.assertFalse(fixture["child"].exists())
+        untethered = self.owner_resolution_evidence_fixture(
+            fixture["stopped"], "resolution-untethered", review_event_id="not-the-review"
+        )
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--finding-evidence") + 1] = str(untethered)
+        mismatched = self.run_cli(*arguments)
+        self.assertNotEqual(mismatched.returncode, 0)
+        self.assertIn("binds different finding evidence", mismatched.stderr)
+        self.assertFalse(fixture["child"].exists())
+        self.assertEqual(self.continuation_registry.read_bytes(), registry_before)
+
+    def test_owner_resolution_refuses_paths_outside_the_plan_write_scope(self) -> None:
+        fixture = self.owner_resolution_fixture()
+        for paths, expected in (
+            (["outside.txt"], "outside the plan write scope"),
+            (["allowed.txt", "allowed.txt"], "allowed paths are invalid"),
+            (["b.txt", "allowed.txt"], "allowed paths are invalid"),
+            (["../escape.txt"], "allowed path is invalid"),
+            (["/etc/passwd"], "allowed path is invalid"),
+        ):
+            authorization = self.continuation_authorization_fixture(
+                fixture["stopped"], fixture["child"], "resolution-child",
+                final=True, resolution=True, source_head=fixture["head"],
+                finding_evidence_digest=digest(fixture["evidence"].read_bytes()),
+                allowed_paths=paths,
+            )
+            arguments = list(fixture["arguments"])
+            arguments[arguments.index("--authorization") + 1] = str(authorization)
+            refused = self.run_cli(*arguments)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn(expected, refused.stderr)
+            self.assertFalse(fixture["child"].exists())
+
+    def test_owner_resolution_refuses_a_directory_as_an_allowed_path(self) -> None:
+        directory = self.repo / "box"
+        directory.mkdir()
+        (directory / "a.txt").write_text("committed box content\n")
+        self.plan.write_text(
+            self.plan.read_text(encoding="utf-8").replace(
+                "write_scope:\n  - allowed.txt\n",
+                "write_scope:\n  - allowed.txt\n  - box/\n",
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "add box"], cwd=self.repo, check=True)
+        fixture = self.owner_resolution_fixture()
+        authorization = self.continuation_authorization_fixture(
+            fixture["stopped"], fixture["child"], "resolution-child",
+            final=True, resolution=True, source_head=fixture["head"],
+            finding_evidence_digest=digest(fixture["evidence"].read_bytes()),
+            allowed_paths=["box"],
+        )
+        arguments = list(fixture["arguments"])
+        arguments[arguments.index("--authorization") + 1] = str(authorization)
+        refused = self.run_cli(*arguments)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("names no committed or current file", refused.stderr)
+        self.assertFalse(fixture["child"].exists())
+        with mock.patch.object(STATE_MODULE, "repository_root", return_value=self.repo):
+            with self.assertRaisesRegex(
+                STATE_MODULE.StateError, "names no committed or current file"
+            ):
+                STATE_MODULE.owner_resolution_diff_digest(
+                    self.repo, fixture["head"], ["box"]
+                )
+
+    def test_owner_acceptance_binds_the_correction_file_mode(self) -> None:
+        fixture = self.owner_resolution_fixture()
+        self.run_cli(*fixture["arguments"], check=True)
+        target = self.repo / "allowed.txt"
+        target.write_text("bounded terminal correction\n")
+        self.record_resolution_validations(fixture)
+        acceptance = self.owner_acceptance_fixture(fixture, "resolution-mode")
+        self.run_cli(
+            "owner-accept", str(fixture["child"]), "--run-id", "resolution-child",
+            "--event-id", "resolution-owner-acceptance", "--acceptance", str(acceptance),
+            check=True,
+        )
+        target.chmod(target.stat().st_mode | 0o111)
+        drifted = self.run_cli(
+            "check", str(fixture["child"]), "--run-id", "resolution-child",
+            "--operation", "completion", "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--lifecycle-state", str(fixture["lifecycle"]),
+        )
+        self.assertNotEqual(drifted.returncode, 0)
+        self.assertIn("changed after the owner acceptance", drifted.stderr)
+
+    def test_owner_acceptance_requires_both_validations_and_the_exact_correction(self) -> None:
+        fixture = self.owner_resolution_fixture()
+        self.run_cli(*fixture["arguments"], check=True)
+        (self.repo / "allowed.txt").write_text("bounded terminal correction\n")
+        premature = self.owner_acceptance_fixture(fixture, "resolution-premature")
+        refused = self.run_cli(
+            "owner-accept", str(fixture["child"]), "--run-id", "resolution-child",
+            "--event-id", "resolution-premature-acceptance", "--acceptance", str(premature),
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("focused_validation_event_digest", refused.stderr)
+        for operation in ("completion", "archive"):
+            gated = self.run_cli(
+                "check", str(fixture["child"]), "--run-id", "resolution-child",
+                "--operation", operation, "--plan", self.plan.relative_to(self.repo).as_posix(),
+                "--lifecycle-state", str(fixture["lifecycle"]),
+            )
+            self.assertNotEqual(gated.returncode, 0)
+            self.assertIn("one recorded owner acceptance", gated.stderr)
+        self.record_resolution_validations(fixture)
+        stale = self.owner_acceptance_fixture(fixture, "resolution-stale")
+        (self.repo / "allowed.txt").write_text("an edit made after the acceptance\n")
+        drifted = self.run_cli(
+            "owner-accept", str(fixture["child"]), "--run-id", "resolution-child",
+            "--event-id", "resolution-stale-acceptance", "--acceptance", str(stale),
+        )
+        self.assertNotEqual(drifted.returncode, 0)
+        self.assertIn("current owner-resolution correction", drifted.stderr)
+        unbounded = self.owner_acceptance_fixture(
+            fixture, "resolution-unbounded", overrides={"owner_acceptance": "TBD"}
+        )
+        refused = self.run_cli(
+            "owner-accept", str(fixture["child"]), "--run-id", "resolution-child",
+            "--event-id", "resolution-unbounded-acceptance", "--acceptance", str(unbounded),
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("owner acceptance statement is not bounded", refused.stderr)
+        accepted = self.owner_acceptance_fixture(fixture, "resolution-accepted")
+        self.run_cli(
+            "owner-accept", str(fixture["child"]), "--run-id", "resolution-child",
+            "--event-id", "resolution-owner-acceptance", "--acceptance", str(accepted),
+            check=True,
+        )
+        second = self.run_cli(
+            "owner-accept", str(fixture["child"]), "--run-id", "resolution-child",
+            "--event-id", "resolution-second-acceptance", "--acceptance", str(accepted),
+        )
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("one owner acceptance", second.stderr)
+
+    def test_owner_resolution_requires_the_exact_four_epoch_history(self) -> None:
+        fixture = self.owner_resolution_fixture()
+        for option in ("--epoch-zero-state", "--epoch-one-state", "--epoch-two-state"):
+            arguments = list(fixture["arguments"])
+            arguments[arguments.index(option) + 1] = str(self.base / "absent.json")
+            refused = self.run_cli(*arguments)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertFalse(fixture["child"].exists())
+        swapped = list(fixture["arguments"])
+        index_one = swapped.index("--epoch-one-state") + 1
+        index_two = swapped.index("--epoch-two-state") + 1
+        swapped[index_one], swapped[index_two] = swapped[index_two], swapped[index_one]
+        refused = self.run_cli(*swapped)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("bound stopped epoch history", refused.stderr)
+        self.assertFalse(fixture["child"].exists())
+
+    def test_owner_resolution_has_no_continuation_of_its_own(self) -> None:
+        fixture = self.owner_resolution_fixture()
+        self.run_cli(*fixture["arguments"], check=True)
+        successor = self.base / "resolution-successor.json"
+        authorization = self.continuation_authorization_fixture(
+            fixture["child"], successor, "resolution-successor",
+        )
+        refused = self.run_cli(
+            "continue", str(successor), "--predecessor-state", str(fixture["child"]),
+            "--continuation-registry", str(self.continuation_registry),
+            "--authorization", str(authorization), "--run-id", "resolution-successor",
+            "--plan", self.plan.relative_to(self.repo).as_posix(),
+            "--lifecycle-state", str(self.base / "resolution-successor-lifecycle.json"),
+            "--implementation-mode", "parent_direct",
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertFalse(successor.exists())
 
     def test_fourth_review_rejects_bad_authorizations_before_effects(self) -> None:
         fixture = self.fourth_review_fixture()

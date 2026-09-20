@@ -42,6 +42,19 @@ ADVERSARIAL_PREFLIGHT_SCHEMA_VERSION = 1
 MAX_REGISTRY_RECORD_BYTES = 4096
 MAX_CONTINUATION_EPOCH = 1
 MAX_CUMULATIVE_REVIEWS = INDEPENDENT_REVIEW_LIMIT * (MAX_CONTINUATION_EPOCH + 1)
+# Owner resolution is a terminal transfer of responsibility, not another review
+# epoch. It adds no review slot, so its epoch index equals the unchanged
+# cumulative maximum and its child admits no formal review at all.
+OWNER_RESOLUTION_EPOCH = MAX_CUMULATIVE_REVIEWS
+OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION = 4
+OWNER_RESOLUTION_AUTHORIZATION_SCHEMA_VERSION = 4
+OWNER_RESOLUTION_EVIDENCE_SCHEMA_VERSION = 1
+OWNER_ACCEPTANCE_SCHEMA_VERSION = 1
+OWNER_RESOLUTION_DIFF_SCHEMA_VERSION = 1
+MAX_OWNER_RESOLUTION_PATHS = 64
+MAX_OWNER_RESOLUTION_FINDINGS = 16
+MAX_OWNER_RESOLUTION_TEXT_BYTES = 400
+PLACEHOLDER_AUTHORIZATIONS = {"todo", "tbd", "placeholder", "none", ""}
 SESSION_BOUNDARIES = {
     "checked",
     "replanned",
@@ -120,6 +133,7 @@ EVENT_TYPES = {
     "execution_epoch_started",
     "adversarial_preflight",
     "review_route_checked",
+    "owner_acceptance",
 }
 RECORD_EVENT_TYPES = EVENT_TYPES - {
     "writable_attempt_started",
@@ -127,6 +141,7 @@ RECORD_EVENT_TYPES = EVENT_TYPES - {
     "execution_epoch_started",
     "adversarial_preflight",
     "review_route_checked",
+    "owner_acceptance",
 }
 EXACT_KEYS = {
     "schema_version", "run_id", "plan_path", "plan_digest", "source_head",
@@ -177,6 +192,9 @@ PREFLIGHT_EVENT_KEYS = EVENT_KEYS | {
 }
 REVIEW_EVENT_KEYS = EVENT_KEYS | {"review_specification_digests"}
 REVIEW_ROUTE_EVENT_KEYS = EVENT_KEYS | {"review_route_evidence"}
+OWNER_ACCEPTANCE_EVENT_KEYS = EVENT_KEYS | {
+    "owner_acceptance", "owner_acceptance_digest"
+}
 REVIEW_ROUTE_EVIDENCE_KEYS = {
     "schema_version", "probe_packet_digest", "manifest_digest",
     "reviewer_session_digest", "inheritance_evidence_digest",
@@ -198,6 +216,19 @@ CONTINUATION_AUTHORIZATION_KEYS = {
     "cumulative_review_limit", "owner_authorization",
 }
 FINAL_CONTINUATION_FIELDS = {"predecessor_source_head", "reviewer_registry"}
+OWNER_RESOLUTION_FIELDS = {"finding_evidence_digest", "allowed_paths"}
+OWNER_RESOLUTION_EVIDENCE_KEYS = {
+    "schema_version", "plan_digest", "run_id", "review_event_id",
+    "review_receipt_digest", "review_target_digest", "finding_severities",
+    "findings",
+}
+OWNER_ACCEPTANCE_KEYS = {
+    "schema_version", "plan_path", "plan_digest", "source_head",
+    "primary_invariant_digest", "run_id", "genesis_digest", "execution_epoch",
+    "finding_evidence_digest", "allowed_paths", "resolution_diff_digest",
+    "focused_validation_event_digest", "authoritative_validation_event_digest",
+    "owner_acceptance",
+}
 PREFLIGHT_EVIDENCE_KEYS = {
     "schema_version", "plan_digest", "review_target_digest",
     "review_identity_digest", "applicable_specification_digests", "cases",
@@ -1517,7 +1548,261 @@ def execution_epoch(state: dict[str, Any]) -> dict[str, Any] | None:
     return epochs[0] if epochs else None
 
 
+def require_bounded_owner_text(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value.encode("utf-8")) > MAX_OWNER_RESOLUTION_TEXT_BYTES
+        or value.strip().lower() in PLACEHOLDER_AUTHORIZATIONS
+    ):
+        raise StateError(f"{label} is not bounded")
+    return value
+
+
+def validate_owner_resolution_paths(value: Any) -> list[str]:
+    """Return the exact repository-relative paths one owner resolution may touch.
+
+    The list is the write boundary of the single terminal correction, so it is
+    stored and compared as exact normalized paths. An absolute path, a
+    traversal, or an unsorted or repeated entry is refused rather than
+    normalized, because a scope that can be rewritten while it is being checked
+    does not bound the write it authorizes. A path that names a directory
+    rather than a file is refused separately, where the repository is
+    available, because a directory has no content identity to bind.
+    """
+
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_OWNER_RESOLUTION_PATHS:
+        raise StateError("owner-resolution allowed paths are invalid")
+    for entry in value:
+        if (
+            not isinstance(entry, str)
+            or not entry
+            or len(entry.encode("utf-8")) > 256
+            or entry != entry.strip()
+            or entry.startswith("/")
+            or entry.endswith("/")
+            or "\\" in entry
+            or "//" in entry
+            or entry != os.path.normpath(entry)
+            or Path(entry).is_absolute()
+            or any(part in {"", ".", ".."} for part in entry.split("/"))
+        ):
+            raise StateError(f"owner-resolution allowed path is invalid: {entry!r}")
+    if len(value) != len(set(value)) or value != sorted(value):
+        raise StateError("owner-resolution allowed paths are invalid")
+    return value
+
+
+def owner_resolution_epoch(state: dict[str, Any]) -> dict[str, Any] | None:
+    epoch = execution_epoch(state)
+    if epoch and epoch["schema_version"] == OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION:
+        return epoch
+    return None
+
+
+def latest_formal_review(state: dict[str, Any]) -> dict[str, Any] | None:
+    reviews = [
+        event
+        for event in state["events"]
+        if event["event_type"] == "parent_review"
+        and event["independent_review_receipt_digest"]
+        and event.get("review_target_digest", "")
+    ]
+    return reviews[-1] if reviews else None
+
+
+def validate_owner_resolution_evidence(
+    value: Any,
+    *,
+    predecessor: dict[str, Any],
+    review: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind the external finding record to the exact fourth formal review.
+
+    Owner resolution is admitted by what the last review actually found, so the
+    evidence must name that review's identity and repeat its recorded
+    severities. A High finding, or any severity list the ledger does not carry,
+    refuses here rather than at the later acceptance.
+    """
+
+    if not isinstance(value, dict) or set(value) != OWNER_RESOLUTION_EVIDENCE_KEYS:
+        raise StateError("owner-resolution finding evidence has an invalid exact shape")
+    if value["schema_version"] != OWNER_RESOLUTION_EVIDENCE_SCHEMA_VERSION:
+        raise StateError(
+            "owner-resolution finding evidence has an unsupported schema version"
+        )
+    if (
+        value["plan_digest"] != predecessor["plan_digest"]
+        or value["run_id"] != predecessor["run_id"]
+        or value["review_event_id"] != review["event_id"]
+        or value["review_receipt_digest"]
+        != review["independent_review_receipt_digest"]
+        or value["review_target_digest"] != review["review_target_digest"]
+    ):
+        raise StateError(
+            "owner-resolution finding evidence differs from the fourth formal review"
+        )
+    severities = value["finding_severities"]
+    if (
+        not isinstance(severities, list)
+        or severities != review["finding_severities"]
+        or "High" in severities
+        or "Medium" not in severities
+    ):
+        raise StateError(
+            "owner resolution requires a latest review with Medium findings and no High finding"
+        )
+    findings = value["findings"]
+    if (
+        not isinstance(findings, list)
+        or not 1 <= len(findings) <= MAX_OWNER_RESOLUTION_FINDINGS
+        or len(findings) != len(set(findings))
+    ):
+        raise StateError("owner-resolution finding evidence has an invalid finding list")
+    for finding in findings:
+        require_bounded_owner_text(finding, "owner-resolution finding")
+    return value
+
+
+def owner_resolution_diff_digest(
+    root: Path, source_head: str, allowed_paths: list[str]
+) -> str:
+    """Digest the exact current content of the allowed paths against a commit.
+
+    A textual diff would depend on rename detection and diff settings, so the
+    identity is derived from the committed blob digest and the working-file
+    digest and mode of each allowed path. An added path and a deleted path are
+    therefore as visible as a modified one. A path that is neither committed
+    nor a current regular file has no content identity to bind, so it is
+    refused instead of digested as a constant: a directory entry would
+    otherwise make this check pass for every write beneath it.
+    """
+
+    guard = load_worktree_guard_module()
+    entries = []
+    for relative in allowed_paths:
+        target = root / relative
+        require_plain_path_components(Path(relative), "owner-resolution allowed path")
+        reject_symlink_ancestors(target, include_target=True)
+        committed = guard.git(
+            root, "cat-file", "blob", f"{source_head}:{relative}", check=False
+        )
+        tracked = committed.returncode == 0
+        present = target.is_file()
+        if not tracked and not present:
+            raise StateError(
+                "owner-resolution allowed path names no committed or current file: "
+                f"{relative}"
+            )
+        entries.append(
+            {
+                "path": relative,
+                "committed": digest(committed.stdout) if tracked else "",
+                "current": file_digest(target) if present else "",
+                "current_executable": (
+                    bool(target.stat().st_mode & 0o111) if present else False
+                ),
+            }
+        )
+    return canonical_digest(
+        {
+            "schema_version": OWNER_RESOLUTION_DIFF_SCHEMA_VERSION,
+            "source_head": source_head,
+            "entries": entries,
+        }
+    )
+
+
+def validate_owner_acceptance_shape(
+    value: Any,
+    state: dict[str, Any],
+    epoch: dict[str, Any],
+    prior_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Bind an owner acceptance to one exact resolution in one exact ledger.
+
+    The acceptance is the second, separate decision that closes an owner
+    resolution, so it repeats the ledger identity, the evidence that admitted
+    the resolution, the exact allowed paths, the content identity of the
+    correction, and the two validation events that preceded it. Copying an
+    acceptance between ledgers, epochs, or corrections therefore fails here.
+    """
+
+    if not isinstance(value, dict) or set(value) != OWNER_ACCEPTANCE_KEYS:
+        raise StateError("owner acceptance has an invalid exact shape")
+    if value["schema_version"] != OWNER_ACCEPTANCE_SCHEMA_VERSION:
+        raise StateError("owner acceptance has an unsupported schema version")
+    if (
+        value["plan_path"] != state["plan_path"]
+        or value["plan_digest"] != state["plan_digest"]
+        or value["source_head"] != state["source_head"]
+        or value["primary_invariant_digest"] != state["primary_invariant_digest"]
+        or value["run_id"] != state["run_id"]
+        or value["genesis_digest"] != state["genesis_digest"]
+    ):
+        raise StateError("owner acceptance differs from the execution ledger identity")
+    if (
+        type(value["execution_epoch"]) is not int
+        or value["execution_epoch"] != epoch["epoch"]
+        or value["finding_evidence_digest"] != epoch["finding_evidence_digest"]
+        or value["allowed_paths"] != epoch["allowed_paths"]
+    ):
+        raise StateError("owner acceptance differs from the owner-resolution epoch")
+    require_digest(value["resolution_diff_digest"], "resolution_diff_digest")
+    require_digest(
+        value["focused_validation_event_digest"], "focused_validation_event_digest"
+    )
+    require_digest(
+        value["authoritative_validation_event_digest"],
+        "authoritative_validation_event_digest",
+    )
+    for event_type, expected in (
+        ("focused_validation", value["focused_validation_event_digest"]),
+        ("authoritative_validation", value["authoritative_validation_event_digest"]),
+    ):
+        if not any(
+            event["event_type"] == event_type and event["event_digest"] == expected
+            for event in prior_events
+        ):
+            raise StateError(
+                f"owner acceptance names no recorded {event_type.replace('_', ' ')}"
+            )
+    require_bounded_owner_text(value["owner_acceptance"], "owner acceptance statement")
+    return value
+
+
 def validate_execution_epoch(value: Any) -> dict[str, Any]:
+    if (
+        isinstance(value, dict)
+        and value.get("schema_version") == OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION
+    ):
+        if set(value) != (
+            EXECUTION_EPOCH_KEYS | FINAL_CONTINUATION_FIELDS | OWNER_RESOLUTION_FIELDS
+        ):
+            raise StateError(
+                "owner-resolution execution epoch has an invalid exact field shape"
+            )
+        if (
+            type(value["epoch"]) is not int
+            or value["epoch"] != OWNER_RESOLUTION_EPOCH
+            or type(value["predecessor_review_count"]) is not int
+            or value["predecessor_review_count"] != MAX_CUMULATIVE_REVIEWS
+            or type(value["cumulative_review_limit"]) is not int
+            or value["cumulative_review_limit"] != MAX_CUMULATIVE_REVIEWS
+            or not isinstance(value["predecessor_source_head"], str)
+            or not re.fullmatch(r"[0-9a-f]{40}", value["predecessor_source_head"])
+        ):
+            raise StateError("owner-resolution epoch has invalid terminal bounds")
+        require_digest(value["finding_evidence_digest"], "finding_evidence_digest")
+        validate_owner_resolution_paths(value["allowed_paths"])
+        validate_reviewer_registry_reference_shape(value["reviewer_registry"])
+        if value["reviewer_registry"]["event_count"] < MAX_CUMULATIVE_REVIEWS:
+            raise StateError("owner-resolution epoch omits prior reviewer admissions")
+        # Reuse the envelope checks without widening historical schema-one limits.
+        historical = {key: value[key] for key in EXECUTION_EPOCH_KEYS}
+        historical.update(schema_version=1, epoch=1, predecessor_review_count=2)
+        validate_execution_epoch(historical)
+        return value
     if isinstance(value, dict) and value.get("schema_version") in (2, 3):
         if set(value) != EXECUTION_EPOCH_KEYS | FINAL_CONTINUATION_FIELDS:
             raise StateError("final execution epoch has an invalid exact field shape")
@@ -1676,9 +1961,11 @@ def validate_review_route_evidence(value: Any, state: dict[str, Any]) -> None:
 
 
 def require_review_route(state: dict[str, Any]) -> None:
-    if execution_epoch(state) is not None and not any(
-        event["event_type"] == "review_route_checked" for event in state["events"]
-    ):
+    epoch = execution_epoch(state)
+    if epoch is None or epoch["schema_version"] == OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION:
+        # Owner resolution spends no review slot, so no review route applies.
+        return
+    if not any(event["event_type"] == "review_route_checked" for event in state["events"]):
         raise StateError("epoch-enabled execution requires a recorded review-route check before writes")
 
 
@@ -1825,6 +2112,7 @@ def validate_state(value: Any) -> dict[str, Any]:
             frozenset(PREFLIGHT_EVENT_KEYS),
             frozenset(REVIEW_EVENT_KEYS),
             frozenset(REVIEW_ROUTE_EVENT_KEYS),
+            frozenset(OWNER_ACCEPTANCE_EVENT_KEYS),
         }
         if not isinstance(event, dict) or frozenset(event) not in allowed_event_keys:
             raise StateError("event has an invalid exact schema")
@@ -1848,10 +2136,14 @@ def validate_state(value: Any) -> dict[str, Any]:
         elif event["event_type"] == "review_route_checked":
             if event_keys != frozenset(REVIEW_ROUTE_EVENT_KEYS):
                 raise StateError("review-route check has an invalid exact schema")
+        elif event["event_type"] == "owner_acceptance":
+            if event_keys != frozenset(OWNER_ACCEPTANCE_EVENT_KEYS):
+                raise StateError("owner acceptance has an invalid exact schema")
         elif event_keys in {
             frozenset(EPOCH_EVENT_KEYS),
             frozenset(PREFLIGHT_EVENT_KEYS),
             frozenset(REVIEW_ROUTE_EVENT_KEYS),
+            frozenset(OWNER_ACCEPTANCE_EVENT_KEYS),
         }:
             raise StateError("event carries evidence reserved for another event type")
         if event["event_type"] == "execution_epoch_started":
@@ -1860,7 +2152,9 @@ def validate_state(value: Any) -> dict[str, Any]:
             epoch = validate_execution_epoch(event["execution_epoch"])
             if event["implementation_mode"] != value["implementation_mode"]:
                 raise StateError("execution epoch implementation mode mismatch")
-            if epoch["schema_version"] in (2, 3) and value["implementation_mode"] != "parent_direct":
+            if epoch["schema_version"] in (2, 3, OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION) and value[
+                "implementation_mode"
+            ] != "parent_direct":
                 raise StateError("final execution epoch requires parent-direct implementation")
             if any(
                 (
@@ -2044,6 +2338,11 @@ def validate_state(value: Any) -> dict[str, Any]:
                 prior["event_type"] == "review_route_checked" for prior in validated_events
             ):
                 raise StateError("review-route check requires one unchecked execution epoch")
+            if (
+                execution_epoch({"events": validated_events})["schema_version"]
+                == OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION
+            ):
+                raise StateError("owner resolution admits no review route")
             if any(
                 prior["event_type"] == "writable_attempt_started" for prior in validated_events
             ):
@@ -2055,6 +2354,39 @@ def validate_state(value: Any) -> dict[str, Any]:
             if any(event[key] for key in EVENT_KEYS - envelope):
                 raise StateError("review-route check carries unrelated event evidence")
             validate_review_route_evidence(event["review_route_evidence"], value)
+        elif event["event_type"] == "owner_acceptance":
+            resolution = execution_epoch({"events": validated_events})
+            if (
+                resolution is None
+                or resolution["schema_version"] != OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION
+            ):
+                raise StateError("owner acceptance requires an owner-resolution epoch")
+            if any(prior["event_type"] == "owner_acceptance" for prior in validated_events):
+                raise StateError("owner resolution permits one owner acceptance")
+            if not any(
+                prior["event_type"] == "focused_validation" for prior in validated_events
+            ):
+                raise StateError("owner acceptance requires a recorded focused validation")
+            if not any(
+                prior["event_type"] == "authoritative_validation" for prior in validated_events
+            ):
+                raise StateError(
+                    "owner acceptance requires a recorded authoritative validation"
+                )
+            envelope = {
+                "sequence", "event_id", "event_type", "implementation_mode",
+                "elapsed_seconds", "monotonic_ns", "previous_event_digest", "event_digest",
+            }
+            if any(event[key] for key in EVENT_KEYS - envelope):
+                raise StateError("owner acceptance carries unrelated event evidence")
+            require_digest(event["owner_acceptance_digest"], "owner_acceptance_digest")
+            validate_owner_acceptance_shape(
+                event["owner_acceptance"], value, resolution, validated_events
+            )
+            if canonical_digest(event["owner_acceptance"]) != event["owner_acceptance_digest"]:
+                raise StateError("owner acceptance digest mismatch")
+        elif "owner_acceptance" in event or "owner_acceptance_digest" in event:
+            raise StateError("only an owner acceptance may carry owner-acceptance evidence")
         elif event["event_type"] == "parent_review" and review_target_digest:
             if (
                 not review_target_digest
@@ -2100,6 +2432,10 @@ def validate_state(value: Any) -> dict[str, Any]:
                 "cumulative_review_limit"
             ]:
                 raise StateError("numbered-plan cumulative review budget is exhausted")
+            if epoch and epoch["schema_version"] == OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION:
+                raise StateError(
+                    "owner resolution admits no formal review; the review budget is spent"
+                )
             if epoch and epoch["schema_version"] in (2, 3) and bounded_review_count > 1:
                 raise StateError("terminal continuation permits only one formal review")
             if epoch:
@@ -2168,6 +2504,12 @@ def validate_state(value: Any) -> dict[str, Any]:
         elif "review_specification_digests" in event:
             raise StateError("only an epoch formal review may carry specification evidence")
         elif event["event_type"] == "writable_attempt_started":
+            if (
+                execution_epoch({"events": validated_events}) or {}
+            ).get("schema_version") == OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION:
+                raise StateError(
+                    "owner resolution admits no writable candidate attempt"
+                )
             if not attempt_id or not event["attempt_kind"]:
                 raise StateError("writable attempt start is missing its identifier or kind")
             if any((event["candidate_digest"], event["review_outcome"], event["review_reason_code"],
@@ -4011,6 +4353,8 @@ def continue_final_state(args: argparse.Namespace) -> None:
     )
     if getattr(args, "fourth_review_continuation", False):
         references += (args.epoch_one_state,)
+    if getattr(args, "owner_resolution", False):
+        references += (args.epoch_one_state, args.epoch_two_state, args.finding_evidence)
     canonical_paths = []
     for raw in (args.state, *references):
         candidate = Path(raw)
@@ -4070,6 +4414,10 @@ def continue_state(args: argparse.Namespace) -> None:
     registry_path = Path(args.continuation_registry)
     final = getattr(args, "final_continuation", False)
     fourth = getattr(args, "fourth_review_continuation", False)
+    resolution = getattr(args, "owner_resolution", False)
+    if resolution:
+        final = True
+        fourth = False
     for external, label in (
         (path, "execution state"),
         (predecessor_path, "predecessor execution state"),
@@ -4083,6 +4431,12 @@ def continue_state(args: argparse.Namespace) -> None:
         require_outside_repository(Path(args.reviewer_registry), "reviewer registry")
         if fourth:
             require_outside_repository(Path(args.epoch_one_state), "epoch-one execution state")
+        if resolution:
+            require_outside_repository(Path(args.epoch_one_state), "epoch-one execution state")
+            require_outside_repository(Path(args.epoch_two_state), "epoch-two execution state")
+            require_outside_repository(
+                Path(args.finding_evidence), "owner-resolution finding evidence"
+            )
     require_group_execution_permit(args.plan, "execution", args)
     if final and load_parallel_plan_module().enrolled_member(repository_root(), args.plan):
         raise StateError("final continuation requires an ungrouped plan")
@@ -4116,19 +4470,33 @@ def continue_state(args: argparse.Namespace) -> None:
             )
         final_reference = None
         if final:
+            if resolution:
+                expected_schema = MAX_CUMULATIVE_REVIEWS - 1
+                expected_predecessor_reviews = MAX_CUMULATIVE_REVIEWS - 1
+            elif fourth:
+                expected_schema = 2
+                expected_predecessor_reviews = 2
+            else:
+                expected_schema = 1
+                expected_predecessor_reviews = None
             if (
-                prior_epoch["schema_version"] != (2 if fourth else 1)
-                or prior_epoch["epoch"] != (2 if fourth else 1)
+                prior_epoch["schema_version"] != expected_schema
+                or prior_epoch["epoch"] != expected_schema
                 or predecessor["implementation_mode"] != "parent_direct"
                 or args.implementation_mode != "parent_direct"
                 or prior_review_count != 1
-                or (fourth and prior_epoch["predecessor_review_count"] != 2)
                 or (
-                    not fourth
+                    expected_predecessor_reviews is not None
+                    and prior_epoch["predecessor_review_count"] != expected_predecessor_reviews
+                )
+                or (
+                    expected_predecessor_reviews is None
                     and not 1 <= prior_epoch["predecessor_review_count"] <= INDEPENDENT_REVIEW_LIMIT
                 )
             ):
                 raise StateError(
+                    "owner resolution requires epoch three with exactly four prior reviews"
+                    if resolution else
                     "fourth-review continuation requires epoch two with exactly three prior reviews"
                     if fourth else
                     "final continuation requires epoch one with one local review "
@@ -4140,43 +4508,58 @@ def continue_state(args: argparse.Namespace) -> None:
             origin, origin_digest = read_state_with_digest(
                 Path(args.epoch_zero_state), require_canonical=True
             )
-            origin_successor = predecessor
-            origin_successor_epoch = prior_epoch
-            history = [origin]
+            if resolution:
+                chain_specs = [
+                    (Path(args.epoch_one_state), 1, 1, 1),
+                    (Path(args.epoch_two_state), 2, 2, 2),
+                ]
+            elif fourth:
+                chain_specs = [(Path(args.epoch_one_state), 1, 1, 1)]
+            else:
+                chain_specs = []
+            history = []
             edges = []
-            if fourth:
-                middle_path = Path(args.epoch_one_state)
+            successor_state = predecessor
+            successor_epoch = prior_epoch
+            successor_path = predecessor_path
+            for middle_path, middle_schema, middle_index, middle_reviews in reversed(chain_specs):
                 middle, middle_digest = read_state_with_digest(
                     middle_path, require_canonical=True
                 )
                 middle_epoch = execution_epoch(middle)
                 if (
                     middle_epoch is None
-                    or middle_epoch["schema_version"] != 1
-                    or middle_epoch["epoch"] != 1
-                    or middle_epoch["predecessor_review_count"] != 1
+                    or middle_epoch["schema_version"] != middle_schema
+                    or middle_epoch["epoch"] != middle_index
+                    or middle_epoch["predecessor_review_count"] != middle_reviews
                     or formal_review_count(middle) != 1
                     or middle["state"] != "descope_pending"
                     or middle["descope_pending_reason_codes"]
                     != ["parent_remediation_budget_exhausted"]
                     or middle["open_attempt_id"]
-                    or middle_digest != prior_epoch["predecessor_state_digest"]
-                    or middle["run_id"] != prior_epoch["predecessor_run_id"]
-                    or middle["event_chain_digest"] != prior_epoch["predecessor_event_chain_digest"]
-                    or middle["source_head"] != prior_epoch["predecessor_source_head"]
+                    or middle_digest != successor_epoch["predecessor_state_digest"]
+                    or middle["run_id"] != successor_epoch["predecessor_run_id"]
+                    or middle["event_chain_digest"]
+                    != successor_epoch["predecessor_event_chain_digest"]
+                    or middle["source_head"] != successor_epoch["predecessor_source_head"]
                     or any(middle[key] != predecessor[key] for key in (
                         "plan_path", "plan_digest", "primary_invariant_digest", "implementation_mode",
                     ))
                 ):
-                    raise StateError("fourth-review continuation differs from the bound epoch-one ledger")
-                origin_successor = middle
-                origin_successor_epoch = middle_epoch
-                history.append(middle)
-                edges.append((middle, middle_digest, predecessor, predecessor_path))
-            edges.insert(0, (
-                origin, origin_digest, origin_successor,
-                Path(args.epoch_one_state) if fourth else predecessor_path,
-            ))
+                    raise StateError(
+                        "owner resolution differs from its bound stopped epoch history"
+                        if resolution else
+                        "fourth-review continuation differs from the bound epoch-one ledger"
+                    )
+                history.insert(0, middle)
+                edges.insert(0, (middle, middle_digest, successor_state, successor_path))
+                successor_state = middle
+                successor_epoch = middle_epoch
+                successor_path = middle_path
+            origin_successor = successor_state
+            origin_successor_epoch = successor_epoch
+            history.insert(0, origin)
+            edges.insert(0, (origin, origin_digest, origin_successor, successor_path))
             if (
                 origin_digest != origin_successor_epoch["predecessor_state_digest"]
                 or origin["run_id"] != origin_successor_epoch["predecessor_run_id"]
@@ -4190,14 +4573,18 @@ def continue_state(args: argparse.Namespace) -> None:
                 ))
             ):
                 raise StateError("final continuation origin differs from the bound epoch-zero ledger")
-            if fourth and (
+            if (fourth or resolution) and (
                 origin["state"] != "descope_pending"
                 or origin["descope_pending_reason_codes"] != ["parent_remediation_budget_exhausted"]
                 or origin["open_attempt_id"]
             ):
-                raise StateError("fourth-review continuation requires three closed stopped histories")
+                raise StateError(
+                    "owner resolution requires four closed stopped histories"
+                    if resolution else
+                    "fourth-review continuation requires three closed stopped histories"
+                )
             reviewers = snapshot_reviewer_registry(Path(args.reviewer_registry))
-            if fourth:
+            if fourth or resolution:
                 validate_reviewer_registry_reference(
                     prior_epoch["reviewer_registry"], reviewers, exact=False
                 )
@@ -4228,7 +4615,7 @@ def continue_state(args: argparse.Namespace) -> None:
                 "continuation registry differs from the predecessor execution"
             )
         if final:
-            if fourth and any(
+            if (fourth or resolution) and any(
                 execution_epoch(previous)["continuation_registry_identity_digest"]
                 != registry["identity_digest"]
                 for previous in history
@@ -4260,10 +4647,15 @@ def continue_state(args: argparse.Namespace) -> None:
         authorization_predecessor = predecessor
         if final:
             source_head = args.source_head
+            expected_keys = CONTINUATION_AUTHORIZATION_KEYS | FINAL_CONTINUATION_FIELDS
+            expected_authorization_schema = 3 if fourth else 2
+            if resolution:
+                expected_keys = expected_keys | OWNER_RESOLUTION_FIELDS
+                expected_authorization_schema = OWNER_RESOLUTION_AUTHORIZATION_SCHEMA_VERSION
             if (
-                set(authorization) != CONTINUATION_AUTHORIZATION_KEYS | FINAL_CONTINUATION_FIELDS
+                set(authorization) != expected_keys
                 or type(authorization["schema_version"]) is not int
-                or authorization["schema_version"] != (3 if fourth else 2)
+                or authorization["schema_version"] != expected_authorization_schema
                 or type(authorization["next_epoch"]) is not int
                 or type(authorization["cumulative_review_limit"]) is not int
                 or authorization["predecessor_source_head"] != predecessor["source_head"]
@@ -4320,6 +4712,36 @@ def continue_state(args: argparse.Namespace) -> None:
             or digest(invariant[0]) != predecessor["primary_invariant_digest"]
         ):
             raise StateError("continuation primary invariant differs from the stopped execution")
+        resolution_fields: dict[str, Any] = {}
+        if resolution:
+            review = latest_formal_review(predecessor)
+            if review is None:
+                raise StateError("owner resolution requires a recorded fourth formal review")
+            evidence, evidence_digest = read_private_json(
+                Path(args.finding_evidence), "owner-resolution finding evidence"
+            )
+            if evidence_digest != authorization["finding_evidence_digest"]:
+                raise StateError(
+                    "owner-resolution authorization binds different finding evidence"
+                )
+            validate_owner_resolution_evidence(
+                evidence, predecessor=predecessor, review=review
+            )
+            allowed_paths = validate_owner_resolution_paths(authorization["allowed_paths"])
+            scope = plan_list_field({"plan_path": args.plan}, "write_scope")
+            outside = [
+                entry for entry in allowed_paths if not path_is_in_write_scope(entry, scope)
+            ]
+            if outside:
+                raise StateError(
+                    "owner-resolution allowed paths fall outside the plan write scope: "
+                    + ", ".join(outside)
+                )
+            owner_resolution_diff_digest(repository_root(), source_head, allowed_paths)
+            resolution_fields = {
+                "finding_evidence_digest": evidence_digest,
+                "allowed_paths": allowed_paths,
+            }
         state = initial_state(
             run_id=args.run_id,
             plan_path=args.plan,
@@ -4332,8 +4754,14 @@ def continue_state(args: argparse.Namespace) -> None:
         append_execution_epoch(
             state,
             {
-                "schema_version": 3 if fourth else 2 if final else 1,
-                "epoch": 3 if fourth else 2 if final else 1,
+                "schema_version": (
+                    OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION if resolution
+                    else 3 if fourth else 2 if final else 1
+                ),
+                "epoch": (
+                    OWNER_RESOLUTION_EPOCH if resolution
+                    else 3 if fourth else 2 if final else 1
+                ),
                 "predecessor_state_digest": predecessor_digest,
                 "predecessor_run_id": predecessor["run_id"],
                 "predecessor_event_chain_digest": predecessor["event_chain_digest"],
@@ -4348,10 +4776,11 @@ def continue_state(args: argparse.Namespace) -> None:
                     "predecessor_source_head": predecessor["source_head"],
                     "reviewer_registry": final_reference,
                 } if final else {}),
+                **resolution_fields,
             },
         )
         validate_state(state)
-        if fourth and not path.exists() and any(
+        if (fourth or resolution) and not path.exists() and any(
             admission["execution_genesis_digest"] == state["genesis_digest"]
             for admission in reviewers["events"]
         ):
@@ -4363,7 +4792,7 @@ def continue_state(args: argparse.Namespace) -> None:
                 "predecessor_genesis_digest": predecessor["genesis_digest"],
             })
             prior_consumption = registry["consumed"].get(consumed_identity)
-            if fourth and prior_consumption is not None and not path.exists():
+            if (fourth or resolution) and prior_consumption is not None and not path.exists():
                 raise StateError("fourth-review continuation cannot recover a missing consumed child")
             if path.exists() or path.is_symlink():
                 if prior_consumption is None:
@@ -5374,6 +5803,13 @@ def record_event(args: argparse.Namespace) -> None:
             raise StateError("run_id mismatch")
         if state["implementation_mode"] != args.implementation_mode:
             raise StateError("event implementation mode differs from the execution ledger")
+        if (
+            args.event_type == "parent_review"
+            and owner_resolution_epoch(state) is not None
+        ):
+            raise StateError(
+                "owner resolution admits no review; record the owner acceptance instead"
+            )
         if state["state"] == "active":
             if args.event_type == "failure_diagnosis":
                 raise StateError("failure diagnosis requires an authoritative failure")
@@ -5533,6 +5969,10 @@ def record_event(args: argparse.Namespace) -> None:
                 >= epoch["cumulative_review_limit"]
             ):
                 raise StateError("cumulative review limit is exhausted")
+            if epoch and epoch["schema_version"] == OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION:
+                raise StateError(
+                    "owner resolution admits no formal review; the review budget is spent"
+                )
             if epoch and epoch["schema_version"] in (2, 3) and prior_reviews:
                 raise StateError("terminal continuation permits only one formal review")
             has_predecessor = bool(state["predecessor_plan_digest"])
@@ -5793,6 +6233,8 @@ def record_writable_attempt_start(args: argparse.Namespace) -> None:
             raise StateError("plan path mismatch")
         if state["state"] != "active":
             raise StateError(stopped_message(state))
+        if owner_resolution_epoch(state) is not None:
+            raise StateError("owner resolution admits no writable candidate attempt")
         if state["implementation_mode"] != "candidate":
             raise StateError("writable attempt start requires candidate implementation mode")
         require_review_route(state)
@@ -6184,6 +6626,57 @@ def record_attempt_close(args: argparse.Namespace) -> None:
         atomic_write(path, state)
 
 
+def record_owner_acceptance(args: argparse.Namespace) -> None:
+    """Record the separate owner decision that closes one owner resolution.
+
+    The correction and its acceptance are two decisions, so this refuses unless
+    the bounded correction has already passed focused and authoritative
+    validation, and it binds the exact content identity of that correction. A
+    later edit inside the allowed paths therefore invalidates the acceptance at
+    the completion gate instead of passing unnoticed.
+    """
+
+    path = Path(args.state)
+    with with_lock(path) as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = read_state(path)
+        if state["run_id"] != args.run_id:
+            raise StateError("run_id mismatch")
+        if state["state"] != "active":
+            raise StateError(stopped_message(state))
+        epoch = owner_resolution_epoch(state)
+        if epoch is None:
+            raise StateError("owner acceptance requires an owner-resolution epoch")
+        if not ID_RE.fullmatch(args.event_id):
+            raise StateError("invalid event_id")
+        if any(event["event_id"] == args.event_id for event in state["events"]):
+            raise StateError("event replay is not allowed")
+        require_repository_baseline(state)
+        record, _record_digest = read_private_json(
+            Path(args.acceptance), "owner acceptance"
+        )
+        validate_owner_acceptance_shape(record, state, epoch, state["events"])
+        current = owner_resolution_diff_digest(
+            repository_root(), state["source_head"], epoch["allowed_paths"]
+        )
+        if record["resolution_diff_digest"] != current:
+            raise StateError(
+                "owner acceptance does not bind the current owner-resolution correction"
+            )
+        event = empty_execution_event(
+            state, event_id=args.event_id, event_type="owner_acceptance"
+        )
+        event["elapsed_seconds"] = args.elapsed_seconds
+        event["owner_acceptance"] = record
+        event["owner_acceptance_digest"] = canonical_digest(record)
+        event["event_digest"] = canonical_digest(event)
+        state["events"].append(event)
+        state["last_monotonic_ns"] = event["monotonic_ns"]
+        state["event_chain_digest"] = event["event_digest"]
+        validate_state(state)
+        atomic_write(path, state)
+
+
 def check_gate(args: argparse.Namespace) -> None:
     path = Path(args.state)
     with with_lock(path) as lock:
@@ -6218,6 +6711,23 @@ def check_gate_locked(args: argparse.Namespace, state: dict[str, Any]) -> None:
         raise StateError("plan execution attempt is no longer the exact open writable attempt")
     if args.operation == "execution":
         require_review_route(state)
+    resolution_epoch = owner_resolution_epoch(state)
+    if resolution_epoch is not None and args.operation in {"completion", "archive"}:
+        acceptances = [
+            event for event in state["events"] if event["event_type"] == "owner_acceptance"
+        ]
+        if len(acceptances) != 1:
+            raise StateError(
+                "owner resolution requires one recorded owner acceptance before completion"
+            )
+        record = acceptances[0]["owner_acceptance"]
+        current = owner_resolution_diff_digest(
+            repository_root(), state["source_head"], resolution_epoch["allowed_paths"]
+        )
+        if record["resolution_diff_digest"] != current:
+            raise StateError(
+                "owner-resolution correction changed after the owner acceptance"
+            )
     require_repository_baseline(state)
     if args.lifecycle_state and state["candidate_lifecycle_identity_digest"] != lifecycle_identity_digest(
         args.run_id, Path(args.lifecycle_state)
@@ -6296,13 +6806,16 @@ def parser() -> argparse.ArgumentParser:
         "--implementation-mode", choices=sorted(MODES), required=True
     )
     continuation.set_defaults(handler=continue_state)
-    for name in ("continue-final", "continue-fourth-review"):
+    for name in ("continue-final", "continue-fourth-review", "resolve-owner"):
         final_continuation = sub.add_parser(name)
         final_continuation.add_argument("state")
         final_continuation.add_argument("--predecessor-state", required=True)
         final_continuation.add_argument("--epoch-zero-state", required=True)
-        if name == "continue-fourth-review":
+        if name in ("continue-fourth-review", "resolve-owner"):
             final_continuation.add_argument("--epoch-one-state", required=True)
+        if name == "resolve-owner":
+            final_continuation.add_argument("--epoch-two-state", required=True)
+            final_continuation.add_argument("--finding-evidence", required=True)
         final_continuation.add_argument("--continuation-registry", required=True)
         final_continuation.add_argument("--reviewer-registry", required=True)
         final_continuation.add_argument("--authorization", required=True)
@@ -6314,7 +6827,15 @@ def parser() -> argparse.ArgumentParser:
         final_continuation.set_defaults(
             handler=continue_final_state, final_continuation=True,
             fourth_review_continuation=name == "continue-fourth-review",
+            owner_resolution=name == "resolve-owner",
         )
+    owner_accept = sub.add_parser("owner-accept")
+    owner_accept.add_argument("state")
+    owner_accept.add_argument("--run-id", required=True)
+    owner_accept.add_argument("--event-id", required=True)
+    owner_accept.add_argument("--acceptance", required=True)
+    owner_accept.add_argument("--elapsed-seconds", type=float, default=0.0)
+    owner_accept.set_defaults(handler=record_owner_acceptance)
     record = sub.add_parser("record")
     record.add_argument("state")
     record.add_argument("--run-id", required=True)

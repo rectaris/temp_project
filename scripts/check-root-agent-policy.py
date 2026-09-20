@@ -3042,6 +3042,67 @@ def check_review_continuation_clause(policy: str) -> None:
         fail("review-continuation clause self-test accepted detached decoy wording")
 
 
+def check_owner_resolution_boundary() -> None:
+    """Assert that owner resolution stays a transfer, not an extra review slot.
+
+    The whole point of the terminal route is that it resolves a spent stop
+    without replenishing any budget, so this checks the executable constants
+    and refusals rather than only the prose that describes them.
+    """
+
+    script = ROOT / "scripts/plan-execution-state.py"
+    spec = importlib.util.spec_from_file_location("owner_resolution_boundary", script)
+    if spec is None or spec.loader is None:
+        fail("could not load the execution-ledger module for the owner-resolution check")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if module.MAX_CUMULATIVE_REVIEWS != 4:
+        fail("owner resolution must not change the cumulative four-review maximum")
+    if module.OWNER_RESOLUTION_EPOCH != module.MAX_CUMULATIVE_REVIEWS:
+        fail("owner-resolution epoch index must equal the unchanged cumulative maximum")
+    if module.OWNER_RESOLUTION_EPOCH_SCHEMA_VERSION != 4:
+        fail("owner-resolution epoch schema version must be 4")
+    if module.INDEPENDENT_REVIEW_LIMIT != 2 or module.MAX_CONTINUATION_EPOCH != 1:
+        fail("owner resolution must not widen the ordinary epoch review limits")
+    if "owner_acceptance" in module.RECORD_EVENT_TYPES:
+        fail("owner acceptance must not be recordable through the generic record command")
+    if module.OWNER_ACCEPTANCE_EVENT_KEYS <= module.EVENT_KEYS:
+        fail("owner acceptance must carry its own bound evidence keys")
+
+    source = read("scripts/plan-execution-state.py")
+    for marker in (
+        "owner resolution admits no formal review",
+        "owner resolution admits no review route",
+        "owner resolution admits no writable candidate attempt",
+        "owner resolution permits one owner acceptance",
+        "owner resolution requires one recorded owner acceptance before completion",
+        "owner-resolution correction changed after the owner acceptance",
+        "owner-resolution allowed paths fall outside the plan write scope",
+    ):
+        if marker not in source:
+            fail(f"execution ledger missing owner-resolution refusal: {marker}")
+
+    for relative in (
+        "docs/agent/SPEC_PLAN_WORKFLOW.md",
+        "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md",
+    ):
+        policy = read(relative).lower()
+        for marker in (
+            "resolve-owner",
+            "owner-accept",
+            "owner resolution is not a fifth review slot",
+            "schema-4 owner authorization",
+            "finding_evidence_digest",
+            "allowed_paths",
+            "medium",
+            "two separate decisions",
+        ):
+            if marker not in policy:
+                fail(f"{relative} missing owner-resolution marker: {marker}")
+        if "cumulative_review_limit: 4" not in policy:
+            fail(f"{relative} must keep the owner-resolution cumulative limit at four")
+
+
 def check_orchestration_policy(*, include_holdout: bool = False) -> None:
     check_plan_restructuring_scenarios()
     check_review_sequencing_scenarios(include_holdout=include_holdout)
@@ -4344,6 +4405,7 @@ def main() -> int:
     check_review_turn_zero_contract()
     check_namespaced_documentation_targets()
     check_orchestration_policy(include_holdout=args.include_holdout)
+    check_owner_resolution_boundary()
     check_plan_admission_boundary()
     check_execution_groups()
     check_active_plans()
