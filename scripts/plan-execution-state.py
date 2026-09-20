@@ -346,6 +346,14 @@ class StateError(ValueError):
     pass
 
 
+# json.loads raises JSONDecodeError and UnicodeDecodeError, but it also raises
+# a plain ValueError when a numeric literal exceeds the interpreter's integer
+# string conversion limit. Every external parse therefore converts ValueError,
+# not only those two subclasses, so digest-bound legacy bytes cannot escape as
+# an uncaught crash past a caller that recovers from StateError. StateError is
+# itself a ValueError, so a parse handler must never wrap a validator call.
+
+
 _SANDBOXED_WORKER_MODULE: ModuleType | None = None
 _PARALLEL_PLAN_MODULE: ModuleType | None = None
 _WORKTREE_GUARD_MODULE: ModuleType | None = None
@@ -550,7 +558,7 @@ def source_session_digests(data: bytes, source: str) -> set[str]:
             continue
         try:
             record = json.loads(line)
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:
             raise StateError(
                 f"resource {source} evidence line {line_number} is invalid JSON"
             ) from exc
@@ -674,7 +682,7 @@ def review_turn_zero_from_manifest(
                 json.loads(line) for line in evidence.decode("utf-8").splitlines()
                 if line.strip()
             ]
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
             raise StateError("review runtime evidence is invalid JSONL") from exc
         observations_in_source = 0
         for record in records:
@@ -889,9 +897,10 @@ def read_session_checkpoint(path: Path) -> dict[str, Any]:
     if len(data) > MAX_BYTES:
         raise StateError("session checkpoint exceeds size limit")
     try:
-        return validate_session_checkpoint(json.loads(data))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        parsed = json.loads(data)
+    except ValueError as exc:
         raise StateError(f"invalid session checkpoint JSON: {exc}") from exc
+    return validate_session_checkpoint(parsed)
 
 
 def validate_legacy_session_checkpoint(value: Any) -> dict[str, Any]:
@@ -930,9 +939,10 @@ def read_legacy_session_checkpoint(path: Path) -> dict[str, Any]:
     if len(data) > MAX_BYTES:
         raise StateError("legacy session checkpoint exceeds size limit")
     try:
-        return validate_legacy_session_checkpoint(json.loads(data))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        parsed = json.loads(data)
+    except ValueError as exc:
         raise StateError(f"invalid legacy session checkpoint JSON: {exc}") from exc
+    return validate_legacy_session_checkpoint(parsed)
 
 
 def require_repository_baseline(state: dict[str, Any]) -> None:
@@ -1031,7 +1041,7 @@ def read_bounded_json(path: Path, label: str, *, outside_repository: bool) -> An
             os.close(descriptor)
     try:
         return json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise StateError(f"{label} is invalid JSON") from exc
 
 
@@ -1099,7 +1109,7 @@ def load_repair_classification(
     data = read_external_artifact(path, "repair classification evidence")
     try:
         value = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise StateError("repair classification evidence is invalid JSON") from exc
     classification = validate_repair_classification(value, state, invariants, receipt, lifecycle_digest)
     canonical = (json.dumps(classification, sort_keys=True, indent=2) + "\n").encode()
@@ -1199,7 +1209,7 @@ def load_descope_classification(
     data = read_external_artifact(path, "descope classification evidence")
     try:
         value = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise StateError("descope classification evidence is invalid JSON") from exc
     classification = validate_descope_classification(
         value, state, invariants, receipt, lifecycle_digest
@@ -1259,7 +1269,7 @@ def load_authoritative_failure(
     )
     try:
         report = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise StateError("authoritative validation report is invalid JSON") from exc
     if not isinstance(report, dict):
         raise StateError("authoritative validation report must be a JSON object")
@@ -1333,7 +1343,7 @@ def load_authoritative_failure(
         lifecycle_data = read_external_artifact(lifecycle_path, "candidate lifecycle")
         try:
             lifecycle = json.loads(lifecycle_data)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
             raise StateError("candidate lifecycle is invalid JSON") from exc
         if not isinstance(lifecycle, dict) or set(lifecycle) != CANDIDATE_LIFECYCLE_KEYS:
             raise StateError("candidate lifecycle state has an invalid exact schema")
@@ -1480,7 +1490,7 @@ def load_diagnosis_evidence(
     data = read_external_artifact(path, "failure diagnosis evidence")
     try:
         value = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise StateError("failure diagnosis evidence is invalid JSON") from exc
     evidence = validate_diagnosis_evidence(value, state, invariants, receipt, lifecycle_digest)
     canonical = (json.dumps(evidence, sort_keys=True, indent=2) + "\n").encode()
@@ -2952,9 +2962,10 @@ def read_state_with_digest(
     if len(data) > EXECUTION_STATE_MAX_BYTES:
         raise StateError("execution state exceeds size limit")
     try:
-        value = validate_state(json.loads(data))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        parsed = json.loads(data)
+    except ValueError as exc:
         raise StateError(f"invalid execution state JSON: {exc}") from exc
+    value = validate_state(parsed)
     if require_canonical and data != (
         json.dumps(value, sort_keys=True, indent=2) + "\n"
     ).encode():
@@ -3293,7 +3304,7 @@ def read_continuation_registry(path: Path) -> dict[str, Any]:
                 raise StateError("continuation registry has a truncated record")
             try:
                 record = json.loads(line)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            except ValueError as exc:
                 raise StateError("continuation registry contains invalid JSON") from exc
             if not isinstance(record, dict) or canonical_registry_record(record) != line:
                 raise StateError("continuation registry record is not canonical")
@@ -3475,7 +3486,7 @@ def read_reviewer_registry(path: Path) -> dict[str, Any]:
                 raise StateError("reviewer session registry has a truncated record")
             try:
                 record = json.loads(line)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            except ValueError as exc:
                 raise StateError("reviewer session registry contains invalid JSON") from exc
             if not isinstance(record, dict) or canonical_registry_record(record) != line:
                 raise StateError("reviewer session registry record is not canonical")
@@ -4293,7 +4304,7 @@ def read_private_json(path: Path, label: str) -> tuple[dict[str, Any], str]:
         raise StateError(f"{label} exceeds size limit")
     try:
         value = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise StateError(f"{label} is invalid JSON") from exc
     if not isinstance(value, dict):
         raise StateError(f"{label} must be an object")
@@ -5481,7 +5492,7 @@ def candidate_review_identity(
     lifecycle_digest = digest(raw)
     try:
         candidate_digest = f"sha256:{json.loads(raw)['current_manifest_digest']}"
-    except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError, ValueError) as exc:
         raise StateError("candidate lifecycle state is invalid JSON") from exc
     lifecycle = load_candidate_lifecycle_for_close(
         lifecycle_path,
@@ -6388,7 +6399,7 @@ def load_candidate_lifecycle_for_close(
         raise StateError("candidate lifecycle content digest mismatch")
     try:
         lifecycle = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise StateError("candidate lifecycle state is invalid JSON") from exc
     if not isinstance(lifecycle, dict) or set(lifecycle) != CANDIDATE_LIFECYCLE_KEYS:
         raise StateError("candidate lifecycle state has an invalid exact schema")
@@ -6450,7 +6461,7 @@ def load_candidate_manifest_for_close(
         raise StateError("candidate manifest digest mismatch")
     try:
         manifest = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise StateError("candidate manifest is invalid JSON") from exc
     if not isinstance(manifest, dict):
         raise StateError("candidate manifest must be a JSON object")
