@@ -2230,11 +2230,18 @@ module = importlib.util.module_from_spec(specification)
 specification.loader.exec_module(module)
 project = Path.cwd()
 home = module.account_home()
-record = module.requirement_path(project, "docs/plan/active/900-project-owned-work.md")
-transfers = module.transfer_directory()
-for path in (record, transfers):
+for path in (module.required_evidence_directory(), module.transfer_directory()):
     if path.is_relative_to(project) or not path.is_relative_to(home):
         raise SystemExit(f"the updated project resolved live evidence to {path}")
+# This fixture project has no canonical origin, so no record can be keyed here.
+# The updated gate must refuse rather than invent a project-local location.
+try:
+    module.requirement_path(project, "docs/plan/active/900-project-owned-work.md")
+except module.EvidenceError as error:
+    if "remote.origin.url" not in str(error):
+        raise SystemExit(f"unexpected refusal without an origin: {error}") from error
+else:
+    raise SystemExit("the updated project keyed a live-evidence record with no origin")
 EOF_PRESERVED_EVIDENCE_LOCATION
 )
 if ! cmp -s "$private_evidence_before" "$private_evidence_after"; then
