@@ -226,6 +226,60 @@ class GeneratedCiTest(unittest.TestCase):
                 ".project-agent-workflow/scripts/verify-parallel-plan-sessions.py", text, name
             )
 
+    def test_generated_live_evidence_records_stay_outside_the_project(self) -> None:
+        """The obligation record is evidence about a project, not project bytes.
+
+        A generated project installs the verifier, so its record identity must
+        still resolve under the account home. A repository-local location would
+        let an install, a template update or a second checkout lose or replace
+        historical evidence.
+        """
+
+        verifier = load_module(
+            ROOT / "template/.project-agent-workflow/scripts/verify-parallel-plan-sessions.py",
+            "generated_live_verifier",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project"
+            (project / "docs/plan/active").mkdir(parents=True)
+            subprocess.run(
+                ["git", "init", "-q", "-b", "main"], cwd=project, check=True
+            )
+            subprocess.run(
+                [
+                    "git", "remote", "add", "origin",
+                    "https://example.invalid/owner/generated.git",
+                ],
+                cwd=project,
+                check=True,
+            )
+            plan = "docs/plan/active/900-generated.md"
+            (project / plan).write_text("# Generated\n", encoding="utf-8")
+            record = verifier.requirement_path(project, plan)
+            transfers = verifier.transfer_directory()
+            home = verifier.account_home()
+            self.assertFalse(record.is_relative_to(project))
+            self.assertFalse(transfers.is_relative_to(project))
+            self.assertTrue(record.is_relative_to(home))
+            self.assertTrue(transfers.is_relative_to(home))
+
+    def test_generated_policy_documents_the_obligation_transfer(self) -> None:
+        workflow = (
+            ROOT
+            / "template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            ".project-agent-workflow/scripts/verify-parallel-plan-sessions.py transfer",
+            workflow,
+        )
+        self.assertIn("records custody, never completed live acceptance", workflow)
+        orchestration = (
+            ROOT / "template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "Do not delegate the live-evidence obligation transfer", orchestration
+        )
+
     def test_default_generated_lint_checks_execution_groups(self) -> None:
         text = self.GENERATED_LINT.read_text(encoding="utf-8")
         self.assertIn("--check-execution-groups", text)

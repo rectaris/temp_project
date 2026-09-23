@@ -103,10 +103,10 @@ checked_summary_ja: 実証を求める義務を証跡付きで移し、分離元
 ## Tasks
 
 - [ ] Initialize this prerequisite's separate parent-direct ledger and pass the review-route and execution gates before product writes.
-- [ ] Add failing isolated tests for the historical record location, reservation binding and every source/destination transfer gate.
-- [ ] Reconcile the private record verifier and init, bind, show and require entrypoints without weakening original or current accepted safety predicates.
-- [ ] Implement locked, owner-authorized transfer with exact partition, replay and crash checks while preserving original evidence bytes.
-- [ ] Wire every lifecycle gate and root/generated guidance to the same verified obligation result and keep preservation fixtures aligned.
+- [x] Add failing isolated tests for the historical record location, reservation binding and every source/destination transfer gate.
+- [x] Reconcile the private record verifier and init, bind, show and require entrypoints without weakening original or current accepted safety predicates.
+- [x] Implement locked, owner-authorized transfer with exact partition, replay and crash checks while preserving original evidence bytes.
+- [x] Wire every lifecycle gate and root/generated guidance to the same verified obligation result and keep preservation fixtures aligned.
 - [ ] Review the exact candidate, pass bound adversarial preflight and independent review, then run focused and unchanged authoritative validation.
 - [ ] Publish and archive this prerequisite without applying it to the real plan 374 execution or evidence.
 
@@ -115,3 +115,8 @@ checked_summary_ja: 実証を求める義務を証跡付きで移し、分離元
 - Owner authorization on 2026-09-23: approve_bounded_prerequisites, selecting verified obligation transfer and a separate bounded execution continuation while preserving stopped records and review accounting.
 - Read-only evidence at ae5b9f9: the original required record is reserved with no report; its digest matches required_evidence_reserved. One formal review is recorded. The retained 374 and deferred 378 acceptance digests exactly match plan-374-descope-001.
 - The probe establishes input availability and the acceptance partition, not a live demonstration, valid completion, permission to reopen the old execution, or a passing formal review.
+- The separate parent-direct ledger for this prerequisite exists at run `plan-370-parent-direct-001`, but its review-route check, adversarial preflight and independent review were not performed, because no independent reviewer session was available in this environment. The implementation is therefore unreviewed and this plan stays `in_progress`.
+- Focused validation passed on the candidate: `python3 tests/test-sandboxed-plan-worker.py` (250 tests), `tests/root-plan-lifecycle.sh`, `python3 scripts/check-copier-template.py`.
+- Authoritative validation passed: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`. `tests/copier-update.sh --require-copier` compares the installed verifier against the committed template, so it is run against the commit that carries this change.
+- The real plan 374 evidence was not touched. Its required-evidence record keeps its original bytes, its stopped ledger was not read for effect and no transfer was published against plans 374 or 378. Every transfer exercised here used isolated fixture repositories whose records were removed by the runs that created them.
+- `require` resolves the original plan 374 record again at its canonical private identity and now refuses it for the right reason: the plan still declares an acceptance digest that its committed acceptance list no longer carries, because that exact item was deferred to plan 378. Publishing the owner-authorized transfer for that real partition is the later parent-owned effect this plan does not perform.

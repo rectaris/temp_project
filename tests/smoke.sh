@@ -2080,6 +2080,47 @@ grep -q 'under an integration authorization' "$tmp/typescript/.project-agent-wor
 grep -q 'Parallel Session Evidence' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_AGENT_LOGGING.md"
 grep -q 'optional `.project-agent-workflow/scripts/orca-coordinator.py ensure-worker` bridge' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 grep -q 'Parallel Execution Groups' "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+# The obligation the verifier enforces is private evidence about the project,
+# so the generated project resolves it under the account home rather than
+# inside its own tree, and it installs the transfer that carries the obligation
+# across an authorized acceptance partition.
+(cd "$tmp/typescript" && python3 - <<'GENERATED_EVIDENCE_LOCATION_EOF'
+import importlib.util
+from pathlib import Path
+
+script = Path(".project-agent-workflow/scripts/verify-parallel-plan-sessions.py")
+specification = importlib.util.spec_from_file_location("generated_verifier", script)
+module = importlib.util.module_from_spec(specification)
+specification.loader.exec_module(module)
+project = Path.cwd()
+home = module.account_home()
+for path in (module.required_evidence_directory(), module.transfer_directory()):
+    if path.is_relative_to(project):
+        raise SystemExit(f"generated project holds private live evidence: {path}")
+    if not path.is_relative_to(home):
+        raise SystemExit(f"private live evidence left the account home: {path}")
+# This generated project has no canonical origin, so no record can be keyed
+# here. The gate must say so rather than invent a project-local location.
+try:
+    module.requirement_path(project, "docs/plan/active/900-generated.md")
+except module.EvidenceError as error:
+    if "remote.origin.url" not in str(error):
+        raise SystemExit(f"unexpected refusal without an origin: {error}") from error
+else:
+    raise SystemExit("an originless project keyed a live-evidence record")
+GENERATED_EVIDENCE_LOCATION_EOF
+)
+if (cd "$tmp/typescript" && python3 \
+    .project-agent-workflow/scripts/verify-parallel-plan-sessions.py transfer \
+    >/dev/null 2>"$tmp/generated-transfer.err"); then
+  echo "the generated live-evidence transfer ran without its required inputs" >&2
+  exit 1
+fi
+grep -q 'transfer requires --source-plan' "$tmp/generated-transfer.err"
+grep -q 'records custody, never completed live acceptance' \
+  "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md"
+grep -q 'Do not delegate the live-evidence obligation transfer' \
+  "$tmp/typescript/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md"
 (cd "$tmp/typescript" && python3 .project-agent-workflow/scripts/lint-plan-docs.py --check-execution-groups >/dev/null)
 
 group_project="$tmp/typescript"

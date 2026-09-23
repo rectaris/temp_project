@@ -2151,7 +2151,36 @@ while IFS= read -r preserved_path || [ -n "$preserved_path" ]; do
   fixture_git "$preserved_project_out" hash-object -- "$preserved_path" >>"$preserved_before"
 done <"$preserved_manifest"
 grep -q '^_commit: v1.4.1$' "$preserved_project_out/.copier-answers.yml"
+private_evidence_before="$tmp/v141-private-evidence-before.txt"
+private_evidence_after="$tmp/v141-private-evidence-after.txt"
+# Ask the installed verifier where private evidence lives, so the snapshot
+# covers the directories the gate actually reads rather than a guessed path.
+private_evidence_directories=$(python3 - "$root/scripts/verify-parallel-plan-sessions.py" <<'EOF_PRIVATE_EVIDENCE_DIRECTORIES'
+import importlib.util
+import sys
+from pathlib import Path
+
+specification = importlib.util.spec_from_file_location("evidence", Path(sys.argv[1]))
+module = importlib.util.module_from_spec(specification)
+specification.loader.exec_module(module)
+print(module.required_evidence_directory())
+print(module.transfer_directory())
+EOF_PRIVATE_EVIDENCE_DIRECTORIES
+)
+snapshot_private_evidence() {
+  : >"$1"
+  for evidence_directory in $private_evidence_directories; do
+    [ -d "$evidence_directory" ] || continue
+    find "$evidence_directory" -maxdepth 1 -type f -name '*.json' -print \
+      | LC_ALL=C sort \
+      | while IFS= read -r evidence_file; do
+          printf '%s\n' "$(sha256sum "$evidence_file")"
+        done >>"$1"
+  done
+}
+snapshot_private_evidence "$private_evidence_before"
 run_copier update -q --trust --defaults --vcs-ref v1.4.2 "$preserved_project_out" >/dev/null
+snapshot_private_evidence "$private_evidence_after"
 preserved_after="$tmp/v141-project-preservation-after.txt"
 : >"$preserved_after"
 while IFS= read -r preserved_path || [ -n "$preserved_path" ]; do
@@ -2183,6 +2212,35 @@ cmp "$root/template/.project-agent-workflow/scripts/run-parallel-plans.py" \
 cmp "$root/template/.project-agent-workflow/scripts/verify-parallel-plan-sessions.py" \
   "$preserved_project_out/.project-agent-workflow/scripts/verify-parallel-plan-sessions.py"
 fixture_git "$preserved_project_out" diff --check
+# A template update rewrites managed project bytes. It must not reach the
+# private live-evidence records at all: they are evidence about the project,
+# they live under the account home, and an install or update that created,
+# changed or removed one would silently rewrite history the gate depends on.
+if [ -n "$(find "$preserved_project_out" -name 'required-evidence*' -print -quit)" ]; then
+  echo "Copier update wrote private live evidence into the project" >&2
+  exit 1
+fi
+(cd "$preserved_project_out" && python3 - <<'EOF_PRESERVED_EVIDENCE_LOCATION'
+import importlib.util
+from pathlib import Path
+
+script = Path(".project-agent-workflow/scripts/verify-parallel-plan-sessions.py")
+specification = importlib.util.spec_from_file_location("updated_verifier", script)
+module = importlib.util.module_from_spec(specification)
+specification.loader.exec_module(module)
+project = Path.cwd()
+home = module.account_home()
+record = module.requirement_path(project, "docs/plan/active/900-project-owned-work.md")
+transfers = module.transfer_directory()
+for path in (record, transfers):
+    if path.is_relative_to(project) or not path.is_relative_to(home):
+        raise SystemExit(f"the updated project resolved live evidence to {path}")
+EOF_PRESERVED_EVIDENCE_LOCATION
+)
+if ! cmp -s "$private_evidence_before" "$private_evidence_after"; then
+  echo "Copier update changed private live-evidence records" >&2
+  exit 1
+fi
 
 # The synthetic v1.4.4 boundary is this template without the installed
 # validation-witness policy marker, so the before migration reads the

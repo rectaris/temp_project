@@ -7454,6 +7454,728 @@ class LiveEvidenceGateTests(unittest.TestCase):
         self.assertEqual(VERIFIER_SCRIPT.read_bytes(), generated.read_bytes())
 
 
+def load_module(name: str, path: Path):
+    """Import one repository script as a module for direct unit checks."""
+
+    specification = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+class LiveEvidenceObligationTransferTests(unittest.TestCase):
+    """An authorized acceptance partition moves the obligation, never drops it.
+
+    Every scenario uses an isolated local Git repository and its own parent-direct
+    execution ledger under a temporary directory. Private records are keyed by
+    repository identity, so no case can reach the evidence of a real plan, and
+    each case removes the records it created.
+    """
+
+    LIVE_ITEM = "two operator-started sessions publish and retire their results"
+    SOURCE = "docs/plan/active/380-source.md"
+    DESTINATION = "docs/plan/backlog/381-destination.md"
+    PROMOTED = "docs/plan/active/381-destination.md"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state = Path(self.temporary.name) / "state"
+        self.state.mkdir()
+        self.repo = Path(self.temporary.name) / "repo"
+        (self.repo / "docs/plan/active").mkdir(parents=True)
+        (self.repo / "docs/plan/backlog").mkdir(parents=True)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.name", "Test")
+        git(self.repo, "config", "user.email", "test@example.invalid")
+        git(
+            self.repo,
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/owner/transfer.git",
+        )
+        self.live_digest = "sha256:" + hashlib.sha256(
+            self.LIVE_ITEM.encode("utf-8")
+        ).hexdigest()
+        self.write_source()
+        self.write_destination(self.DESTINATION, carries=True)
+        (self.repo / "AGENTS.md").write_text("fixture\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "baseline")
+        self.verifier = load_module("live_evidence_transfer_verifier", VERIFIER_SCRIPT)
+        self.execution = load_module(
+            "live_evidence_transfer_state", ROOT / "scripts/plan-execution-state.py"
+        )
+        for plan in (self.SOURCE, self.DESTINATION, self.PROMOTED):
+            self.track(self.verifier.requirement_path(self.repo, plan))
+
+    def track(self, path: Path) -> None:
+        PENDING_RECORDS.add(path)
+        self.addCleanup(PENDING_RECORDS.discard, path)
+        self.addCleanup(path.unlink, missing_ok=True)
+
+    def write_source(self) -> None:
+        (self.repo / self.SOURCE).write_text(
+            "# Source plan\n\nstatus: in_progress\n"
+            "plan_purpose: implementation\n"
+            "primary_invariant: the source invariant\n"
+            "live_evidence_contract: parallel_sessions_v1\n"
+            f"live_evidence_acceptance_sha256: {self.live_digest}\n"
+            "acceptance:\n"
+            "  - the retained first acceptance item\n"
+            "  - the retained second acceptance item\n"
+            f"  - {self.LIVE_ITEM}\n"
+            "  - the retained fourth acceptance item\n"
+            "write_scope:\n  - AGENTS.md\n"
+            "\n## Tasks\n\n- [ ] implement\n",
+            encoding="utf-8",
+        )
+
+    def write_destination(self, selector: str, *, carries: bool) -> None:
+        item = self.LIVE_ITEM if carries else "an unrelated acceptance item"
+        (self.repo / selector).write_text(
+            "# Destination plan\n\nstatus: backlog\n"
+            "plan_purpose: implementation\n"
+            "primary_invariant: the destination invariant\n"
+            "acceptance:\n"
+            f"  - {item}\n"
+            "write_scope:\n  - AGENTS.md\n"
+            "\n## Tasks\n\n- [ ] implement\n",
+            encoding="utf-8",
+        )
+
+    def run_verifier(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(VERIFIER_SCRIPT), *arguments],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def run_state(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/plan-execution-state.py"),
+                *arguments,
+            ],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    @staticmethod
+    def text_digest(value: str) -> str:
+        return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def review_identity(self, ledger: Path) -> str:
+        """Ask the ledger module for the current write-scope review identity.
+
+        The identity is derived from the repository the command runs in, so it
+        is computed inside the fixture repository rather than this test process.
+        """
+
+        program = (
+            "import importlib.util, json, sys\n"
+            "specification = importlib.util.spec_from_file_location('state', sys.argv[1])\n"
+            "module = importlib.util.module_from_spec(specification)\n"
+            "specification.loader.exec_module(module)\n"
+            "state = json.load(open(sys.argv[2], encoding='utf-8'))\n"
+            "print(module.parent_direct_review_identity(state)[1])\n"
+        )
+        derived = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                program,
+                str(ROOT / "scripts/plan-execution-state.py"),
+                str(ledger),
+            ],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(derived.returncode, 0, derived.stderr)
+        return derived.stdout.strip()
+
+    def ledger_path(self) -> Path:
+        return self.state / "execution.json"
+
+    def descope_ledger(self) -> Path:
+        """Drive one real parent-direct ledger to a checked descope.
+
+        The transfer is only ever reachable from a stopped, owner-classified
+        acceptance partition, so the fixture reproduces that whole route through
+        the authoritative ledger command instead of writing ledger bytes.
+        """
+
+        ledger = self.ledger_path()
+        lifecycle = self.state / "lifecycle.json"
+        head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        prepared = self.run_state(
+            "prepare-parent-direct",
+            str(ledger),
+            "--run-id",
+            "transfer-run-001",
+            "--plan",
+            self.SOURCE,
+            "--source-head",
+            head,
+            "--lifecycle-state",
+            str(lifecycle),
+            "--reviewer-registry",
+            str(self.state / "reviewers.json"),
+            "--continuation-registry",
+            str(self.state / "continuation.json"),
+        )
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        (self.repo / "AGENTS.md").write_text("fixture\nreviewed\n", encoding="utf-8")
+        state = json.loads(ledger.read_text(encoding="utf-8"))
+        identity = self.review_identity(ledger)
+        invariant = self.text_digest("the source invariant")
+        reviewed = self.run_state(
+            "record",
+            str(ledger),
+            "--run-id",
+            "transfer-run-001",
+            "--event-id",
+            "transfer-review-001",
+            "--event-type",
+            "parent_review",
+            "--implementation-mode",
+            "parent_direct",
+            "--invariant-digest",
+            invariant,
+            "--finding-severity",
+            "High",
+            "--independent-review-receipt-digest",
+            self.text_digest("transfer review receipt"),
+            "--lifecycle-state",
+            str(lifecycle),
+            "--candidate-lifecycle-digest",
+            identity,
+        )
+        self.assertEqual(reviewed.returncode, 0, reviewed.stderr)
+        state = json.loads(ledger.read_text(encoding="utf-8"))
+        self.assertEqual(state["state"], "descope_pending")
+        evidence = self.state / "descope-evidence.json"
+        evidence.write_text(
+            json.dumps(self.descope_evidence(state, identity), sort_keys=True, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        classified = self.run_state(
+            "record",
+            str(ledger),
+            "--run-id",
+            "transfer-run-001",
+            "--event-id",
+            "transfer-descope-001",
+            "--event-type",
+            "descope_classification",
+            "--implementation-mode",
+            "parent_direct",
+            "--invariant-digest",
+            invariant,
+            "--independent-review-receipt-digest",
+            self.text_digest("transfer descope receipt"),
+            "--descope-evidence-file",
+            str(evidence),
+            "--lifecycle-state",
+            str(lifecycle),
+            "--candidate-lifecycle-digest",
+            identity,
+        )
+        self.assertEqual(classified.returncode, 0, classified.stderr)
+        state = json.loads(ledger.read_text(encoding="utf-8"))
+        self.assertEqual(state["state"], "descope_required")
+        return ledger
+
+    def descope_evidence(self, state: dict, identity: str) -> dict:
+        head = state["source_head"]
+        committed = subprocess.run(
+            ["git", "show", f"{head}:{self.SOURCE}"],
+            cwd=self.repo,
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+        manifest = self.verifier.plan_manifest(committed.decode("utf-8"))
+        digests = [self.text_digest(item) for item in manifest["acceptance"]]
+        return {
+            "schema_version": 1,
+            "plan_path": self.SOURCE,
+            "plan_digest": "sha256:" + hashlib.sha256(committed).hexdigest(),
+            "source_head": head,
+            "primary_invariant_digest": state["primary_invariant_digest"],
+            "affected_invariant_digests": [self.text_digest("the source invariant")],
+            "candidate_lifecycle_identity_digest": state[
+                "candidate_lifecycle_identity_digest"
+            ],
+            "candidate_lifecycle_digest": identity,
+            "independent_review_receipt_digest": self.text_digest(
+                "transfer descope receipt"
+            ),
+            "source_acceptance_digests": digests,
+            "retained_acceptance_digests": [
+                digest for digest in digests if digest != self.live_digest
+            ],
+            "deferred_acceptance_digests": [self.live_digest],
+            "deferred_backlog_path": self.DESTINATION,
+            "bounded_write_scope": True,
+            "source_scope_unchanged": True,
+            "validation_authority_unchanged": True,
+            "invariant_boundaries_unchanged": True,
+            "primary_invariant_unchanged": True,
+            "safety_conditions_unchanged": True,
+            "external_effect_authority_unchanged": True,
+            "independent_invariant_count": 1,
+        }
+
+    def reserve(self, ledger: Path) -> dict:
+        reserved = self.run_verifier(
+            "init",
+            "--plan",
+            self.SOURCE,
+            "--execution-state",
+            str(ledger),
+            "--group-id",
+            "transfer-demo",
+        )
+        self.assertEqual(reserved.returncode, 0, reserved.stderr)
+        return json.loads(reserved.stdout)
+
+    def authorize(self, reserved: dict, **overrides: str) -> Path:
+        record = json.loads(
+            self.verifier.requirement_path(self.repo, self.SOURCE).read_text(
+                encoding="utf-8"
+            )
+        )
+        value = {
+            "schema_version": self.verifier.TRANSFER_SCHEMA_VERSION,
+            "record_type": self.verifier.AUTHORIZATION_RECORD_TYPE,
+            "repository_identity": record["repository_identity"],
+            "source_plan_path": self.SOURCE,
+            "source_plan_digest": self.verifier.digest_bytes(
+                (self.repo / self.SOURCE).read_bytes()
+            ),
+            "destination_plan_path": self.DESTINATION,
+            "destination_plan_digest": self.verifier.digest_bytes(
+                (self.repo / self.DESTINATION).read_bytes()
+            ),
+            "live_acceptance_digest": record["live_acceptance_digest"],
+            "source_record_digest": reserved["record_digest"],
+            "execution_genesis_digest": record["execution_genesis_digest"],
+            "run_id": record["run_id"],
+            "authorization": (
+                "Move the live-evidence obligation of the source plan to the "
+                "deferred destination plan and keep the stopped record unchanged."
+            ),
+            "record_digest": "",
+        }
+        value.update(overrides)
+        value["record_digest"] = self.verifier.self_digest(value)
+        path = self.state / "authorization.json"
+        path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    def transfer(self, ledger: Path, authorization: Path) -> subprocess.CompletedProcess[str]:
+        return self.run_verifier(
+            "transfer",
+            "--source-plan",
+            self.SOURCE,
+            "--destination-plan",
+            self.DESTINATION,
+            "--execution-state",
+            str(ledger),
+            "--owner-authorization",
+            str(authorization),
+        )
+
+    def partition(self) -> tuple[Path, dict, subprocess.CompletedProcess[str]]:
+        ledger = self.descope_ledger()
+        reserved = self.reserve(ledger)
+        authorization = self.authorize(reserved)
+        published = self.transfer(ledger, authorization)
+        self.assertEqual(published.returncode, 0, published.stderr)
+        record = json.loads(published.stdout)
+        self.track(Path(record["record_path"]))
+        return ledger, reserved, published
+
+    def test_the_record_lives_at_the_canonical_account_home_identity(self) -> None:
+        """Historical evidence keeps one identity outside every worktree.
+
+        A repository-local location would make an authorized partition lose the
+        original record, so the canonical path derives from the account home,
+        the repository identity and the plan path alone.
+        """
+
+        path = self.verifier.requirement_path(self.repo, self.SOURCE)
+        home = self.verifier.account_home()
+        self.assertEqual(
+            path.parent, home / self.verifier.STATE_RELATIVE_DIRECTORY
+        )
+        self.assertFalse(path.is_relative_to(self.repo))
+        key = self.verifier.record_key(
+            {
+                "repository_identity": self.verifier.repository_identity(self.repo),
+                "plan_path": self.SOURCE,
+                "record_type": self.verifier.REQUIREMENT_RECORD_TYPE,
+            }
+        )
+        self.assertEqual(path.name, f"{key}.json")
+
+    def test_a_reservation_event_must_name_the_exact_record(self) -> None:
+        """The ledger reservation binds the record, or it binds nothing.
+
+        A forged or duplicated reservation must refuse instead of standing in
+        for the original obligation.
+        """
+
+        digest = "sha256:" + "a" * 64
+        event = {
+            "event_type": "required_evidence_reserved",
+            "event_id": "reserve-001",
+            "event_digest": "sha256:" + "c" * 64,
+            "invariant_digests": [digest],
+        }
+        self.assertEqual(
+            self.verifier.ledger_reservation({"events": [event]}, digest),
+            event["event_digest"],
+        )
+        self.assertEqual(self.verifier.ledger_reservation({"events": []}, digest), "")
+        with self.assertRaises(self.verifier.EvidenceError):
+            self.verifier.ledger_reservation(
+                {"events": [event, dict(event, event_id="reserve-002")]}, digest
+            )
+        with self.assertRaises(self.verifier.EvidenceError):
+            self.verifier.ledger_reservation(
+                {"events": [event]}, "sha256:" + "b" * 64
+            )
+
+    def test_a_verified_transfer_releases_only_the_source_gate(self) -> None:
+        self.partition()
+        released = self.run_verifier("require", "--plan", self.SOURCE)
+        self.assertEqual(released.returncode, 0, released.stderr)
+        report = json.loads(released.stdout)
+        self.assertEqual(report["obligation"], "transferred")
+        self.assertTrue(report["released"])
+        self.assertFalse(report["satisfied"])
+        refused = self.run_verifier("require", "--plan", self.DESTINATION)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("live-evidence obligation", refused.stderr)
+
+    def test_the_source_can_no_longer_bind_the_demonstration_itself(self) -> None:
+        self.partition()
+        report = self.state / "report.json"
+        report.write_text("{}\n", encoding="utf-8")
+        refused = self.run_verifier(
+            "bind", "--plan", self.SOURCE, "--report", str(report)
+        )
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("destination plan", refused.stderr)
+
+    def test_an_exact_replay_is_idempotent_and_publishes_nothing_new(self) -> None:
+        """Crash recovery repeats the same transfer, or it stops.
+
+        The one-time transfer is locked and journalled, so an exact retry
+        returns the same record and any other attempt refuses.
+        """
+
+        ledger, reserved, published = self.partition()
+        original = json.loads(published.stdout)
+        authorization = self.authorize(reserved)
+        replayed = self.transfer(ledger, authorization)
+        self.assertEqual(replayed.returncode, 0, replayed.stderr)
+        repeated = json.loads(replayed.stdout)
+        self.assertEqual(repeated["outcome"], "idempotent")
+        self.assertEqual(repeated["record_digest"], original["record_digest"])
+
+    def test_a_second_destination_for_the_same_obligation_refuses(self) -> None:
+        ledger, reserved, _ = self.partition()
+        other = "docs/plan/backlog/382-other.md"
+        self.write_destination(other, carries=True)
+        authorization = self.authorize(reserved, destination_plan_path=other)
+        conflicting = self.run_verifier(
+            "transfer",
+            "--source-plan",
+            self.SOURCE,
+            "--destination-plan",
+            other,
+            "--execution-state",
+            str(ledger),
+            "--owner-authorization",
+            str(authorization),
+        )
+        self.assertNotEqual(conflicting.returncode, 0, conflicting.stdout)
+
+    def test_a_destination_that_drops_the_item_loses_the_release(self) -> None:
+        """Deleting the moved acceptance item must not satisfy anything.
+
+        The source release depends on the destination still carrying the exact
+        transferred item, so gutting the destination refuses both gates.
+        """
+
+        self.partition()
+        self.write_destination(self.DESTINATION, carries=False)
+        refused = self.run_verifier("require", "--plan", self.SOURCE)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("would be lost", refused.stderr)
+        blocked = self.run_verifier("require", "--plan", self.DESTINATION)
+        self.assertNotEqual(blocked.returncode, 0, blocked.stdout)
+
+    def test_a_missing_destination_plan_refuses_the_release(self) -> None:
+        self.partition()
+        (self.repo / self.DESTINATION).unlink()
+        refused = self.run_verifier("require", "--plan", self.SOURCE)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("missing", refused.stderr)
+
+    def test_an_ordinary_lifecycle_promotion_keeps_the_obligation(self) -> None:
+        """A deferred destination is started later, from another directory.
+
+        Resolving the destination by its recorded path alone would let the
+        normal backlog to active move silently drop the obligation, so the
+        destination is resolved by its plan identity in one lifecycle location.
+        """
+
+        self.partition()
+        (self.repo / self.PROMOTED).write_text(
+            (self.repo / self.DESTINATION).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        (self.repo / self.DESTINATION).unlink()
+        released = self.run_verifier("require", "--plan", self.SOURCE)
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertEqual(
+            json.loads(released.stdout)["destination_plan_path"], self.PROMOTED
+        )
+        refused = self.run_verifier("require", "--plan", self.PROMOTED)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+
+    def test_two_lifecycle_copies_of_the_destination_refuse(self) -> None:
+        self.partition()
+        (self.repo / self.PROMOTED).write_text(
+            (self.repo / self.DESTINATION).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        refused = self.run_verifier("require", "--plan", self.SOURCE)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("more than one lifecycle location", refused.stderr)
+
+    def test_a_replaced_source_record_invalidates_the_release(self) -> None:
+        self.partition()
+        path = self.verifier.requirement_path(self.repo, self.SOURCE)
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["reserved_group_id"] = "replaced-demo"
+        record["record_digest"] = self.verifier.self_digest(record)
+        self.verifier.write_private_json(path, record)
+        refused = self.run_verifier("require", "--plan", self.SOURCE)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("transferred", refused.stderr)
+
+    def test_a_missing_source_record_refuses_instead_of_recreating_evidence(self) -> None:
+        self.partition()
+        self.verifier.requirement_path(self.repo, self.SOURCE).unlink()
+        refused = self.run_verifier("require", "--plan", self.SOURCE)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("missing", refused.stderr)
+
+    def test_an_unauthorized_transfer_refuses(self) -> None:
+        ledger = self.descope_ledger()
+        reserved = self.reserve(ledger)
+        authorization = self.authorize(
+            reserved, authorization="please proceed", record_digest=""
+        )
+        value = json.loads(authorization.read_text(encoding="utf-8"))
+        value["record_digest"] = self.verifier.self_digest(value)
+        authorization.write_text(
+            json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+        refused = self.transfer(ledger, authorization)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+
+    def test_a_forged_authorization_digest_refuses(self) -> None:
+        ledger = self.descope_ledger()
+        reserved = self.reserve(ledger)
+        authorization = self.authorize(reserved)
+        value = json.loads(authorization.read_text(encoding="utf-8"))
+        value["destination_plan_path"] = "docs/plan/backlog/382-other.md"
+        authorization.write_text(
+            json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+        refused = self.transfer(ledger, authorization)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("digest", refused.stderr)
+
+    def test_a_transfer_without_a_stopped_partition_refuses(self) -> None:
+        """Custody moves only out of a checked acceptance partition.
+
+        A running or unclassified execution has no owner-checked partition, so
+        the transfer must refuse before it releases anything.
+        """
+
+        ledger = self.state / "execution.json"
+        lifecycle = self.state / "lifecycle.json"
+        head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        prepared = self.run_state(
+            "prepare-parent-direct",
+            str(ledger),
+            "--run-id",
+            "transfer-run-001",
+            "--plan",
+            self.SOURCE,
+            "--source-head",
+            head,
+            "--lifecycle-state",
+            str(lifecycle),
+            "--reviewer-registry",
+            str(self.state / "reviewers.json"),
+            "--continuation-registry",
+            str(self.state / "continuation.json"),
+        )
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        reserved = self.reserve(ledger)
+        authorization = self.authorize(reserved)
+        refused = self.transfer(ledger, authorization)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        still_required = self.run_verifier("require", "--plan", self.SOURCE)
+        self.assertNotEqual(still_required.returncode, 0, still_required.stdout)
+
+    def test_a_transfer_that_contradicts_the_partition_refuses(self) -> None:
+        ledger = self.descope_ledger()
+        reserved = self.reserve(ledger)
+        other = "docs/plan/backlog/382-other.md"
+        self.write_destination(other, carries=True)
+        authorization = self.authorize(reserved, destination_plan_path=other)
+        refused = self.run_verifier(
+            "transfer",
+            "--source-plan",
+            self.SOURCE,
+            "--destination-plan",
+            other,
+            "--execution-state",
+            str(ledger),
+            "--owner-authorization",
+            str(authorization),
+        )
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("defers to another plan", refused.stderr)
+
+    def test_the_report_environment_variable_cannot_waive_either_gate(self) -> None:
+        """The gate reads private evidence only.
+
+        PROJECT_AGENT_WORKFLOW_REQUIRED_EVIDENCE configures the non-gating
+        verify command, so pointing it anywhere must not change require.
+        """
+
+        self.partition()
+        self.write_destination(self.DESTINATION, carries=False)
+        forged = self.state / "forged.json"
+        forged.write_text("{}\n", encoding="utf-8")
+        environment = dict(os.environ)
+        environment["PROJECT_AGENT_WORKFLOW_REQUIRED_EVIDENCE"] = str(forged)
+        refused = subprocess.run(
+            [sys.executable, str(VERIFIER_SCRIPT), "require", "--plan", self.SOURCE],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+
+    def test_every_lifecycle_entrypoint_reaches_the_same_result(self) -> None:
+        """No completion path may bypass the verifier's conclusion."""
+
+        self.partition()
+        self.write_destination(self.DESTINATION, carries=False)
+        for script in ("complete-plan.sh", "finalize-active-plan.sh"):
+            with self.subTest(script=script):
+                blocked = subprocess.run(
+                    ["bash", str(ROOT / "scripts" / script), self.SOURCE],
+                    cwd=self.repo,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertNotEqual(blocked.returncode, 0, blocked.stdout)
+
+    def test_show_reports_the_obligation_without_changing_it(self) -> None:
+        _, reserved, _ = self.partition()
+        path = self.verifier.requirement_path(self.repo, self.SOURCE)
+        before = path.read_bytes()
+        shown = self.run_verifier("show", "--plan", self.SOURCE)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        report = json.loads(shown.stdout)
+        self.assertEqual(report["record_digest"], reserved["record_digest"])
+        self.assertEqual(report["state"], "reserved")
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_the_destination_reserves_the_inherited_contract(self) -> None:
+        """A deferred destination declares no contract of its own.
+
+        The transfer record is then the only authority for the inherited
+        obligation, and reserving it must still bind the exact moved item.
+        """
+
+        self.partition()
+        head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        (self.repo / self.PROMOTED).write_text(
+            (self.repo / self.DESTINATION)
+            .read_text(encoding="utf-8")
+            .replace("status: backlog", "status: in_progress"),
+            encoding="utf-8",
+        )
+        (self.repo / self.DESTINATION).unlink()
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "promote destination")
+        head = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        ledger = self.state / "destination-execution.json"
+        prepared = self.run_state(
+            "prepare-parent-direct",
+            str(ledger),
+            "--run-id",
+            "transfer-destination-001",
+            "--plan",
+            self.PROMOTED,
+            "--source-head",
+            head,
+            "--lifecycle-state",
+            str(self.state / "destination-lifecycle.json"),
+            "--reviewer-registry",
+            str(self.state / "destination-reviewers.json"),
+            "--continuation-registry",
+            str(self.state / "destination-continuation.json"),
+        )
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        reserved = self.run_verifier(
+            "init",
+            "--plan",
+            self.PROMOTED,
+            "--execution-state",
+            str(ledger),
+            "--group-id",
+            "transfer-demo",
+        )
+        self.assertEqual(reserved.returncode, 0, reserved.stderr)
+        report = json.loads(reserved.stdout)
+        self.assertEqual(report["obligation_origin"], "transferred")
+        self.assertEqual(report["live_acceptance_digest"], self.live_digest)
+        refused = self.run_verifier("require", "--plan", self.PROMOTED)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("reserves the demonstration", refused.stderr)
+
+
 class MemberRetentionBindingTests(unittest.TestCase):
     """Retention is the exact accepted bytes, not a pathname that still differs.
 

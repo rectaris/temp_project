@@ -3,7 +3,17 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=${TMPDIR:-/tmp}/project-agent-workflow-root-plan-$$
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+# The required-evidence record is private and keyed by repository identity, so
+# it lives outside every worktree. The fixture origin keeps it away from any
+# real plan record, and this run removes exactly the paths it created.
+private_records=""
+cleanup() {
+  rm -rf "$tmp"
+  for record in $private_records; do
+    rm -f "$record"
+  done
+}
+trap cleanup EXIT HUP INT TERM
 
 mkdir -p "$tmp/scripts" "$tmp/docs/plan/active" "$tmp/docs/plan/checked"
 cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" \
@@ -268,6 +278,8 @@ status: $3
 plan_purpose: implementation
 primary_invariant: invariant $2
 execution_group: docs/plan/execution-groups/lifecycle.json
+acceptance:
+  - two operator-started sessions publish and retire the $2 result
 write_scope:
   - src/$2.py
 context_files:
@@ -387,8 +399,11 @@ grep -q '^status: in_progress$' "$grouped/docs/plan/active/285-beta.md"
 mv "$tmp/adapter-away.py" "$grouped/scripts/run-parallel-plans.py"
 
 # Bind the live-evidence contract after the enrollment assertions and rebuild
-# the grouped state so the later lifecycle checks use a real gated member.
-live_acceptance_digest="sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411"
+# the grouped state so the later lifecycle checks use a real gated member. The
+# contract names one exact acceptance item the plan already carries, because the
+# obligation is that item and not a manifest keyword.
+live_acceptance_item="two operator-started sessions publish and retire the beta result"
+live_acceptance_digest="sha256:$(printf '%s' "$live_acceptance_item" | sha256sum | cut -d' ' -f1)"
 sed -i \
   "/^execution_group:/i live_evidence_contract: parallel_sessions_v1\nlive_evidence_acceptance_sha256: $live_acceptance_digest" \
   "$grouped/docs/plan/active/285-beta.md"
@@ -415,8 +430,30 @@ grouped_head=$(git -C "$grouped" rev-parse HEAD)
   --group-description docs/plan/execution-groups/lifecycle.json \
   --target-ref refs/heads/main --start-commit "$grouped_head" >/dev/null)
 
+# The gate reads one canonical private record outside every worktree, so a
+# gated plan with no record refuses instead of passing by default.
+beta_record=$(cd "$grouped" && python3 - <<'PY'
+import importlib.util
+from pathlib import Path
+
+script = Path("scripts/verify-parallel-plan-sessions.py")
+spec = importlib.util.spec_from_file_location("live_verifier", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.requirement_path(Path.cwd(), "docs/plan/active/285-beta.md"))
+PY
+)
+private_records="$private_records $beta_record"
+rm -f "$beta_record"
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py require \
+    --plan docs/plan/active/285-beta.md >/dev/null 2>"$tmp/live-record-missing.err"); then
+  echo "live verifier passed a gated plan with no required-evidence record" >&2
+  exit 1
+fi
+grep -q 'required-evidence record is missing' "$tmp/live-record-missing.err"
+
 # A private verifier for the live parallel-session proof fails closed without a
-# required-evidence record and matching report digest.
+# matching report digest.
 required_record="$tmp/required-evidence.json"
 cat >"$required_record" <<EOF
 {
@@ -477,7 +514,162 @@ else
   echo "live verifier rejected matching required evidence and report" >&2
   exit 1
 fi
-fixed_required_record=$(cd "$grouped" && python3 - <<'PY'
+
+# The canonical record is written in the schema the gate verifies, and binding
+# the verified report is what discharges the obligation.
+(cd "$grouped" && python3 - "$beta_record" "$actual_report_digest" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+script = Path("scripts/verify-parallel-plan-sessions.py")
+spec = importlib.util.spec_from_file_location("live_verifier", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+plan = "docs/plan/active/285-beta.md"
+contract = module.plan_contract(Path.cwd(), plan)
+record = {
+    "schema_version": module.REQUIREMENT_SCHEMA_VERSION,
+    "record_type": module.REQUIREMENT_RECORD_TYPE,
+    "repository_identity": module.repository_identity(Path.cwd()),
+    "plan_path": plan,
+    "plan_digest": contract["plan_digest"],
+    "execution_plan_digest": contract["plan_digest"],
+    "live_evidence_contract": contract["contract"],
+    "live_acceptance_digest": contract["live_acceptance_digest"],
+    "execution_genesis_digest": "sha256:" + "1" * 64,
+    "run_id": "lifecycle-fixture-run",
+    "reserved_group_id": "lifecycle",
+    "state": "reserved",
+    "group_description_digest": "",
+    "report_path": "",
+    "report_digest": "",
+    "record_digest": "",
+}
+record["record_digest"] = module.self_digest(record)
+module.write_private_json(Path(sys.argv[1]), record)
+PY
+)
+
+# A reserved record is never success, and the serial completion entrypoint must
+# reach that same conclusion.
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py require \
+    --plan docs/plan/active/285-beta.md >/dev/null 2>"$tmp/live-reserved.err"); then
+  echo "live verifier passed a reserved required-evidence record" >&2
+  exit 1
+fi
+grep -q 'reserves the demonstration' "$tmp/live-reserved.err"
+
+# Removing the contract fields is not a way out: the obligation lives in the
+# private record, so the gate refuses the edited plan instead of releasing it.
+cp "$grouped/docs/plan/active/285-beta.md" "$tmp/beta-with-contract.md"
+sed -i '/^live_evidence_/d' "$grouped/docs/plan/active/285-beta.md"
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py require \
+    --plan docs/plan/active/285-beta.md >/dev/null 2>"$tmp/live-dropped.err"); then
+  echo "live verifier released an obligation after the contract fields were removed" >&2
+  exit 1
+fi
+grep -q 'no longer declares' "$tmp/live-dropped.err"
+cp "$tmp/beta-with-contract.md" "$grouped/docs/plan/active/285-beta.md"
+
+# Binding the verified report discharges the obligation, and only then does the
+# gate pass. The bound report is private evidence, so it carries private mode.
+chmod 600 "$tmp/live-report.json"
+(cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py bind \
+  --plan docs/plan/active/285-beta.md --report "$tmp/live-report.json" >/dev/null)
+(cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py require \
+  --plan docs/plan/active/285-beta.md >"$tmp/live-satisfied.json")
+grep -q '"satisfied": true' "$tmp/live-satisfied.json"
+
+# The report environment variable configures the non-gating report check only.
+# Pointing it at forged bytes must not change what require concludes.
+cat >"$tmp/forged-evidence.json" <<EOF
+{
+  "plan_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "live_acceptance_digest": "$live_acceptance_digest",
+  "execution_genesis": "genesis:forged",
+  "report_digest": "$actual_report_digest"
+}
+EOF
+sed -i '/^live_evidence_/d' "$grouped/docs/plan/active/285-beta.md"
+if (cd "$grouped" && PROJECT_AGENT_WORKFLOW_REQUIRED_EVIDENCE="$tmp/forged-evidence.json" \
+    python3 scripts/verify-parallel-plan-sessions.py require \
+    --plan docs/plan/active/285-beta.md >/dev/null 2>"$tmp/live-env.err"); then
+  echo "live verifier let the report environment variable waive the gate" >&2
+  exit 1
+fi
+grep -q 'no longer declares' "$tmp/live-env.err"
+cp "$tmp/beta-with-contract.md" "$grouped/docs/plan/active/285-beta.md"
+
+fixed_required_record="$beta_record"
+
+# An owner-authorized acceptance partition moves the live-evidence obligation to
+# the plan that now carries the exact item. The source gate is released, the
+# destination gate is not, and no lifecycle entrypoint can waive either. This
+# fixture is a separate repository with its own parent-direct execution ledger,
+# so it never reaches the evidence or ledger of a real plan.
+transfer="$tmp/transfer"
+transfer_state="$tmp/transfer-state"
+mkdir -p "$transfer/scripts" "$transfer/docs/plan/active" "$transfer/docs/plan/backlog" \
+  "$transfer_state"
+cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" \
+  "$root/scripts/parallel-plan-state.py" "$root/scripts/plan-execution-state.py" \
+  "$root/scripts/verify-parallel-plan-sessions.py" "$transfer/scripts/"
+git -C "$transfer" init -q -b main
+git -C "$transfer" config user.email "test@example.invalid"
+git -C "$transfer" config user.name "Test"
+git -C "$transfer" remote add origin "https://example.invalid/owner/transfer.git"
+
+transfer_item="two operator-started sessions publish and retire the partitioned result"
+transfer_digest="sha256:$(printf '%s' "$transfer_item" | sha256sum | cut -d' ' -f1)"
+cat >"$transfer/docs/plan/active/286-source.md" <<EOF
+# Partition source
+
+status: in_progress
+plan_purpose: implementation
+primary_invariant: the partitioned source invariant
+live_evidence_contract: parallel_sessions_v1
+live_evidence_acceptance_sha256: $transfer_digest
+acceptance:
+  - the retained acceptance item
+  - $transfer_item
+write_scope:
+  - AGENTS.md
+checked_summary_ja: 分離元計画を完了する。
+
+## Tasks
+
+-  [x] finished
+
+## Validation Notes
+
+1. Fixture validation.
+EOF
+cat >"$transfer/docs/plan/backlog/287-destination.md" <<EOF
+# Partition destination
+
+status: backlog
+plan_purpose: implementation
+primary_invariant: the partitioned destination invariant
+acceptance:
+  - $transfer_item
+write_scope:
+  - AGENTS.md
+checked_summary_ja: 分離先計画を完了する。
+
+## Tasks
+
+-  [ ] unfinished
+
+## Validation Notes
+
+1. Pending validation.
+EOF
+printf 'fixture\n' >"$transfer/AGENTS.md"
+git -C "$transfer" add -A
+git -C "$transfer" commit -qm "partition baseline"
+
+source_record=$(cd "$transfer" && python3 - <<'PY'
 import importlib.util
 from pathlib import Path
 
@@ -485,11 +677,249 @@ script = Path("scripts/verify-parallel-plan-sessions.py")
 spec = importlib.util.spec_from_file_location("live_verifier", script)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-print(module.requirement_path(Path.cwd(), "docs/plan/active/285-beta.md"))
+print(module.requirement_path(Path.cwd(), "docs/plan/active/286-source.md"))
 PY
 )
-mkdir -p "$(dirname "$fixed_required_record")"
-cp "$required_record" "$fixed_required_record"
+private_records="$private_records $source_record"
+
+# Drive one real parent-direct ledger to a checked acceptance partition, then
+# publish the owner-authorized transfer through the verifier itself.
+(cd "$transfer" && python3 - "$transfer_state" <<'PY'
+import hashlib
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+state = Path(sys.argv[1])
+ledger = state / "execution.json"
+lifecycle = state / "lifecycle.json"
+plan = "docs/plan/active/286-source.md"
+destination = "docs/plan/backlog/287-destination.md"
+
+
+def digest_text(value):
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def load(name, script):
+    specification = importlib.util.spec_from_file_location(name, Path(script))
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def run(*arguments):
+    completed = subprocess.run(
+        [sys.executable, "scripts/plan-execution-state.py", *arguments],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        raise SystemExit(f"ledger command failed: {completed.stderr.strip()}")
+    return completed
+
+
+head = subprocess.run(
+    ["git", "rev-parse", "HEAD"], check=True, text=True, capture_output=True
+).stdout.strip()
+run(
+    "prepare-parent-direct", str(ledger),
+    "--run-id", "partition-run-001",
+    "--plan", plan,
+    "--source-head", head,
+    "--lifecycle-state", str(lifecycle),
+    "--reviewer-registry", str(state / "reviewers.json"),
+    "--continuation-registry", str(state / "continuation.json"),
+)
+Path("AGENTS.md").write_text("fixture\nreviewed\n", encoding="utf-8")
+execution = load("partition_state", "scripts/plan-execution-state.py")
+recorded = json.loads(ledger.read_text(encoding="utf-8"))
+identity = execution.parent_direct_review_identity(recorded)[1]
+invariant = digest_text("the partitioned source invariant")
+run(
+    "record", str(ledger),
+    "--run-id", "partition-run-001",
+    "--event-id", "partition-review-001",
+    "--event-type", "parent_review",
+    "--implementation-mode", "parent_direct",
+    "--invariant-digest", invariant,
+    "--finding-severity", "High",
+    "--independent-review-receipt-digest", digest_text("partition review receipt"),
+    "--lifecycle-state", str(lifecycle),
+    "--candidate-lifecycle-digest", identity,
+)
+recorded = json.loads(ledger.read_text(encoding="utf-8"))
+verifier = load("partition_verifier", "scripts/verify-parallel-plan-sessions.py")
+committed = subprocess.run(
+    ["git", "show", f"{head}:{plan}"], check=True, capture_output=True
+).stdout
+manifest = verifier.plan_manifest(committed.decode("utf-8"))
+digests = [digest_text(item) for item in manifest["acceptance"]]
+live = manifest["live_evidence_acceptance_sha256"]
+evidence = state / "descope-evidence.json"
+evidence.write_text(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "plan_path": plan,
+            "plan_digest": "sha256:" + hashlib.sha256(committed).hexdigest(),
+            "source_head": head,
+            "primary_invariant_digest": recorded["primary_invariant_digest"],
+            "affected_invariant_digests": [invariant],
+            "candidate_lifecycle_identity_digest": recorded[
+                "candidate_lifecycle_identity_digest"
+            ],
+            "candidate_lifecycle_digest": identity,
+            "independent_review_receipt_digest": digest_text(
+                "partition descope receipt"
+            ),
+            "source_acceptance_digests": digests,
+            "retained_acceptance_digests": [d for d in digests if d != live],
+            "deferred_acceptance_digests": [live],
+            "deferred_backlog_path": destination,
+            "bounded_write_scope": True,
+            "source_scope_unchanged": True,
+            "validation_authority_unchanged": True,
+            "invariant_boundaries_unchanged": True,
+            "primary_invariant_unchanged": True,
+            "safety_conditions_unchanged": True,
+            "external_effect_authority_unchanged": True,
+            "independent_invariant_count": 1,
+        },
+        sort_keys=True,
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+run(
+    "record", str(ledger),
+    "--run-id", "partition-run-001",
+    "--event-id", "partition-descope-001",
+    "--event-type", "descope_classification",
+    "--implementation-mode", "parent_direct",
+    "--invariant-digest", invariant,
+    "--independent-review-receipt-digest", digest_text("partition descope receipt"),
+    "--descope-evidence-file", str(evidence),
+    "--lifecycle-state", str(lifecycle),
+    "--candidate-lifecycle-digest", identity,
+)
+Path("AGENTS.md").write_text("fixture\n", encoding="utf-8")
+
+reserved = subprocess.run(
+    [
+        sys.executable, "scripts/verify-parallel-plan-sessions.py", "init",
+        "--plan", plan, "--execution-state", str(ledger), "--group-id", "partition",
+    ],
+    check=True, text=True, capture_output=True,
+)
+record = json.loads(
+    Path(verifier.requirement_path(Path.cwd(), plan)).read_text(encoding="utf-8")
+)
+authorization = {
+    "schema_version": verifier.TRANSFER_SCHEMA_VERSION,
+    "record_type": verifier.AUTHORIZATION_RECORD_TYPE,
+    "repository_identity": record["repository_identity"],
+    "source_plan_path": plan,
+    "source_plan_digest": verifier.digest_bytes(Path(plan).read_bytes()),
+    "destination_plan_path": destination,
+    "destination_plan_digest": verifier.digest_bytes(Path(destination).read_bytes()),
+    "live_acceptance_digest": record["live_acceptance_digest"],
+    "source_record_digest": record["record_digest"],
+    "execution_genesis_digest": record["execution_genesis_digest"],
+    "run_id": record["run_id"],
+    "authorization": (
+        "Move the live-evidence obligation of the source plan to the deferred "
+        "destination plan and keep the stopped record unchanged."
+    ),
+    "record_digest": "",
+}
+authorization["record_digest"] = verifier.self_digest(authorization)
+authorization_path = state / "authorization.json"
+authorization_path.write_text(
+    json.dumps(authorization, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+)
+authorization_path.chmod(0o600)
+published = subprocess.run(
+    [
+        sys.executable, "scripts/verify-parallel-plan-sessions.py", "transfer",
+        "--source-plan", plan, "--destination-plan", destination,
+        "--execution-state", str(ledger),
+        "--owner-authorization", str(authorization_path),
+    ],
+    check=True, text=True, capture_output=True,
+)
+(state / "transfer-record-path").write_text(
+    json.loads(published.stdout)["record_path"] + "\n", encoding="utf-8"
+)
+PY
+)
+private_records="$private_records $(cat "$transfer_state/transfer-record-path")"
+
+# The verified transfer releases the source gate and nothing else.
+(cd "$transfer" && python3 scripts/verify-parallel-plan-sessions.py require \
+  --plan docs/plan/active/286-source.md >"$tmp/transfer-source.json")
+grep -q '"released": true' "$tmp/transfer-source.json"
+grep -q '"satisfied": false' "$tmp/transfer-source.json"
+
+# The destination keeps the unmet obligation even though its own manifest
+# declares no contract at all.
+if (cd "$transfer" && python3 scripts/verify-parallel-plan-sessions.py require \
+    --plan docs/plan/backlog/287-destination.md >/dev/null 2>"$tmp/transfer-destination.err"); then
+  echo "live verifier passed a destination that still owes the demonstration" >&2
+  exit 1
+fi
+grep -q 'live-evidence obligation' "$tmp/transfer-destination.err"
+
+# The ordinary backlog to active promotion must not drop the obligation.
+git -C "$transfer" mv docs/plan/backlog/287-destination.md \
+  docs/plan/active/287-destination.md
+promoted_record=$(cd "$transfer" && python3 - <<'PY'
+import importlib.util
+from pathlib import Path
+
+script = Path("scripts/verify-parallel-plan-sessions.py")
+spec = importlib.util.spec_from_file_location("live_verifier", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.requirement_path(Path.cwd(), "docs/plan/active/287-destination.md"))
+PY
+)
+private_records="$private_records $promoted_record"
+(cd "$transfer" && python3 scripts/verify-parallel-plan-sessions.py require \
+  --plan docs/plan/active/286-source.md >"$tmp/transfer-promoted.json")
+grep -q '"destination_plan_path": "docs/plan/active/287-destination.md"' \
+  "$tmp/transfer-promoted.json"
+if (cd "$transfer" && python3 scripts/verify-parallel-plan-sessions.py require \
+    --plan docs/plan/active/287-destination.md >/dev/null 2>/dev/null); then
+  echo "live verifier passed a promoted destination that still owes the demonstration" >&2
+  exit 1
+fi
+
+# Every lifecycle entrypoint reaches the same conclusion: the destination stays
+# shut, and no manifest edit or report environment variable reopens it.
+for entrypoint in complete-plan.sh finalize-active-plan.sh; do
+  if (cd "$transfer" && PROJECT_AGENT_WORKFLOW_REQUIRED_EVIDENCE="$tmp/forged-evidence.json" \
+      "scripts/$entrypoint" docs/plan/active/287-destination.md \
+      >/dev/null 2>"$tmp/transfer-$entrypoint.err"); then
+    echo "root $entrypoint completed a destination that still owes the demonstration" >&2
+    exit 1
+  fi
+done
+
+# Gutting the destination is not a discharge either: the source release depends
+# on the destination still carrying the exact transferred item.
+sed -i "s|  - $transfer_item|  - an unrelated acceptance item|" \
+  "$transfer/docs/plan/active/287-destination.md"
+if (cd "$transfer" && python3 scripts/verify-parallel-plan-sessions.py require \
+    --plan docs/plan/active/286-source.md >/dev/null 2>"$tmp/transfer-gutted.err"); then
+  echo "live verifier released a source whose destination dropped the item" >&2
+  exit 1
+fi
+grep -q 'would be lost' "$tmp/transfer-gutted.err"
 
 # After the parent publishes that member's verified result, the same serial
 # entrypoints complete and archive it, while its unpublished partner stays shut.

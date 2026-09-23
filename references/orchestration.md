@@ -23,6 +23,7 @@ The main agent owns interpretation, final integration, validation acceptance, pl
 
 - Do not delegate short deterministic commands, direct user clarification, final interpretation, final validation acceptance, commit/release decisions, or final report generation.
 - Do not delegate work involving external writes, secrets, secret handling, destructive operations, authorization decisions, or final high-risk policy or architectural judgment.
+- Do not delegate the live-evidence obligation transfer. Reserving, binding, releasing or moving a required-evidence obligation is a parent-owned effect on private evidence outside the repository, and its owner authorization is an authorization decision. A helper may read a plan or report and describe what it finds; it never publishes a transfer, and its output stays advisory until the main session verifies it.
 - The main session must reconcile findings and decide what is accepted before planning updates and commits.
 - Final report transparency is mandatory: state whether helpers were used, and when used, each helper's role and write scope plus the main-session acceptance rationale.
 
