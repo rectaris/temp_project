@@ -7463,6 +7463,157 @@ def load_module(name: str, path: Path):
     return module
 
 
+class LiveMemberEvidenceTests(unittest.TestCase):
+    """A live report must be re-derivable from the repository it claims to describe.
+
+    The earlier verifier rewrite left these member fields self-consistent but
+    bound to no Git history, so a report could assert retention, serialized
+    publication and retirement that never happened. Each case below is a fact
+    the report cannot fabricate: the repository is asked directly.
+    """
+
+    def setUp(self) -> None:
+        self.verifier = load_module("live_member_evidence_verifier", VERIFIER_SCRIPT)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.repo = Path(directory.name) / "project"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.email", "test@example.invalid")
+        git(self.repo, "config", "user.name", "Test")
+        (self.repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "seed")
+        self.base = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        self.first = self.publish("alpha.txt", "alpha\n", "member alpha")
+        self.second = self.publish("beta.txt", "beta\n", "member beta")
+        self.final_tip = self.second["commit"]
+
+    def publish(self, path: str, content: str, message: str) -> dict[str, str]:
+        (self.repo / path).write_text(content, encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", message)
+        return {
+            "commit": git(self.repo, "rev-parse", "HEAD").stdout.strip(),
+            "tree": git(self.repo, "rev-parse", "HEAD^{tree}").stdout.strip(),
+            "path": path,
+        }
+
+    def patch_digest(self, base: str, tree: str) -> str:
+        patch = subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.abbrev=40",
+                "diff",
+                "--binary",
+                "--full-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                base,
+                tree,
+            ],
+            cwd=self.repo,
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+        return "sha256:" + hashlib.sha256(patch).hexdigest()
+
+    def report(self) -> dict[str, object]:
+        return {
+            "final_tip": self.final_tip,
+            "publication_order": [
+                "docs/plan/active/900-alpha.md",
+                "docs/plan/active/901-beta.md",
+            ],
+            "members": [
+                {
+                    "plan_path": "docs/plan/active/900-alpha.md",
+                    "worktree_path": str(self.repo.parent / "retired-alpha"),
+                    "branch_ref": "refs/heads/task/alpha",
+                    "base_commit": self.base,
+                    "task_tip": self.first["commit"],
+                    "published_commit": self.first["commit"],
+                    "result_tree": self.first["tree"],
+                    "changed_paths": [self.first["path"]],
+                    "patch_digest": self.patch_digest(self.base, self.first["tree"]),
+                },
+                {
+                    "plan_path": "docs/plan/active/901-beta.md",
+                    "worktree_path": str(self.repo.parent / "retired-beta"),
+                    "branch_ref": "refs/heads/task/beta",
+                    "base_commit": self.first["commit"],
+                    "task_tip": self.second["commit"],
+                    "published_commit": self.second["commit"],
+                    "result_tree": self.second["tree"],
+                    "changed_paths": [self.second["path"]],
+                    "patch_digest": self.patch_digest(
+                        self.first["commit"], self.second["tree"]
+                    ),
+                },
+            ],
+        }
+
+    def refusal(self, report: dict[str, object]) -> str:
+        with self.assertRaises(self.verifier.EvidenceError) as caught:
+            self.verifier.verify_member_evidence(report, self.repo)
+        return str(caught.exception)
+
+    def test_a_faithful_report_is_accepted(self) -> None:
+        self.verifier.verify_member_evidence(self.report(), self.repo)
+
+    def test_omitting_members_does_not_skip_the_obligation(self) -> None:
+        report = self.report()
+        del report["members"]
+        self.assertIn("exactly both member sessions", self.refusal(report))
+
+    def test_overwritten_member_work_is_refused(self) -> None:
+        report = self.report()
+        (self.repo / self.first["path"]).write_text("overwritten\n", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "overwrite alpha")
+        self.final_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        report["final_tip"] = self.final_tip
+        self.assertIn("overwritten", self.refusal(report))
+
+    def test_unserialized_publication_is_refused(self) -> None:
+        report = self.report()
+        report["publication_order"] = list(reversed(report["publication_order"]))
+        self.assertIn("publication was not serialized", self.refusal(report))
+
+    def test_a_surviving_member_branch_is_refused(self) -> None:
+        git(self.repo, "branch", "task/alpha", self.first["commit"])
+        self.assertIn("was not retired", self.refusal(self.report()))
+
+    def test_a_surviving_member_worktree_is_refused(self) -> None:
+        report = self.report()
+        path = Path(str(report["members"][0]["worktree_path"]))
+        path.mkdir()
+        self.assertIn("still exists on disk", self.refusal(report))
+
+    def test_discarded_member_work_is_refused(self) -> None:
+        report = self.report()
+        report["members"][0]["task_tip"] = git(
+            self.repo, "commit-tree", self.base + "^{tree}", "-m", "orphan"
+        ).stdout.strip()
+        self.assertIn("unaccounted member work", self.refusal(report))
+
+    def test_an_unpublished_final_tip_is_refused(self) -> None:
+        report = self.report()
+        report["final_tip"] = git(
+            self.repo,
+            "commit-tree",
+            self.second["tree"],
+            "-p",
+            self.second["commit"],
+            "-m",
+            "dangling",
+        ).stdout.strip()
+        self.assertIn("never published", self.refusal(report))
+
+
 class LiveEvidenceObligationTransferTests(unittest.TestCase):
     """An authorized acceptance partition moves the obligation, never drops it.
 

@@ -471,6 +471,102 @@ if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py \
 fi
 grep -q 'live report does not exist' "$tmp/live-report-missing.err"
 
+# The live report is checked against real Git history, so the fixture publishes
+# two member results into the generated project and retires both member tasks.
+python3 - "$grouped" "$tmp" <<'PY'
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+index = str(repo / ".git" / "live-fixture-index")
+
+
+def git(*args: str, stdin: str | None = None, index_file: bool = False) -> bytes:
+    env = dict(os.environ)
+    if index_file:
+        env["GIT_INDEX_FILE"] = index
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        input=stdin.encode() if stdin is not None else None,
+        env=env,
+    ).stdout
+
+
+def publish(parent: str, path: str, content: str, message: str) -> tuple[str, str]:
+    blob = git("hash-object", "-w", "--stdin", stdin=content).decode().strip()
+    git("read-tree", f"{parent}^{{tree}}", index_file=True)
+    git(
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"100644,{blob},{path}",
+        index_file=True,
+    )
+    tree = git("write-tree", index_file=True).decode().strip()
+    commit = git("commit-tree", tree, "-p", parent, "-m", message).decode().strip()
+    return commit, tree
+
+
+def patch_digest(base: str, tree: str) -> str:
+    patch = git(
+        "-c",
+        "core.abbrev=40",
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-color",
+        "--no-ext-diff",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        base,
+        tree,
+    )
+    return "sha256:" + hashlib.sha256(patch).hexdigest()
+
+
+base = git("rev-parse", "HEAD").decode().strip()
+first_commit, first_tree = publish(base, "live-member-alpha.txt", "alpha\n", "member alpha")
+second_commit, second_tree = publish(
+    first_commit, "live-member-beta.txt", "beta\n", "member beta"
+)
+members = [
+    {
+        "plan_path": "docs/plan/active/900-live-alpha.md",
+        "worktree_path": str(repo.parent / "retired-live-alpha"),
+        "branch_ref": "refs/heads/task/live-alpha",
+        "base_commit": base,
+        "task_tip": first_commit,
+        "published_commit": first_commit,
+        "result_tree": first_tree,
+        "changed_paths": ["live-member-alpha.txt"],
+        "patch_digest": patch_digest(base, first_tree),
+    },
+    {
+        "plan_path": "docs/plan/active/901-live-beta.md",
+        "worktree_path": str(repo.parent / "retired-live-beta"),
+        "branch_ref": "refs/heads/task/live-beta",
+        "base_commit": first_commit,
+        "task_tip": second_commit,
+        "published_commit": second_commit,
+        "result_tree": second_tree,
+        "changed_paths": ["live-member-beta.txt"],
+        "patch_digest": patch_digest(first_commit, second_tree),
+    },
+]
+git("update-ref", "refs/heads/live-publication", second_commit)
+out = Path(sys.argv[2])
+(out / "live-final-tip.txt").write_text(second_commit + "\n")
+(out / "live-members.json").write_text(json.dumps(members, indent=2) + "\n")
+PY
+live_final_tip=$(cat "$tmp/live-final-tip.txt")
+live_members=$(cat "$tmp/live-members.json")
+
 cat >"$tmp/live-report.json" <<EOF
 {
   "plan_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -479,7 +575,13 @@ cat >"$tmp/live-report.json" <<EOF
   "implementation_intervals": [
     {"start": "2026-09-16T00:00:00Z", "end": "2026-09-16T00:10:00Z"},
     {"start": "2026-09-16T00:05:00Z", "end": "2026-09-16T00:20:00Z"}
-  ]
+  ],
+  "final_tip": "$live_final_tip",
+  "publication_order": [
+    "docs/plan/active/900-live-alpha.md",
+    "docs/plan/active/901-live-beta.md"
+  ],
+  "members": $live_members
 }
 EOF
 if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py \

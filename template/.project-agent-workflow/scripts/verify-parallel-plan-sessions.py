@@ -146,6 +146,27 @@ def git_bytes(repo: Path, *args: str) -> bytes:
     return proc.stdout
 
 
+def git_run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ("git", "-C", str(repo), *args),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def git_text(repo: Path, *args: str) -> str:
+    completed = git_run(repo, *args)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise EvidenceError(f"git {' '.join(args)} failed: {detail}")
+    return completed.stdout.strip()
+
+
+def git_succeeds(repo: Path, *args: str) -> bool:
+    return git_run(repo, *args).returncode == 0
+
+
 def self_digest(value: dict[str, Any]) -> str:
     """Digest every field of a record except the field that carries it."""
 
@@ -578,7 +599,7 @@ def require_record(
         raise ValueError("required-evidence record must declare execution_genesis")
 
 
-def validate_report(report: dict[str, Any], plan_path: Path) -> None:
+def validate_report(report: dict[str, Any], plan_path: Path, repo: Path) -> None:
     text = plan_path.read_text(encoding="utf-8")
     live_acceptance = re.search(r"^live_evidence_acceptance_sha256:\s*(sha256:[0-9a-fA-F]{64})", text, flags=re.MULTILINE)
     if live_acceptance is None:
@@ -618,6 +639,129 @@ def validate_report(report: dict[str, Any], plan_path: Path) -> None:
                 break
         if len(parsed) >= 2 and not overlaps:
             raise ValueError("report implementation intervals do not overlap")
+    verify_member_evidence(report, repo)
+
+
+MEMBER_COUNT = 2
+
+MEMBER_EVIDENCE_KEYS = (
+    "plan_path",
+    "worktree_path",
+    "branch_ref",
+    "base_commit",
+    "task_tip",
+    "published_commit",
+    "result_tree",
+    "changed_paths",
+    "patch_digest",
+)
+
+
+def shaped_members(report: dict[str, Any]) -> list[dict[str, Any]]:
+    members = report.get("members")
+    if not isinstance(members, list) or len(members) != MEMBER_COUNT:
+        raise EvidenceError(
+            "a live report must describe exactly both member sessions; "
+            "an omitted member is not an absent obligation"
+        )
+    shaped: list[dict[str, Any]] = []
+    for member in members:
+        if not isinstance(member, dict):
+            raise EvidenceError("each live report member must be a JSON object")
+        missing = [key for key in MEMBER_EVIDENCE_KEYS if key not in member]
+        if missing:
+            raise EvidenceError(
+                f"a live report member omits required evidence fields: {', '.join(missing)}"
+            )
+        shaped.append(member)
+    for field in ("plan_path", "worktree_path", "branch_ref", "task_tip"):
+        values = [str(member[field]) for member in shaped]
+        if len(set(values)) != MEMBER_COUNT:
+            raise EvidenceError(f"both members share one {field}; sessions are not distinct")
+    return shaped
+
+
+def verify_publication_order(
+    repo: Path, report: dict[str, Any], members: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    order = report.get("publication_order")
+    if not isinstance(order, list) or len(order) != MEMBER_COUNT:
+        raise EvidenceError("publication_order must list exactly both member plans")
+    by_plan = {str(member["plan_path"]): member for member in members}
+    if sorted(str(item) for item in order) != sorted(by_plan):
+        raise EvidenceError("publication_order must name exactly the reported members")
+    ordered = [by_plan[str(plan)] for plan in order]
+    first, second = ordered
+    if first["published_commit"] == second["published_commit"]:
+        raise EvidenceError("both members claim the same published commit")
+    if not git_succeeds(
+        repo,
+        "merge-base",
+        "--is-ancestor",
+        str(first["published_commit"]),
+        str(second["published_commit"]),
+    ):
+        raise EvidenceError(
+            "the first published member must be an ancestor of the second; "
+            "publication was not serialized"
+        )
+    return ordered
+
+
+def verify_retirement(repo: Path, member: dict[str, Any], final_tip: str) -> None:
+    if git_succeeds(repo, "show-ref", "--verify", "--quiet", str(member["branch_ref"])):
+        raise EvidenceError(
+            f"member branch {member['branch_ref']} still exists; the task was not retired"
+        )
+    registered = git_text(repo, "worktree", "list", "--porcelain")
+    for line in registered.splitlines():
+        if line.startswith("worktree ") and line[len("worktree ") :] == str(
+            member["worktree_path"]
+        ):
+            raise EvidenceError(
+                f"member worktree {member['worktree_path']} is still registered"
+            )
+    if Path(str(member["worktree_path"])).exists():
+        raise EvidenceError(
+            f"member worktree {member['worktree_path']} still exists on disk"
+        )
+    if not git_succeeds(
+        repo, "merge-base", "--is-ancestor", str(member["task_tip"]), final_tip
+    ):
+        raise EvidenceError(
+            "a retired member task tip must be contained in the published history; "
+            "unaccounted member work was discarded"
+        )
+
+
+def verify_member_evidence(report: dict[str, Any], repo: Path) -> None:
+    """Re-derive retention, publication order and retirement from Git.
+
+    These checks were lost when the verifier was rewritten, which left the
+    reported member digests self-consistent but unbound to any real history.
+    They run for every report, so omitting a field cannot skip them.
+    """
+
+    final_tip = require_commit(report.get("final_tip"), "final_tip")
+    if not git_succeeds(repo, "cat-file", "-e", f"{final_tip}^{{commit}}"):
+        raise EvidenceError("final_tip names no commit of this repository")
+    containing = git_text(repo, "for-each-ref", "--contains", final_tip, "--format=%(refname)")
+    if not containing.strip():
+        raise EvidenceError(
+            "final_tip is reachable from no ref; the assembled result was never published"
+        )
+    members = shaped_members(report)
+    verify_publication_order(repo, report, members)
+    for member in members:
+        published = str(member["published_commit"])
+        if not git_succeeds(repo, "cat-file", "-e", f"{published}^{{commit}}"):
+            raise EvidenceError("a member published commit is absent from the project")
+        if not git_succeeds(repo, "merge-base", "--is-ancestor", published, final_tip):
+            raise EvidenceError(
+                "a member published commit is not contained in the target ref"
+            )
+        verify_changes_retained(repo, member, final_tip)
+        verify_retirement(repo, member, final_tip)
 
 
 def verify_changes_retained(repo: Path, member: dict[str, Any], final_tip: str) -> None:
@@ -958,7 +1102,7 @@ def verify_bound_report(repo: Path, record: dict[str, Any]) -> str:
         raise EvidenceError(f"bound live report is not valid JSON: {error}") from error
     if not isinstance(report, dict):
         raise EvidenceError("bound live report must be a JSON object")
-    validate_report(report, repo / record["plan_path"])
+    validate_report(report, repo / record["plan_path"], repo)
     return record["report_digest"]
 
 
@@ -1069,7 +1213,7 @@ def command_bind(args: argparse.Namespace) -> dict[str, Any]:
     report = json.loads(data.decode("utf-8"))
     if not isinstance(report, dict):
         raise EvidenceError("live report must be a JSON object")
-    validate_report(report, repo / plan)
+    validate_report(report, repo / plan, repo)
     updated = dict(record)
     updated["state"] = "bound"
     updated["group_description_digest"] = str(report.get("group_description_digest") or "")
@@ -1539,7 +1683,7 @@ def main(argv: list[str] | None = None) -> int:
         report = load_json(report_path)
         if not isinstance(report, dict):
             raise ValueError(f"live session report must contain a JSON object: {report_path}")
-        validate_report(report, plan_path)
+        validate_report(report, plan_path, repo)
         print(f"parallel live-session verification passed for {plan_path}")
         return 0
     except (ValueError, EvidenceError) as exc:
