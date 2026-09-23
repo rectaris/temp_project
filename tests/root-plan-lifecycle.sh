@@ -254,7 +254,7 @@ grouped="$tmp/grouped"
 mkdir -p "$grouped/scripts" "$grouped/docs/plan/active" "$grouped/docs/plan/execution-groups"
 cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" \
   "$root/scripts/parallel-plan-state.py" "$root/scripts/run-parallel-plans.py" \
-  "$grouped/scripts/"
+  "$root/scripts/verify-parallel-plan-sessions.py" "$grouped/scripts/"
 git -C "$grouped" init -q -b main
 git -C "$grouped" config user.email "test@example.invalid"
 git -C "$grouped" config user.name "Test"
@@ -385,6 +385,111 @@ fi
 grep -q 'grouped execution adapter' "$tmp/grouped-no-adapter.err"
 grep -q '^status: in_progress$' "$grouped/docs/plan/active/285-beta.md"
 mv "$tmp/adapter-away.py" "$grouped/scripts/run-parallel-plans.py"
+
+# Bind the live-evidence contract after the enrollment assertions and rebuild
+# the grouped state so the later lifecycle checks use a real gated member.
+live_acceptance_digest="sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411"
+sed -i \
+  "/^execution_group:/i live_evidence_contract: parallel_sessions_v1\nlive_evidence_acceptance_sha256: $live_acceptance_digest" \
+  "$grouped/docs/plan/active/285-beta.md"
+python3 - "$grouped" <<'GROUP_LIVE_BINDING_EOF'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+fixture = Path(sys.argv[1])
+description_path = fixture / "docs/plan/execution-groups/lifecycle.json"
+description = json.loads(description_path.read_text(encoding="utf-8"))
+plan = fixture / "docs/plan/active/285-beta.md"
+for member in description["members"]:
+    if member["plan_path"] == "docs/plan/active/285-beta.md":
+        member["plan_digest"] = "sha256:" + hashlib.sha256(plan.read_bytes()).hexdigest()
+description_path.write_text(json.dumps(description, indent=2) + "\n", encoding="utf-8")
+GROUP_LIVE_BINDING_EOF
+git -C "$grouped" add -A
+git -C "$grouped" commit -qm "bind live evidence fixture"
+rm "$group_state"
+grouped_head=$(git -C "$grouped" rev-parse HEAD)
+(cd "$grouped" && python3 scripts/parallel-plan-state.py group-init "$group_state" \
+  --group-description docs/plan/execution-groups/lifecycle.json \
+  --target-ref refs/heads/main --start-commit "$grouped_head" >/dev/null)
+
+# A private verifier for the live parallel-session proof fails closed without a
+# required-evidence record and matching report digest.
+required_record="$tmp/required-evidence.json"
+cat >"$required_record" <<EOF
+{
+  "plan_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "live_acceptance_digest": "$live_acceptance_digest",
+  "execution_genesis": "genesis:fixture",
+  "report_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+EOF
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py \
+    --plan docs/plan/active/285-beta.md --report "$tmp/live-report.json" \
+    --required-evidence "$required_record" >/dev/null 2>"$tmp/live-report-missing.err"); then
+  echo "live verifier accepted a missing report" >&2
+  exit 1
+fi
+grep -q 'live report does not exist' "$tmp/live-report-missing.err"
+
+cat >"$tmp/live-report.json" <<EOF
+{
+  "plan_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "live_acceptance_digest": "$live_acceptance_digest",
+  "distinct_session_ids": ["session-a", "session-b"],
+  "implementation_intervals": [
+    {"start": "2026-09-16T00:00:00Z", "end": "2026-09-16T00:10:00Z"},
+    {"start": "2026-09-16T00:05:00Z", "end": "2026-09-16T00:20:00Z"}
+  ]
+}
+EOF
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py \
+    --plan docs/plan/active/285-beta.md --report "$tmp/live-report.json" \
+    --required-evidence "$required_record" >/dev/null 2>"$tmp/live-report-digest.err"); then
+  echo "live verifier accepted mismatched digest evidence" >&2
+  exit 1
+fi
+grep -q 'digest mismatch' "$tmp/live-report-digest.err"
+
+actual_report_digest=$(python3 - "$tmp/live-report.json" <<'PY'
+import hashlib, pathlib, sys
+print('sha256:' + hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)
+python3 - "$required_record" "$tmp/live-report.json" "$grouped/docs/plan/active/285-beta.md" <<'PY'
+import json, hashlib, pathlib, sys
+required = pathlib.Path(sys.argv[1])
+report = pathlib.Path(sys.argv[2])
+plan = pathlib.Path(sys.argv[3])
+record = json.loads(required.read_text())
+record['plan_digest'] = 'sha256:' + hashlib.sha256(plan.read_bytes()).hexdigest()
+record['execution_plan_digest'] = record['plan_digest']
+record['report_digest'] = 'sha256:' + hashlib.sha256(report.read_bytes()).hexdigest()
+required.write_text(json.dumps(record, indent=2) + '\n')
+PY
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py \
+    --plan docs/plan/active/285-beta.md --report "$tmp/live-report.json" \
+    --required-evidence "$required_record" >/dev/null); then
+  :
+else
+  echo "live verifier rejected matching required evidence and report" >&2
+  exit 1
+fi
+fixed_required_record=$(cd "$grouped" && python3 - <<'PY'
+import importlib.util
+from pathlib import Path
+
+script = Path("scripts/verify-parallel-plan-sessions.py")
+spec = importlib.util.spec_from_file_location("live_verifier", script)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.requirement_path(Path.cwd(), "docs/plan/active/285-beta.md"))
+PY
+)
+mkdir -p "$(dirname "$fixed_required_record")"
+cp "$required_record" "$fixed_required_record"
 
 # After the parent publishes that member's verified result, the same serial
 # entrypoints complete and archive it, while its unpublished partner stays shut.
