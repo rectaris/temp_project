@@ -254,7 +254,7 @@ grouped="$tmp/grouped"
 mkdir -p "$grouped/scripts" "$grouped/docs/plan/active" "$grouped/docs/plan/execution-groups"
 cp "$root/scripts/complete-plan.sh" "$root/scripts/finalize-active-plan.sh" \
   "$root/scripts/parallel-plan-state.py" "$root/scripts/run-parallel-plans.py" \
-  "$grouped/scripts/"
+  "$root/scripts/verify-parallel-plan-sessions.py" "$grouped/scripts/"
 git -C "$grouped" init -q -b main
 git -C "$grouped" config user.email "test@example.invalid"
 git -C "$grouped" config user.name "Test"
@@ -385,6 +385,67 @@ fi
 grep -q 'grouped execution adapter' "$tmp/grouped-no-adapter.err"
 grep -q '^status: in_progress$' "$grouped/docs/plan/active/285-beta.md"
 mv "$tmp/adapter-away.py" "$grouped/scripts/run-parallel-plans.py"
+
+# A private verifier for the live parallel-session proof fails closed without a
+# required-evidence record and matching report digest.
+required_record="$tmp/required-evidence.json"
+cat >"$required_record" <<'EOF'
+{
+  "plan_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "live_acceptance_digest": "sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411",
+  "execution_genesis": "genesis:fixture",
+  "report_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+EOF
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py \
+    --plan docs/plan/active/285-beta.md --report "$tmp/live-report.json" \
+    --required-evidence "$required_record" >/dev/null 2>"$tmp/live-report-missing.err"); then
+  echo "live verifier accepted a missing report" >&2
+  exit 1
+fi
+grep -q 'live report does not exist' "$tmp/live-report-missing.err"
+
+cat >"$tmp/live-report.json" <<'EOF'
+{
+  "plan_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "live_acceptance_digest": "sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411",
+  "distinct_session_ids": ["session-a", "session-b"],
+  "implementation_intervals": [
+    {"start": "2026-09-16T00:00:00Z", "end": "2026-09-16T00:10:00Z"},
+    {"start": "2026-09-16T00:05:00Z", "end": "2026-09-16T00:20:00Z"}
+  ]
+}
+EOF
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py \
+    --plan docs/plan/active/285-beta.md --report "$tmp/live-report.json" \
+    --required-evidence "$required_record" >/dev/null 2>"$tmp/live-report-digest.err"); then
+  echo "live verifier accepted mismatched digest evidence" >&2
+  exit 1
+fi
+grep -q 'digest mismatch' "$tmp/live-report-digest.err"
+
+actual_report_digest=$(python3 - <<'PY'
+import hashlib, pathlib
+print('sha256:' + hashlib.sha256(pathlib.Path('"$tmp/live-report.json"').read_bytes()).hexdigest())
+PY
+)
+python3 - "$required_record" "$tmp/live-report.json" <<'PY'
+import json, hashlib, pathlib, sys
+required = pathlib.Path(sys.argv[1])
+report = pathlib.Path(sys.argv[2])
+record = json.loads(required.read_text())
+record['plan_digest'] = 'sha256:' + hashlib.sha256((pathlib.Path('docs/plan/active/285-beta.md')).read_bytes()).hexdigest()
+record['report_digest'] = 'sha256:' + hashlib.sha256(report.read_bytes()).hexdigest()
+required.write_text(json.dumps(record, indent=2) + '\n')
+PY
+if (cd "$grouped" && python3 scripts/verify-parallel-plan-sessions.py \
+    --plan docs/plan/active/285-beta.md --report "$tmp/live-report.json" \
+    --required-evidence "$required_record" >/dev/null); then
+  :
+else
+  echo "live verifier rejected matching required evidence and report" >&2
+  exit 1
+fi
 
 # After the parent publishes that member's verified result, the same serial
 # entrypoints complete and archive it, while its unpublished partner stays shut.
