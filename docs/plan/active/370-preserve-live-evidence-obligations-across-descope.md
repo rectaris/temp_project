@@ -1,6 +1,8 @@
 # Preserve live-evidence obligations across an authorized acceptance partition
 
 status: replan_required
+replan_reason_codes:
+  - multiple_independent_invariants
 primary_invariant: A live-evidence obligation is neither lost nor reported satisfied when its exact acceptance item moves to another plan; only a verified owner-authorized transfer releases the source while preserving the destination gate.
 task_types:
   - template_workflow
