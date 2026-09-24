@@ -69,3 +69,4 @@ id	path	contract
 364	docs/plan/replanned/2026/09/16-31/364-enforce-bounded-python-lint.md	docs/plan/replanned/contracts/364-enforce-bounded-python-lint.json
 367	docs/plan/replanned/2026/09/16-31/367-repair-parent-direct-lifecycle-records.md	docs/plan/replanned/contracts/367-repair-parent-direct-lifecycle-records.json
 369	docs/plan/replanned/2026/09/16-31/369-repair-parent-direct-lifecycle-records-successor.md	docs/plan/replanned/contracts/369-repair-parent-direct-lifecycle-records-successor.json
+370	docs/plan/replanned/2026/09/16-31/370-preserve-live-evidence-obligations-across-descope.md	docs/plan/replanned/contracts/370-preserve-live-evidence-obligations-across-descope.json

@@ -1,9 +1,6 @@
 # Preserve live-evidence obligations across an authorized acceptance partition
 
-status: replan_required
-replan_reason_codes:
-  - multiple_independent_invariants
-primary_invariant: A live-evidence obligation is neither lost nor reported satisfied when its exact acceptance item moves to another plan; only a verified owner-authorized transfer releases the source while preserving the destination gate.
+status: replanned
 task_types:
   - template_workflow
   - planning_docs
@@ -85,10 +82,20 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:a64668ab97129eb85cf951c24c8b5e5204b4716b53504f1d02d90c80a2dd6635","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:57272969571ee919aa4c719ccef9344845bd847c61a7af4b9e105c0a50b84d8a","stage":"focused","witness":"tests/root-plan-lifecycle.sh"}
   - {"acceptance_sha256":"sha256:59b81ceb6885ea9ea1fd16a7e251a24f6fe5ef92f7d0d563d3e783e214b61b07","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/370-preserve-live-evidence-obligations-across-descope.md
+replan_contract: docs/plan/replanned/contracts/370-preserve-live-evidence-obligations-across-descope.json
 integration_gates:
-  - Implement serially with a separate parent-direct execution ledger and independent review; never use this new transfer path to admit or accept its own implementation.
-  - Do not execute a transfer against plans 374 or 378, edit those plans, mutate their private evidence, or resume their stopped execution in this prerequisite. Exercise effects only in isolated fixtures.
-  - The later owner-authorized application must preserve both exact acceptance partitions and obtain its own task binding; a transfer records custody, never completed live acceptance.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/361-verify-evidence-records-against-parent-owned-authority.md
+  - docs/plan/active/375-align-completion-paths-with-one-verified-obligation-result.md
+inherited_acceptance_digests:
+  - sha256:5476865eb4ad67917497ac0a208a8caf86458a028e3a183f4abce8f335898900
+  - sha256:a64668ab97129eb85cf951c24c8b5e5204b4716b53504f1d02d90c80a2dd6635
+  - sha256:57272969571ee919aa4c719ccef9344845bd847c61a7af4b9e105c0a50b84d8a
+  - sha256:59b81ceb6885ea9ea1fd16a7e251a24f6fe5ef92f7d0d563d3e783e214b61b07
 checked_summary_ja: 実証を求める義務を証跡付きで移し、分離元の誤った完了判定を防ぐ。
 
 ## Decisions

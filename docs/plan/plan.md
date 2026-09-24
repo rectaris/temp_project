@@ -2,4 +2,5 @@
 
 id	path	status
 374	docs/plan/active/374-publish-and-verify-separate-session-plan-results.md	deferred
-370	docs/plan/active/370-preserve-live-evidence-obligations-across-descope.md	replan_required
+361	docs/plan/active/361-verify-evidence-records-against-parent-owned-authority.md	in_progress
+375	docs/plan/active/375-align-completion-paths-with-one-verified-obligation-result.md	deferred
