@@ -1,6 +1,8 @@
 # Verify evidence records against parent-owned authority
 
-status: in_progress
+status: replan_required
+replan_reason_codes:
+  - security_boundary_drift
 implementation_mode: parent_direct
 primary_invariant: Every value the required-evidence, transfer and live-evidence gates treat as authority is read from a parent-owned record that the reporting session cannot author, relocate or replay; a reporter-controlled field never decides a gate outcome.
 replan_sources:
@@ -108,3 +110,9 @@ checked_summary_ja: 証拠記録と移管の判定を親所有の記録だけに
 - Owner continuation authorization: 「提案の方針で後続プランを作成せよ。」
 - The preserved epoch-3 patch already passes all three focused commands; the review rejected it for the three findings above, not for validation failure. Verify its digest before applying and treat any apply conflict as a stop, not a reason to drop source changes.
 - Plan 370 recorded four out-of-scope defects in its own Validation Notes. Re-read them before review and route any that fall inside this write scope into this plan rather than deferring them silently.
+- Epoch 0 (`plan-361-parent-direct-001`) ran one parent review that returned High, Medium and Low findings. The single parent-direct remediation round was spent, so the run stopped at `descope_pending` with reason code `parent_remediation_budget_exhausted`.
+- Epoch 1 (`plan-361-parent-direct-002`) was opened under owner continuation authorization with a cumulative review limit of four. The route gate and the exact-target adversarial preflight passed, and the three focused commands passed on the epoch-1 candidate.
+- The epoch-1 independent review did not approve. It returned three High findings and one Medium finding: the supplied candidate hashes to `sha256:1f72df3d5144d27f73096cd111aa9645b84e1da487110b41356f5c542d360d2e` while the review packet and preflight bind `sha256:c8d4bc267fafa106b7cc6cfc46f860955d2b4ce321556c7865ab2a7f01f938cd`; the transfer path records the descope event itself as `owner_authorization_digest` instead of separately authenticated owner authorization; default `verify` still accepts a canonical record that no parent reservation authenticates; and no published command can create the reservation that a transfer now requires.
+- The three substantive findings all require a parent-owned reservation and authorization mechanism in `scripts/plan-execution-state.py`, which this plan's `write_scope` does not contain. Acceptance items one and two therefore cannot be satisfied inside the declared boundary, so the run was stopped at `replan_required` with reason code `security_boundary_drift` rather than widening the scope.
+- The epoch-1 candidate bytes remain dirty in the bound task worktree and are preserved outside the repository at `plan-361-parent-direct-epoch1/candidate.patch`, whose digest equals the worktree diff. They are rejected work, not accepted implementation.
+- Both ledger runs are stopped and must not be reopened. Reconstruction into successors, or shelving, is an owner decision.
