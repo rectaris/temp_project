@@ -1,6 +1,6 @@
 # Integrate separate-session results in order and verify real-session completion
 
-status: deferred
+status: replan_required
 primary_invariant: Only the exact current-base result accepted by integration is published and completed; preserve both member changes and require real two-session evidence.
 task_types:
   - template_workflow
@@ -111,6 +111,9 @@ integration_gates:
   - Implement this integration serially.
   - Demonstration plans change bounded product files, not the governing controls; candidate-only or mock sessions cannot substitute for independent parent-direct sessions.
   - Live evidence is additional acceptance, not a replacement for focused/authoritative/Copy update checks. Bind its report path/digest before focused verification and completion.
+replan_reason_codes:
+  - multiple_independent_invariants
+  - parent_remediation_budget_exhausted
 checked_summary_ja: 別セッションの変更を順番に取り込み、実セッションで完了と後片付けを確認する。
 
 ## Decisions
@@ -190,3 +193,5 @@ checked_summary_ja: 別セッションの変更を順番に取り込み、実セ
 - Local evidence: .agent-artifacts/parallel-session-planning/. The disposable Git prototype and prior 16 passing GroupedExecutionAdapterTests prove bounded mechanics only; actual two-session runtime acceptance is not yet established.
 - Independent plan review identified review-slot exhaustion and an optional-live-report bypass. The plans reserve integration review capacity and bind live evidence before implementation; primary runtime transcript evidence remains required. Parent accepted these bounded corrections without changing the user outcome.
 - A bounded independent rereview confirmed all three document findings closed. The main session owns final scope, dependency checks, validation and publication; helpers held no write scope.
+- The owner stopped this plan at `replan_required` for reconstruction. Its epoch-0 parent review returned four High and five Medium findings, the parent remediation budget was spent, and the ledger `plan-374-parent-direct-001` closed at `descope_required`. That ledger cannot reopen: `require_repository_baseline` demands source head `8f5cbcc` and the recorded plan digest, both of which the repository has moved past, and the bound parent-direct lifecycle file no longer exists. The findings also span independently validatable invariants: integration assembly and evidence authority, publication and retirement correctness, root and generated alignment, and the live two-session demonstration. Reason codes `multiple_independent_invariants` and `parent_remediation_budget_exhausted` record both facts. The owner also instructed that every related plan other than this one be shelved, so plans 361, 371, 375 and 378 are shelved and their work returns here.
+- The live two-session obligation is not carried by `scripts/restructure-plan.py`, which never reads `live_evidence_contract` or `live_evidence_acceptance_sha256`. The integration successor therefore declares both fields explicitly, keeping acceptance digest `sha256:78d5a40d` bound to a live plan rather than to shelved plan 378.
