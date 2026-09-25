@@ -1,6 +1,8 @@
 # Bind integration evidence to parent-owned authority
 
-status: replan_required
+status: shelved
+shelved_reason: Owner instruction 2026-09-25: E で進める（379〜382 は棚上げ）. The parallel-session authority mechanism is no longer pursued. Plan 370's actual requirement, that a descope or restructure must not silently drop a live-evidence obligation, is an exact static gap in scripts/restructure-plan.py and is taken up there instead.
+shelved_at: 2026-09-25
 implementation_mode: parent_direct
 primary_invariant: Every value that decides an integration assembly, meaning the reserved review result, the retained original evidence and the handoff target, is read from a parent-owned record that the calling session cannot author, relocate or replay; a caller-supplied digest never decides an assembly outcome.
 replan_sources:
@@ -78,8 +80,6 @@ integration_gates:
   - Change only the two integration scripts, their generated counterparts and the worker test file. Leave publication, retirement and lifecycle repair to plan 380, root and generated guidance to plan 381, and the live-evidence verifier to plan 382.
   - Plans 361, 371, 375 and 378 are shelved on owner instruction, so no prerequisite mechanism arrives from them. This plan's write scope already contains the records it needs; treat a value that still decides a gate from caller input as a stop condition rather than a finding to defer.
   - Plan 374 constrained its prerequisites so they could not apply their own controls to it, which is what stopped plan 361 at `security_boundary_drift`. That constraint is not inherited here.
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
 checked_summary_ja: 統合の判定に使う値を親所有の記録だけから読み、呼び出し側が渡した digest が結果を決めないようにする。
 
 ## Decisions

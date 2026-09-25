@@ -1,7 +1,8 @@
 # Retire and publish members without false completion
 
-status: deferred
-completion_deferred_reason: Plan 379 must first make integration evidence authoritative; publication and retirement decisions read those records, so repairing them against the current caller-supplied values would encode the defect this reconstruction removes.
+status: shelved
+shelved_reason: Owner instruction 2026-09-25: E で進める（379〜382 は棚上げ）. The parallel-session authority mechanism is no longer pursued. Plan 370's actual requirement, that a descope or restructure must not silently drop a live-evidence obligation, is an exact static gap in scripts/restructure-plan.py and is taken up there instead.
+shelved_at: 2026-09-25
 implementation_mode: parent_direct
 primary_invariant: A member is reported complete and its worktree and branch are retired only after the parent-owned ledger, publication journal and retirement record all agree that this exact member finished; an interruption at any step leaves a recoverable state rather than a deleted branch or a false completion.
 replan_sources:

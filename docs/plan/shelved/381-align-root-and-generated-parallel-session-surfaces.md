@@ -1,7 +1,8 @@
 # Align root and generated parallel session surfaces
 
-status: deferred
-completion_deferred_reason: Plans 379 and 380 change the behavior this plan documents and mirrors, so aligning the surfaces first would describe an interface that is about to change.
+status: shelved
+shelved_reason: Owner instruction 2026-09-25: E で進める（379〜382 は棚上げ）. The parallel-session authority mechanism is no longer pursued. Plan 370's actual requirement, that a descope or restructure must not silently drop a live-evidence obligation, is an exact static gap in scripts/restructure-plan.py and is taken up there instead.
+shelved_at: 2026-09-25
 implementation_mode: parent_direct
 primary_invariant: Root and generated commands, guidance and Copier fixtures describe one behavior for starting, handing off, integrating and retiring a parallel member; a reader of the generated project never receives an instruction that the root repository no longer follows.
 replan_sources:
