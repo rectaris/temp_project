@@ -289,3 +289,4 @@ id	path
 373	docs/plan/checked/2026/09/16-31/373-run-parent-direct-plans-in-member-sessions.md
 362	docs/plan/checked/2026/09/16-31/362-add-terminal-owner-resolution.md
 363	docs/plan/checked/2026/09/16-31/363-complete-parent-direct-lifecycle-records.md
+383	docs/plan/checked/2026/09/16-31/383-carry-live-evidence-obligations-through-restructuring.md
