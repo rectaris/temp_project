@@ -1,7 +1,8 @@
 # Align completion paths with one verified obligation result
 
-status: deferred
-completion_deferred_reason: Plan 361 re-applies the preserved epoch-3 patch and must be checked and published first; this plan's completion-path tests must run against the accepted verifier, not against rejected bytes.
+status: shelved
+shelved_reason: Owner instruction 2026-09-25: 374 以外の関連プランはすべて棚上げして良い. Never started; its completion-path and Copier alignment work returns to a plan 374 successor.
+shelved_at: 2026-09-25
 primary_invariant: Every completion path in the root repository and in the generated template reaches the same verified live-evidence obligation result, and project-owned bytes survive installation and Copier update without any command reading private evidence.
 replan_sources:
   - docs/plan/active/370-preserve-live-evidence-obligations-across-descope.md

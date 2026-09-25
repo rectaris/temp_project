@@ -1,8 +1,8 @@
 # Verify evidence records against parent-owned authority
 
-status: replan_required
-replan_reason_codes:
-  - security_boundary_drift
+status: shelved
+shelved_reason: Owner instruction 2026-09-25: 374 以外の関連プランはすべて棚上げして良い. Stopped at replan_required with security_boundary_drift after two epochs; plan 374 is now reconstructed directly and its write scope already covers the mechanism this plan could not reach.
+shelved_at: 2026-09-25
 implementation_mode: parent_direct
 primary_invariant: Every value the required-evidence, transfer and live-evidence gates treat as authority is read from a parent-owned record that the reporting session cannot author, relocate or replay; a reporter-controlled field never decides a gate outcome.
 replan_sources:

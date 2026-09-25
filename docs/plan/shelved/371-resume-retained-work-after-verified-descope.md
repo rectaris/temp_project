@@ -1,6 +1,8 @@
 # Resume retained implementation after a verified committed acceptance partition
 
-status: backlog
+status: shelved
+shelved_reason: Owner instruction 2026-09-25: 374 以外の関連プランはすべて棚上げして良い. Plan 374 is being reconstructed directly, so this retained-work resumption mechanism is superseded.
+shelved_at: 2026-09-25
 primary_invariant: A stopped descope execution can authorize at most one owner-approved retained-work child, bound to the exact committed partition and inherited implementation, without rewriting evidence, resetting review accounting or widening acceptance authority.
 task_types:
   - template_workflow

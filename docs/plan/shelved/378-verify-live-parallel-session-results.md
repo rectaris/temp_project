@@ -1,6 +1,8 @@
 # Verify live parallel-session results
 
-status: backlog
+status: shelved
+shelved_reason: Owner instruction 2026-09-25: 374 以外の関連プランはすべて棚上げして良い. The live two-session acceptance it held returns to a plan 374 successor, so this destination is superseded.
+shelved_at: 2026-09-25
 primary_invariant: Only runtime-proven distinct sessions with overlapping implementation work and verified publication and retirement can satisfy the deferred live parallel-session acceptance.
 task_types:
   - template_workflow
