@@ -44,6 +44,7 @@ write_scope:
   - scripts/run-parallel-plans.py
   - template/.project-agent-workflow/scripts/run-parallel-plans.py
   - tests/test-sandboxed-plan-worker.py
+  - tests/test-plan-execution-state.py
 preservation_scope:
   - none
 context_files:
