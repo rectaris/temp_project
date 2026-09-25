@@ -2834,6 +2834,64 @@ def validate_schema_three_successor(
     }
 
 
+def live_evidence_obligation(
+    manifest: dict[str, str | list[str]],
+    label: str,
+) -> tuple[str, str] | None:
+    """Return the declared live-evidence obligation, or None when none is declared."""
+
+    contract = scalar(manifest, "live_evidence_contract").strip()
+    acceptance = scalar(manifest, "live_evidence_acceptance_sha256").strip()
+    if not contract and not acceptance:
+        return None
+    if not contract:
+        raise RestructureError(
+            f"{label} declares live_evidence_acceptance_sha256 without live_evidence_contract"
+        )
+    if not acceptance:
+        raise RestructureError(
+            f"{label} declares live_evidence_contract without live_evidence_acceptance_sha256"
+        )
+    if not SHA_RE.fullmatch(acceptance):
+        raise RestructureError(
+            f"{label} live_evidence_acceptance_sha256 must be sha256:<64 lowercase hex>"
+        )
+    return contract, acceptance
+
+
+def validate_live_evidence_carry(
+    sources: list[tuple[str, dict[str, str | list[str]]]],
+    successors: list[tuple[str, dict[str, str | list[str]]]],
+) -> None:
+    """Refuse a restructuring that releases or invents a live-evidence obligation."""
+
+    declared: dict[tuple[str, str], str] = {}
+    for label, manifest in sources:
+        obligation = live_evidence_obligation(manifest, label)
+        if obligation is not None:
+            declared.setdefault(obligation, label)
+    carried: dict[tuple[str, str], str] = {}
+    for label, manifest in successors:
+        obligation = live_evidence_obligation(manifest, label)
+        if obligation is not None:
+            carried.setdefault(obligation, label)
+    for obligation, label in declared.items():
+        if obligation not in carried:
+            contract, acceptance = obligation
+            raise RestructureError(
+                f"{label} declares live_evidence_contract {contract} with "
+                f"live_evidence_acceptance_sha256 {acceptance}, but no successor plan "
+                "carries that obligation"
+            )
+    for obligation, label in carried.items():
+        if obligation not in declared:
+            contract, acceptance = obligation
+            raise RestructureError(
+                f"{label} declares live_evidence_contract {contract} with "
+                f"live_evidence_acceptance_sha256 {acceptance}, which no source plan holds"
+            )
+
+
 def validate_schema_three_integration_coverage(
     successors: list[dict[str, Any]],
     source_infos: list[dict[str, Any]],
@@ -3170,6 +3228,10 @@ def validate_single_source_spec(spec: dict[str, Any]) -> dict[str, Any]:
     mapped = {digest for entry in entries for digest in entry["acceptance_digests"]}
     if mapped != source_digests:
         raise RestructureError("every source acceptance digest must be mapped")
+    validate_live_evidence_carry(
+        [(source_path, manifest)],
+        [(entry["path"], entry["manifest"]) for entry in entries],
+    )
     actual_dirty = dirty_product_paths()
     declared_dirty = spec["dirty_product_paths"]
     if not isinstance(declared_dirty, list) or declared_dirty != actual_dirty:
@@ -4899,6 +4961,13 @@ def validate_schema_three_spec(
         for index, entry in enumerate(raw_successors)
     ]
     validate_schema_three_integration_coverage(successors, source_infos)
+    validate_live_evidence_carry(
+        [
+            (source["path"], parse_manifest(source["original_content"]))
+            for source in source_infos
+        ],
+        [(successor["path"], successor["manifest"]) for successor in successors],
+    )
     raw_prerequisites = spec["prerequisite_plans"]
     if not isinstance(raw_prerequisites, list):
         raise RestructureError("prerequisite_plans must be a list")

@@ -8474,6 +8474,149 @@ class PlanRestructureTest(unittest.TestCase):
             )
         self.assertIn("unauthorized field", str(rejected.exception))
 
+    LIVE_CONTRACT = "parallel_sessions_v1"
+    LIVE_ACCEPTANCE = "sha256:" + "a" * 64
+
+    def declare_source_live_evidence(self) -> None:
+        """Rewrite the schema-1 source so it holds a live-evidence obligation."""
+
+        text = self.source_text().replace(
+            "\nvalidation:\n  - git diff --check\n",
+            f"\nlive_evidence_contract: {self.LIVE_CONTRACT}\n"
+            f"live_evidence_acceptance_sha256: {self.LIVE_ACCEPTANCE}\n"
+            "validation:\n  - git diff --check\n",
+            1,
+        )
+        (self.repo / self.source_path).write_text(text, encoding="utf-8")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "source declares a live-evidence obligation")
+        self.spec = self.make_spec()
+        self.write_spec()
+
+    def carry_live_evidence(self, entry: dict[str, object], acceptance: str) -> None:
+        entry["content"] = str(entry["content"]).replace(
+            "\nvalidation:\n  - git diff --check\n",
+            f"\nlive_evidence_contract: {self.LIVE_CONTRACT}\n"
+            f"live_evidence_acceptance_sha256: {acceptance}\n"
+            "validation:\n  - git diff --check\n",
+            1,
+        )
+
+    def test_schema_one_refuses_to_release_a_live_evidence_obligation(self) -> None:
+        self.declare_source_live_evidence()
+        rejected = self.run_command()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(self.source_path, rejected.stderr)
+        self.assertIn("live_evidence_contract", rejected.stderr)
+        self.assertIn("no successor plan", rejected.stderr)
+        self.assert_source_unchanged()
+
+    def test_schema_one_accepts_a_carried_live_evidence_obligation(self) -> None:
+        self.declare_source_live_evidence()
+        self.carry_live_evidence(
+            self.spec["integration"],  # type: ignore[arg-type,index]
+            self.LIVE_ACCEPTANCE,
+        )
+        self.write_spec()
+        accepted = self.run_command()
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        carried = (self.repo / "docs/plan/active/003-integration.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"live_evidence_contract: {self.LIVE_CONTRACT}\n", carried)
+        self.assertIn(
+            f"live_evidence_acceptance_sha256: {self.LIVE_ACCEPTANCE}\n", carried
+        )
+
+    def test_schema_one_refuses_a_successor_that_changes_the_acceptance_digest(
+        self,
+    ) -> None:
+        self.declare_source_live_evidence()
+        self.carry_live_evidence(
+            self.spec["integration"],  # type: ignore[arg-type,index]
+            "sha256:" + "b" * 64,
+        )
+        self.write_spec()
+        rejected = self.run_command()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("no successor plan", rejected.stderr)
+        self.assert_source_unchanged()
+
+    def test_schema_one_refuses_an_invented_live_evidence_obligation(self) -> None:
+        self.carry_live_evidence(
+            self.spec["integration"],  # type: ignore[arg-type,index]
+            self.LIVE_ACCEPTANCE,
+        )
+        self.write_spec()
+        rejected = self.run_command()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("which no source plan holds", rejected.stderr)
+        self.assert_source_unchanged()
+
+    def test_schema_one_refuses_a_half_declared_live_evidence_obligation(self) -> None:
+        integration = self.spec["integration"]  # type: ignore[index]
+        integration["content"] = str(integration["content"]).replace(
+            "\nvalidation:\n  - git diff --check\n",
+            f"\nlive_evidence_contract: {self.LIVE_CONTRACT}\n"
+            "validation:\n  - git diff --check\n",
+            1,
+        )
+        self.write_spec()
+        rejected = self.run_command()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn(
+            "declares live_evidence_contract without live_evidence_acceptance_sha256",
+            rejected.stderr,
+        )
+        self.assert_source_unchanged()
+
+    def test_a_source_without_a_live_evidence_obligation_restructures_unchanged(
+        self,
+    ) -> None:
+        accepted = self.run_command()
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        for path in (
+            "docs/plan/active/002-data.md",
+            "docs/plan/active/003-integration.md",
+        ):
+            created = (self.repo / path).read_text(encoding="utf-8")
+            self.assertNotIn("live_evidence_contract", created)
+
+    def test_schema_three_refuses_to_release_a_live_evidence_obligation(self) -> None:
+        self.declare_source_live_evidence()
+        self.carry_live_evidence(
+            self.spec["successors"][0],  # type: ignore[arg-type,index]
+            self.LIVE_ACCEPTANCE,
+        )
+        self.carry_live_evidence(
+            self.spec["integration"],  # type: ignore[arg-type,index]
+            self.LIVE_ACCEPTANCE,
+        )
+        self.write_spec()
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        for successor in coupled["successors"]:  # type: ignore[union-attr]
+            self.assertNotIn(self.LIVE_CONTRACT, str(successor["content"]))
+
+        rejected = self.run_spec_data(coupled, "live-evidence-released.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("live_evidence_contract", rejected.stderr)
+        self.assertIn("no successor plan", rejected.stderr)
+
+        self.carry_live_evidence(
+            coupled["successors"][-1],  # type: ignore[arg-type,index]
+            self.LIVE_ACCEPTANCE,
+        )
+        accepted = self.run_spec_data(coupled, "live-evidence-carried.json")
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_schema_three_refuses_an_invented_live_evidence_obligation(self) -> None:
+        coupled, _, _, _ = self.prepare_coupled_spec()
+        successor = coupled["successors"][0]  # type: ignore[index]
+        self.carry_live_evidence(successor, self.LIVE_ACCEPTANCE)
+        rejected = self.run_spec_data(coupled, "live-evidence-invented.json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("which no source plan holds", rejected.stderr)
+
 
 COUPLED_ACCEPTANCE_CLAUSES: tuple[dict[str, object], ...] = (
     {
