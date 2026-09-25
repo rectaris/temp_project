@@ -1,7 +1,6 @@
 # Integrate separate-session results in order and verify real-session completion
 
-status: replan_required
-primary_invariant: Only the exact current-base result accepted by integration is published and completed; preserve both member changes and require real two-session evidence.
+status: replanned
 task_types:
   - template_workflow
   - planning_docs
@@ -105,15 +104,21 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:405a824fe0f24376c2ce7a8275ef41575cc19ddb95b3d66029a3600aba97a1d2","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 live_evidence_contract: parallel_sessions_v1
 live_evidence_acceptance_sha256: sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/374-publish-and-verify-separate-session-plan-results.md
+replan_contract: docs/plan/replanned/contracts/374-publish-and-verify-separate-session-plan-results.json
 integration_gates:
-  - Start only after docs/plan/checked/2026/09/16-31/373-run-parent-direct-plans-in-member-sessions.md is checked; that archive is the exact resolved predecessor.
-  - Start only after docs/plan/checked/2026/09/16-31/372-bind-parallel-plans-to-separate-session-owners.md is checked; that archive is the exact resolved predecessor.
-  - Implement this integration serially.
-  - Demonstration plans change bounded product files, not the governing controls; candidate-only or mock sessions cannot substitute for independent parent-direct sessions.
-  - Live evidence is additional acceptance, not a replacement for focused/authoritative/Copy update checks. Bind its report path/digest before focused verification and completion.
-replan_reason_codes:
-  - multiple_independent_invariants
-  - parent_remediation_budget_exhausted
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/379-bind-integration-evidence-to-parent-owned-authority.md
+  - docs/plan/active/380-retire-and-publish-members-without-false-completion.md
+  - docs/plan/active/381-align-root-and-generated-parallel-session-surfaces.md
+  - docs/plan/active/382-demonstrate-live-parallel-sessions-end-to-end.md
+inherited_acceptance_digests:
+  - sha256:fa8fd07e674da2c9bc560061a17191a7336705b5f4da25a281060af350aff6e4
+  - sha256:4f7453fc0e59e3ccda836275d66739d8568b487ff2def2db542e550e784841cd
+  - sha256:405a824fe0f24376c2ce7a8275ef41575cc19ddb95b3d66029a3600aba97a1d2
 checked_summary_ja: 別セッションの変更を順番に取り込み、実セッションで完了と後片付けを確認する。
 
 ## Decisions

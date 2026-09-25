@@ -32,7 +32,7 @@ write_scope:
 preservation_scope:
   - none
 context_files:
-  - docs/plan/active/374-publish-and-verify-separate-session-plan-results.md
+  - docs/plan/replanned/2026/09/16-31/374-publish-and-verify-separate-session-plan-results.md
   - docs/agent/SPEC_PLAN_WORKFLOW.md
   - docs/agent/SPEC_SECURITY.md
   - docs/agent/SPEC_GIT_RETIREMENT.md

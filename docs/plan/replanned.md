@@ -70,3 +70,4 @@ id	path	contract
 367	docs/plan/replanned/2026/09/16-31/367-repair-parent-direct-lifecycle-records.md	docs/plan/replanned/contracts/367-repair-parent-direct-lifecycle-records.json
 369	docs/plan/replanned/2026/09/16-31/369-repair-parent-direct-lifecycle-records-successor.md	docs/plan/replanned/contracts/369-repair-parent-direct-lifecycle-records-successor.json
 370	docs/plan/replanned/2026/09/16-31/370-preserve-live-evidence-obligations-across-descope.md	docs/plan/replanned/contracts/370-preserve-live-evidence-obligations-across-descope.json
+374	docs/plan/replanned/2026/09/16-31/374-publish-and-verify-separate-session-plan-results.md	docs/plan/replanned/contracts/374-publish-and-verify-separate-session-plan-results.json

@@ -54,7 +54,7 @@ context_files:
   - scripts/project_workflow/worktree_guard.py
   - scripts/complete-plan.sh
   - docs/plan/replanned/2026/09/16-31/370-preserve-live-evidence-obligations-across-descope.md
-  - docs/plan/active/374-publish-and-verify-separate-session-plan-results.md
+  - docs/plan/replanned/2026/09/16-31/374-publish-and-verify-separate-session-plan-results.md
   - docs/plan/backlog/378-verify-live-parallel-session-results.md
   - docs/agent/spec-index.yaml
 required_specs:
