@@ -72,3 +72,4 @@ id	path	contract
 370	docs/plan/replanned/2026/09/16-31/370-preserve-live-evidence-obligations-across-descope.md	docs/plan/replanned/contracts/370-preserve-live-evidence-obligations-across-descope.json
 374	docs/plan/replanned/2026/09/16-31/374-publish-and-verify-separate-session-plan-results.md	docs/plan/replanned/contracts/374-publish-and-verify-separate-session-plan-results.json
 357	docs/plan/replanned/2026/09/16-31/357-delegate-candidate-implementation-to-opencode-go.md	docs/plan/replanned/contracts/357-delegate-candidate-implementation-to-opencode-go.json
+356	docs/plan/replanned/2026/09/16-31/356-delegate-read-only-tasks-to-opencode-go.md	docs/plan/replanned/contracts/356-delegate-read-only-tasks-to-opencode-go.json
