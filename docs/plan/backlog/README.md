@@ -26,6 +26,24 @@ Ruffによる検査を入れた[353](../checked/2026/09/16-31/353-enforce-bounde
    npm版のPyright 1.1.407をNode 24で導入し、同じ6ファイルの型を検査する。
    Pyrightは隠しディレクトリの下のファイルを解析しないため、配置ごとに設定ファイルを分ける。
 
+## Issue #15の最小の評価実行
+
+[Issue #15](https://github.com/rectaris/temp_project/issues/15)のPhase 1のうち、同じCodexの構成を2回実行して既存の`compare-harness-runs.py`で比べ、結果が再現されることを示すまでを、4件に分けた。
+評価のツールはこのリポジトリ専用で、テンプレートには入れない。
+実験の記録は`.agent-artifacts/evaluations/<experiment-id>/`に置く。
+
+次の順に一件ずつ、それぞれ新しい会話セッションで実装する。
+番号は作成順に割り当てたため、418が417より先になる。
+
+1. [415：違う次元の集合による実行構成の比較](415-compare-named-run-configurations-by-changed-dimensions.md)
+   比較形式にschema 2を加え、同じ構成どうしの比較を`replication`として報告する。schema 1の比較は変えない。
+2. [416：実行前に確定する評価の定義](416-freeze-evaluation-experiments-before-execution.md)
+3. [418：分離したCodexのサンドボックスでの実行](418-execute-evaluation-runs-in-isolated-codex-sandboxes.md)
+4. [417：独立した検証と比較](417-verify-evaluation-runs-and-compare-observations.md)
+
+4件の完了後、番号付きのプランの外で、実モデルを使って同じ構成どうしの比較を1回行う。
+Codexの利用枠を消費し、その結果は再現性の確認であって、構成を採用する根拠にはならない。
+
 ## 能力と実装の境界によるOpenCode Goへの委任
 
 親のオーケストレーターから別のCLIへ作業を渡す経路を、[Issue #14](https://github.com/rectaris/temp_project/issues/14)の能力と実装の境界に載せて、読み取り専用から順に広げる。
@@ -45,7 +63,7 @@ OpenCode固有の起動方法と資格情報の中継は、OpenCodeGoBackendの�
 次の順に一件ずつ実装する。
 
 1. [410：Issue #14の基盤](../checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md)（完了）
-2. Issue #15の最小の評価実行
+2. Issue #15の最小の評価実行（前の節の415、416、418、417と、実モデルでの再現性の確認）
 3. [404：読み取り専用の能力を処理するOpenCode Goの実装](404-run-read-only-capabilities-through-opencode-go-backend.md)
 4. [405：どの能力も有効にしない実装の設定](405-seed-disabled-opencode-go-backend-configuration.md)
 5. [406：能力による発見とCopierの配布](406-discover-read-only-capabilities-through-registry.md)
