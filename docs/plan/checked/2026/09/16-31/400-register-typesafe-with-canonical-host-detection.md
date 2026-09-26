@@ -1,6 +1,6 @@
 # Register TypeSafe with canonical host detection at the root entrypoint
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Every TypeSafe call is authorized per request as a read with the ordinary effect against the unchanged root policy, its credential never reaches a repository file, plan, log, fixture, provider payload, or delegated process, and no advisory score can relax an existing deterministic check.
 replan_sources:
@@ -106,7 +106,7 @@ checked_summary_ja: TypeSafeの構造化判断をルート外部サービスと�
 - [x] Update the TypeSafe section of docs/agent/SPEC_EXTERNAL_SERVICES.md with the canonical host rule, the name folding steps, the option and environment rules, and the documented limits.
 - [x] Extend RootExternalServicePolicyTest with the canonical host acceptances and refusals, every non-ASCII host character, repeated options, the scrubbed subprocess environment, and the unchanged GitHub and OpenCode Go results.
 - [x] Update the policy, specification and entrypoint markers in check-root-agent-policy.py; keep the template absence check in check-copier-template.py.
-- [ ] Obtain independent review through a fresh read-only reviewer whose first prompt carries the ReviewPacket marker, run the focused checks, then the full validation suite once, and publish through the ordinary lifecycle.
+- [x] Obtain independent review through a fresh read-only reviewer whose first prompt carries the ReviewPacket marker, run the focused checks, then the full validation suite once, and publish through the ordinary lifecycle.
 
 ## Validation Notes
 

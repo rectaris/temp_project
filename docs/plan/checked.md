@@ -292,3 +292,4 @@ id	path
 383	docs/plan/checked/2026/09/16-31/383-carry-live-evidence-obligations-through-restructuring.md
 384	docs/plan/checked/2026/09/16-31/384-derive-review-outcome-from-reviewer-evidence.md
 317	docs/plan/checked/2026/09/16-31/317-build-plan-record-question-set.md
+400	docs/plan/checked/2026/09/16-31/400-register-typesafe-with-canonical-host-detection.md
