@@ -1,6 +1,6 @@
 # Build a labeled implementation-risk question set from committed plan records
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Every emitted question carries its source plan path, source commit, and declared label, no question input exposes a field recorded after the plan was authored, and every rejected plan is reported with its reason instead of being silently normalized or dropped.
 task_types:
@@ -87,7 +87,7 @@ checked_summary_ja: 計画記録から実装リスク分類のラベル付き問
 - [x] Write the construction protocol document and the committed tuning cases, marking the cases as used for tuning.
 - [x] Register the command in copier_inventory.SOURCE_REQUIRED and the tests in tests/test-validation-tools.py.
 - [x] Report the tuning partition's per-class record counts separately, so a later weight fitting can tell before it starts whether a class has enough records to fit on.
-- [ ] Run the focused test, then the full validation suite, and commit the change through the ordinary lifecycle.
+- [x] Run the focused test, then the full validation suite, and commit the change through the ordinary lifecycle.
 
 ## Validation Notes
 
