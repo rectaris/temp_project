@@ -1,6 +1,6 @@
 # Register TypeSafe structured decisions as a root external service with a parent-held credential
 
-status: in_progress
+status: replan_required
 implementation_mode: parent_direct
 primary_invariant: Every TypeSafe call is authorized per request as a read with the ordinary effect against the unchanged root policy, its credential never reaches a repository file, plan, log, fixture, provider payload, or delegated process, and no advisory score can relax an existing deterministic check.
 task_types:
@@ -63,6 +63,8 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:7f4bb3333d4719ecf5c9c2b0a52295a0123a736d482e6e4880d6009561396770","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:126774b069c3fce41025e5a10e7e550052570c5a58d21b8d6a537e41c4131d22","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+replan_reason_codes:
+  - parent_remediation_budget_exhausted
 checked_summary_ja: TypeSafeの構造化判断をルート外部サービスとして登録し、ルートの入口で操作と対象を固定する。
 
 ## Decisions
@@ -94,3 +96,8 @@ checked_summary_ja: TypeSafeの構造化判断をルート外部サービスと�
 - implementation_risk is high, and the write scope includes validation authority under scripts/ and tests/, so scripts/run-sandboxed-plan-worker.py refuses this plan. It runs parent_direct in its task-bound worktree with a parent-owned execution ledger, review-route check and adversarial preflight before the first product edit.
 - Probes rerun at dev 9bcaada before any edit: `authorize typesafe read decision.evaluate --target https://api.typesafe.ai/v1/systemone --effect ordinary --provider-configured --task-authorized` exited 0, and `authorize opencode_go write x --target https://example.invalid --effect ordinary --provider-configured --task-authorized` exited 0. The feasibility defect is unchanged.
 - Provider documentation checked 2026-09-26: https://docs.typesafe.ai/api.md states `POST https://api.typesafe.ai/v1/systemone` with `Authorization: Bearer <API_KEY>`; https://docs.typesafe.ai/models.md lists the versioned id `jev-1.13.0` and the moving aliases `jev-latest` and `jev-preview`; https://docs.typesafe.ai/sdk/python/api/constants.md names `TYPESAFE_API_KEY` and a `TYPESAFE_BASE_URL` override. The fixed tuple and the refused aliases match that documentation.
+- Execution history, all parent_direct in the task worktree at source head `91e4b67`, reviewers were fresh read-only Codex `gpt-5.6-sol` sessions, and every epoch recorded its review-route check before its first product edit. Epoch 0 (`plan-345-parent-direct`) review 1 reported High, Medium, Medium, Low, Low: trailing-dot and Unicode-dot hosts and a whitespace-padded operation bypassed routing, argparse echoed an invalid access value, tests lacked those cases, an undocumented nine-digit version limit, and no per-request marker. Owner answered 「同一計画で継続する」.
+- Epoch 1 (`plan-345-parent-direct-epoch1`) review 2 reported High and Medium: default-ignorable host characters such as a soft hyphen bypassed routing, and whole-target search refused a GitHub ref named `typesafe.ai`. Owner answered 「最終継続を承認する」. Epoch 2 (`plan-345-parent-direct-epoch2`) review 3 reported High: U+1806, which IDNA2003 maps to nothing, bypassed routing. Owner answered 「4回目のレビューまで継続する」.
+- Epoch 3 (`plan-345-parent-direct-epoch3`) review 4, the last of the cumulative four, reported: (High) `delegate()` passes the parent environment, so a TypeSafe credential reaches the maintained-checker subprocess; (Medium) argparse keeps only the last repeated `--target`, so a TypeSafe URL followed by a benign target is checked as the benign one; (Medium) whole-target folding refuses legitimate targets such as a GitHub branch `x%2F%2Ftypesafe.ai` or an OpenCode model fragment naming `typesafe.ai`; (Low) the specification says case folding runs twice but the code runs it once. A remaining High makes resolve-owner ineligible.
+- The owner stopped this plan at `replan_required` for reconstruction and chose to continue through a successor: 「再構成して実装を続ける（許可リスト方式）」, then, after the parent reported that refusing unregistered services would end `task_scoped_default_allow` and change the root policy, 「正規表記方式に切り替える」. The successor keeps both acceptance items and replaces spelling-folding host detection with a canonical ASCII host requirement.
+- The reviewed epoch-3 candidate is not committed. Its exact patch against `91e4b67` for the six `write_scope` files has digest `sha256:e793f2d5a45e20726505e3fec3a4566e8d20acbb31cf582b99f253281c666fc0` and is kept at `.agent-artifacts/plan-345/epoch3-reviewed-candidate.patch` and in the parent-owned review directory `plan-345-parent-direct-epoch3/review-1/target.patch`. The dirty bytes transfer unchanged to the successor through dirty-path promotion. No focused or authoritative validation event was recorded, because review never cleared.
