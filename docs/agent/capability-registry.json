@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "id": "repository_exploration",
+      "access": "read_only",
+      "implementations": [
+        {"backend": "codex", "kind": "native_profile", "profiles": ["repo_explorer"]}
+      ]
+    },
+    {
+      "id": "bounded_implementation",
+      "access": "writable",
+      "implementations": [
+        {"backend": "codex", "kind": "native_profile", "profiles": ["fast_scoped_worker", "scoped_worker"]}
+      ]
+    },
+    {
+      "id": "plan_implementation",
+      "access": "writable",
+      "implementations": [
+        {"backend": "codex", "kind": "sandboxed_runner"}
+      ]
+    },
+    {
+      "id": "evidence_synthesis",
+      "access": "read_only",
+      "implementations": [
+        {"backend": "codex", "kind": "native_profile", "profiles": ["evidence_synthesizer"]}
+      ]
+    },
+    {
+      "id": "documentation_research",
+      "access": "read_only",
+      "implementations": [
+        {"backend": "codex", "kind": "native_profile", "profiles": ["docs_researcher"]}
+      ]
+    },
+    {
+      "id": "deep_review",
+      "access": "read_only",
+      "implementations": [
+        {"backend": "codex", "kind": "native_profile", "profiles": ["change_reviewer"]}
+      ]
+    }
+  ]
+}

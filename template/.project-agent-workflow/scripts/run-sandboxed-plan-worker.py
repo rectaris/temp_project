@@ -1088,6 +1088,52 @@ def load_plan_validation_commands() -> ModuleType:
     raise RunnerError("could not locate managed plan_validation_commands.py")
 
 
+CAPABILITY_REGISTRY_RELATIVE_PATH = "docs/agent/capability-registry.json"
+PLAN_IMPLEMENTATION_CAPABILITY = "plan_implementation"
+
+
+def load_worker_backends() -> ModuleType:
+    script_dir = Path(__file__).resolve().parent
+    candidates = (
+        script_dir / "worker_backends.py",
+        script_dir / "project_workflow/worker_backends.py",
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("sandboxed_plan_worker_backends", candidate)
+        if spec is None or spec.loader is None:
+            break
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    raise RunnerError("could not locate managed worker_backends.py")
+
+
+def capability_registry_path() -> Path:
+    """Return the managed Capability Registry that ships beside this runner."""
+
+    return Path(__file__).resolve().parent.parent / CAPABILITY_REGISTRY_RELATIVE_PATH
+
+
+def resolve_plan_implementation_backend() -> Any:
+    """Resolve plan_implementation to the backend that builds each Codex attempt.
+
+    Resolution runs before any lifecycle, ledger or attempt effect, so a missing
+    or malformed registry refuses the run instead of launching an unresolved
+    worker.
+    """
+
+    backends = load_worker_backends()
+    try:
+        return backends.resolve_plan_implementation(capability_registry_path())
+    except backends.RegistryError as exc:
+        raise RunnerError(
+            f"could not resolve {PLAN_IMPLEMENTATION_CAPABILITY} through the capability registry: {exc}"
+        ) from exc
+
+
 def run_subprocess(
     argv: Sequence[str],
     *,
@@ -2979,36 +3025,6 @@ def build_correction_prompt() -> str:
     )
 
 
-def default_worker_command(
-    *,
-    codex_bin: str,
-    clone_dir: Path,
-    scratch_dir: Path,
-    last_message_path: Path,
-    model: str,
-    reasoning: str,
-) -> list[str]:
-    return [
-        codex_bin,
-        "exec",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--ignore-user-config",
-        "--ephemeral",
-        "--model",
-        model,
-        "--skip-git-repo-check",
-        "--color",
-        "never",
-        "--cd",
-        str(clone_dir),
-        "--config",
-        f'model_reasoning_effort="{reasoning}"',
-        "--output-last-message",
-        str(last_message_path),
-        "-",
-    ]
-
-
 def classify_codex_unavailability(stdout: bytes, stderr: bytes) -> str | None:
     """Return a bounded reason only for a Codex CLI availability error line."""
     del stdout
@@ -3529,6 +3545,7 @@ def execute_isolated_attempt(
     model: str | None = None,
     reasoning: str | None = None,
     custom_command: Sequence[str] | None = None,
+    worker_backend: Any | None = None,
     prior_patch: bytes | None = None,
     correction_brief: bytes | None = None,
 ) -> dict[str, Any]:
@@ -3581,8 +3598,10 @@ def execute_isolated_attempt(
         correction_brief_path.chmod(0o400)
         read_only_inputs.append(correction_brief_path)
     if custom_command is None:
-        if codex_bin is None or model is None or reasoning is None:
-            raise RunnerError("Codex attempt requires an executable, model, and reasoning effort")
+        if codex_bin is None or model is None or reasoning is None or worker_backend is None:
+            raise RunnerError(
+                "Codex attempt requires an executable, model, reasoning effort, and resolved backend"
+            )
         codex_path = Path(codex_bin)
         has_runtime_root = any(
             parent != Path("/") and (parent / "bin").is_dir() and (parent / "lib").is_dir()
@@ -3595,10 +3614,9 @@ def execute_isolated_attempt(
             shutil.copy2(codex_path, copied_codex, follow_symlinks=True)
             copied_codex.chmod(0o500)
             codex_bin = str(copied_codex)
-        command = default_worker_command(
-            codex_bin=codex_bin,
+        command = worker_backend.command(
+            executable=codex_bin,
             clone_dir=clone_dir,
-            scratch_dir=scratch_dir,
             last_message_path=last_message_path,
             model=model,
             reasoning=reasoning,
@@ -3927,6 +3945,9 @@ def run_worker(args: argparse.Namespace) -> int:
     implementation_risk = implementation_classification(values, "implementation_risk")
     implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
     selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
+    worker_backend = (
+        resolve_plan_implementation_backend() if args.worker_binary is None else None
+    )
     with open_lifecycle_state(
         repo_root, args.lifecycle_state, args.orchestration_run_id
     ) as lifecycle_state:
@@ -4012,6 +4033,7 @@ def run_worker(args: argparse.Namespace) -> int:
                     codex_bin=codex_bin,
                     model=primary_model,
                     reasoning=primary_reasoning,
+                    worker_backend=worker_backend,
                 )
                 attempts.append(primary["record"])
                 if primary["result"].returncode == 0:
@@ -4067,6 +4089,7 @@ def run_worker(args: argparse.Namespace) -> int:
                     codex_bin=codex_bin,
                     model=fallback_model,
                     reasoning=fallback_reasoning_effort,
+                    worker_backend=worker_backend,
                 )
                 attempts.append(fallback["record"])
                 if fallback["result"].returncode != 0:
@@ -5300,6 +5323,9 @@ def correct_worker(args: argparse.Namespace) -> int:
     implementation_risk = implementation_classification(values, "implementation_risk")
     implementation_ambiguity = implementation_classification(values, "implementation_ambiguity")
     selected_plan_model, selected_plan_reasoning = select_plan_writable_profile(values)
+    worker_backend = (
+        resolve_plan_implementation_backend() if args.worker_binary is None else None
+    )
     brief_path = Path(args.correction_brief).expanduser()
     if not brief_path.is_absolute():
         brief_path = (Path.cwd() / brief_path).absolute()
@@ -5437,6 +5463,7 @@ def correct_worker(args: argparse.Namespace) -> int:
                     codex_bin=codex_bin,
                     model=primary_model,
                     reasoning=primary_reasoning,
+                    worker_backend=worker_backend,
                 )
                 attempts.append(primary["record"])
                 if primary["result"].returncode == 0:
@@ -5473,6 +5500,7 @@ def correct_worker(args: argparse.Namespace) -> int:
                     codex_bin=codex_bin,
                     model=fallback_model,
                     reasoning=fallback_reasoning,
+                    worker_backend=worker_backend,
                 )
                 attempts.append(fallback["record"])
                 if fallback["result"].returncode != 0:

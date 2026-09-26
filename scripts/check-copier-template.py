@@ -702,6 +702,47 @@ def require_referent_first_alignment() -> None:
             fail(f"referent-first root/template files differ: {root_path} != {template_path}")
 
 
+def require_worker_backend_alignment() -> None:
+    """Keep the capability boundary identical in both layouts.
+
+    The runner resolves plan_implementation through this module and registry,
+    so a generated project that shipped a different copy would launch its
+    workers through a different boundary than the one this repository tests.
+    Every profile the registry names must also exist as a root profile and a
+    template seed, because the registry names profiles it never owns.
+    """
+
+    for root_relative, template_relative in (
+        ("scripts/project_workflow/worker_backends.py", "template/.project-agent-workflow/scripts/worker_backends.py"),
+        ("docs/agent/capability-registry.json", "template/.project-agent-workflow/docs/agent/capability-registry.json"),
+    ):
+        root_file = ROOT / root_relative
+        template_file = ROOT / template_relative
+        if root_file.read_bytes() != template_file.read_bytes():
+            fail(f"root and generated capability boundary files differ: {root_relative}")
+        if (root_file.stat().st_mode & 0o777) != (template_file.stat().st_mode & 0o777):
+            fail(f"root and generated capability boundary file modes differ: {root_relative}")
+    spec = importlib.util.spec_from_file_location(
+        "copier_template_worker_backends", ROOT / "scripts/project_workflow/worker_backends.py"
+    )
+    if spec is None or spec.loader is None:
+        fail("could not load the worker backend module")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    try:
+        registry = module.load_registry(ROOT / "docs/agent/capability-registry.json")
+        module.resolve_plan_implementation(ROOT / "docs/agent/capability-registry.json")
+    except module.RegistryError as exc:
+        fail(f"capability registry is invalid: {exc}")
+    for capability in registry.values():
+        for implementation in capability.implementations:
+            for profile in implementation.profiles:
+                for directory in (".codex/agents", "template/.codex/agents"):
+                    if not (ROOT / directory / f"{profile}.toml").is_file():
+                        fail(f"capability registry names a missing profile: {directory}/{profile}.toml")
+
+
 def require_opencode_go_transport_alignment() -> None:
     """Keep the bounded Go inference transport identical in both layouts.
 
@@ -3868,6 +3909,7 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_opencode_go_transport_alignment()
+    require_worker_backend_alignment()
     require_typesafe_root_only()
     require_harness_evaluation_alignment()
     require_harness_profile_alignment()

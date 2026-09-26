@@ -620,6 +620,25 @@ def load_runner_module():
 
 
 RUNNER = load_runner_module()
+WORKER_BACKENDS_SCRIPT = ROOT / "scripts/project_workflow/worker_backends.py"
+TEMPLATE_WORKER_BACKENDS_SCRIPT = ROOT / "template/.project-agent-workflow/scripts/worker_backends.py"
+CAPABILITY_REGISTRY = ROOT / "docs/agent/capability-registry.json"
+TEMPLATE_CAPABILITY_REGISTRY = (
+    ROOT / "template/.project-agent-workflow/docs/agent/capability-registry.json"
+)
+
+
+def load_worker_backends_module():
+    spec = importlib.util.spec_from_file_location("worker_backends_under_test", WORKER_BACKENDS_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not import worker backends from {WORKER_BACKENDS_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+WORKER_BACKENDS = load_worker_backends_module()
 
 
 def run_cli(repo: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -1207,18 +1226,25 @@ class SandboxedPlanWorkerTests(unittest.TestCase):
         }
         path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
-    def test_default_worker_command_uses_supported_external_sandbox_flags(self) -> None:
-        command = RUNNER.default_worker_command(
-            codex_bin="/usr/bin/codex",
+    def test_codex_backend_builds_the_unchanged_external_sandbox_command(self) -> None:
+        command = WORKER_BACKENDS.CodexBackend().command(
+            executable="/usr/bin/codex",
             clone_dir=Path("/tmp/clone"),
-            scratch_dir=Path("/tmp/scratch"),
             last_message_path=Path("/tmp/last-message.txt"),
             model="model",
             reasoning="medium",
         )
-        self.assertIn("--dangerously-bypass-approvals-and-sandbox", command)
-        self.assertIn("--ignore-user-config", command)
-        self.assertIn("--ephemeral", command)
+        # The exact argv the runner built before the WorkerBackend boundary existed.
+        self.assertEqual(
+            command,
+            [
+                "/usr/bin/codex", "exec", "--dangerously-bypass-approvals-and-sandbox",
+                "--ignore-user-config", "--ephemeral", "--model", "model",
+                "--skip-git-repo-check", "--color", "never", "--cd", "/tmp/clone",
+                "--config", 'model_reasoning_effort="medium"',
+                "--output-last-message", "/tmp/last-message.txt", "-",
+            ],
+        )
         self.assertNotIn("--sandbox", command)
         self.assertNotIn("--ask-for-approval", command)
         self.assertNotIn("--dangerously-bypass-hook-trust", command)
@@ -5162,7 +5188,7 @@ def evaluate_selected_worker_contract_fixture(
     """Run one explicitly selected sealed fixture through the production runner behavior."""
     SandboxedPlanWorkerTests.setUpClass()
     evaluator = SandboxedPlanWorkerTests(
-        methodName="test_default_worker_command_uses_supported_external_sandbox_flags"
+        methodName="test_codex_backend_builds_the_unchanged_external_sandbox_command"
     )
     return evaluate_worker_contract_fixture(
         path,
@@ -9119,6 +9145,393 @@ class CandidatePreflightRunnerIdentityTests(unittest.TestCase):
         self.assertEqual(
             SCRIPT.read_bytes(),
             TEMPLATE_SCRIPT.read_bytes(),
+        )
+
+
+class WorkerBackendRegistryTests(unittest.TestCase):
+    """The Capability Registry resolves every capability to its Codex implementation."""
+
+    EXPECTED_RESOLUTIONS = {
+        "repository_exploration": ("read_only", {"backend": "codex", "kind": "native_profile", "profiles": ["repo_explorer"]}),
+        "bounded_implementation": ("writable", {"backend": "codex", "kind": "native_profile", "profiles": ["fast_scoped_worker", "scoped_worker"]}),
+        "plan_implementation": ("writable", {"backend": "codex", "kind": "sandboxed_runner"}),
+        "evidence_synthesis": ("read_only", {"backend": "codex", "kind": "native_profile", "profiles": ["evidence_synthesizer"]}),
+        "documentation_research": ("read_only", {"backend": "codex", "kind": "native_profile", "profiles": ["docs_researcher"]}),
+        "deep_review": ("read_only", {"backend": "codex", "kind": "native_profile", "profiles": ["change_reviewer"]}),
+    }
+
+    def registry_document(self) -> dict[str, Any]:
+        return json.loads(CAPABILITY_REGISTRY.read_text(encoding="utf-8"))
+
+    def test_both_registry_copies_resolve_every_capability_to_codex(self) -> None:
+        self.assertEqual(CAPABILITY_REGISTRY.read_bytes(), TEMPLATE_CAPABILITY_REGISTRY.read_bytes())
+        self.assertEqual(WORKER_BACKENDS_SCRIPT.read_bytes(), TEMPLATE_WORKER_BACKENDS_SCRIPT.read_bytes())
+        registry = WORKER_BACKENDS.load_registry(CAPABILITY_REGISTRY)
+        self.assertEqual(list(registry), list(self.EXPECTED_RESOLUTIONS))
+        for capability, (access, record) in self.EXPECTED_RESOLUTIONS.items():
+            with self.subTest(capability=capability):
+                self.assertEqual(registry[capability].access, access)
+                self.assertEqual(
+                    WORKER_BACKENDS.resolve(registry, capability).as_record(), record
+                )
+        backend = WORKER_BACKENDS.resolve_plan_implementation(CAPABILITY_REGISTRY)
+        self.assertIsInstance(backend, WORKER_BACKENDS.CodexBackend)
+        self.assertEqual(backend.backend_id, "codex")
+        with self.assertRaisesRegex(WORKER_BACKENDS.RegistryError, "unknown capability"):
+            WORKER_BACKENDS.resolve(registry, "unlisted_capability")
+
+    def test_registry_refuses_every_malformed_document(self) -> None:
+        def mutated(change) -> bytes:
+            document = self.registry_document()
+            change(document)
+            return json.dumps(document).encode("utf-8")
+
+        def capability(document: dict[str, Any], identifier: str) -> dict[str, Any]:
+            return next(entry for entry in document["capabilities"] if entry["id"] == identifier)
+
+        def set_first_implementation(identifier: str, value: dict[str, Any]):
+            return lambda document: capability(document, identifier)["implementations"].__setitem__(0, value)
+
+        cases = {
+            "unknown top-level key": mutated(lambda d: d.__setitem__("default", "codex")),
+            "boolean schema version": mutated(lambda d: d.__setitem__("schema_version", True)),
+            "float schema version": mutated(lambda d: d.__setitem__("schema_version", 1.0)),
+            "future schema version": mutated(lambda d: d.__setitem__("schema_version", 2)),
+            "capabilities not a list": mutated(lambda d: d.__setitem__("capabilities", {})),
+            "omitted capability": mutated(lambda d: d["capabilities"].pop()),
+            "repeated capability": mutated(lambda d: d["capabilities"].append(d["capabilities"][0])),
+            "reordered capabilities": mutated(lambda d: d["capabilities"].reverse()),
+            "unknown capability key": mutated(lambda d: d["capabilities"][0].__setitem__("model", "any")),
+            "wrong access": mutated(lambda d: capability(d, "deep_review").__setitem__("access", "writable")),
+            "empty implementations": mutated(lambda d: capability(d, "deep_review").__setitem__("implementations", [])),
+            "repeated implementation": mutated(
+                lambda d: capability(d, "deep_review")["implementations"].append(
+                    capability(d, "deep_review")["implementations"][0]
+                )
+            ),
+            "unknown backend": mutated(set_first_implementation(
+                "plan_implementation", {"backend": "opencode-go", "kind": "sandboxed_runner"}
+            )),
+            "unknown kind": mutated(set_first_implementation(
+                "plan_implementation", {"backend": "codex", "kind": "process"}
+            )),
+            "sandboxed runner outside plan_implementation": mutated(set_first_implementation(
+                "repository_exploration", {"backend": "codex", "kind": "sandboxed_runner"}
+            )),
+            "native profile for plan_implementation": mutated(set_first_implementation(
+                "plan_implementation", {"backend": "codex", "kind": "native_profile", "profiles": ["scoped_worker"]}
+            )),
+            "runner with profiles": mutated(set_first_implementation(
+                "plan_implementation", {"backend": "codex", "kind": "sandboxed_runner", "profiles": ["scoped_worker"]}
+            )),
+            "malformed profile": mutated(set_first_implementation(
+                "repository_exploration", {"backend": "codex", "kind": "native_profile", "profiles": ["../repo_explorer"]}
+            )),
+            "writable profile for a read-only capability": mutated(set_first_implementation(
+                "repository_exploration", {"backend": "codex", "kind": "native_profile", "profiles": ["scoped_worker"]}
+            )),
+            "reordered profiles": mutated(set_first_implementation(
+                "bounded_implementation",
+                {"backend": "codex", "kind": "native_profile", "profiles": ["scoped_worker", "fast_scoped_worker"]},
+            )),
+            "extra implementation": mutated(
+                lambda d: capability(d, "repository_exploration")["implementations"].append(
+                    {"backend": "codex", "kind": "native_profile", "profiles": ["docs_researcher"]}
+                )
+            ),
+            "empty profiles": mutated(set_first_implementation(
+                "repository_exploration", {"backend": "codex", "kind": "native_profile", "profiles": []}
+            )),
+            "repeated profile": mutated(set_first_implementation(
+                "repository_exploration",
+                {"backend": "codex", "kind": "native_profile", "profiles": ["repo_explorer", "repo_explorer"]},
+            )),
+            "duplicate JSON key": b'{"schema_version": 1, "schema_version": 1, "capabilities": []}',
+            "not an object": b"[]",
+            "not UTF-8": b"\xff\xfe",
+            "not JSON": b"{",
+            "oversized": b" " * (WORKER_BACKENDS.REGISTRY_MAX_BYTES + 1),
+        }
+        for name, raw in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(WORKER_BACKENDS.RegistryError):
+                    WORKER_BACKENDS.parse_registry(raw)
+
+    def test_registry_reader_refuses_missing_symlinked_and_non_regular_files(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="capability-registry-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        valid = root / "valid.json"
+        shutil.copyfile(CAPABILITY_REGISTRY, valid)
+        self.assertEqual(list(WORKER_BACKENDS.load_registry(valid)), list(self.EXPECTED_RESOLUTIONS))
+        linked = root / "linked.json"
+        linked.symlink_to(valid)
+        directory = root / "directory.json"
+        directory.mkdir()
+        oversized = root / "oversized.json"
+        oversized.write_bytes(b" " * (WORKER_BACKENDS.REGISTRY_MAX_BYTES + 1))
+        fifo = root / "fifo.json"
+        os.mkfifo(fifo)
+        real_parent = root / "real"
+        real_parent.mkdir()
+        shutil.copyfile(CAPABILITY_REGISTRY, real_parent / "capability-registry.json")
+        linked_parent = root / "linked"
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+        for path, message in (
+            (root / "missing.json", "missing"),
+            (root / "missing-parent" / "capability-registry.json", "missing"),
+            (linked, "cannot be opened safely"),
+            (linked_parent / "capability-registry.json", "cannot be opened safely"),
+            (directory, "not a regular file"),
+            (fifo, "not a regular file"),
+            (oversized, "exceeds"),
+        ):
+            with self.subTest(path=path.name):
+                with self.assertRaisesRegex(WORKER_BACKENDS.RegistryError, message):
+                    WORKER_BACKENDS.load_registry(path)
+
+    def test_generated_flat_copy_resolves_plan_implementation_with_the_standard_library_only(self) -> None:
+        project = Path(tempfile.mkdtemp(prefix="generated-worker-backends-"))
+        self.addCleanup(shutil.rmtree, project, True)
+        scripts = project / ".project-agent-workflow/scripts"
+        registry = project / ".project-agent-workflow/docs/agent/capability-registry.json"
+        scripts.mkdir(parents=True)
+        registry.parent.mkdir(parents=True)
+        module = scripts / "worker_backends.py"
+        shutil.copyfile(TEMPLATE_WORKER_BACKENDS_SCRIPT, module)
+        shutil.copyfile(TEMPLATE_CAPABILITY_REGISTRY, registry)
+        result = subprocess.run(
+            [sys.executable, "-I", str(module), "resolve", "plan_implementation"],
+            cwd=project, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "access": "writable",
+                "capability": "plan_implementation",
+                "implementation": {"backend": "codex", "kind": "sandboxed_runner"},
+            },
+        )
+        override = subprocess.run(
+            [sys.executable, "-I", str(module), "resolve", "plan_implementation", "--registry", str(registry)],
+            cwd=project, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(override.returncode, 2)
+        self.assertIn("unrecognized arguments", override.stderr)
+        registry.unlink()
+        missing = subprocess.run(
+            [sys.executable, "-I", str(module), "resolve", "plan_implementation"],
+            cwd=project, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("capability registry is missing", missing.stderr)
+
+    def broken_registry(self) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="broken-capability-registry-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        broken = root / "capability-registry.json"
+        broken.write_text('{"schema_version": 1, "capabilities": []}\n', encoding="utf-8")
+        return broken
+
+    def enter_repository(self, repo: Path) -> None:
+        previous = Path.cwd()
+        self.addCleanup(os.chdir, previous)
+        os.chdir(repo)
+
+    def run_args(self, plan_path: str, root: Path, **overrides: Any) -> argparse.Namespace:
+        values: dict[str, Any] = {
+            "git_bin": "git",
+            "plan": plan_path,
+            "worker_binary": None,
+            "worker_arg": [],
+            "lifecycle_state": str(root / "lifecycle.json"),
+            "orchestration_run_id": "registry-refusal-run",
+            "output_dir": str(root / "output"),
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_codex_run_refuses_an_unresolved_registry_before_any_effect(self) -> None:
+        helper = SandboxedPlanWorkerTests(methodName="test_dependent_attempt_forwards_reviewer_registry")
+        temporary, repo, plan_path = helper.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.enter_repository(repo)
+        broken = self.broken_registry()
+        with (
+            mock.patch.object(RUNNER, "capability_registry_path", return_value=broken),
+            mock.patch.object(RUNNER, "open_lifecycle_state") as lifecycle,
+            mock.patch.object(RUNNER, "begin_plan_execution_attempt") as begin,
+            mock.patch.object(RUNNER, "execute_isolated_attempt") as attempt,
+        ):
+            with self.assertRaisesRegex(RUNNER.RunnerError, "could not resolve plan_implementation"):
+                RUNNER.run_worker(self.run_args(plan_path, root))
+        lifecycle.assert_not_called()
+        begin.assert_not_called()
+        attempt.assert_not_called()
+        self.assertFalse((root / "lifecycle.json").exists())
+        self.assertFalse((root / "output").exists())
+
+    def test_custom_worker_run_does_not_consult_the_registry(self) -> None:
+        helper = SandboxedPlanWorkerTests(methodName="test_dependent_attempt_forwards_reviewer_registry")
+        temporary, repo, plan_path = helper.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.enter_repository(repo)
+
+        class ReachedLifecycle(Exception):
+            pass
+
+        with (
+            mock.patch.object(RUNNER, "capability_registry_path", return_value=self.broken_registry()),
+            mock.patch.object(RUNNER, "open_lifecycle_state", side_effect=ReachedLifecycle),
+        ):
+            with self.assertRaises(ReachedLifecycle):
+                RUNNER.run_worker(
+                    self.run_args(plan_path, root, worker_binary=sys.executable)
+                )
+
+    def test_codex_correction_refuses_an_unresolved_registry_before_any_effect(self) -> None:
+        helper = SandboxedPlanWorkerTests(methodName="test_dependent_attempt_forwards_reviewer_registry")
+        temporary, repo, plan_path = helper.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial = helper.run_with_fake_codex(
+            repo, plan_path, "primary_success", output_dir=root / "initial-output"
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        lifecycle_path = Path(manifest["lifecycle_state_path"])
+        lifecycle_before = lifecycle_path.read_bytes()
+        brief = root / "correction-brief.txt"
+        brief.write_text("Correct the candidate.\n", encoding="utf-8")
+        self.enter_repository(repo)
+        args = self.run_args(
+            plan_path,
+            root,
+            prior_manifest=str(manifest_path),
+            correction_brief=str(brief),
+            lifecycle_state=str(lifecycle_path),
+            orchestration_run_id=manifest["orchestration_run_id"],
+            output_dir=str(root / "correction-output"),
+        )
+        with (
+            mock.patch.object(RUNNER, "capability_registry_path", return_value=self.broken_registry()),
+            mock.patch.object(RUNNER, "begin_plan_execution_attempt") as begin,
+            mock.patch.object(RUNNER, "execute_isolated_attempt") as attempt,
+        ):
+            with self.assertRaisesRegex(RUNNER.RunnerError, "could not resolve plan_implementation"):
+                RUNNER.correct_worker(args)
+        begin.assert_not_called()
+        attempt.assert_not_called()
+        self.assertEqual(lifecycle_path.read_bytes(), lifecycle_before)
+        self.assertFalse((root / "correction-output").exists())
+
+    def test_custom_worker_correction_does_not_consult_the_registry(self) -> None:
+        helper = SandboxedPlanWorkerTests(methodName="test_dependent_attempt_forwards_reviewer_registry")
+        temporary, repo, plan_path = helper.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        initial = helper.run_with_fake_codex(
+            repo, plan_path, "primary_success", output_dir=root / "initial-output"
+        )
+        self.assertEqual(initial.returncode, 0, initial.stderr)
+        manifest_path = Path(initial.stdout.strip())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        brief = root / "correction-brief.txt"
+        brief.write_text("Correct the candidate.\n", encoding="utf-8")
+        self.enter_repository(repo)
+
+        class ReachedLineage(Exception):
+            pass
+
+        args = self.run_args(
+            plan_path,
+            root,
+            prior_manifest=str(manifest_path),
+            correction_brief=str(brief),
+            lifecycle_state=manifest["lifecycle_state_path"],
+            orchestration_run_id=manifest["orchestration_run_id"],
+            output_dir=str(root / "correction-output"),
+            worker_binary=sys.executable,
+        )
+        with (
+            mock.patch.object(RUNNER, "capability_registry_path", return_value=self.broken_registry()),
+            mock.patch.object(RUNNER, "next_correction_lineage", side_effect=ReachedLineage),
+        ):
+            with self.assertRaises(ReachedLineage):
+                RUNNER.correct_worker(args)
+
+    def test_primary_fallback_and_correction_attempts_take_their_command_from_the_resolved_backend(self) -> None:
+        helper = SandboxedPlanWorkerTests(methodName="test_dependent_attempt_forwards_reviewer_registry")
+        temporary, repo, plan_path = helper.make_repo(["allowed.txt"])
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        record = root / "backend-commands.jsonl"
+        wrapper = root / "recording-runner.py"
+        wrapper.write_text(
+            textwrap.dedent(
+                f"""\
+                import importlib.util
+                import json
+                import sys
+
+                spec = importlib.util.spec_from_file_location("recording_runner", {str(SCRIPT)!r})
+                runner = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = runner
+                spec.loader.exec_module(runner)
+                resolve = runner.resolve_plan_implementation_backend
+
+
+                def recording_backend():
+                    backend = resolve()
+
+                    class RecordingBackend(type(backend)):
+                        def command(self, **values):
+                            argv = super().command(**values)
+                            with open({str(record)!r}, "a", encoding="utf-8") as handle:
+                                handle.write(json.dumps(argv) + "\\n")
+                            return argv
+
+                    return RecordingBackend()
+
+
+                runner.resolve_plan_implementation_backend = recording_backend
+                sys.exit(runner.main(sys.argv[1:]))
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        def recorded_models() -> list[str]:
+            lines = record.read_text(encoding="utf-8").splitlines() if record.exists() else []
+            commands = [json.loads(line) for line in lines]
+            for command in commands:
+                self.assertEqual(command[1:5], ["exec", "--dangerously-bypass-approvals-and-sandbox", "--ignore-user-config", "--ephemeral"])
+            return [command[command.index("--model") + 1] for command in commands]
+
+        with mock.patch.dict(globals(), {"SCRIPT": wrapper}):
+            initial = helper.run_with_fake_codex(
+                repo, plan_path, "unavailable_then_success", output_dir=root / "initial-output"
+            )
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            manifest_path = Path(initial.stdout.strip())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                recorded_models(),
+                [attempt["model"] for attempt in manifest["worker_result"]["attempts"]],
+            )
+            self.assertEqual(recorded_models(), ["gpt-5.3-codex-spark", "gpt-5.6-luna"])
+            brief = root / "correction-brief.txt"
+            brief.write_text("Correct the candidate.\n", encoding="utf-8")
+            correction = helper.run_correction_with_fake_codex(
+                repo, plan_path, manifest_path, brief, "primary_success",
+                output_dir=root / "correction-output",
+            )
+            self.assertEqual(correction.returncode, 0, correction.stderr)
+        self.assertEqual(
+            recorded_models(), ["gpt-5.3-codex-spark", "gpt-5.6-luna", "gpt-5.3-codex-spark"]
         )
 
 

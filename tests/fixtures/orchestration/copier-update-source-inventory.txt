@@ -42,6 +42,8 @@ template/.project-agent-workflow/scripts/retire-merged-worktrees.py
 template/.project-agent-workflow/ownership.yaml
 template/.project-agent-workflow/scripts/run-sandboxed-plan-worker.py
 template/.project-agent-workflow/scripts/opencode_go_transport.py
+template/.project-agent-workflow/scripts/worker_backends.py
+template/.project-agent-workflow/docs/agent/capability-registry.json
 template/.project-agent-workflow/skills/browser-ops/SKILL.md
 template/.project-agent-workflow/skills/browser-ops/agents/openai.yaml
 template/.project-agent-workflow/skills/browser-ops/references/browser-run-policy.md
