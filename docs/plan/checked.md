@@ -294,3 +294,4 @@ id	path
 317	docs/plan/checked/2026/09/16-31/317-build-plan-record-question-set.md
 400	docs/plan/checked/2026/09/16-31/400-register-typesafe-with-canonical-host-detection.md
 354	docs/plan/checked/2026/09/16-31/354-score-plan-risk-from-weighted-features.md
+410	docs/plan/checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md

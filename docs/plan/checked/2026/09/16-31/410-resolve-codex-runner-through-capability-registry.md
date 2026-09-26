@@ -1,6 +1,6 @@
 # Resolve the Codex plan runner through a managed Capability Registry and a CodexBackend with no behavior change
 
-status: in_progress
+status: checked
 primary_invariant: Every capability resolves to an existing Codex implementation, and the runner's Codex attempts launch the exact command, sandbox, model routing, fallback, receipts, manifests and validation they launched before, obtained only through the resolved CodexBackend.
 task_types:
   - template_workflow
@@ -100,14 +100,20 @@ checked_summary_ja: 管理された Capability Registry と CodexBackend を加�
 
 ## Tasks
 
-- [ ] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, record the review-route check, and record the pre-change Codex argv and runner suite result this plan must keep.
-- [ ] Add worker_backends.py with registry loading, validation, resolution, WorkerBackend, CodexBackend and the resolve command, and the registry in both layouts.
-- [ ] Route the primary, fallback and correction Codex attempts through the resolved backend in both runner copies and remove default_worker_command.
-- [ ] Add registry refusal, resolution, exact argv, resolution-before-effect and flat-layout cases to tests/test-sandboxed-plan-worker.py, and keep the existing runner cases unchanged.
-- [ ] Register the module and registry in the inventories and the Copier update source inventory, and add the template checker alignment and profile-existence checks.
-- [ ] Document the boundary in references/orchestration.md, the generated SPEC_ORCHESTRATION.md and CHANGELOG.md.
-- [ ] Record a passing adversarial preflight, obtain independent review through a fresh read-only reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
+- [x] Before product edits, prepare the parent-direct execution ledger with prepare-parent-direct, record the review-route check, and record the pre-change Codex argv and runner suite result this plan must keep.
+- [x] Add worker_backends.py with registry loading, validation, resolution, WorkerBackend, CodexBackend and the resolve command, and the registry in both layouts.
+- [x] Route the primary, fallback and correction Codex attempts through the resolved backend in both runner copies and remove default_worker_command.
+- [x] Add registry refusal, resolution, exact argv, resolution-before-effect and flat-layout cases to tests/test-sandboxed-plan-worker.py, and keep the existing runner cases unchanged.
+- [x] Register the module and registry in the inventories and the Copier update source inventory, and add the template checker alignment and profile-existence checks.
+- [x] Document the boundary in references/orchestration.md, the generated SPEC_ORCHESTRATION.md and CHANGELOG.md.
+- [x] Record a passing adversarial preflight, obtain independent review through a fresh read-only reviewer whose first prompt carries the ReviewPacket marker, resolve findings within the existing budget, run the focused checks, then the authoritative suites once, and publish through manage-plan-worktrees.py without pushing.
 
 ## Validation Notes
 
 - Owner instruction on 2026-09-26, 「1. のプランを実装せよ。」, selected the Issue #14 foundation as the next step after the reconstruction of plans 394 to 399, with the recommended choices: the #15 configuration identity stays out of this plan, the registry holds the six Issue #14 capabilities, and the foundation runs before the #15 controller.
+- Execution record: parent_direct in the plan 410 task worktree at source head `0de7b39`, with fresh read-only Codex `gpt-5.6-sol` reviewers whose first prompt carried the ReviewPacket marker and a review-route check before each epoch's first product edit. Before any edit the runner suite passed (258 tests), and the pre-change `default_worker_command` argv equaled `CodexBackend.command` for 27 executable, model and reasoning combinations.
+- Epoch 0 (`plan-410-parent-direct-001`) review 1 reported High, Medium and Low: the registry accepted a writable profile for a read-only capability and extra implementations; the resolve command accepted a `--registry` override; the reader could block on a FIFO and followed ancestor symlinks; `schema_version` 1.0 was accepted; the tests did not prove that primary, fallback and correction attempts take their command from the resolved backend or cover the custom correction path. The owner answered 「同じプランで続行」.
+- Epoch 1 (`plan-410-parent-direct-002`) fixed all five: a fixed schema-1 implementation table that the registry must equal, no override option, a component-by-component `O_NOFOLLOW` walk with a non-blocking final open, an integer version check, and a recording-backend test plus a custom-correction case. Its adversarial preflight bound 11 mutation cases, each failing its test when applied and passing when restored; the FIFO case failed by its 120-second timeout. Review 2 returned `REVIEW-VERDICT: none`.
+- Decisions refinement: the Decisions describe the registry shape and the resolve command; review 1 added the fixed schema-1 table, so a later plan that adds an implementation changes that table in worker_backends.py together with the registry. The ledger binds the plan digest, so the refinement is recorded here.
+- Focused validation passed: `python3 tests/test-sandboxed-plan-worker.py` (267 tests), `python3 scripts/check-copier-template.py` and `tests/copier-update.sh --require-copier`. The runner suite ran with the system `/usr/bin/python3`, because the repository `.venv` interpreter lies outside the Bubblewrap sandbox; the Copier update ran with `.venv/bin` on PATH for Ruff. The authoritative suite then passed once with `.venv/bin` on PATH: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- The configuration identity that Issue #15 consumes stays out of this plan, as the Decisions state. No helper agents were used; the reviewers were independent Codex sessions started by the parent, and the parent verified each finding before fixing it.

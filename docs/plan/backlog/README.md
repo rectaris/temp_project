@@ -36,15 +36,15 @@ Ruffによる検査を入れた[353](../checked/2026/09/16-31/353-enforce-bounde
 後継では、親はOpenCodeを名指しせず能力の名前で要求し、Capability Registryが既定のCodexか、プロジェクトが明示的に有効にしたOpenCode Goの実装を選ぶ。
 OpenCode固有の起動方法と資格情報の中継は、OpenCodeGoBackendの中に閉じる。
 
-後継の6件は、まだプランになっていない前提作業を integration_gates の文章で待つ。
+後継の6件は、次の前提作業を integration_gates の文章で待つ。
 
-- Issue #14の基盤は、Capability RegistryとWorkerBackend境界を追加し、現行のCodexの経路をCodexBackendとして動作を変えずに包む。後継は`docs/agent/capability-registry.json`と`scripts/project_workflow/worker_backends.py`、およびそれぞれのテンプレートの写しをこの名前で編集する。基盤のプランが名前を変える場合は、所有者の承認を記録して後継の書き込み範囲を移す。
+- Issue #14の基盤は、[410](../checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md)として完了した。Capability RegistryとWorkerBackend境界を追加し、現行のCodexの経路をCodexBackendとして動作を変えずに包んでいる。後継が編集する`docs/agent/capability-registry.json`と`scripts/project_workflow/worker_backends.py`、およびそれぞれのテンプレートの写しは、この名前で作られた。登録表はworker_backends.pyの固定の対応表と一致する必要があるため、実装を加える後継は両方を同時に変える。
 - [Issue #15](https://github.com/rectaris/temp_project/issues/15)の最小の評価実行は、404の開始前に完了させる。
 - 408は、#15でCodexとOpenCode Goの読み取り専用の動作を比べた結果が、書き込みの実装を有効にすることを支持するまで開始しない。
 
 次の順に一件ずつ実装する。
 
-1. Issue #14の基盤
+1. [410：Issue #14の基盤](../checked/2026/09/16-31/410-resolve-codex-runner-through-capability-registry.md)（完了）
 2. Issue #15の最小の評価実行
 3. [404：読み取り専用の能力を処理するOpenCode Goの実装](404-run-read-only-capabilities-through-opencode-go-backend.md)
 4. [405：どの能力も有効にしない実装の設定](405-seed-disabled-opencode-go-backend-configuration.md)
