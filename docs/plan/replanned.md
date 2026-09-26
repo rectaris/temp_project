@@ -77,3 +77,6 @@ id	path	contract
 397	docs/plan/replanned/2026/09/16-31/397-isolate-read-only-opencode-go-helper.md	docs/plan/replanned/contracts/397-target-read-only-capability-backends.json
 398	docs/plan/replanned/2026/09/16-31/398-seed-opencode-go-helper-configuration.md	docs/plan/replanned/contracts/397-target-read-only-capability-backends.json
 399	docs/plan/replanned/2026/09/16-31/399-integrate-opencode-go-read-only-helper.md	docs/plan/replanned/contracts/397-target-read-only-capability-backends.json
+394	docs/plan/replanned/2026/09/16-31/394-bind-custom-worker-dispatch-provenance.md	docs/plan/replanned/contracts/394-target-writable-worker-backends.json
+395	docs/plan/replanned/2026/09/16-31/395-run-opencode-go-candidate-worker.md	docs/plan/replanned/contracts/394-target-writable-worker-backends.json
+396	docs/plan/replanned/2026/09/16-31/396-integrate-opencode-go-candidate-route.md	docs/plan/replanned/contracts/394-target-writable-worker-backends.json

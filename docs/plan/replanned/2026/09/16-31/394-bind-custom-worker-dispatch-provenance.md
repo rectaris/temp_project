@@ -1,17 +1,7 @@
 # Bind parent-authored custom-worker dispatch provenance to every candidate attempt
 
-status: replan_required
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: Every custom-worker attempt carries a parent-authored dispatch record bound to its exact attempt, and no worker claim can supply, replace or satisfy that record on any admission path.
-replan_sources:
-  - docs/plan/active/357-delegate-candidate-implementation-to-opencode-go.md
-replan_contract: docs/plan/replanned/contracts/357-delegate-candidate-implementation-to-opencode-go.json
-successor_plans:
-  - docs/plan/active/394-bind-custom-worker-dispatch-provenance.md
-  - docs/plan/active/395-run-opencode-go-candidate-worker.md
-  - docs/plan/active/396-integrate-opencode-go-candidate-route.md
-inherited_acceptance_digests:
-  - sha256:72b4b9ee612345af0ad93689efed29eda6b85063c25fc7f41dd82388205ada6b
 task_types:
   - template_workflow
   - security
@@ -66,10 +56,20 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:72b4b9ee612345af0ad93689efed29eda6b85063c25fc7f41dd82388205ada6b","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/394-bind-custom-worker-dispatch-provenance.md
+  - docs/plan/active/395-run-opencode-go-candidate-worker.md
+  - docs/plan/active/396-integrate-opencode-go-candidate-route.md
+replan_contract: docs/plan/replanned/contracts/394-target-writable-worker-backends.json
 integration_gates:
-  - Plan 356 and the plans its reconstruction creates must reach checked archives before this plan starts, because this plan reuses the read-only helper launcher, configuration and discovery surfaces they add.
-replan_reason_codes:
-  - scope_drift
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/407-bind-worker-backend-dispatch-provenance.md
+  - docs/plan/active/408-add-opencode-go-writable-backend.md
+  - docs/plan/active/409-discover-plan-implementation-backends-through-registry.md
+inherited_acceptance_digests:
+  - sha256:72b4b9ee612345af0ad93689efed29eda6b85063c25fc7f41dd82388205ada6b
 checked_summary_ja: カスタムワーカーの試行ごとに、親が記録した起動情報を結び付けて検証する。
 
 ## Decisions

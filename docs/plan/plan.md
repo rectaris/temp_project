@@ -1,9 +1,9 @@
 # Active Plan
 
 id	path	status
-394	docs/plan/active/394-bind-custom-worker-dispatch-provenance.md	replan_required
-395	docs/plan/active/395-run-opencode-go-candidate-worker.md	deferred
-396	docs/plan/active/396-integrate-opencode-go-candidate-route.md	deferred
 404	docs/plan/active/404-run-read-only-capabilities-through-opencode-go-backend.md	deferred
 405	docs/plan/active/405-seed-disabled-opencode-go-backend-configuration.md	deferred
 406	docs/plan/active/406-discover-read-only-capabilities-through-registry.md	deferred
+407	docs/plan/active/407-bind-worker-backend-dispatch-provenance.md	deferred
+408	docs/plan/active/408-add-opencode-go-writable-backend.md	deferred
+409	docs/plan/active/409-discover-plan-implementation-backends-through-registry.md	deferred

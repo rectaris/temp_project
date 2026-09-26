@@ -1,20 +1,7 @@
 # Run an OpenCode Go candidate worker behind a runner-owned backend selector
 
-status: deferred
-completion_deferred_reason: Plan 394 must be checked first, and plan 356's reconstruction successors before it.
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: Only the runner-selected, runner-shipped Go adapter reaches the credential relay, and the OpenCode process edits only the admitted writable shadows with no shell, network or credential access.
-replan_sources:
-  - docs/plan/active/357-delegate-candidate-implementation-to-opencode-go.md
-replan_contract: docs/plan/replanned/contracts/357-delegate-candidate-implementation-to-opencode-go.json
-successor_plans:
-  - docs/plan/active/394-bind-custom-worker-dispatch-provenance.md
-  - docs/plan/active/395-run-opencode-go-candidate-worker.md
-  - docs/plan/active/396-integrate-opencode-go-candidate-route.md
-inherited_acceptance_digests:
-  - sha256:d930bc55fa2da26dfb2e6a2bd4f2a0b00d7079bf28176e0828141c143967b5bd
-  - sha256:68efe554460079f7e5645eb24e5697d41905580d3d4cfc7a1a2a7b71bf15673c
-  - sha256:8ded8e74d9aa6291e5f488ffb4529ab04a1e0e49f624c89b0af5fcac8721d6a0
 predecessor_plans:
   - docs/plan/active/394-bind-custom-worker-dispatch-provenance.md
 task_types:
@@ -88,8 +75,22 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:d930bc55fa2da26dfb2e6a2bd4f2a0b00d7079bf28176e0828141c143967b5bd","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:68efe554460079f7e5645eb24e5697d41905580d3d4cfc7a1a2a7b71bf15673c","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:8ded8e74d9aa6291e5f488ffb4529ab04a1e0e49f624c89b0af5fcac8721d6a0","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/394-bind-custom-worker-dispatch-provenance.md
+  - docs/plan/active/395-run-opencode-go-candidate-worker.md
+  - docs/plan/active/396-integrate-opencode-go-candidate-route.md
+replan_contract: docs/plan/replanned/contracts/394-target-writable-worker-backends.json
 integration_gates:
-  - Plan 356 and the plans its reconstruction creates must reach checked archives before this plan starts, because this plan reuses the read-only helper launcher, configuration and discovery surfaces they add.
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/407-bind-worker-backend-dispatch-provenance.md
+  - docs/plan/active/408-add-opencode-go-writable-backend.md
+  - docs/plan/active/409-discover-plan-implementation-backends-through-registry.md
+inherited_acceptance_digests:
+  - sha256:d930bc55fa2da26dfb2e6a2bd4f2a0b00d7079bf28176e0828141c143967b5bd
+  - sha256:68efe554460079f7e5645eb24e5697d41905580d3d4cfc7a1a2a7b71bf15673c
+  - sha256:8ded8e74d9aa6291e5f488ffb4529ab04a1e0e49f624c89b0af5fcac8721d6a0
 checked_summary_ja: ランナーが選んだ OpenCode Go アダプターだけが中継に接続し、許可された書き込み先だけを編集する実装候補を生成する。
 
 ## Decisions
