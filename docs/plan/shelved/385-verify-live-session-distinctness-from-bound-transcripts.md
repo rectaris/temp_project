@@ -1,6 +1,8 @@
 # Verify live-session distinctness and overlap from bound member transcripts instead of report strings
 
-status: backlog
+status: shelved
+shelved_reason: Owner instruction 2026-09-26: 385 はオーナー指示として棚上げする. No active or backlog plan declares live_evidence_contract, so this verifier gates nothing today; restore it only when a plan reserves a live two-session demonstration.
+shelved_at: 2026-09-26
 primary_invariant: A live-evidence report is admitted only when each of its two members names a private runtime transcript outside the repository whose bytes match the reported digest, whose session metadata names exactly that member's reported session, and which holds a tool record inside that member's implementation interval, and when the two sessions differ and the two intervals overlap; a caller-declared session list, session count or interval list never satisfies the gate.
 task_types:
   - template_workflow
