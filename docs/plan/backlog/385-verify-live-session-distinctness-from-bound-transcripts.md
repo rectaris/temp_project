@@ -1,8 +1,6 @@
 # Verify live-session distinctness and overlap from bound member transcripts instead of report strings
 
-status: shelved
-shelved_reason: Owner instruction 2026-09-26: 385 はオーナー指示として棚上げする. No active or backlog plan declares live_evidence_contract, so this verifier gates nothing today; restore it only when a plan reserves a live two-session demonstration.
-shelved_at: 2026-09-26
+status: backlog
 primary_invariant: A live-evidence report is admitted only when each of its two members names a private runtime transcript outside the repository whose bytes match the reported digest, whose session metadata names exactly that member's reported session, and which holds a tool record inside that member's implementation interval, and when the two sessions differ and the two intervals overlap; a caller-declared session list, session count or interval list never satisfies the gate.
 task_types:
   - template_workflow
@@ -93,3 +91,7 @@ checked_summary_ja: 実地セッションの別個性と重なりを、報告書
 - This plan is the second of two that close what plan 374 never closed. The first is the recorded review outcome in plan-execution-state.py. The two are kept apart because they are independently validatable; coupling independent invariants is the condition that stops a plan for reconstruction, and it is what happened to 374. The two plans share no written file.
 - 374 acceptance items one through three are already carried by working code, with forty passing tests at the planning baseline covering stale evidence, target drift, the reserved review slot, interrupted and duplicate publication, retirement authority, and root-to-generated identity. Neither this plan nor its predecessor reimplements that work.
 - 374's live acceptance obligation, sha256:78d5a40ddf9da07975330961711334ee747e8bdf119961e1373ab28b57c42411 under parallel_sessions_v1, was last held by plan 382, which was shelved on the owner instruction of 2026-09-25. No active or backlog plan declares live_evidence_contract, so no plan is gated by this verifier today. The owner chose on 2026-09-26 to keep this plan so the verifier matches its specification before any later plan reserves a live demonstration.
+
+- Planning request 2026-09-26: 「並列実装をするためのプランを作成せよ。」 Restore this unstarted plan to backlog because a live two-session demonstration is now planned in docs/plan/parallel-session-development-20260926.md. Keep the implementation scope, acceptance and witnesses unchanged; restoration does not start implementation or reserve evidence by itself.
+- The predecessor review-outcome change is checked as docs/plan/checked/2026/09/16-31/384-derive-review-outcome-from-reviewer-evidence.md. Reuse that accepted supported-entrypoint boundary, not the same-user unforgeability requirement rejected in shelved plan 379. Do not reopen its stopped ledgers, apply its retained candidate or reset its review budget.
+- Complete this verifier change serially before attempting the live demonstration. Passing its synthetic regression fixtures is not evidence that two real sessions ran. The separate operational plan requires distinct runtime transcripts, overlapping implementation, ordered publication, retained changes and exact task retirement before reporting parallel development as demonstrated.
