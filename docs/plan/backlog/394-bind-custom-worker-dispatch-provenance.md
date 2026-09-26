@@ -1,7 +1,6 @@
 # Bind parent-authored custom-worker dispatch provenance to every candidate attempt
 
-status: deferred
-completion_deferred_reason: Plan 356's reconstruction successors must be checked first; this plan then runs before plans 395 and 396.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: Every custom-worker attempt carries a parent-authored dispatch record bound to its exact attempt, and no worker claim can supply, replace or satisfy that record on any admission path.
 replan_sources:
