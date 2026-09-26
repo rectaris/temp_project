@@ -1,6 +1,6 @@
 # Let OpenCode Go produce bounded implementation candidates
 
-status: backlog
+status: replan_required
 primary_invariant: An explicitly selected Go worker produces only an in-scope candidate under the existing attempt, receipt, correction and parent-validation gates, without receiving upstream credentials or lifecycle authority.
 task_types:
   - template_workflow
@@ -100,6 +100,9 @@ validation_witness_map:
 integration_gates:
   - docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
   - docs/plan/backlog/356-delegate-read-only-tasks-to-opencode-go.md
+replan_reason_codes:
+  - scope_drift
+  - multiple_independent_invariants
 checked_summary_ja: 既存の隔離実行を通じて OpenCode Go に実装候補と修正候補を生成させる。
 
 ## Decisions
@@ -136,3 +139,4 @@ checked_summary_ja: 既存の隔離実行を通じて OpenCode Go に実装候�
 - Pre-admission local evidence: OpenCode 1.18.30 with a temporary empty HOME/config, denied tools and a synthetic loopback provider exited 0; two streamed POST /v1/chat/completions requests selected glm-5.3 and emitted step_start, text and step_finish events. No Go API or real credential was used.
 - Requested settings, runtime reports and provider execution are distinct evidence classes. Live entitlement and answer quality remain unverified; deterministic fixture success establishes only the stated implementation conditions.
 - Implementation has not started. Focused and authoritative commands in this manifest are required future witnesses, not results of this plan-authoring task.
+- Stopped at replan_required on 2026-09-26 on the owner's instruction to reconstruct it through the governed route: the write scope omits scripts/project_workflow/copier_inventory.py, the plan couples attempt provenance, the Go adapter and distribution, and its OpenCode 1.18.30 evidence no longer matches the installed 2.0.15 CLI.
