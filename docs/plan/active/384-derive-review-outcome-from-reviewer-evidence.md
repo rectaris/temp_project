@@ -16,19 +16,19 @@ feasibility_evidence:
   - {"evidence":"finding_severities comes from the bare --finding-severity argument at scripts/plan-execution-state.py:6223 and decides accepted closure at :2694 and checked parent-direct commit at :5275, so omitting the argument records an empty finding set that passes both gates.","kind":"reproduced_defect"}
   - {"evidence":"A review manifest binds raw/transcript.jsonl under evidence_digests.external_transcript. Assistant records carry no session_id, but validate_resource_identity_evidence at scripts/plan-execution-state.py:752 requires every session_id in that file to resolve to one observed session, and review_turn_zero_from_manifest at :787 requires it to be the reviewer.","kind":"existing_mechanism"}
   - {"evidence":"All 45 local review transcripts under .agent-logs end their message records with an assistant message, and the largest is 203 KB against the 1 MiB bound of read_bound_resource_evidence at scripts/plan-execution-state.py:721.","kind":"existing_mechanism"}
-  - {"evidence":"validate_review_receipt at scripts/plan-execution-state.py:917 also reads historical receipts during checkpoint issuance at :5206 and legacy checkpoint migration at :5379 and :5403, and review_turn_zero_from_manifest is shared with review-route-check at :5927, so the schema-1 read path and the shared turn-zero check must stay unchanged.","kind":"existing_mechanism"}
-  - {"evidence":"tests/test-plan-execution-state.py builds every review through one review_receipt helper at :431 and one resource_manifest helper at :286, so the fixture change reaches every existing review test from two places.","kind":"existing_mechanism"}
+  - {"evidence":"review_turn_zero_from_manifest at scripts/plan-execution-state.py:787 is shared with review-route-check at :5927, and the manifest it verifies is already bound to the receipt through the reviewer session digest and the packet digest, so the verdict can be read from that manifest without changing the receipt or the shared check.","kind":"existing_mechanism"}
+  - {"evidence":"tests/test-plan-execution-state.py builds every review manifest through one resource_manifest helper at :286, so a bound verdict transcript reaches every existing review test from one place; about ten review calls that pass a severity also need a matching verdict.","kind":"existing_mechanism"}
 completion_conditions:
-  - Recording a bounded review reads the external transcript that the review resource manifest binds and refuses when that evidence is absent, is not observed, differs from the transcript digest the receipt names, or its final assistant message does not end with exactly one verdict line in the fixed grammar.
+  - Recording a bounded review reads the external transcript that the review resource manifest binds and refuses when that evidence is absent, is not observed, or its final assistant message does not end with exactly one verdict line in the fixed grammar.
   - The recorded finding severities must equal the severity set the bound verdict states; a recorded set that adds, drops, or contradicts a stated severity refuses, and an empty recorded set is admitted only against a verdict that states no findings.
   - The review-verdict-instructions subcommand prints the exact reviewer instruction block whose verdict line the parser accepts, and every example verdict line in that block parses.
-  - Schema-1 review receipts stay readable for checkpoint issuance and legacy checkpoint migration, the bounded review command admits only schema-2 receipts, and review-route-check accepts the same evidence it accepted before.
+  - The review receipt format is unchanged, and review-route-check accepts the same evidence it accepted before.
   - The generated plan-execution-state.py stays byte-identical to the root script.
 completion_witness_map:
-  - {"condition_sha256":"sha256:b90f45c273f6af826d690d0cd62d72772ce6810423429643ca48ac4125acc0b3","witness":"python3 tests/test-plan-execution-state.py"}
+  - {"condition_sha256":"sha256:db14f2aaceeddc72d81b3a9b76735a5076787234a382f951e76cf01df257f461","witness":"python3 tests/test-plan-execution-state.py"}
   - {"condition_sha256":"sha256:11492edcd26691677c70c5d9f60987ec5bdd90edf8afe4f9a7fc64ab9566c9fa","witness":"python3 tests/test-plan-execution-state.py"}
   - {"condition_sha256":"sha256:9f389598cae9741765bd50fad0a161ee0beef11a24de2960b692bacc39058ee2","witness":"python3 tests/test-plan-execution-state.py"}
-  - {"condition_sha256":"sha256:5e2e8cc2c526146a650f9102ab89d1a0184298fc099e8a765aa022c9ed806125","witness":"python3 tests/test-plan-execution-state.py"}
+  - {"condition_sha256":"sha256:f4b6a6d201c2db866694a281f50cfaa30959bc8b3ef8fecbe06e176e68e918c6","witness":"python3 tests/test-plan-execution-state.py"}
   - {"condition_sha256":"sha256:73a96182b0a5521c5ea2122a2e524ee84d3cfebdc52f8944c96143e07c243445","witness":"python3 scripts/check-copier-template.py"}
 write_scope:
   - scripts/plan-execution-state.py
@@ -53,11 +53,11 @@ validation:
   - scripts/lint-project-workflow.sh
   - tests/smoke.sh
 acceptance:
-  - A bounded review is recorded only when the final assistant message of the bound reviewer transcript ends with one verdict line in the grammar that review-verdict-instructions prints and the recorded severity set equals that verdict; missing evidence, an unparsable verdict and a contradicting set each refuse, while schema-1 receipts stay readable and review-route-check is unchanged.
+  - A bounded review is recorded only when the final assistant message of the bound reviewer transcript ends with one verdict line in the grammar that review-verdict-instructions prints and the recorded severity set equals that verdict; missing evidence, an unparsable verdict and a contradicting set each refuse, while the receipt format and review-route-check are unchanged.
   - The generated plan-execution-state.py stays byte-identical to the root script.
 validation_witness_schema: 1
 validation_witness_map:
-  - {"acceptance_sha256":"sha256:b0677a037230ec4b8fd96301f07c8a3d3a927a4bceb818859f43f26ae33d87d6","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
+  - {"acceptance_sha256":"sha256:cbf21e3d3531f9b01431100865a6653f9c93ef3f8ba0a1d59261509b7e280c82","stage":"focused","witness":"python3 tests/test-plan-execution-state.py"}
   - {"acceptance_sha256":"sha256:73a96182b0a5521c5ea2122a2e524ee84d3cfebdc52f8944c96143e07c243445","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
 checked_summary_ja: 記録するレビュー結果を、レビュアセッション自身の拘束済み証拠から導出する
 
@@ -67,7 +67,7 @@ checked_summary_ja: 記録するレビュー結果を、レビュアセッショ
 - The verdict is read from the external transcript rather than from a hook event, because the Stop hook payload carries no assistant message while raw/transcript.jsonl carries the reviewer final message verbatim. Hooks stay unchanged, so no other session type is affected.
 - The verdict message is the last transcript record whose record_type is message and whose role is assistant. Its last non-empty line must be exactly `REVIEW-VERDICT: none`, or `REVIEW-VERDICT: ` followed by a comma-separated list without spaces of High, Medium and Low, each at most once and in that order, such as `REVIEW-VERDICT: High,Low`. A final line of any other shape, a second line in that message that starts with `REVIEW-VERDICT:`, or an empty message refuses. Earlier assistant messages are never parsed, so a quoted instruction block cannot supply the verdict.
 - The message is attributed to the reviewer by file, not by record. Assistant records carry no session_id, and the existing identity check already requires the whole bound transcript to resolve to the one reviewer session.
-- Review receipt schema 2 adds exactly one field, verdict_evidence_digest, which must equal the manifest's external_transcript digest. validate_review_receipt keeps accepting the exact schema-1 key set, so checkpoint issuance and legacy checkpoint migration still read historical receipts. Only the bounded review command requires schema 2. The event shape is unchanged, because the event already records the receipt digest as independent_review_receipt_digest.
+- The review receipt and the event shape stay unchanged. The transcript is the one bound by the manifest passed to the review command, which the existing turn-zero check already ties to the receipt through the reviewer session and packet digests. A later reader reaches the transcript through the event's receipt digest, the receipt's reviewer session and that session's manifest. A receipt field naming the transcript digest was considered and dropped: it adds no record-time check, and it would force a schema change whose historical receipts checkpoint issuance and legacy migration must still read.
 - Verdict parsing lives in the bounded review path of record_event only. review_turn_zero_from_manifest keeps its name, signature and behavior, because review-route-check shares it and a route probe states no verdict, and the policy checkers require that marker.
 - `record --event-type parent_review` stays unchanged and outside this invariant. Accepted closure at scripts/plan-execution-state.py:2694 and checked parent-direct commit at :5274 both require the deciding review to carry the exact review target digest, which only the bounded review path assigns at :6439, so a record-path review cannot satisfy either gate. Its severities still feed stop-reason accounting, which this plan leaves as it is.
 - An absent or not_observed transcript refuses the review instead of falling back to the caller argument. This follows the existing rule that a staged review requires observed zero inherited turns rather than an unavailable-evidence path.
@@ -76,11 +76,10 @@ checked_summary_ja: 記録するレビュー結果を、レビュアセッショ
 
 ## Tasks
 
-- [ ] Add review receipt schema 2 with verdict_evidence_digest, keep the schema-1 key set readable in validate_review_receipt, and require schema 2 only in the bounded review command.
-- [ ] In the bounded review path, read the bound external transcript through read_bound_resource_evidence, take the last assistant message, and parse the fixed verdict line; refuse on absent or not_observed evidence, a digest that differs from verdict_evidence_digest, no assistant message, or an unparsable verdict.
+- [ ] In the bounded review path, read the bound external transcript through read_bound_resource_evidence, take the last assistant message, and parse the fixed verdict line; refuse on absent or not_observed evidence, no assistant message, or an unparsable verdict.
 - [ ] Require the recorded finding severities to equal the parsed severity set, and refuse an empty recorded set unless the verdict is `REVIEW-VERDICT: none`.
 - [ ] Add the review-verdict-instructions subcommand that prints the exact reviewer instruction block, and name it in references/orchestration.md and template/.project-agent-workflow/docs/agent/SPEC_ORCHESTRATION.md.
-- [ ] Extend the resource_manifest and review_receipt fixtures once so every existing review test supplies a bound transcript with a verdict, then add refusal tests plus tests that a schema-1 receipt still passes checkpoint issuance and legacy migration and that review-route-check still accepts its probe evidence.
+- [ ] Extend the resource_manifest fixture once so every existing review test supplies a bound transcript with a verdict, give each severity-bearing review call a matching verdict, then add refusal tests and a test that review-route-check still accepts its probe evidence.
 - [ ] Mirror the change into template/.project-agent-workflow/scripts/plan-execution-state.py and run the focused witnesses.
 
 ## Validation Notes
