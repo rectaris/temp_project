@@ -1,19 +1,7 @@
 # Run an isolated read-only OpenCode Go helper against an admitted repository snapshot
 
-status: replan_required
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: A parent-selected OpenCode Go helper reads only the admitted snapshot files and returns a bounded advisory answer, with no shell, network except the relay socket, credential, or repository write.
-replan_sources:
-  - docs/plan/active/356-delegate-read-only-tasks-to-opencode-go.md
-replan_contract: docs/plan/replanned/contracts/356-delegate-read-only-tasks-to-opencode-go.json
-successor_plans:
-  - docs/plan/active/397-isolate-read-only-opencode-go-helper.md
-  - docs/plan/active/398-seed-opencode-go-helper-configuration.md
-  - docs/plan/active/399-integrate-opencode-go-read-only-helper.md
-inherited_acceptance_digests:
-  - sha256:6a93344caf98fde95f6920a3db153727b5203c0bc6f8700503494d5c2c64b59c
-  - sha256:2c6b904e8013fa92f54ad13d9707d3d2ad62ba0d96eca963e72e395529132af0
-  - sha256:518cd64e6d0416977a47728c0c8c65705c78b4d993a7b86279942f16329a2426
 task_types:
   - template_workflow
   - security
@@ -85,10 +73,22 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:6a93344caf98fde95f6920a3db153727b5203c0bc6f8700503494d5c2c64b59c","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:2c6b904e8013fa92f54ad13d9707d3d2ad62ba0d96eca963e72e395529132af0","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:518cd64e6d0416977a47728c0c8c65705c78b4d993a7b86279942f16329a2426","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/397-isolate-read-only-opencode-go-helper.md
+  - docs/plan/active/398-seed-opencode-go-helper-configuration.md
+  - docs/plan/active/399-integrate-opencode-go-read-only-helper.md
+replan_contract: docs/plan/replanned/contracts/397-target-read-only-capability-backends.json
 integration_gates:
-  - docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
-replan_reason_codes:
-  - scope_drift
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/404-run-read-only-capabilities-through-opencode-go-backend.md
+  - docs/plan/active/405-seed-disabled-opencode-go-backend-configuration.md
+  - docs/plan/active/406-discover-read-only-capabilities-through-registry.md
+inherited_acceptance_digests:
+  - sha256:6a93344caf98fde95f6920a3db153727b5203c0bc6f8700503494d5c2c64b59c
+  - sha256:2c6b904e8013fa92f54ad13d9707d3d2ad62ba0d96eca963e72e395529132af0
+  - sha256:518cd64e6d0416977a47728c0c8c65705c78b4d993a7b86279942f16329a2426
 checked_summary_ja: 隔離した OpenCode Go の補助プロセスに、許可したファイルだけの読み取り専用の調査を依頼する。
 
 ## Decisions

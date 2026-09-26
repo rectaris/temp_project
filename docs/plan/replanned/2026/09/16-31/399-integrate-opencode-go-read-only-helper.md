@@ -1,24 +1,7 @@
 # Integrate the read-only OpenCode Go helper into skills, routing and Copier distribution
 
-status: deferred
-completion_deferred_reason: Plans 397 and 398 must be checked first.
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: Root and generated installations discover the read-only Go helper through one managed skill and routing entry, while default Codex routing, Sol review and every existing validation stay unchanged.
-replan_sources:
-  - docs/plan/active/356-delegate-read-only-tasks-to-opencode-go.md
-replan_contract: docs/plan/replanned/contracts/356-delegate-read-only-tasks-to-opencode-go.json
-successor_plans:
-  - docs/plan/active/397-isolate-read-only-opencode-go-helper.md
-  - docs/plan/active/398-seed-opencode-go-helper-configuration.md
-  - docs/plan/active/399-integrate-opencode-go-read-only-helper.md
-inherited_acceptance_digests:
-  - sha256:6a93344caf98fde95f6920a3db153727b5203c0bc6f8700503494d5c2c64b59c
-  - sha256:2c6b904e8013fa92f54ad13d9707d3d2ad62ba0d96eca963e72e395529132af0
-  - sha256:518cd64e6d0416977a47728c0c8c65705c78b4d993a7b86279942f16329a2426
-  - sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb
-  - sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f
-integration_source_ids:
-  - 356
 predecessor_plans:
   - docs/plan/active/397-isolate-read-only-opencode-go-helper.md
   - docs/plan/active/398-seed-opencode-go-helper-configuration.md
@@ -111,8 +94,24 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:518cd64e6d0416977a47728c0c8c65705c78b4d993a7b86279942f16329a2426","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb","stage":"focused","witness":"tests/copier-update.sh --require-copier"}
   - {"acceptance_sha256":"sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/397-isolate-read-only-opencode-go-helper.md
+  - docs/plan/active/398-seed-opencode-go-helper-configuration.md
+  - docs/plan/active/399-integrate-opencode-go-read-only-helper.md
+replan_contract: docs/plan/replanned/contracts/397-target-read-only-capability-backends.json
 integration_gates:
-  - docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/404-run-read-only-capabilities-through-opencode-go-backend.md
+  - docs/plan/active/405-seed-disabled-opencode-go-backend-configuration.md
+  - docs/plan/active/406-discover-read-only-capabilities-through-registry.md
+inherited_acceptance_digests:
+  - sha256:6a93344caf98fde95f6920a3db153727b5203c0bc6f8700503494d5c2c64b59c
+  - sha256:2c6b904e8013fa92f54ad13d9707d3d2ad62ba0d96eca963e72e395529132af0
+  - sha256:518cd64e6d0416977a47728c0c8c65705c78b4d993a7b86279942f16329a2426
+  - sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb
+  - sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f
 checked_summary_ja: 読み取り専用の OpenCode Go 補助を、スキル、案内、Copier の配布に組み込む。
 
 ## Decisions

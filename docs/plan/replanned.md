@@ -74,3 +74,6 @@ id	path	contract
 357	docs/plan/replanned/2026/09/16-31/357-delegate-candidate-implementation-to-opencode-go.md	docs/plan/replanned/contracts/357-delegate-candidate-implementation-to-opencode-go.json
 356	docs/plan/replanned/2026/09/16-31/356-delegate-read-only-tasks-to-opencode-go.md	docs/plan/replanned/contracts/356-delegate-read-only-tasks-to-opencode-go.json
 345	docs/plan/replanned/2026/09/16-31/345-register-typesafe-structured-decision-provider.md	docs/plan/replanned/contracts/345-register-typesafe-structured-decision-provider.json
+397	docs/plan/replanned/2026/09/16-31/397-isolate-read-only-opencode-go-helper.md	docs/plan/replanned/contracts/397-target-read-only-capability-backends.json
+398	docs/plan/replanned/2026/09/16-31/398-seed-opencode-go-helper-configuration.md	docs/plan/replanned/contracts/397-target-read-only-capability-backends.json
+399	docs/plan/replanned/2026/09/16-31/399-integrate-opencode-go-read-only-helper.md	docs/plan/replanned/contracts/397-target-read-only-capability-backends.json

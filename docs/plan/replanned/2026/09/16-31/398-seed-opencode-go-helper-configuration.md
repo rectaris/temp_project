@@ -1,18 +1,7 @@
 # Seed a disabled project-owned OpenCode Go helper configuration
 
-status: deferred
-completion_deferred_reason: Plan 397 must be checked first.
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: Every installation starts with the Go helper disabled, and a project-owned helper configuration is never replaced by a Copier update.
-replan_sources:
-  - docs/plan/active/356-delegate-read-only-tasks-to-opencode-go.md
-replan_contract: docs/plan/replanned/contracts/356-delegate-read-only-tasks-to-opencode-go.json
-successor_plans:
-  - docs/plan/active/397-isolate-read-only-opencode-go-helper.md
-  - docs/plan/active/398-seed-opencode-go-helper-configuration.md
-  - docs/plan/active/399-integrate-opencode-go-read-only-helper.md
-inherited_acceptance_digests:
-  - sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb
 predecessor_plans:
   - docs/plan/active/397-isolate-read-only-opencode-go-helper.md
 task_types:
@@ -73,8 +62,20 @@ acceptance:
 validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb","stage":"focused","witness":"tests/copier-update.sh --require-copier"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/397-isolate-read-only-opencode-go-helper.md
+  - docs/plan/active/398-seed-opencode-go-helper-configuration.md
+  - docs/plan/active/399-integrate-opencode-go-read-only-helper.md
+replan_contract: docs/plan/replanned/contracts/397-target-read-only-capability-backends.json
 integration_gates:
-  - docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/404-run-read-only-capabilities-through-opencode-go-backend.md
+  - docs/plan/active/405-seed-disabled-opencode-go-backend-configuration.md
+  - docs/plan/active/406-discover-read-only-capabilities-through-registry.md
+inherited_acceptance_digests:
+  - sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb
 checked_summary_ja: OpenCode Go 補助の設定を無効の状態で配布し、更新でプロジェクトの設定を上書きしない。
 
 ## Decisions
