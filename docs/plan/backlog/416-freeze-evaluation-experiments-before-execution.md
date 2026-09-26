@@ -58,6 +58,7 @@ write_scope:
   - evals/cases/coding-core-dev/cross-file-change/repository/limits.py
   - evals/cases/coding-core-dev/cross-file-change/repository/report.py
   - evals/cases/coding-core-dev/cross-file-change/repository/test_report.py
+  - scripts/plan_validation_commands.py
 preservation_scope:
   - none
 context_files:
@@ -102,11 +103,13 @@ checked_summary_ja: 評価の実験、実行構成、実行環境、ベンチマ
 - The bwrap-default environment declares Bubblewrap, shared network for the provider only through the evaluated process, the cold cache policy, and uncontrolled CPU and memory, stated explicitly rather than implied.
 - Store resolved state under .agent-artifacts/evaluations/<experiment-id>/ as experiment.json, protocol.json and matrix.json. Refuse an existing directory; a changed definition needs a new experiment id.
 - Offer declared and balanced ordering. Balanced ordering alternates which configuration runs first per repetition; randomized ordering, cgroup limits and warm caches stay in Issue #15 Phase 2.
+- Add python3 tests/test-agent-eval.py to the root validation-command allowlist in scripts/plan_validation_commands.py, because this plan and plans 417 and 418 declare it as a focused witness.
 - Mark the development suite used_for_tuning and synthetic, so its comparisons demonstrate tool behavior only and never support a recommendation.
 - Size every experiment for one comparison invocation: one protocol, one observation per run and exactly four evidence files per run (events, candidate patch, execution record, validation record), each under the command's 8 MiB file limit. An experiment that cannot fit is refused at resolve time instead of after its runs.
 
 ## Tasks
 
+- [ ] Add python3 tests/test-agent-eval.py to the root validation-command allowlist.
 - [ ] Implement the definition parsers, path confinement and deterministic fixture baselines.
 - [ ] Implement resolve with the frozen record, schema-2 protocol derivation, balanced ordering and the budget refusal.
 - [ ] Add the development suite, configurations, environment, experiment and evals/README.md.

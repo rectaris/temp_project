@@ -26,6 +26,24 @@ Ruffによる検査を入れた[353](../checked/2026/09/16-31/353-enforce-bounde
    npm版のPyright 1.1.407をNode 24で導入し、同じ6ファイルの型を検査する。
    Pyrightは隠しディレクトリの下のファイルを解析しないため、配置ごとに設定ファイルを分ける。
 
+## 開発環境と進め方の規則の変更
+
+オーナーの指示で、2026-09-26 に見つかった開発環境と進め方の問題を、規則として定める5件を作った。
+Issue #15の4件より先に、次の順に一件ずつ、それぞれ新しい会話セッションで実装する。
+
+1. [419：プランの行き先ごとに一つの番号予約](419-keep-one-plan-id-reservation-per-authoring-target.md)
+   下書きを直して確認し直しても、プラン番号が飛ばないようにする。
+2. [420：プランの開始時に一度だけ与える続行の承認](420-record-standing-owner-continuation-up-to-four-reviews.md)
+   オーナーが開始時に承認すれば、4回目のレビューまでは続行の承認を求めない。4回目の後の判断は、必ずオーナーが行う。
+3. [421：提供が終了したSparkからTerraへの置き換え](421-route-writable-work-to-terra-after-spark-retirement.md)
+   OpenAIは[2026-09-14にgpt-5.3-codex-sparkの提供を終了した](https://learn.chatgpt.com/docs/changelog#codex-2026-09-14-codex-spark-deprecation)。書き込みの作業はgpt-5.6-terraのmediumに統一し、生成先のプロジェクトでも更新時に置き換える。
+4. [422：タスクのworktreeへのuv環境の用意](422-provision-task-worktrees-with-the-locked-uv-environment.md)
+   新しいworktreeを作るときに`uv sync --locked`で`.venv`を作り、ルートの検証をその環境で実行する。
+5. [423：サンドボックスから見えるPythonでの補助処理](423-run-sandboxed-python-helpers-from-a-reachable-interpreter.md)
+   ランナーをuvの仮想環境で動かしても、サンドボックスの中のPythonが動くようにする。422の完了後に始める。
+
+423が完了するまでは、`tests/test-sandboxed-plan-worker.py`をシステムの`python3`で実行する。
+
 ## Issue #15の最小の評価実行
 
 [Issue #15](https://github.com/rectaris/temp_project/issues/15)のPhase 1のうち、同じCodexの構成を2回実行して既存の`compare-harness-runs.py`で比べ、結果が再現されることを示すまでを、4件に分けた。

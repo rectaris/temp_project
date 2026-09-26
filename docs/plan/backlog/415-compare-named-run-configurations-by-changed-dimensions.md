@@ -39,6 +39,7 @@ write_scope:
   - docs/agent/SPEC_HARNESS_EVALUATION.md
   - template/.project-agent-workflow/docs/agent/SPEC_HARNESS_EVALUATION.md
   - CHANGELOG.md
+  - scripts/plan_validation_commands.py
 preservation_scope:
   - none
 context_files:
@@ -84,10 +85,12 @@ checked_summary_ja: 名前付きの実行構成を、違う次元の集合で分
 - Bind repository_baseline per case in schema 2, because each fixture case builds its own repository, and check every observation against its own case's baseline; schema 1 keeps its single protocol-level baseline.
 - Report replication with both sides' outcome, quality and elapsed coverage and their denominators, and withhold the recommendation with the blocker replication_comparison. It is a reproducibility check, not evidence for adopting either side.
 - Replace slot with configuration_id in schema-2 observations and keep every other observation field, evidence rule, coverage rule and outcome rule of schema 1.
+- Add python3 tests/test-harness-comparison.py and python3 tests/test-harness-comparison.py --generated to the root validation-command allowlist in scripts/plan_validation_commands.py, because this plan declares both as focused witnesses.
 - Keep the Plan 328 term Harness Profile for optional instruction selection only; a schema-2 configuration records its selection digest and never redefines the term.
 
 ## Tasks
 
+- [ ] Add the two comparison suite commands to the root validation-command allowlist.
 - [ ] Record the unchanged schema-1 behavior of the comparison suite before product edits.
 - [ ] Add the schema-2 protocol, configuration and observation parsers with digest recomputation and exact key sets.
 - [ ] Add dimension classification, replication reporting and the mixed-version refusal, and route schema-1 inputs through the existing path unchanged.
