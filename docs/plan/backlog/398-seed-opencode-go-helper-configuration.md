@@ -1,7 +1,6 @@
 # Seed a disabled project-owned OpenCode Go helper configuration
 
-status: deferred
-completion_deferred_reason: Plan 397 must be checked first.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: Every installation starts with the Go helper disabled, and a project-owned helper configuration is never replaced by a Copier update.
 replan_sources:

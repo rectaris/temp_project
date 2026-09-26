@@ -1,7 +1,6 @@
 # Run an isolated read-only OpenCode Go helper against an admitted repository snapshot
 
-status: deferred
-completion_deferred_reason: Deferred to the backlog after reconstruction; plans 398 and 399 follow it.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: A parent-selected OpenCode Go helper reads only the admitted snapshot files and returns a bounded advisory answer, with no shell, network except the relay socket, credential, or repository write.
 replan_sources:
