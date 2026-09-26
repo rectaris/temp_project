@@ -1,6 +1,7 @@
 # Integrate the OpenCode Go candidate route into routing, skills and Copier distribution
 
-status: backlog
+status: deferred
+completion_deferred_reason: Plans 394 and 395 must be checked first, and plan 356's reconstruction successors before them.
 implementation_mode: parent_direct
 primary_invariant: An explicitly enabled Go candidate route is discoverable in root and generated installations, while default installations, Codex routing and unrelated custom workers behave exactly as before.
 replan_sources:

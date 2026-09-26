@@ -1,6 +1,7 @@
 # Run an OpenCode Go candidate worker behind a runner-owned backend selector
 
-status: backlog
+status: deferred
+completion_deferred_reason: Plan 394 must be checked first, and plan 356's reconstruction successors before it.
 implementation_mode: parent_direct
 primary_invariant: Only the runner-selected, runner-shipped Go adapter reaches the credential relay, and the OpenCode process edits only the admitted writable shadows with no shell, network or credential access.
 replan_sources:

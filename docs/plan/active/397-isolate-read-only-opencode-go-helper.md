@@ -1,6 +1,6 @@
 # Run an isolated read-only OpenCode Go helper against an admitted repository snapshot
 
-status: backlog
+status: replan_required
 implementation_mode: parent_direct
 primary_invariant: A parent-selected OpenCode Go helper reads only the admitted snapshot files and returns a bounded advisory answer, with no shell, network except the relay socket, credential, or repository write.
 replan_sources:
@@ -87,6 +87,8 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:518cd64e6d0416977a47728c0c8c65705c78b4d993a7b86279942f16329a2426","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
 integration_gates:
   - docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
+replan_reason_codes:
+  - scope_drift
 checked_summary_ja: 隔離した OpenCode Go の補助プロセスに、許可したファイルだけの読み取り専用の調査を依頼する。
 
 ## Decisions
@@ -113,3 +115,4 @@ checked_summary_ja: 隔離した OpenCode Go の補助プロセスに、許可�
 ## Validation Notes
 
 - Pre-activation review on 2026-09-26 reconstructed plan 356 into three successors: its write scope lacked scripts/project_workflow/copier_inventory.py and the orchestration guidance, the runner's Bubblewrap builder cannot mount a Unix socket, one completion condition had a witness that cannot observe an update, and its OpenCode 1.18.30 run --pure evidence no longer matched the installed 2.0.15 CLI.
+- Stopped at replan_required on 2026-09-26 on the owner's instruction to reconstruct plans 394 to 399 through the governed route under Issue #14: the plans add OpenCode-specific launch, routing and discovery surfaces, while the owner now requires them to target the generic Capability Registry and WorkerBackend boundary, which changes their write scopes and implementation methods.

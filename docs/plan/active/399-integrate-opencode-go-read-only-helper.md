@@ -1,6 +1,7 @@
 # Integrate the read-only OpenCode Go helper into skills, routing and Copier distribution
 
-status: backlog
+status: deferred
+completion_deferred_reason: Plans 397 and 398 must be checked first.
 implementation_mode: parent_direct
 primary_invariant: Root and generated installations discover the read-only Go helper through one managed skill and routing entry, while default Codex routing, Sol review and every existing validation stay unchanged.
 replan_sources:

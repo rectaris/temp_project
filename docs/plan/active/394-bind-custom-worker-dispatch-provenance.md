@@ -1,6 +1,6 @@
 # Bind parent-authored custom-worker dispatch provenance to every candidate attempt
 
-status: backlog
+status: replan_required
 implementation_mode: parent_direct
 primary_invariant: Every custom-worker attempt carries a parent-authored dispatch record bound to its exact attempt, and no worker claim can supply, replace or satisfy that record on any admission path.
 replan_sources:
@@ -68,6 +68,8 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:72b4b9ee612345af0ad93689efed29eda6b85063c25fc7f41dd82388205ada6b","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
 integration_gates:
   - Plan 356 and the plans its reconstruction creates must reach checked archives before this plan starts, because this plan reuses the read-only helper launcher, configuration and discovery surfaces they add.
+replan_reason_codes:
+  - scope_drift
 checked_summary_ja: カスタムワーカーの試行ごとに、親が記録した起動情報を結び付けて検証する。
 
 ## Decisions
@@ -89,3 +91,4 @@ checked_summary_ja: カスタムワーカーの試行ごとに、親が記録し
 ## Validation Notes
 
 - Pre-activation review on 2026-09-26 reconstructed plan 357 into three successors: its write scope lacked scripts/project_workflow/copier_inventory.py, the Go-path selector and tool permission set were undecided, two completion conditions had witnesses that cannot establish them, and its OpenCode 1.18.30 evidence no longer matched the installed 2.0.15 CLI.
+- Stopped at replan_required on 2026-09-26 on the owner's instruction to reconstruct plans 394 to 399 through the governed route under Issue #14: the plans add OpenCode-specific launch, routing and discovery surfaces, while the owner now requires them to target the generic Capability Registry and WorkerBackend boundary, which changes their write scopes and implementation methods.
