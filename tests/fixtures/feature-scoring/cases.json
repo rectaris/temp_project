@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "fixture_kind": "synthetic",
+  "note": "Clearly synthetic dimensions and tuning cases that exercise scripts/score-plan-features.py. They are not recorded provider responses and not observed prediction results. Every case is a tuning case marked used_for_tuning.",
+  "holdout": {
+    "present": false,
+    "reason": "The real holdout scores are recorded outside this repository by the operator. This fixture never embeds a holdout question, holdout score, or holdout label."
+  },
+  "dimensions": {
+    "schema_version": 1,
+    "kind": "feature_dimensions",
+    "dimensions": [
+      {
+        "id": "change_breadth",
+        "text": "How many independently changing files, commands, and generated counterparts must the plan touch, from 0 for one file to 1 for many coupled surfaces."
+      },
+      {
+        "id": "authority_surface",
+        "text": "How much validation, lifecycle, security, or external-effect authority the plan changes, from 0 for none to 1 for a core gate."
+      }
+    ]
+  },
+  "tuning_cases": [
+    {"case_id": "low-a", "plan_file": "801-synthetic-low-a.md", "label": "low", "values": {"change_breadth": 0.1, "authority_surface": 0.15}, "used_for_tuning": true},
+    {"case_id": "low-b", "plan_file": "802-synthetic-low-b.md", "label": "low", "values": {"change_breadth": 0.2, "authority_surface": 0.05}, "used_for_tuning": true},
+    {"case_id": "low-c", "plan_file": "803-synthetic-low-c.md", "label": "low", "values": {"change_breadth": 0.15, "authority_surface": 0.25}, "used_for_tuning": true},
+    {"case_id": "ordinary-a", "plan_file": "804-synthetic-ordinary-a.md", "label": "ordinary", "values": {"change_breadth": 0.45, "authority_surface": 0.5}, "used_for_tuning": true},
+    {"case_id": "ordinary-b", "plan_file": "805-synthetic-ordinary-b.md", "label": "ordinary", "values": {"change_breadth": 0.55, "authority_surface": 0.4}, "used_for_tuning": true},
+    {"case_id": "ordinary-c", "plan_file": "806-synthetic-ordinary-c.md", "label": "ordinary", "values": {"change_breadth": 0.5, "authority_surface": 0.6}, "used_for_tuning": true},
+    {"case_id": "high-a", "plan_file": "807-synthetic-high-a.md", "label": "high", "values": {"change_breadth": 0.85, "authority_surface": 0.9}, "used_for_tuning": true},
+    {"case_id": "high-b", "plan_file": "808-synthetic-high-b.md", "label": "high", "values": {"change_breadth": 0.9, "authority_surface": 0.8}, "used_for_tuning": true},
+    {"case_id": "high-c", "plan_file": "809-synthetic-high-c.md", "label": "high", "values": {"change_breadth": 0.8, "authority_surface": 0.95}, "used_for_tuning": true},
+    {"case_id": "high-d", "plan_file": "810-synthetic-high-d.md", "label": "high", "values": {"change_breadth": 0.7, "authority_surface": 0.75}, "used_for_tuning": true}
+  ]
+}

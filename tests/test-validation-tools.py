@@ -7,6 +7,7 @@ import unittest
 
 from validation_tools.changes import ValidateChangesTest
 from validation_tools.external import RootExternalServicePolicyTest
+from validation_tools.feature_scoring import CommittedFeatureScoringCasesTest, FeatureScoringTest
 from validation_tools.generated import (
     GeneratedCiTest,
     LegacyExternalServiceMigrationTest,

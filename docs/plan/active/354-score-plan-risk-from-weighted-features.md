@@ -88,12 +88,12 @@ checked_summary_ja: 重み付き特徴量スコアから計画の実装リスク
 
 ## Tasks
 
-- [ ] Define the dimensions, scores, weights and report record shapes in the protocol document, including the fixed fitting parameters and band thresholds.
-- [ ] Implement fit with 317 report verification, the question_id and input_sha256 join, and holdout refusal before any computation.
-- [ ] Implement score-holdout with the outside-worktree ledger and the second-scoring refusal.
-- [ ] Implement report with paired baselines, per-class and per-band denominators and not_measurable classes, and refuse a report without a paired baseline.
-- [ ] Add FeatureScoringTest: synthetic cases for every refusal and report field, socket creation disabled in the subprocess, and a repository tree digest compared before and after.
-- [ ] Register the command and fixtures in SOURCE_REQUIRED and the test in tests/test-validation-tools.py.
+- [x] Define the dimensions, scores, weights and report record shapes in the protocol document, including the fixed fitting parameters and band thresholds.
+- [x] Implement fit with 317 report verification, the question_id and input_sha256 join, and holdout refusal before any computation.
+- [x] Implement score-holdout with the outside-worktree ledger and the second-scoring refusal.
+- [x] Implement report with paired baselines, per-class and per-band denominators and not_measurable classes, and refuse a report without a paired baseline.
+- [x] Add FeatureScoringTest: synthetic cases for every refusal and report field, socket creation disabled in the subprocess, and a repository tree digest compared before and after.
+- [x] Register the command and fixtures in SOURCE_REQUIRED and the test in tests/test-validation-tools.py.
 - [ ] Obtain independent review, run the focused checks, then the full validation suite once, and publish through the ordinary lifecycle.
 
 ## Validation Notes
@@ -101,3 +101,8 @@ checked_summary_ja: 重み付き特徴量スコアから計画の実装リスク
 - Pre-activation review at d61b41e replaced the stale 8f5cbcc class counts with 317's recorded numbers, removed the dependency on plan 345, and moved response collection and the real measurement out of this plan, because investigation and value evaluation stay outside numbered plans.
 - Owner instruction 2026-09-26, 「@docs/plan/backlog/354-score-plan-risk-from-weighted-features.md について実装作業をせよ。」, approved this plan and promoted it to active. The plan had been authored with human_approval_status pending under human_design_required yes.
 - Every write_scope entry lies under scripts/ or tests/, which scripts/run-sandboxed-plan-worker.py refuses before worker start, so this plan runs parent_direct.
+- Decisions refinements made during implementation: the protocol parameters are one JSON block in tests/fixtures/feature-scoring/evaluation-protocol.md, read from `HEAD` of `--repo` through Git and bound by its canonical digest into the weights and the holdout scoring. The predeclared decision limit is `min_overall_accuracy_gain_over_baseline` 0.05; `meets_limits` or `below_limits` is reported only when tuning and holdout coverage are complete and the overall set and every band are measurable, and otherwise `insufficient_evidence` names its blockers. The baseline predictor is the tuning partition's majority class from the question set, first in label order on a tie, evaluated on the same records as each accuracy. An unscored holdout question stays in the overall and per-class denominators as incorrect and belongs to no band. Records with any unknown key, including a `partition` field, are refused.
+- score-holdout also refuses weights bound to a different protocol, question set or dimensions. The ledger must lie outside every worktree and common Git directory of both the data repository and the tool repository, and it must be a caller-owned mode-0600 regular file with one link, opened without following a symlink. report accepts a holdout scoring only when its digest is the one ledger entry for its key.
+- One independent read-only reviewer subagent (reviewer role, no write scope) reviewed the candidate. Round 1 reported three Medium findings: importing the question-set builder wrote a bytecode cache into the tool checkout, the ledger boundary ignored the repository's other linked worktrees, and a hard-linked ledger could alias a file inside the worktree. All three were remediated; the offline test now runs committed copies of both scripts from inside the history repository, and the ledger test covers a linked worktree and a hard link. Reverting each fix one at a time failed the suite. The re-review reported no findings. No execution ledger was used, following plan 317's parent-direct precedent; implementation_risk is ordinary and no sandboxed candidate correction path applies.
+- At real-set size (207 tuning records, 10 dimensions, 2000 iterations) fit_weights took 1.8 s on this workstation.
+- Focused validation on the final candidate passed: `python3 tests/test-validation-tools.py` (419 tests) with the repository `.venv/bin` on PATH for the pinned Ruff, and `python3 scripts/check-copier-template.py`.
