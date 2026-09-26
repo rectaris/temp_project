@@ -1,13 +1,14 @@
 # Predict plan implementation risk from weighted structured feature scores and report its measured limits
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Feature dimensions and weights are fitted only on the tuning partition, the held-out partition is scored exactly once against predeclared limits, and every reported accuracy is paired with its majority-class baseline and its own denominator so a class below the declared minimum is reported as not measurable instead of scored.
 task_types:
   - planning_docs
   - harness_evaluation
 review_class: C
 human_design_required: yes
-human_approval_status: pending
+human_approval_status: approved
 implementation_tier: 2
 implementation_risk: ordinary
 implementation_ambiguity: ordinary
@@ -98,3 +99,5 @@ checked_summary_ja: 重み付き特徴量スコアから計画の実装リスク
 ## Validation Notes
 
 - Pre-activation review at d61b41e replaced the stale 8f5cbcc class counts with 317's recorded numbers, removed the dependency on plan 345, and moved response collection and the real measurement out of this plan, because investigation and value evaluation stay outside numbered plans.
+- Owner instruction 2026-09-26, 「@docs/plan/backlog/354-score-plan-risk-from-weighted-features.md について実装作業をせよ。」, approved this plan and promoted it to active. The plan had been authored with human_approval_status pending under human_design_required yes.
+- Every write_scope entry lies under scripts/ or tests/, which scripts/run-sandboxed-plan-worker.py refuses before worker start, so this plan runs parent_direct.
