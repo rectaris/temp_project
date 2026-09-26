@@ -79,17 +79,22 @@ checked_summary_ja: 計画記録から実装リスク分類のラベル付き問
 
 ## Tasks
 
-- [ ] Implement bounded plan enumeration and point-in-time reading of each plan from the commit that first added it.
-- [ ] Implement label extraction with leak-field removal, and fail closed when a removed field still appears in a question input.
-- [ ] Implement exclusion accounting for out-of-policy and missing label values, reporting each excluded path and raw value.
-- [ ] Implement class counts, the majority-class share, and a declared minimum count below which a class is reported as not measurable.
-- [ ] Implement lineage-aware time-split partitions and per-question provenance covering the source plan path and source commit.
-- [ ] Write the construction protocol document and the committed tuning cases, marking the cases as used for tuning.
-- [ ] Register the command in copier_inventory.SOURCE_REQUIRED and the tests in tests/test-validation-tools.py.
-- [ ] Report the tuning partition's per-class record counts separately, so a later weight fitting can tell before it starts whether a class has enough records to fit on.
+- [x] Implement bounded plan enumeration and point-in-time reading of each plan from the commit that first added it.
+- [x] Implement label extraction with leak-field removal, and fail closed when a removed field still appears in a question input.
+- [x] Implement exclusion accounting for out-of-policy and missing label values, reporting each excluded path and raw value.
+- [x] Implement class counts, the majority-class share, and a declared minimum count below which a class is reported as not measurable.
+- [x] Implement lineage-aware time-split partitions and per-question provenance covering the source plan path and source commit.
+- [x] Write the construction protocol document and the committed tuning cases, marking the cases as used for tuning.
+- [x] Register the command in copier_inventory.SOURCE_REQUIRED and the tests in tests/test-validation-tools.py.
+- [x] Report the tuning partition's per-class record counts separately, so a later weight fitting can tell before it starts whether a class has enough records to fit on.
 - [ ] Run the focused test, then the full validation suite, and commit the change through the ordinary lifecycle.
 
 ## Validation Notes
 
 - Owner instruction 2026-09-26, 「@docs/plan/backlog/317-build-plan-record-question-set.md について実装作業をせよ。」, approved this plan and promoted it to active. The plan had been authored with human_approval_status pending under human_design_required yes.
 - Every write_scope entry lies under scripts/ or tests/, which scripts/run-sandboxed-plan-worker.py refuses before worker start, so this plan runs parent_direct.
+- At dev 4f2727f the command enumerated 385 plan files and emitted 250 questions: high 148, ordinary 88, low 14, majority-class share 0.592. The tuning partition holds 207 (high 120, ordinary 75, low 12) and the holdout 43 (high 28, ordinary 13, low 2); holdout low is below the minimum of 10 and is reported as not measurable. 135 plans are excluded with reasons, including the two medium records 082 and 090.
+- The feasibility count of 295 labels came from 365 files at a6ef261. At 4f2727f, 315 first-added revisions declare a label; 65 of them are excluded because they were first committed after execution started (status checked, replanned, shelved, or ready_to_archive, or a completed task checkbox), because their input still names a removed field, or because the value is out of policy.
+- Decisions refinements made during implementation: `replan_source` is removed alongside `replan_sources`; `status` leaks only in its field form, and every other removed name leaks as any whole token; a concurrent addition of the same file name, such as a squash on a release branch, resolves to the earliest committed one, and a same-time addition with different bytes is excluded as ambiguous. The frozen holdout cutoff is 2026-09-14T00:00:00Z, chosen so the tuning low class reaches the minimum of 10. A `verify` subcommand regenerates a saved report from its recorded revision and names every mismatched question.
+- One independent read-only reviewer subagent (reviewer role, no write scope) reviewed the candidate. Round 1 found one High (the colon-only leak check let three tuning inputs state "implementation_risk is high") and three Low findings (singular replan_source kept, concurrent additions resolved topologically, overstated partition stability). All four were remediated, and the re-review reported no findings. The parent accepted the result after rerunning the focused tests. No execution ledger was used because implementation_risk is low.
+- Focused validation `python3 tests/test-validation-tools.py` passed (399 tests). Its first run had 15 PythonLintTest errors because the pinned Ruff environment was not on PATH; with the repository `.venv/bin` on PATH it passed. `scripts/lint-project-workflow.sh` and `tests/smoke.sh` then passed once with the same PATH.

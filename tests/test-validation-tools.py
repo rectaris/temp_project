@@ -14,6 +14,7 @@ from validation_tools.generated import (
 )
 from validation_tools.plan import PlanOverviewTest, PlanValidationCommandsTest
 from validation_tools.python_lint import PythonLintTest
+from validation_tools.question_set import CommittedQuestionCasesTest, QuestionSetBuilderTest
 from validation_tools.plan_authoring import PlanAuthoringInRepositoryTest, PlanAuthoringTest
 from validation_tools.release_skill import (
     ReleaseRunbookExampleTest,

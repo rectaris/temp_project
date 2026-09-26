@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "fixture_kind": "committed_history",
+  "label_field": "implementation_risk",
+  "holdout": "withheld_outside_repository",
+  "note": "Tuning cases regenerated from this repository's own committed plan history by scripts/build-plan-question-set.py with the default protocol. Every case is in the tuning partition and is marked used_for_tuning. No holdout question, holdout label, or holdout partition list is committed.",
+  "cases": [
+    {
+      "plan_file": "150-certify-exact-ref-local-apply.md",
+      "source_path": "docs/plan/active/150-certify-exact-ref-local-apply.md",
+      "source_commit": "b3363fb030ebe2450504d6dd9fdc30d7f75d9d47",
+      "label": "low",
+      "input_sha256": "sha256:59380c5b5481ed4339699568277b26cbde4958fab2975cbd928d2547edbdb8a0",
+      "partition": "tuning",
+      "used_for_tuning": true
+    },
+    {
+      "plan_file": "293-state-what-to-do-when-a-decision-record-is-insufficient.md",
+      "source_path": "docs/plan/backlog/293-state-what-to-do-when-a-decision-record-is-insufficient.md",
+      "source_commit": "9524537728816d91eae2306c5946cceeae9d5e90",
+      "label": "low",
+      "input_sha256": "sha256:18bff07ae7c1b8a67aab0998157e65d5a7ac2498ba82b845310e2fc38c053637",
+      "partition": "tuning",
+      "used_for_tuning": true
+    },
+    {
+      "plan_file": "071-orchestration-throughput-foundation.md",
+      "source_path": "docs/plan/active/071-orchestration-throughput-foundation.md",
+      "source_commit": "701d8a60aea8d7412c6ab640e7bb4507c0e74dd5",
+      "label": "ordinary",
+      "input_sha256": "sha256:3bbfe33d59bad8d49f94747a43006cd2d942def620a9b0d4c95b1a65e83e2290",
+      "partition": "tuning",
+      "used_for_tuning": true,
+      "note": "The plan file at the scanned revision declares implementation_risk low; the committed case keeps the ordinary label declared when the plan was first added."
+    },
+    {
+      "plan_file": "271-complete-referent-contract-resolution.md",
+      "source_path": "docs/plan/active/271-complete-referent-contract-resolution.md",
+      "source_commit": "cec637d870a61a02a7c20666e14f00d8b9452443",
+      "label": "ordinary",
+      "input_sha256": "sha256:78802352beda59737eb0b485b80640ad69f6927ba094015f7353d1a1c31a6377",
+      "partition": "tuning",
+      "used_for_tuning": true
+    },
+    {
+      "plan_file": "076-plan-restructuring-policy-schema.md",
+      "source_path": "docs/plan/active/076-plan-restructuring-policy-schema.md",
+      "source_commit": "fcce7878a46b8285e1693c42a21aeb124e60229e",
+      "label": "high",
+      "input_sha256": "sha256:da80b1657a9a0ff3851920655a4df36ba2055b70c17a0a0dfc2498f87cb39926",
+      "partition": "tuning",
+      "used_for_tuning": true
+    },
+    {
+      "plan_file": "199-admit-decomposed-shell-validation.md",
+      "source_path": "docs/plan/active/199-admit-decomposed-shell-validation.md",
+      "source_commit": "d42b00d0f0bf04bea58d671f3ae0d98a647314fb",
+      "label": "high",
+      "input_sha256": "sha256:01def52d395c81643bbd660b3210131748703731502fa0ef22a600a80bc70f7c",
+      "partition": "tuning",
+      "used_for_tuning": true
+    }
+  ]
+}
