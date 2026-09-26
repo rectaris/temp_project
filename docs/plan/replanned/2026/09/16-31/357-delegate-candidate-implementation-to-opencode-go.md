@@ -1,7 +1,6 @@
 # Let OpenCode Go produce bounded implementation candidates
 
-status: replan_required
-primary_invariant: An explicitly selected Go worker produces only an in-scope candidate under the existing attempt, receipt, correction and parent-validation gates, without receiving upstream credentials or lifecycle authority.
+status: replanned
 task_types:
   - template_workflow
   - security
@@ -97,12 +96,23 @@ validation_witness_map:
   - {"acceptance_sha256":"sha256:8ded8e74d9aa6291e5f488ffb4529ab04a1e0e49f624c89b0af5fcac8721d6a0","stage":"focused","witness":"python3 tests/test-sandboxed-plan-worker.py"}
   - {"acceptance_sha256":"sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb","stage":"focused","witness":"tests/copier-update.sh --require-copier"}
   - {"acceptance_sha256":"sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/357-delegate-candidate-implementation-to-opencode-go.md
+replan_contract: docs/plan/replanned/contracts/357-delegate-candidate-implementation-to-opencode-go.json
 integration_gates:
-  - docs/plan/checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md
-  - docs/plan/backlog/356-delegate-read-only-tasks-to-opencode-go.md
-replan_reason_codes:
-  - scope_drift
-  - multiple_independent_invariants
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/394-bind-custom-worker-dispatch-provenance.md
+  - docs/plan/active/395-run-opencode-go-candidate-worker.md
+  - docs/plan/active/396-integrate-opencode-go-candidate-route.md
+inherited_acceptance_digests:
+  - sha256:d930bc55fa2da26dfb2e6a2bd4f2a0b00d7079bf28176e0828141c143967b5bd
+  - sha256:72b4b9ee612345af0ad93689efed29eda6b85063c25fc7f41dd82388205ada6b
+  - sha256:68efe554460079f7e5645eb24e5697d41905580d3d4cfc7a1a2a7b71bf15673c
+  - sha256:8ded8e74d9aa6291e5f488ffb4529ab04a1e0e49f624c89b0af5fcac8721d6a0
+  - sha256:0f2aa0b08b8ce5b5075270f29fd79217bd0cfce1885217c44dac8f8953941adb
+  - sha256:66465497df1b019a9452678898554cfb155cf7c0a1093d5737df21431e302e8f
 checked_summary_ja: 既存の隔離実行を通じて OpenCode Go に実装候補と修正候補を生成させる。
 
 ## Decisions
