@@ -31,12 +31,24 @@ Ruffによる検査を入れた[353](../checked/2026/09/16-31/353-enforce-bounde
 親のオーケストレーターから別のCLIへ作業を渡す経路を、読み取り専用から順に広げる。
 前提の資格情報隔離は、355を再構成した[359](../checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md)として完了済みである。
 
-1. [356：読み取り専用の調査の委任](356-delegate-read-only-tasks-to-opencode-go.md)
-2. [357：実装候補の生成の委任](357-delegate-candidate-implementation-to-opencode-go.md)
+元の356と357は、オーナーの指示で正規の再構成により3件ずつに分けた。
+元の本文と受け入れ条件は[replannedの一覧](../replanned.md)から辿れる。
+手元のOpenCodeは2.0.15に更新されており、元の2件が前提にした1.18.30の起動方法はもう使えない。
+後継の6件は、2.0.15で確かめた隔離の方法を前提にしている。
 
-2件の本文は付け替え記録に固定されているため、直接は書き直せない。
-オーナーの指示により、正規の再構成で分割する。
-手元のOpenCodeは2.0.15に更新されており、2件が前提にした1.18.30の起動方法はもう使えない。
+次の順に一件ずつ実装する。
+
+1. [397：隔離した読み取り専用の補助プロセス](397-isolate-read-only-opencode-go-helper.md)
+2. [398：無効の状態で配る補助の設定](398-seed-opencode-go-helper-configuration.md)
+3. [399：スキル、案内、Copierの配布への組み込み](399-integrate-opencode-go-read-only-helper.md)
+   元の356の受け入れ条件をすべて引き継ぎ、3件をまとめて検証する。
+4. [394：カスタムワーカーの試行ごとの起動情報](394-bind-custom-worker-dispatch-provenance.md)
+5. [395：ランナーが選ぶOpenCode Goの実装候補ワーカー](395-run-opencode-go-candidate-worker.md)
+6. [396：実装候補の経路の案内とCopierの配布](396-integrate-opencode-go-candidate-route.md)
+   元の357の受け入れ条件をすべて引き継ぎ、3件をまとめて検証する。
+
+394から396は、397から399の完了を前提にする。
+どの完了も、実際のモデルで品質が向上したことを意味しない。
 
 ## 外部の構造化判断とリスク予測
 
