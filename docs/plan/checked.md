@@ -290,3 +290,4 @@ id	path
 362	docs/plan/checked/2026/09/16-31/362-add-terminal-owner-resolution.md
 363	docs/plan/checked/2026/09/16-31/363-complete-parent-direct-lifecycle-records.md
 383	docs/plan/checked/2026/09/16-31/383-carry-live-evidence-obligations-through-restructuring.md
+384	docs/plan/checked/2026/09/16-31/384-derive-review-outcome-from-reviewer-evidence.md

@@ -1,6 +1,6 @@
 # Derive a recorded review outcome from the reviewer session's own bound evidence
 
-status: in_progress
+status: checked
 primary_invariant: A bounded review records only the finding severities that the final assistant message of the reviewer transcript bound by its review resource manifest states in one fixed verdict line, and a bounded review whose bound evidence carries no such line refuses, before any registry, group or ledger effect, instead of recording an empty finding set.
 task_types:
   - template_workflow
@@ -87,11 +87,11 @@ checked_summary_ja: 記録するレビュー結果を、レビュアセッショ
 
 ## Tasks
 
-- [ ] In the bounded review path, immediately after review_turn_zero_from_manifest, read the bound external transcript through read_bound_resource_evidence, take the last assistant message, unwrap the exact truncation object to its head, and parse the first non-empty line as the fixed verdict line; refuse on absent or not_observed evidence, no assistant message, an unparsable first line, or a second verdict line.
-- [ ] Require the recorded finding severities to equal the parsed severity set, and refuse an empty recorded set unless the verdict is `REVIEW-VERDICT: none`, still before admit_reviewer_session and spend_group_member_review.
-- [ ] Add the review-verdict-instructions subcommand that prints the exact reviewer instruction block, and state the verdict admission rule and the subcommand in the Review-Finding Budgets section of docs/agent/SPEC_PLAN_WORKFLOW.md and template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md.
-- [ ] Extend the resource_manifest fixture once so every existing review test supplies a bound transcript with a verdict, give each severity-bearing review call a matching verdict, then add refusal tests covering a last-line-only verdict, a truncated message whose head carries the verdict, and a refused review that leaves the reviewer registry, group state and ledger bytes unchanged, plus a test that review-route-check still accepts its probe evidence.
-- [ ] Mirror the change into template/.project-agent-workflow/scripts/plan-execution-state.py and run the focused witnesses.
+- [x] In the bounded review path, immediately after review_turn_zero_from_manifest, read the bound external transcript through read_bound_resource_evidence, take the last assistant message, unwrap the exact truncation object to its head, and parse the first non-empty line as the fixed verdict line; refuse on absent or not_observed evidence, no assistant message, an unparsable first line, or a second verdict line.
+- [x] Require the recorded finding severities to equal the parsed severity set, and refuse an empty recorded set unless the verdict is `REVIEW-VERDICT: none`, still before admit_reviewer_session and spend_group_member_review.
+- [x] Add the review-verdict-instructions subcommand that prints the exact reviewer instruction block, and state the verdict admission rule and the subcommand in the Review-Finding Budgets section of docs/agent/SPEC_PLAN_WORKFLOW.md and template/.project-agent-workflow/docs/agent/SPEC_PLAN_WORKFLOW.md.
+- [x] Extend the resource_manifest fixture once so every existing review test supplies a bound transcript with a verdict, give each severity-bearing review call a matching verdict, then add refusal tests covering a last-line-only verdict, a truncated message whose head carries the verdict, and a refused review that leaves the reviewer registry, group state and ledger bytes unchanged, plus a test that review-route-check still accepts its probe evidence.
+- [x] Mirror the change into template/.project-agent-workflow/scripts/plan-execution-state.py and run the focused witnesses.
 
 ## Validation Notes
 
