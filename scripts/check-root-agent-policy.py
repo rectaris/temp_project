@@ -1878,12 +1878,13 @@ def check_external_service_policy() -> None:
         "external_services:",
         "  github:",
         "  opencode_go:",
+        "  typesafe:",
         "unavailable_fallback:",
     )
     for marker in policy_markers:
         if marker not in policy:
             fail(f"root external-service policy missing marker: {marker}")
-    for forbidden in ("credential_reference:", "access_token:", "private_key:"):
+    for forbidden in ("credential_reference:", "access_token:", "private_key:", "TYPESAFE_API_KEY"):
         if forbidden in policy:
             fail(f"root external-service policy contains credential material field: {forbidden}")
 
@@ -1900,6 +1901,32 @@ def check_external_service_policy() -> None:
         "git check-ref-format --branch",
         "inference.chat_completions",
         "scripts/project_workflow/opencode_go_transport.py",
+        "## TypeSafe structured decisions",
+        "Its only operation is `decision.evaluate`, its only access class is `read`, and its only admissible effect is `ordinary`.",
+        "Its only target form is `https://api.typesafe.ai/v1/systemone#model=jev-<MAJOR>.<MINOR>.<PATCH>`",
+        "The tuple check refuses any other access class, operation, effect, host, path, query, or model, and it refuses the moving aliases `jev-latest` and `jev-preview`.",
+        "A request without `--provider-configured` or `--task-authorized` is refused before delegation.",
+        "Authorize each request separately immediately before it is sent.",
+        "a changed model id is a different target and a different authorization",
+        "keeping that fact fresh remains the caller's duty",
+        "A caller must therefore authorize every call that reaches TypeSafe as service `typesafe` against the direct endpoint",
+        "A wider fold can only route more requests into the tuple check.",
+        "When a target has an authority, it must be canonical ASCII: at most one `@`, a userinfo of unreserved and sub-delimiter ASCII characters and colons without a percent escape, an LDH host without a trailing dot or a bracketed literal that parses as an IPv6 address, and an optional decimal port.",
+        "Only a `file` target or the authority of another non-special scheme may have an empty host.",
+        "the target names TypeSafe when a canonical host or guessed host is equal to or under `typesafe.ai`, compared case-insensitively.",
+        "Every target is also read the way a command-line client such as curl reads it",
+        "another libcurl protocol scheme, such as `gopher`, `dict`, `imap`, `ldap`, `sftp`, or `telnet`, followed by at least one slash or backslash skips all of them",
+        "Every other scheme has an authority only after `//`, as RFC 3986 and the WHATWG URL parser read it",
+        "A guessed host must be an LDH host without a trailing dot; a guessed host with any other character, including a non-ASCII character, is refused as a noncanonical host.",
+        "The name fold percent-decodes until the text is stable, applies Unicode compatibility normalization, case folding, and compatibility normalization again, maps the ideographic full stop to a dot, and drops control, format, surrogate, private-use, unassigned, mark, separator, and Hangul filler characters together with every character that IDNA2003 nameprep maps to nothing (RFC 3454 table B.1).",
+        "A repeated `--target`, `--confirmed-target`, or `--authorization-rule` is refused for every service instead of keeping only its last value.",
+        "The entrypoint runs the maintained checker with an environment that omits every variable whose name starts with `TYPESAFE_`",
+        "The TypeSafe API key is a denied payload, not a task input.",
+        "The only admissible caller is a process that the parent session starts and controls, reading `TYPESAFE_API_KEY` from its own runtime environment.",
+        "never make it available to a delegated process",
+        "names no credential value or credential-source binding",
+        "A returned decision is advisory.",
+        "It never relaxes, replaces, or satisfies a deterministic validation, review, authorization, or stop condition",
     )
     for marker in specification_markers:
         if marker not in specification:
@@ -1916,12 +1943,30 @@ def check_external_service_policy() -> None:
         "rectaris/temp_project",
         "check-ref-format",
         "subprocess.run",
+        'TYPESAFE_SERVICE = "typesafe"',
+        'TYPESAFE_OPERATION = "decision.evaluate"',
+        'r"https://api\\.typesafe\\.ai/v1/systemone#model=jev-"',
+        "TYPESAFE_TARGET.fullmatch(args.target)",
+        "validate_typesafe_request(args)",
+        "def routing_form(value: str) -> str:",
+        "stringprep.in_table_b1(character)",
+        "def names_typesafe_host(target: str) -> bool:",
+        "CANONICAL_AUTHORITY.fullmatch(authority)",
+        "ipaddress.IPv6Address(literal)",
+        "LIBCURL_SLASH_TOLERANT_SCHEMES = frozenset(",
+        "def command_line_host(target: str) -> str | None:",
+        "CANONICAL_HOST.fullmatch(guessed)",
+        "class SingleValueAction(argparse.Action):",
+        "env=maintained_checker_environment()",
+        "class RootArgumentParser(argparse.ArgumentParser):",
     )
     for marker in entrypoint_markers:
         if marker not in entrypoint:
             fail(f"root external-service entrypoint missing marker: {marker}")
     if "str(POLICY)" not in entrypoint or "str(MAINTAINED_CHECKER)" not in entrypoint:
         fail("root external-service entrypoint must delegate with the fixed root policy")
+    if "TYPESAFE_API_KEY" in entrypoint:
+        fail("root external-service entrypoint must not name the TypeSafe credential source")
 
 
 def check_git_retirement_policy() -> None:

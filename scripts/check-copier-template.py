@@ -739,6 +739,21 @@ def require_opencode_go_transport_alignment() -> None:
             fail(f"external-service policy does not register opencode_go: {policy_path}")
 
 
+def require_typesafe_root_only() -> None:
+    """Keep the root TypeSafe registration out of the generic template.
+
+    TypeSafe is this repository's provider choice. A generated project must
+    not inherit it through its external-service policy or specification.
+    """
+
+    for template_path in (
+        "template/docs/agent/external-services.yaml.jinja",
+        "template/.project-agent-workflow/docs/agent/SPEC_EXTERNAL_SERVICES.md.jinja",
+    ):
+        if "typesafe" in read(template_path).casefold():
+            fail(f"template external-service file names the root-only TypeSafe provider: {template_path}")
+
+
 def require_harness_evaluation_alignment() -> None:
     """Keep the harness comparison command, policy, and routing aligned."""
 
@@ -3853,6 +3868,7 @@ def main() -> int:
     require_evidence_synthesizer()
     require_referent_first_alignment()
     require_opencode_go_transport_alignment()
+    require_typesafe_root_only()
     require_harness_evaluation_alignment()
     require_harness_profile_alignment()
     require_template_feedback_alignment()

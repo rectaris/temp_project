@@ -1,7 +1,7 @@
 # Root External Services
 
 The active root policy is `docs/agent/external-services.yaml`.
-It uses schema version 2 with `access_profile: task_scoped_default_allow` and declares GitHub and OpenCode Go as its configured-provider records.
+It uses schema version 2 with `access_profile: task_scoped_default_allow` and declares GitHub, OpenCode Go, and TypeSafe as its configured-provider records.
 
 Provider configuration and authorization are separate facts.
 The provider-call execution context is the provider, command execution boundary, and credential source used for one exact external call.
@@ -84,7 +84,60 @@ Authorize each relayed request separately before it reaches the provider.
 The target is the exact upstream URL with the exact requested model, so a model the request did not declare is a different target and a different authorization.
 A failed, ambiguous, or erroring authorization denies the request.
 
+## TypeSafe structured decisions
 
+Service `typesafe` covers structured decisions from the TypeSafe System One endpoint.
+Its only operation is `decision.evaluate`, its only access class is `read`, and its only admissible effect is `ordinary`.
+Its only target form is `https://api.typesafe.ai/v1/systemone#model=jev-<MAJOR>.<MINOR>.<PATCH>`, where each version component is a decimal integer without a leading zero.
+
+The root entrypoint applies this tuple before it delegates to the maintained version 2 checker.
+It routes a request through the tuple check when the target's URL authority names a TypeSafe host, or when the service or operation name folds to `typesafe` or `decision.evaluate`.
+
+For every service, the entrypoint first refuses a target that contains a tab, line feed, or carriage return, or that begins or ends with a control or space character, because a URL parser may strip those characters.
+It then finds the URL authority the way a client would connect to it.
+A scheme follows the RFC 3986 grammar.
+The special network schemes `http`, `https`, `ws`, `wss`, and `ftp`, and a scheme-relative target that begins with two slashes or backslashes, skip every leading slash and backslash and require a host.
+A `file` target has an authority only after two leading slashes or backslashes, and another libcurl protocol scheme, such as `gopher`, `dict`, `imap`, `ldap`, `sftp`, or `telnet`, followed by at least one slash or backslash skips all of them, because libcurl reads `gopher:/host` and `gopher:///host` as `gopher://host`.
+Every other scheme has an authority only after `//`, as RFC 3986 and the WHATWG URL parser read it, so `foo:/a_b` has none.
+The authority ends at the first `/`, `?`, or `#`.
+When a target has an authority, it must be canonical ASCII: at most one `@`, a userinfo of unreserved and sub-delimiter ASCII characters and colons without a percent escape, an LDH host without a trailing dot or a bracketed literal that parses as an IPv6 address, and an optional decimal port.
+Only a `file` target or the authority of another non-special scheme may have an empty host.
+Any other authority, including a percent escape, a backslash, or a non-ASCII character, is refused with one fixed diagnostic, so a noncanonical spelling of a TypeSafe host cannot reach the maintained checker.
+Every target is also read the way a command-line client such as curl reads it, because `api.example.com:/v1` is a URL with a dotted scheme to one parser and a host with an empty port to another.
+When the leading token before the first `/`, `?`, or `#` contains no whitespace, the text after its last `@` and before the following first `:` is a guessed host if its name fold, described below, contains a dot, so `x:secret@host` and `host:443/v1` both name `host` and an ideographic, full-width, or percent-encoded dot still counts.
+A guessed host must be an LDH host without a trailing dot; a guessed host with any other character, including a non-ASCII character, is refused as a noncanonical host.
+Every host either reading finds must be canonical, and the target names TypeSafe when a canonical host or guessed host is equal to or under `typesafe.ai`, compared case-insensitively.
+A target with neither a URL authority nor a guessed host, such as a GitHub-form target or an opaque URI without a dotted leading name, keeps its existing result, and so does every canonical target of another host.
+
+The service and operation names are folded instead, because the maintained checker accepts any operation text.
+The name fold percent-decodes until the text is stable, applies Unicode compatibility normalization, case folding, and compatibility normalization again, maps the ideographic full stop to a dot, and drops control, format, surrogate, private-use, unassigned, mark, separator, and Hangul filler characters together with every character that IDNA2003 nameprep maps to nothing (RFC 3454 table B.1).
+A wider fold can only route more requests into the tuple check.
+
+The entrypoint cannot recognize TypeSafe reached through another gateway, an IP address, an alias host, or client-side expansion such as curl URL globbing, because the maintained version 2 checker still authorizes other services without consulting the service map; that separate defect is outside this registration.
+A caller must therefore authorize every call that reaches TypeSafe as service `typesafe` against the direct endpoint, and must not reach TypeSafe through another service or gateway.
+
+The tuple check refuses any other access class, operation, effect, host, path, query, or model, and it refuses the moving aliases `jev-latest` and `jev-preview`.
+An alias moves when the provider ships a release, so it can change the decisions that a later evaluation depends on without any change on this side; each call pins one versioned model id instead.
+An authorization rule and a confirmation argument are not accepted for this service.
+A repeated `--target`, `--confirmed-target`, or `--authorization-rule` is refused for every service instead of keeping only its last value.
+The host and path come only from the authorized target, so the caller must not honor a base-URL override such as `TYPESAFE_BASE_URL`.
+A request without `--provider-configured` or `--task-authorized` is refused before delegation.
+
+Authorize each request separately immediately before it is sent.
+The exact operation, target, payload, and current user request must match, and a changed model id is a different target and a different authorization.
+The entrypoint cannot observe whether the current user request still requires the call, so keeping that fact fresh remains the caller's duty.
+
+The TypeSafe API key is a denied payload, not a task input.
+The only admissible caller is a process that the parent session starts and controls, reading `TYPESAFE_API_KEY` from its own runtime environment.
+Never pass the key on a command line, in a prompt, a delegated task, a sandbox environment, a repository file, a plan, a log, a fixture, or a provider payload, and never make it available to a delegated process.
+This registration installs no relay and no SDK.
+The entrypoint runs the maintained checker with an environment that omits every variable whose name starts with `TYPESAFE_`, so no TypeSafe credential reaches that subprocess.
+Every refusal of a TypeSafe request exits nonzero.
+The tuple check's diagnostics use fixed wording that echoes no caller-supplied value and names no credential value or credential-source binding.
+An argument-parsing failure reports the same fixed invalid-arguments diagnostic for every service instead of echoing the rejected argument.
+
+A returned decision is advisory.
+It never relaxes, replaces, or satisfies a deterministic validation, review, authorization, or stop condition, and no returned score, probability, or confidence value substitutes for one.
 
 When GitHub is unavailable, continue with local repository files, plans, validation output, and Git history, and report the deferral when it changes scope, confidence, validation, or completion.
 Never place credentials, tokens, private keys, secret values, or private configuration in a policy, target, confirmation, or provider payload.
