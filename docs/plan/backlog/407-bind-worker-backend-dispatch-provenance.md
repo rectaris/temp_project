@@ -1,7 +1,6 @@
 # Bind parent-authored WorkerBackend dispatch provenance to every candidate attempt
 
-status: deferred
-completion_deferred_reason: The Issue #14 foundation plan must be checked first, as integration_gates records.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: Every attempt the runner dispatches through a WorkerBackend carries a parent-authored dispatch record bound to its exact attempt, and no worker claim can supply, replace or satisfy that record on any admission path.
 replan_sources:

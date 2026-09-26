@@ -1,7 +1,6 @@
 # Seed a disabled project-owned OpenCode Go backend configuration
 
-status: deferred
-completion_deferred_reason: Plan 404 must be checked first.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: Every installation starts with no capability enabled for the OpenCode Go backend, and a project-owned backend configuration is never replaced by a Copier update.
 replan_sources:

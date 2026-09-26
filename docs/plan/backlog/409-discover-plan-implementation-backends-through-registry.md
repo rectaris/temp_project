@@ -1,7 +1,6 @@
 # Discover alternate plan-implementation backends through the registry in routing, skills and Copier distribution
 
-status: deferred
-completion_deferred_reason: Plans 406, 407 and 408 must be checked first.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: An explicitly enabled alternate implementation of plan_implementation is discoverable in root and generated installations through capability resolution, while default installations, Codex routing and unrelated custom workers behave exactly as before.
 replan_sources:

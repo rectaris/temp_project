@@ -1,7 +1,6 @@
 # Discover read-only capabilities through the registry in skills, routing and Copier distribution
 
-status: deferred
-completion_deferred_reason: Plans 404 and 405 must be checked first.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: Root and generated installations discover read-only delegation through one provider-neutral skill and capability-based routing guidance, while default resolution, Codex routing, Sol review and every existing validation stay unchanged.
 replan_sources:

@@ -1,7 +1,6 @@
 # Run a read-only capability through an isolated OpenCode Go backend
 
-status: deferred
-completion_deferred_reason: The Issue #14 foundation plan and the Issue #15 minimal Evaluation Controller must be checked first, as integration_gates records.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: A read-only capability request resolved to the OpenCode Go backend reads only the admitted snapshot files and returns a bounded advisory evidence artifact, with no shell, no network except the relay socket, no credential and no repository write.
 replan_sources:

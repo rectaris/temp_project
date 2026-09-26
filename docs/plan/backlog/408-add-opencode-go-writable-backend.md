@@ -1,7 +1,6 @@
 # Add OpenCode Go as the first non-Codex writable WorkerBackend
 
-status: deferred
-completion_deferred_reason: Plans 404, 405 and 407 must be checked first, and the Issue #15 read-only comparison must support a writable OpenCode backend.
+status: backlog
 implementation_mode: parent_direct
 primary_invariant: Only the runner-resolved OpenCodeGoBackend writable profile reaches the credential relay, and the OpenCode process edits only the admitted writable shadows with no shell, network or credential access.
 replan_sources:
