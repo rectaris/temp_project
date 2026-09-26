@@ -26,28 +26,39 @@ Ruffによる検査を入れた[353](../checked/2026/09/16-31/353-enforce-bounde
    npm版のPyright 1.1.407をNode 24で導入し、同じ6ファイルの型を検査する。
    Pyrightは隠しディレクトリの下のファイルを解析しないため、配置ごとに設定ファイルを分ける。
 
-## OpenCode Goへの委任
+## 能力と実装の境界によるOpenCode Goへの委任
 
-親のオーケストレーターから別のCLIへ作業を渡す経路を、読み取り専用から順に広げる。
+親のオーケストレーターから別のCLIへ作業を渡す経路を、[Issue #14](https://github.com/rectaris/temp_project/issues/14)の能力と実装の境界に載せて、読み取り専用から順に広げる。
 前提の資格情報隔離は、355を再構成した[359](../checked/2026/09/01-15/359-isolate-opencode-go-inference-credentials.md)として完了済みである。
 
-元の356と357は、オーナーの指示で正規の再構成により3件ずつに分けた。
+元の356と357から分けた394から399は、Issue #14のオーナーの指示で正規の再構成をもう一度行い、404から409に1件ずつ置き換えた。
 元の本文と受け入れ条件は[replannedの一覧](../replanned.md)から辿れる。
-手元のOpenCodeは2.0.15に更新されており、元の2件が前提にした1.18.30の起動方法はもう使えない。
-後継の6件は、2.0.15で確かめた隔離の方法を前提にしている。
+後継では、親はOpenCodeを名指しせず能力の名前で要求し、Capability Registryが既定のCodexか、プロジェクトが明示的に有効にしたOpenCode Goの実装を選ぶ。
+OpenCode固有の起動方法と資格情報の中継は、OpenCodeGoBackendの中に閉じる。
+
+後継の6件は、まだプランになっていない前提作業を integration_gates の文章で待つ。
+
+- Issue #14の基盤は、Capability RegistryとWorkerBackend境界を追加し、現行のCodexの経路をCodexBackendとして動作を変えずに包む。後継は`docs/agent/capability-registry.json`と`scripts/project_workflow/worker_backends.py`、およびそれぞれのテンプレートの写しをこの名前で編集する。基盤のプランが名前を変える場合は、所有者の承認を記録して後継の書き込み範囲を移す。
+- [Issue #15](https://github.com/rectaris/temp_project/issues/15)の最小の評価実行は、404の開始前に完了させる。
+- 408は、#15でCodexとOpenCode Goの読み取り専用の動作を比べた結果が、書き込みの実装を有効にすることを支持するまで開始しない。
 
 次の順に一件ずつ実装する。
 
-1. [397：隔離した読み取り専用の補助プロセス](397-isolate-read-only-opencode-go-helper.md)
-2. [398：無効の状態で配る補助の設定](398-seed-opencode-go-helper-configuration.md)
-3. [399：スキル、案内、Copierの配布への組み込み](399-integrate-opencode-go-read-only-helper.md)
-   元の356の受け入れ条件をすべて引き継ぎ、3件をまとめて検証する。
-4. [394：カスタムワーカーの試行ごとの起動情報](394-bind-custom-worker-dispatch-provenance.md)
-5. [395：ランナーが選ぶOpenCode Goの実装候補ワーカー](395-run-opencode-go-candidate-worker.md)
-6. [396：実装候補の経路の案内とCopierの配布](396-integrate-opencode-go-candidate-route.md)
-   元の357の受け入れ条件をすべて引き継ぎ、3件をまとめて検証する。
+1. Issue #14の基盤
+2. Issue #15の最小の評価実行
+3. [404：読み取り専用の能力を処理するOpenCode Goの実装](404-run-read-only-capabilities-through-opencode-go-backend.md)
+4. [405：どの能力も有効にしない実装の設定](405-seed-disabled-opencode-go-backend-configuration.md)
+5. [406：能力による発見とCopierの配布](406-discover-read-only-capabilities-through-registry.md)
+   元の399の受け入れ条件をすべて引き継ぎ、3件をまとめて検証する。
+6. [407：WorkerBackendを通じた試行ごとの起動情報](407-bind-worker-backend-dispatch-provenance.md)
+   前提は基盤だけで、OpenCodeを名指ししない。
+7. Issue #15による読み取り専用の動作の比較
+8. [408：Codex以外で最初の書き込みの実装](408-add-opencode-go-writable-backend.md)
+9. [409：書き込みの能力の発見とCopierの配布](409-discover-plan-implementation-backends-through-registry.md)
+   元の396の受け入れ条件をすべて引き継ぎ、3件をまとめて検証する。
 
-394から396は、397から399の完了を前提にする。
+OpenCode Goは`plan_implementation`だけに登録し、`bounded_implementation`はCodexの既存の設定に残す。
+`bounded_implementation`にはサンドボックスを通る実装候補の経路がないためである。
 どの完了も、実際のモデルで品質が向上したことを意味しない。
 
 ## 別セッションでの並列実装
