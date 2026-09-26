@@ -73,3 +73,4 @@ id	path	contract
 374	docs/plan/replanned/2026/09/16-31/374-publish-and-verify-separate-session-plan-results.md	docs/plan/replanned/contracts/374-publish-and-verify-separate-session-plan-results.json
 357	docs/plan/replanned/2026/09/16-31/357-delegate-candidate-implementation-to-opencode-go.md	docs/plan/replanned/contracts/357-delegate-candidate-implementation-to-opencode-go.json
 356	docs/plan/replanned/2026/09/16-31/356-delegate-read-only-tasks-to-opencode-go.md	docs/plan/replanned/contracts/356-delegate-read-only-tasks-to-opencode-go.json
+345	docs/plan/replanned/2026/09/16-31/345-register-typesafe-structured-decision-provider.md	docs/plan/replanned/contracts/345-register-typesafe-structured-decision-provider.json

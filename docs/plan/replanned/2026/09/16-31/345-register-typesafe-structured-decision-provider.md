@@ -1,8 +1,7 @@
 # Register TypeSafe structured decisions as a root external service with a parent-held credential
 
-status: replan_required
+status: replanned
 implementation_mode: parent_direct
-primary_invariant: Every TypeSafe call is authorized per request as a read with the ordinary effect against the unchanged root policy, its credential never reaches a repository file, plan, log, fixture, provider payload, or delegated process, and no advisory score can relax an existing deterministic check.
 task_types:
   - security
   - external_services
@@ -63,8 +62,17 @@ validation_witness_schema: 1
 validation_witness_map:
   - {"acceptance_sha256":"sha256:7f4bb3333d4719ecf5c9c2b0a52295a0123a736d482e6e4880d6009561396770","stage":"focused","witness":"python3 tests/test-validation-tools.py"}
   - {"acceptance_sha256":"sha256:126774b069c3fce41025e5a10e7e550052570c5a58d21b8d6a537e41c4131d22","stage":"focused","witness":"python3 scripts/check-copier-template.py"}
-replan_reason_codes:
-  - parent_remediation_budget_exhausted
+primary_invariant: preserve the complete coupled source acceptance baseline
+replan_sources:
+  - docs/plan/active/345-register-typesafe-structured-decision-provider.md
+replan_contract: docs/plan/replanned/contracts/345-register-typesafe-structured-decision-provider.json
+integration_gates:
+  - combined successors must satisfy every mapped source acceptance item
+successor_plans:
+  - docs/plan/active/400-register-typesafe-with-canonical-host-detection.md
+inherited_acceptance_digests:
+  - sha256:7f4bb3333d4719ecf5c9c2b0a52295a0123a736d482e6e4880d6009561396770
+  - sha256:126774b069c3fce41025e5a10e7e550052570c5a58d21b8d6a537e41c4131d22
 checked_summary_ja: TypeSafeの構造化判断をルート外部サービスとして登録し、ルートの入口で操作と対象を固定する。
 
 ## Decisions
