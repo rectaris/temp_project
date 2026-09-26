@@ -293,3 +293,4 @@ id	path
 384	docs/plan/checked/2026/09/16-31/384-derive-review-outcome-from-reviewer-evidence.md
 317	docs/plan/checked/2026/09/16-31/317-build-plan-record-question-set.md
 400	docs/plan/checked/2026/09/16-31/400-register-typesafe-with-canonical-host-detection.md
+354	docs/plan/checked/2026/09/16-31/354-score-plan-risk-from-weighted-features.md

@@ -1,6 +1,6 @@
 # Predict plan implementation risk from weighted structured feature scores and report its measured limits
 
-status: in_progress
+status: checked
 implementation_mode: parent_direct
 primary_invariant: Feature dimensions and weights are fitted only on the tuning partition, the held-out partition is scored exactly once against predeclared limits, and every reported accuracy is paired with its majority-class baseline and its own denominator so a class below the declared minimum is reported as not measurable instead of scored.
 task_types:
@@ -94,7 +94,7 @@ checked_summary_ja: 重み付き特徴量スコアから計画の実装リスク
 - [x] Implement report with paired baselines, per-class and per-band denominators and not_measurable classes, and refuse a report without a paired baseline.
 - [x] Add FeatureScoringTest: synthetic cases for every refusal and report field, socket creation disabled in the subprocess, and a repository tree digest compared before and after.
 - [x] Register the command and fixtures in SOURCE_REQUIRED and the test in tests/test-validation-tools.py.
-- [ ] Obtain independent review, run the focused checks, then the full validation suite once, and publish through the ordinary lifecycle.
+- [x] Obtain independent review, run the focused checks, then the full validation suite once, and publish through the ordinary lifecycle.
 
 ## Validation Notes
 
@@ -106,3 +106,5 @@ checked_summary_ja: 重み付き特徴量スコアから計画の実装リスク
 - One independent read-only reviewer subagent (reviewer role, no write scope) reviewed the candidate. Round 1 reported three Medium findings: importing the question-set builder wrote a bytecode cache into the tool checkout, the ledger boundary ignored the repository's other linked worktrees, and a hard-linked ledger could alias a file inside the worktree. All three were remediated; the offline test now runs committed copies of both scripts from inside the history repository, and the ledger test covers a linked worktree and a hard link. Reverting each fix one at a time failed the suite. The re-review reported no findings. No execution ledger was used, following plan 317's parent-direct precedent; implementation_risk is ordinary and no sandboxed candidate correction path applies.
 - At real-set size (207 tuning records, 10 dimensions, 2000 iterations) fit_weights took 1.8 s on this workstation.
 - Focused validation on the final candidate passed: `python3 tests/test-validation-tools.py` (419 tests) with the repository `.venv/bin` on PATH for the pinned Ruff, and `python3 scripts/check-copier-template.py`.
+- Authoritative validation passed once on the final candidate with the same PATH: `scripts/lint-project-workflow.sh` and `tests/smoke.sh`.
+- Smoke on real data at 179d6d9: `build-plan-question-set.py build` then `score-plan-features.py fit` with three placeholder dimensions and pseudo-random scores passed verify, fitted all 207 tuning questions in 2.3 s, and left the worktree clean. No holdout was scored and no prediction result is claimed.

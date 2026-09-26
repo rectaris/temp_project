@@ -53,7 +53,7 @@ Ruffによる検査を入れた[353](../checked/2026/09/16-31/353-enforce-bounde
 ## 外部の構造化判断とリスク予測
 
 TypeSafeの登録を扱う345は、再構成した[400](../checked/2026/09/16-31/400-register-typesafe-with-canonical-host-detection.md)として完了した。
-354は、オーナーの承認を受けてactiveへ昇格した。
+354は[重み付き特徴量による実装リスクの予測](../checked/2026/09/16-31/354-score-plan-risk-from-weighted-features.md)として完了した。
 
 ## 図、操作動画、スキル
 
