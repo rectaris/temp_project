@@ -1,13 +1,14 @@
 # Build a labeled implementation-risk question set from committed plan records
 
-status: backlog
+status: in_progress
+implementation_mode: parent_direct
 primary_invariant: Every emitted question carries its source plan path, source commit, and declared label, no question input exposes a field recorded after the plan was authored, and every rejected plan is reported with its reason instead of being silently normalized or dropped.
 task_types:
   - planning_docs
   - test_coverage
 review_class: C
 human_design_required: yes
-human_approval_status: pending
+human_approval_status: approved
 implementation_tier: 2
 implementation_risk: low
 implementation_ambiguity: ordinary
@@ -89,3 +90,6 @@ checked_summary_ja: 計画記録から実装リスク分類のラベル付き問
 - [ ] Run the focused test, then the full validation suite, and commit the change through the ordinary lifecycle.
 
 ## Validation Notes
+
+- Owner instruction 2026-09-26, 「@docs/plan/backlog/317-build-plan-record-question-set.md について実装作業をせよ。」, approved this plan and promoted it to active. The plan had been authored with human_approval_status pending under human_design_required yes.
+- Every write_scope entry lies under scripts/ or tests/, which scripts/run-sandboxed-plan-worker.py refuses before worker start, so this plan runs parent_direct.
